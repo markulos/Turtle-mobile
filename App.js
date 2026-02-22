@@ -1,13 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 // Screens
-import SettingsScreen from './screens/SettingsScreen';
-import PasswordsScreen from './screens/PasswordScreen';
-import TasksScreen from './screens/TasksScreen';
+import SettingsScreen from './screens/SettingsScreen';        // Single file
+import PasswordsScreen from './screens/PasswordsScreen';        // Folder with index.jsx
+import TasksScreen from './screens/TasksScreen';                // Folder with index.jsx
 import { ServerProvider } from './context/ServerContext';
 
 const Tab = createBottomTabNavigator();

@@ -9,6 +9,7 @@ import {
   Keyboard,
   Platform,
   StyleSheet,
+  Alert,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -22,7 +23,10 @@ export const TaskForm = ({
   onSave, 
   initialData, 
   projects, 
-  onAddProject 
+  onAddProject,
+  // NEW: Pre-fill props
+  prefillProject,
+  prefillTags
 }) => {
   const [formData, setFormData] = useState({
     title: '', description: '', priority: 'medium', completed: false,
@@ -39,14 +43,20 @@ export const TaskForm = ({
           tags: normalizeTags(initialData.tags)
         });
       } else {
+        // NEW: Use prefill values if provided
         setFormData({
-          title: '', description: '', priority: 'medium', completed: false,
-          project: '', dueDate: '', tags: []
+          title: '', 
+          description: '', 
+          priority: 'medium', 
+          completed: false,
+          project: prefillProject || '',
+          dueDate: '', 
+          tags: prefillTags ? [...prefillTags] : []
         });
       }
       setTagInput('');
     }
-  }, [visible, initialData]);
+  }, [visible, initialData, prefillProject, prefillTags]);
 
   const handleSave = async () => {
     if (!formData.title.trim()) {
@@ -129,6 +139,7 @@ export const TaskForm = ({
                   placeholder="What needs to be done?"
                   value={formData.title}
                   onChangeText={text => updateField('title', text)}
+                  autoFocus={!isEditing} // NEW: Auto-focus when creating new
                 />
               </FormField>
 

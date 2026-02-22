@@ -32,6 +32,8 @@ export default function TasksScreen() {
   const [showDetail, setShowDetail] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [selectedTask, setSelectedTask] = useState(null);
+  // MISSING: Add prefillData state
+  const [prefillData, setPrefillData] = useState({ project: '', tags: [] });
 
   const {
     tasks, setTasks, projects, allTags,
@@ -47,6 +49,32 @@ export default function TasksScreen() {
       Animated.timing(menuAnimation, { toValue: 0, duration: 200, useNativeDriver: true }).start();
     }
   }, [showFilterMenu, menuAnimation]);
+
+  // MOVED: Define openTaskForm BEFORE handleAddFromSection
+  const openTaskForm = (task = null, project = '', tags = []) => {
+    setEditingTask(task);
+    
+    let prefilledProject = project;
+    if (!prefilledProject && filters.selectedProject !== 'All') {
+      prefilledProject = filters.selectedProject === 'No Project' ? '' : filters.selectedProject;
+    }
+    
+    const prefilledTags = Array.isArray(tags) ? tags : [];
+    
+    
+    setPrefillData({ 
+      project: prefilledProject,
+      tags: prefilledTags
+    });
+    
+    setShowTaskForm(true);
+  };
+
+  // MOVED: Define handleAddFromSection AFTER openTaskForm
+  const handleAddFromSection = (project, tags) => {
+    const actualProject = project === 'No Project' ? '' : project;
+    openTaskForm(null, actualProject, tags);
+  };
 
   const handleSaveTask = async (taskData) => {
     if (taskData.tags.length > 0) await collectTags(taskData.tags);
@@ -84,15 +112,13 @@ export default function TasksScreen() {
     ]);
   };
 
-  const openTaskForm = (task = null) => {
-    setEditingTask(task);
-    setShowTaskForm(true);
-  };
-
   const openDetail = (task) => {
     setSelectedTask(task);
     setShowDetail(true);
   };
+
+  // Debug logs - move inside component but after all function definitions
+  console.log('Current prefillData:', prefillData);
 
   if (!isConnected) {
     return (
@@ -132,6 +158,15 @@ export default function TasksScreen() {
       {filters.hasActiveFilters && (
         <View style={styles.activeFiltersBar}>
           <Animated.ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {!filters.showIncompleteOnly && (
+              <View style={[styles.filterChip, styles.warningChip]}>
+                <Icon name="eye-off" size={12} color="#ff9800" />
+                <Text style={[styles.filterChipText, styles.warningChipText]}>Showing Completed</Text>
+                <TouchableOpacity onPress={() => filters.setShowIncompleteOnly(true)}>
+                  <Icon name="close" size={14} color="#666" />
+                </TouchableOpacity>
+              </View>
+            )}
             {filters.selectedProject !== 'All' && (
               <View style={styles.filterChip}>
                 <Icon name="folder" size={12} color="#4CAF50" />
@@ -189,6 +224,8 @@ export default function TasksScreen() {
         initialData={editingTask}
         projects={projects}
         onAddProject={addProject}
+        prefillProject={prefillData.project}
+        prefillTags={prefillData.tags}
       />
 
       <TaskDetail
@@ -205,18 +242,31 @@ export default function TasksScreen() {
       <SectionList
         sections={filters.groupedTasks}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <TaskItem 
-            item={item} 
-            onPress={openDetail}
-            onToggleComplete={handleToggleComplete}
-          />
-        )}
+        renderItem={({ item, section }) => {
+          // Don't render project headers as items
+          if (section.type === 'project') return null;
+          
+          // Check if this tag section is expanded
+          const tagKey = `${section.project}-${section.title}`;
+          const isExpanded = filters.expandedTags[tagKey] !== false;
+          
+          // Don't render items if collapsed
+          if (!isExpanded) return null;
+          
+          return (
+            <TaskItem 
+              item={item} 
+              onPress={openDetail}
+              onToggleComplete={handleToggleComplete}
+            />
+          );
+        }}
         renderSectionHeader={({ section }) => (
           <SectionHeader 
             section={section} 
             expandedTags={filters.expandedTags}
             onToggleExpand={filters.toggleTagExpand}
+            onAddTask={handleAddFromSection}
           />
         )}
         contentContainerStyle={styles.list}
@@ -224,7 +274,11 @@ export default function TasksScreen() {
         ListEmptyComponent={
           <View style={styles.emptyState}>
             <Icon name="folder-open" size={60} color="#ccc" />
-            <Text style={styles.emptyText}>No tasks match filters</Text>
+            <Text style={styles.emptyText}>
+              {filters.showIncompleteOnly && tasks.some(t => t.completed)
+                ? 'No incomplete tasks match filters'
+                : 'No tasks match filters'}
+            </Text>
             <TouchableOpacity onPress={filters.clearFilters} style={styles.clearFiltersBtn}>
               <Text style={styles.clearFiltersText}>Clear filters</Text>
             </TouchableOpacity>
@@ -242,7 +296,9 @@ export default function TasksScreen() {
           {filters.hasActiveFilters && (
             <View style={styles.filterBadge}>
               <Text style={styles.filterBadgeText}>
-                {filters.selectedTags.length + (filters.selectedProject !== 'All' ? 1 : 0)}
+                {filters.selectedTags.length + 
+                 (filters.selectedProject !== 'All' ? 1 : 0) +
+                 (!filters.showIncompleteOnly ? 1 : 0)}
               </Text>
             </View>
           )}
@@ -304,8 +360,10 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   tagFilterChip: { backgroundColor: '#e3f2fd' },
+  warningChip: { backgroundColor: '#fff3e0' },
   filterChipText: { fontSize: 12, color: '#4CAF50', marginHorizontal: 4 },
   tagFilterChipText: { color: '#2196F3' },
+  warningChipText: { color: '#ff9800' },
   
   list: { paddingBottom: 100 },
   emptyState: { alignItems: 'center', marginTop: 100 },

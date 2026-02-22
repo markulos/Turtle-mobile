@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Animated,
   StyleSheet,
+  Switch,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -45,6 +46,24 @@ export const FilterMenu = ({
                 </TouchableOpacity>
               ))}
             </View>
+          </View>
+
+          {/* NEW: Incomplete Filter Toggle */}
+          <View style={styles.section}>
+            <View style={styles.toggleRow}>
+              <Text style={styles.sectionTitle}>Show Incomplete Only</Text>
+              <Switch
+                value={filters.showIncompleteOnly}
+                onValueChange={filters.setShowIncompleteOnly}
+                trackColor={{ false: '#ddd', true: '#4CAF50' }}
+                thumbColor="#fff"
+              />
+            </View>
+            <Text style={styles.hint}>
+              {filters.showIncompleteOnly 
+                ? 'Hiding completed tasks' 
+                : 'Showing all tasks including completed'}
+            </Text>
           </View>
 
           {/* Tags */}
@@ -123,6 +142,18 @@ const styles = StyleSheet.create({
   viewActive: { backgroundColor: '#e8f5e9' },
   viewText: { marginTop: 5, color: '#666' },
   viewTextActive: { color: '#4CAF50', fontWeight: '600' },
+  // NEW: Toggle styles
+  toggleRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center',
+    marginBottom: 5
+  },
+  hint: { 
+    fontSize: 12, 
+    color: '#999',
+    marginTop: 4
+  },
   modeRow: { flexDirection: 'row', marginBottom: 15 },
   modeBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderWidth: 1, borderColor: '#ddd', marginHorizontal: 5, borderRadius: 8 },
   modeBtnActive: { backgroundColor: '#4CAF50', borderColor: '#4CAF50' },

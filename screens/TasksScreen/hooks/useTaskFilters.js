@@ -7,6 +7,7 @@ export const useTaskFilters = (tasks) => {
   const [tagFilterMode, setTagFilterMode] = useState('any');
   const [viewMode, setViewMode] = useState('tree');
   const [expandedTags, setExpandedTags] = useState({});
+  const [showIncompleteOnly, setShowIncompleteOnly] = useState(true);
 
   const toggleTagFilter = useCallback((tag) => {
     setSelectedTags(prev => 
@@ -18,6 +19,7 @@ export const useTaskFilters = (tasks) => {
     setSelectedTags([]);
     setTagFilterMode('any');
     setSelectedProject('All');
+    setShowIncompleteOnly(true);
   }, []);
 
   const toggleTagExpand = useCallback((tagKey) => {
@@ -26,6 +28,10 @@ export const useTaskFilters = (tasks) => {
 
   const filteredTasks = useMemo(() => {
     let result = tasks;
+    
+    if (showIncompleteOnly) {
+      result = result.filter(t => !t.completed);
+    }
     
     if (selectedProject !== 'All') {
       result = result.filter(t => 
@@ -44,7 +50,7 @@ export const useTaskFilters = (tasks) => {
     }
     
     return result;
-  }, [tasks, selectedProject, selectedTags, tagFilterMode]);
+  }, [tasks, selectedProject, selectedTags, tagFilterMode, showIncompleteOnly]);
 
   const groupedTasks = useMemo(() => {
     const byProject = {};
@@ -52,26 +58,34 @@ export const useTaskFilters = (tasks) => {
       const proj = task.project || 'No Project';
       if (!byProject[proj]) byProject[proj] = {};
       
-      const tagKey = Array.isArray(task.tags) && task.tags.length > 0 
+      const tags = Array.isArray(task.tags) && task.tags.length > 0 
         ? task.tags.join(', ') 
         : (task.tags || 'Untagged');
       
-      if (!byProject[proj][tagKey]) byProject[proj][tagKey] = [];
-      byProject[proj][tagKey].push(task);
+      if (!byProject[proj][tags]) byProject[proj][tags] = [];
+      byProject[proj][tags].push(task);
     });
 
     const sections = [];
+    
+    // FIXED: Properly iterate through byProject
     Object.entries(byProject).forEach(([project, tags]) => {
-      sections.push({ title: project, type: 'project', data: [] });
+      sections.push({ title: project, type: 'project', data: [], project });
       
-      Object.entries(tags).forEach(([tag, tagTasks]) => {
+      Object.entries(tags).forEach(([tagKey, tagTasks]) => {
+        // Parse the tag string back into array
+        const tagArray = tagKey === 'Untagged' 
+          ? [] 
+          : tagKey.split(',').map(t => t.trim()).filter(Boolean);
+        
         sections.push({
-          title: tag,
+          title: tagKey,
           type: 'tag',
           project,
           data: tagTasks.sort(sortTasks),
           completedCount: tagTasks.filter(t => t.completed).length,
-          totalCount: tagTasks.length
+          totalCount: tagTasks.length,
+          tags: tagArray
         });
       });
     });
@@ -90,10 +104,11 @@ export const useTaskFilters = (tasks) => {
     tagFilterMode, setTagFilterMode,
     viewMode, setViewMode,
     expandedTags, toggleTagExpand,
+    showIncompleteOnly, setShowIncompleteOnly,
     clearFilters,
     filteredTasks,
     groupedTasks,
     stats,
-    hasActiveFilters: selectedTags.length > 0 || selectedProject !== 'All'
+    hasActiveFilters: selectedTags.length > 0 || selectedProject !== 'All' || !showIncompleteOnly
   };
 };

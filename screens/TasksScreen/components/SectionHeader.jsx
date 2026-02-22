@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
-export const SectionHeader = ({ section, expandedTags, onToggleExpand }) => {
+export const SectionHeader = ({ section, expandedTags, onToggleExpand, onAddTask }) => {
   if (section.type === 'project') {
     return (
       <View style={styles.projectHeader}>
@@ -17,17 +17,33 @@ export const SectionHeader = ({ section, expandedTags, onToggleExpand }) => {
   const allDone = section.completedCount === section.totalCount && section.totalCount > 0;
 
   return (
-    <TouchableOpacity 
-      style={[styles.tagHeader, allDone && styles.tagHeaderCompleted]}
-      onPress={() => onToggleExpand(tagKey)}
-    >
-      <Icon name={isExpanded ? "chevron-down" : "chevron-right"} size={20} color={allDone ? "#4CAF50" : "#666"} />
-      <Text style={[styles.tagText, allDone && styles.tagTextCompleted]}>{section.title}</Text>
-      <Text style={styles.count}>{section.completedCount}/{section.totalCount}</Text>
-      {allDone && <Icon name="check-circle" size={16} color="#4CAF50" style={styles.check} />}
-    </TouchableOpacity>
+    <View>
+      <TouchableOpacity 
+        style={[styles.tagHeader, allDone && styles.tagHeaderCompleted]}
+        onPress={() => onToggleExpand(tagKey)}
+      >
+        <Icon name={isExpanded ? "chevron-down" : "chevron-right"} size={20} color={allDone ? "#4CAF50" : "#666"} />
+        <Text style={[styles.tagText, allDone && styles.tagTextCompleted]}>{section.title}</Text>
+        <Text style={styles.count}>{section.completedCount}/{section.totalCount}</Text>
+        {allDone && <Icon name="check-circle" size={16} color="#4CAF50" style={styles.check} />}
+      </TouchableOpacity>
+      
+      {isExpanded && (
+        <TouchableOpacity 
+          style={styles.addTaskRow}
+          onPress={() => {
+            console.log('Adding task with:', { project: section.project, tags: section.tags });
+            onAddTask(section.project, section.tags);
+          }}
+        >
+          <Icon name="plus-circle" size={18} color="#4CAF50" />
+          <Text style={styles.addTaskText}>Add a new task</Text>
+        </TouchableOpacity>
+      )}
+    </View>
   );
 };
+
 
 const styles = StyleSheet.create({
   projectHeader: {
@@ -54,4 +70,21 @@ const styles = StyleSheet.create({
   tagTextCompleted: { color: '#4CAF50' },
   count: { fontSize: 12, color: '#999', marginRight: 8 },
   check: { marginLeft: 5 },
+  // NEW: Add task button styles
+  addTaskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f9f9f9',
+    paddingVertical: 8,
+    paddingLeft: 50,
+    paddingRight: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  addTaskText: {
+    fontSize: 14,
+    color: '#4CAF50',
+    marginLeft: 8,
+    fontWeight: '500',
+  },
 });
