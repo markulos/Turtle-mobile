@@ -7,10 +7,60 @@ export const SectionHeader = ({ section, expandedTags, onToggleExpand, onAddTask
   const [newTaskTitle, setNewTaskTitle] = useState('');
 
   if (section.type === 'project') {
+    const handleSubmit = () => {
+      if (!newTaskTitle.trim()) return;
+      onAddTask(section.project, [], newTaskTitle.trim());
+      setNewTaskTitle('');
+      setIsAdding(false);
+    };
+
+    const handleCancel = () => {
+      setNewTaskTitle('');
+      setIsAdding(false);
+    };
+
+    // Inline input mode
+    if (isAdding) {
+      return (
+        <View style={styles.inlineAddContainer}>
+          <View style={styles.inlineInputRow}>
+            <TextInput
+              style={styles.inlineInput}
+              placeholder="What needs to be done?"
+              value={newTaskTitle}
+              onChangeText={setNewTaskTitle}
+              autoFocus
+              onSubmitEditing={handleSubmit}
+              blurOnSubmit={false}
+            />
+            <TouchableOpacity style={styles.inlineSubmitBtn} onPress={handleSubmit}>
+              <Icon name="check" size={18} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.inlineCancelBtn} onPress={handleCancel}>
+              <Icon name="close" size={18} color="#666" />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.inlineContext}>
+            <Icon name="folder" size={12} color="#666" />
+            <Text style={styles.inlineContextText}>{section.project}</Text>
+          </View>
+        </View>
+      );
+    }
+
     return (
-      <View style={styles.projectHeader}>
-        <Icon name="folder" size={20} color="#4CAF50" />
-        <Text style={styles.projectText}>{section.title}</Text>
+      <View>
+        <View style={styles.projectHeader}>
+          <Icon name="folder" size={20} color="#4CAF50" />
+          <Text style={styles.projectText}>{section.title}</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.addTaskRow}
+          onPress={() => setIsAdding(true)}
+        >
+          <Icon name="plus-circle" size={18} color="#4CAF50" />
+          <Text style={styles.addTaskText}>Add a new task</Text>
+        </TouchableOpacity>
       </View>
     );
   }

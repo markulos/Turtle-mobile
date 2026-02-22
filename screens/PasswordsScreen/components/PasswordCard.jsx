@@ -1,25 +1,61 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Clipboard, Alert } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import * as Clipboard from 'expo-clipboard';
 
 export const PasswordCard = ({ 
   item, 
   showPassword, 
   onTogglePassword, 
   onEdit, 
-  onDelete 
+  onDelete,
+  isEncrypted,
 }) => {
-  const copyToClipboard = (text, label) => {
-    Clipboard.setString(text);
+  const [isDecrypted, setIsDecrypted] = useState(false);
+  const [decryptedData, setDecryptedData] = useState(null);
+
+  const copyToClipboard = async (text, label) => {
+    await Clipboard.setStringAsync(text);
     Alert.alert('Copied', `${label} copied to clipboard`);
   };
+
+  // Show encrypted state - user needs to tap to decrypt
+  if (isEncrypted && !decryptedData) {
+    return (
+      <View style={[styles.card, styles.encryptedCard]}>
+        <View style={styles.header}>
+          <View style={styles.titleSection}>
+            <Icon name="lock" size={24} color="#4CAF50" />
+            <View style={styles.encryptedInfo}>
+              <Text style={styles.encryptedTitle}>🔒 Encrypted Password</Text>
+              <Text style={styles.encryptedId}>ID: {item.id?.slice(-8)}</Text>
+            </View>
+          </View>
+          <View style={styles.actions}>
+            <TouchableOpacity onPress={() => onEdit(item)} style={styles.actionBtn}>
+              <Icon name="pencil" size={20} color="#2196F3" />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => onDelete(item.id)} style={styles.actionBtn}>
+              <Icon name="delete" size={20} color="#f44336" />
+            </TouchableOpacity>
+          </View>
+        </View>
+        <Text style={styles.encryptedHint}>
+          Tap edit (✏️) to decrypt and view this password
+        </Text>
+      </View>
+    );
+  }
+
+  // Use decrypted data if available, otherwise use item directly
+  const data = decryptedData || item;
 
   return (
     <View style={styles.card}>
       <View style={styles.header}>
         <View style={styles.titleSection}>
           <Icon name="key-variant" size={24} color="#4CAF50" />
-          <Text style={styles.title}>{item.title}</Text>
+          <Text style={styles.title}>{data.title}</Text>
         </View>
         <View style={styles.actions}>
           <TouchableOpacity onPress={() => onEdit(item)} style={styles.actionBtn}>
@@ -31,13 +67,13 @@ export const PasswordCard = ({
         </View>
       </View>
       
-      {item.username && (
+      {data.username && (
         <TouchableOpacity 
           style={styles.row} 
-          onPress={() => copyToClipboard(item.username, 'Username')}
+          onPress={() => copyToClipboard(data.username, 'Username')}
         >
           <Text style={styles.label}>Username:</Text>
-          <Text style={styles.value}>{item.username}</Text>
+          <Text style={styles.value}>{data.username}</Text>
           <Icon name="content-copy" size={16} color="#666" />
         </TouchableOpacity>
       )}
@@ -45,7 +81,7 @@ export const PasswordCard = ({
       <TouchableOpacity style={styles.row} onPress={() => onTogglePassword(item.id)}>
         <Text style={styles.label}>Password:</Text>
         <Text style={styles.value}>
-          {showPassword ? item.password : '••••••••'}
+          {showPassword ? data.password : '••••••••'}
         </Text>
         <Icon name={showPassword ? "eye-off" : "eye"} size={16} color="#666" />
       </TouchableOpacity>
@@ -53,14 +89,14 @@ export const PasswordCard = ({
       {showPassword && (
         <TouchableOpacity 
           style={styles.copyBtn}
-          onPress={() => copyToClipboard(item.password, 'Password')}
+          onPress={() => copyToClipboard(data.password, 'Password')}
         >
           <Text style={styles.copyText}>Copy Password</Text>
         </TouchableOpacity>
       )}
       
-      {item.notes && (
-        <Text style={styles.notes}>{item.notes}</Text>
+      {data.notes && (
+        <Text style={styles.notes}>{data.notes}</Text>
       )}
     </View>
   );
@@ -77,6 +113,11 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
+  },
+  encryptedCard: {
+    backgroundColor: '#e8f5e9',
+    borderWidth: 1,
+    borderColor: '#4CAF50',
   },
   header: {
     flexDirection: 'row',
@@ -136,5 +177,26 @@ const styles = StyleSheet.create({
     color: '#666',
     fontSize: 12,
     fontStyle: 'italic',
+  },
+  // Encrypted state styles
+  encryptedInfo: {
+    marginLeft: 10,
+  },
+  encryptedTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2e7d32',
+  },
+  encryptedId: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  encryptedHint: {
+    fontSize: 12,
+    color: '#666',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 5,
   },
 });

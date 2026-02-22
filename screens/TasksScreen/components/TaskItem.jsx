@@ -125,18 +125,16 @@ export const TaskItem = ({
           <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(item.priority) }]} />
           
           {/* Expand/chevron for subtasks */}
-          {subtasks.length > 0 && (
-            <TouchableOpacity 
-              style={styles.expandBtn}
-              onPress={(e) => { e.stopPropagation(); toggleExpand(); }}
-            >
-              <Icon 
-                name={expanded ? "chevron-up" : "chevron-down"} 
-                size={20} 
-                color="#666" 
-              />
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={styles.expandBtn}
+            onPress={(e) => { e.stopPropagation(); toggleExpand(); }}
+          >
+            <Icon
+              name={expanded ? "chevron-up" : "chevron-down"}
+              size={20}
+              color="#666"
+            />
+          </TouchableOpacity>
         </View>
       </TouchableOpacity>
 

@@ -6,23 +6,34 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
 
 const INITIAL_FORM = { title: '', username: '', password: '', notes: '' };
 
 export const PasswordForm = ({ visible, onClose, onSave, initialData }) => {
   const [formData, setFormData] = useState(INITIAL_FORM);
+  const [isSaving, setIsSaving] = useState(false);
   const isEditing = !!initialData?.id;
 
   useEffect(() => {
     if (visible) {
       setFormData(initialData || INITIAL_FORM);
+      setIsSaving(false);
     }
   }, [visible, initialData]);
 
-  const handleSave = () => {
-    if (onSave(formData, initialData?.id)) {
-      onClose();
+  const handleSave = async () => {
+    if (isSaving) return;
+    
+    setIsSaving(true);
+    try {
+      const result = await onSave(formData, initialData?.id);
+      if (result) {
+        onClose();
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -43,6 +54,7 @@ export const PasswordForm = ({ visible, onClose, onSave, initialData }) => {
             placeholder="Title (e.g., Gmail, Netflix)"
             value={formData.title}
             onChangeText={text => updateField('title', text)}
+            editable={!isSaving}
           />
           
           <TextInput
@@ -51,6 +63,7 @@ export const PasswordForm = ({ visible, onClose, onSave, initialData }) => {
             value={formData.username}
             onChangeText={text => updateField('username', text)}
             autoCapitalize="none"
+            editable={!isSaving}
           />
           
           <TextInput
@@ -59,6 +72,7 @@ export const PasswordForm = ({ visible, onClose, onSave, initialData }) => {
             value={formData.password}
             onChangeText={text => updateField('password', text)}
             secureTextEntry
+            editable={!isSaving}
           />
           
           <TextInput
@@ -68,14 +82,27 @@ export const PasswordForm = ({ visible, onClose, onSave, initialData }) => {
             onChangeText={text => updateField('notes', text)}
             multiline
             numberOfLines={3}
+            editable={!isSaving}
           />
           
           <View style={styles.buttons}>
-            <TouchableOpacity style={[styles.btn, styles.cancelBtn]} onPress={onClose}>
+            <TouchableOpacity 
+              style={[styles.btn, styles.cancelBtn]} 
+              onPress={onClose}
+              disabled={isSaving}
+            >
               <Text style={styles.cancelText}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.btn, styles.saveBtn]} onPress={handleSave}>
-              <Text style={styles.saveText}>Save</Text>
+            <TouchableOpacity 
+              style={[styles.btn, styles.saveBtn, isSaving && styles.savingBtn]} 
+              onPress={handleSave}
+              disabled={isSaving}
+            >
+              {isSaving ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.saveText}>Save</Text>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -132,6 +159,9 @@ const styles = StyleSheet.create({
   },
   saveBtn: {
     backgroundColor: '#4CAF50',
+  },
+  savingBtn: {
+    backgroundColor: '#a5d6a7',
   },
   cancelText: {
     color: '#666',

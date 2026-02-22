@@ -271,8 +271,8 @@ export default function TasksScreen() {
           );
         }}
         renderSectionHeader={({ section }) => (
-          <SectionHeader 
-            section={section} 
+          <SectionHeader
+            section={section}
             expandedTags={filters.expandedTags}
             onToggleExpand={filters.toggleTagExpand}
             onAddTask={handleInlineAdd}
@@ -290,6 +290,16 @@ export default function TasksScreen() {
             </Text>
             <TouchableOpacity onPress={filters.clearFilters} style={styles.clearFiltersBtn}>
               <Text style={styles.clearFiltersText}>Clear filters</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                setEditingTask(null);
+                setShowTaskForm(true);
+              }}
+              style={styles.addNewTaskBtn}
+            >
+              <Icon name="plus" size={20} color="#fff" />
+              <Text style={styles.addNewTaskText}>Add new task</Text>
             </TouchableOpacity>
           </View>
         }
@@ -392,7 +402,9 @@ const styles = StyleSheet.create({
   emptyText: { marginTop: 10, color: '#999', fontSize: 16 },
   clearFiltersBtn: { marginTop: 15, backgroundColor: '#4CAF50', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 },
   clearFiltersText: { color: '#fff', fontWeight: '600' },
-  
+  addNewTaskBtn: { marginTop: 20, backgroundColor: '#4CAF50', paddingHorizontal: 25, paddingVertical: 12, borderRadius: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  addNewTaskText: { color: '#fff', fontWeight: '600', marginLeft: 8, fontSize: 16 },
+
   fabContainer: { position: 'absolute', right: 20, bottom: 20, flexDirection: 'row', alignItems: 'flex-end' },
   filterFab: {
     width: 56,
