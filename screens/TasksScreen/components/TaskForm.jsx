@@ -1,19 +1,19 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Modal,
   View,
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
-  Keyboard,
   Platform,
   StyleSheet,
   Alert,
   ScrollView,
+  Keyboard,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useTheme } from '../../../context/ThemeContext';
 import { FormField } from './FormField';
 import { normalizeTags, parseTags, getPriorityColor } from '../utils/taskHelpers';
 import { PRIORITIES } from '../utils/constants';
@@ -24,15 +24,21 @@ export const TaskForm = ({
   onSave, 
   initialData, 
   projects, 
-  allTags, // NEW: Pass existing tags for suggestions
+  allTags,
   onAddProject,
 }) => {
+  const { theme } = useTheme();
   const [formData, setFormData] = useState({
     title: '', description: '', priority: 'medium', completed: false,
     project: '', dueDate: '', tags: []
   });
   const [tagInput, setTagInput] = useState('');
-  const [showSuggestions, setShowSuggestions] = useState(false); // NEW
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  
+  const titleInputRef = useRef(null);
+  const descInputRef = useRef(null);
+  const dueDateInputRef = useRef(null);
+  
   const isEditing = !!initialData?.id;
 
   useEffect(() => {
@@ -42,27 +48,32 @@ export const TaskForm = ({
           ...initialData,
           tags: normalizeTags(initialData.tags)
         });
+      } else {
+        setFormData({
+          title: '', description: '', priority: 'medium', completed: false,
+          project: '', dueDate: '', tags: []
+        });
       }
       setTagInput('');
       setShowSuggestions(false);
     }
   }, [visible, initialData]);
 
-  // NEW: Filter suggestions based on input
   const suggestions = useMemo(() => {
     if (!tagInput.trim() || !showSuggestions) return [];
     
     const input = tagInput.toLowerCase().trim();
     const currentTags = formData.tags.map(t => t.toLowerCase());
     
-    // Filter out already selected tags and match input
     return allTags.filter(tag => 
       !currentTags.includes(tag.toLowerCase()) &&
       tag.toLowerCase().includes(input)
-    ).slice(0, 5); // Limit to 5 suggestions
+    ).slice(0, 5);
   }, [tagInput, allTags, formData.tags, showSuggestions]);
 
   const handleSave = async () => {
+    Keyboard.dismiss();
+    
     if (!formData.title.trim()) {
       Alert.alert('Error', 'Task title is required');
       return;
@@ -87,7 +98,6 @@ export const TaskForm = ({
     const tagToAdd = tag || tagInput.trim();
     if (!tagToAdd) return;
     
-    // Prevent duplicates
     if (formData.tags.some(t => t.toLowerCase() === tagToAdd.toLowerCase())) {
       setTagInput('');
       setShowSuggestions(false);
@@ -110,6 +120,7 @@ export const TaskForm = ({
   };
 
   const selectProject = () => {
+    Keyboard.dismiss();
     Alert.alert(
       'Select Project',
       '',
@@ -128,223 +139,310 @@ export const TaskForm = ({
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
-  // NEW: Handle suggestion selection
   const selectSuggestion = (suggestion) => {
     addTag(suggestion);
   };
 
+  const focusNext = (ref) => {
+    ref?.current?.focus();
+  };
+
+  const styles = createStyles(theme);
+
   return (
-    <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
+    <Modal 
+      animationType="slide" 
+      transparent 
+      visible={visible} 
+      onRequestClose={onClose}
+    >
       <View style={styles.overlay}>
         <KeyboardAwareScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
-          enableOnAndroid
-          extraScrollHeight={Platform.OS === 'ios' ? 20 : 100}
+          enableOnAndroid={true}
+          extraScrollHeight={Platform.OS === 'ios' ? 80 : 120}
+          enableResetScrollToCoords={false}
+          showsVerticalScrollIndicator={true}
         >
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-            <View style={styles.content}>
-              <Text style={styles.title}>{isEditing ? 'Edit Task' : 'New Task'}</Text>
-              
-              <FormField label="Project *">
-                <View style={styles.projectRow}>
-                  <TextInput
-                    style={[styles.input, styles.projectInput]}
-                    placeholder="Type new or select existing..."
-                    value={formData.project}
-                    onChangeText={text => updateField('project', text)}
-                  />
-                  <TouchableOpacity style={styles.projectBtn} onPress={selectProject}>
-                    <Icon name="folder-open" size={20} color="#4CAF50" />
-                  </TouchableOpacity>
-                </View>
-                {formData.project && !projects.includes(formData.project) && (
-                  <Text style={styles.hint}>Will create new project "{formData.project}"</Text>
-                )}
-              </FormField>
-
-              <FormField label="Title *">
+          <View style={styles.content}>
+            <Text style={styles.title}>{isEditing ? 'Edit Task' : 'New Task'}</Text>
+            
+            <FormField label="Project *">
+              <View style={styles.projectRow}>
                 <TextInput
-                  style={styles.input}
-                  placeholder="What needs to be done?"
-                  value={formData.title}
-                  onChangeText={text => updateField('title', text)}
-                  autoFocus={!isEditing}
+                  style={[styles.input, styles.projectInput]}
+                  placeholder="Type new or select existing..."
+                  placeholderTextColor={theme.colors.textPlaceholder}
+                  value={formData.project}
+                  onChangeText={text => updateField('project', text)}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => focusNext(titleInputRef)}
                 />
-              </FormField>
-
-              {/* UPDATED: Tags with suggestions */}
-              <FormField label="Tags">
-                <View style={styles.tagRow}>
-                  <TextInput
-                    style={[styles.input, styles.tagInput]}
-                    placeholder="Type to see suggestions..."
-                    value={tagInput}
-                    onChangeText={(text) => {
-                      setTagInput(text);
-                      setShowSuggestions(text.length > 0);
-                    }}
-                    onSubmitEditing={() => addTag()}
-                    onFocus={() => setShowSuggestions(tagInput.length > 0)}
-                  />
-                  <TouchableOpacity style={styles.addTagBtn} onPress={() => addTag()}>
-                    <Icon name="plus" size={20} color="#fff" />
-                  </TouchableOpacity>
-                </View>
-                
-                {/* NEW: Suggestions dropdown */}
-                {showSuggestions && suggestions.length > 0 && (
-                  <View style={styles.suggestionsContainer}>
-                    <ScrollView 
-                      keyboardShouldPersistTaps="handled"
-                      nestedScrollEnabled
-                    >
-                      {suggestions.map((suggestion, index) => (
-                        <TouchableOpacity
-                          key={suggestion}
-                          style={[
-                            styles.suggestionItem,
-                            index === suggestions.length - 1 && styles.suggestionLast
-                          ]}
-                          onPress={() => selectSuggestion(suggestion)}
-                        >
-                          <Icon name="tag" size={14} color="#2196F3" />
-                          <Text style={styles.suggestionText}>{suggestion}</Text>
-                          <Icon name="plus-circle" size={16} color="#4CAF50" />
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                )}
-                
-                {/* Show all available tags if no input and focused */}
-                {showSuggestions && tagInput.length === 0 && allTags.length > 0 && (
-                  <View style={styles.suggestionsContainer}>
-                    <Text style={styles.suggestionsLabel}>All tags:</Text>
-                    <ScrollView 
-                      horizontal 
-                      showsHorizontalScrollIndicator={false}
-                      keyboardShouldPersistTaps="handled"
-                      style={styles.allTagsRow}
-                    >
-                      {allTags
-                        .filter(tag => !formData.tags.includes(tag))
-                        .map(tag => (
-                          <TouchableOpacity
-                            key={tag}
-                            style={styles.allTagChip}
-                            onPress={() => selectSuggestion(tag)}
-                          >
-                            <Text style={styles.allTagText}>{tag}</Text>
-                          </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                  </View>
-                )}
-                
-                {/* Selected tags */}
-                {formData.tags.length > 0 && (
-                  <View style={styles.tagsContainer}>
-                    {formData.tags.map((tag, idx) => (
-                      <View key={idx} style={styles.selectedTagChip}>
-                        <Text style={styles.selectedTagText}>{tag}</Text>
-                        <TouchableOpacity onPress={() => removeTag(tag)}>
-                          <Icon name="close-circle" size={16} color="#f44336" />
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </FormField>
-
-              <FormField label="Description">
-                <TextInput
-                  style={[styles.input, styles.descInput]}
-                  placeholder="Add details..."
-                  value={formData.description}
-                  onChangeText={text => updateField('description', text)}
-                  multiline
-                  numberOfLines={3}
-                />
-              </FormField>
-
-              <FormField label="Due Date">
-                <TextInput
-                  style={styles.input}
-                  placeholder="YYYY-MM-DD"
-                  value={formData.dueDate}
-                  onChangeText={text => updateField('dueDate', text)}
-                />
-              </FormField>
-
-              <FormField label="Priority">
-                <View style={styles.priorityRow}>
-                  {PRIORITIES.map(p => (
-                    <TouchableOpacity
-                      key={p}
-                      style={[
-                        styles.priorityBtn,
-                        formData.priority === p && { 
-                          backgroundColor: getPriorityColor(p),
-                          borderColor: getPriorityColor(p)
-                        }
-                      ]}
-                      onPress={() => updateField('priority', p)}
-                    >
-                      <Text style={[
-                        styles.priorityText,
-                        formData.priority === p && styles.priorityTextActive
-                      ]}>
-                        {p.charAt(0).toUpperCase() + p.slice(1)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </FormField>
-
-              <View style={styles.buttons}>
-                <TouchableOpacity style={[styles.btn, styles.cancelBtn]} onPress={onClose}>
-                  <Text style={styles.cancelText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.btn, styles.saveBtn]} onPress={handleSave}>
-                  <Text style={styles.saveText}>Save Task</Text>
+                <TouchableOpacity style={styles.projectBtn} onPress={selectProject}>
+                  <Icon name="folder-open" size={20} color={theme.colors.textPrimary} />
                 </TouchableOpacity>
               </View>
+              {formData.project && !projects.includes(formData.project) && (
+                <Text style={styles.hint}>Will create new project "{formData.project}"</Text>
+              )}
+            </FormField>
+
+            <FormField label="Title *">
+              <TextInput
+                ref={titleInputRef}
+                style={styles.input}
+                placeholder="What needs to be done?"
+                placeholderTextColor={theme.colors.textPlaceholder}
+                value={formData.title}
+                onChangeText={text => updateField('title', text)}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => focusNext(descInputRef)}
+              />
+            </FormField>
+
+            <FormField label="Tags">
+              <View style={styles.tagRow}>
+                <TextInput
+                  style={[styles.input, styles.tagInput]}
+                  placeholder="Type to see suggestions..."
+                  placeholderTextColor={theme.colors.textPlaceholder}
+                  value={tagInput}
+                  onChangeText={(text) => {
+                    setTagInput(text);
+                    setShowSuggestions(text.length > 0);
+                  }}
+                  onSubmitEditing={() => addTag()}
+                  onFocus={() => setShowSuggestions(tagInput.length > 0)}
+                  blurOnSubmit={false}
+                  returnKeyType="done"
+                />
+                <TouchableOpacity style={styles.addTagBtn} onPress={() => addTag()}>
+                  <Icon name="plus" size={20} color={theme.colors.background} />
+                </TouchableOpacity>
+              </View>
+              
+              {showSuggestions && suggestions.length > 0 && (
+                <View style={styles.suggestionsContainer}>
+                  <ScrollView 
+                    keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled
+                  >
+                    {suggestions.map((suggestion, index) => (
+                      <TouchableOpacity
+                        key={suggestion}
+                        style={[
+                          styles.suggestionItem,
+                          index === suggestions.length - 1 && styles.suggestionLast
+                        ]}
+                        onPress={() => selectSuggestion(suggestion)}
+                      >
+                        <Icon name="tag" size={14} color={theme.colors.textPrimary} />
+                        <Text style={styles.suggestionText}>{suggestion}</Text>
+                        <Icon name="plus-circle" size={16} color={theme.colors.textPrimary} />
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+              
+              {showSuggestions && tagInput.length === 0 && allTags.length > 0 && (
+                <View style={styles.suggestionsContainer}>
+                  <Text style={styles.suggestionsLabel}>All tags:</Text>
+                  <ScrollView 
+                    horizontal 
+                    showsHorizontalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                    style={styles.allTagsRow}
+                  >
+                    {allTags
+                      .filter(tag => !formData.tags.includes(tag))
+                      .map(tag => (
+                        <TouchableOpacity
+                          key={tag}
+                          style={styles.allTagChip}
+                          onPress={() => selectSuggestion(tag)}
+                        >
+                          <Text style={styles.allTagText}>{tag}</Text>
+                        </TouchableOpacity>
+                      ))}
+                  </ScrollView>
+                </View>
+              )}
+              
+              {formData.tags.length > 0 && (
+                <View style={styles.tagsContainer}>
+                  {formData.tags.map((tag, idx) => (
+                    <View key={idx} style={styles.selectedTagChip}>
+                      <Text style={styles.selectedTagText}>{tag}</Text>
+                      <TouchableOpacity onPress={() => removeTag(tag)}>
+                        <Icon name="close-circle" size={16} color={theme.colors.accentError} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </FormField>
+
+            <FormField label="Description">
+              <TextInput
+                ref={descInputRef}
+                style={[styles.input, styles.descInput]}
+                placeholder="Add details..."
+                placeholderTextColor={theme.colors.textPlaceholder}
+                value={formData.description}
+                onChangeText={text => updateField('description', text)}
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => focusNext(dueDateInputRef)}
+              />
+            </FormField>
+
+            <FormField label="Due Date">
+              <TextInput
+                ref={dueDateInputRef}
+                style={styles.input}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor={theme.colors.textPlaceholder}
+                value={formData.dueDate}
+                onChangeText={text => updateField('dueDate', text)}
+                returnKeyType="done"
+                blurOnSubmit={true}
+                onSubmitEditing={handleSave}
+              />
+            </FormField>
+
+            <FormField label="Priority">
+              <View style={styles.priorityRow}>
+                {PRIORITIES.map(p => (
+                  <TouchableOpacity
+                    key={p}
+                    style={[
+                      styles.priorityBtn,
+                      formData.priority === p && { 
+                        backgroundColor: getPriorityColor(p, theme),
+                        borderColor: getPriorityColor(p, theme)
+                      }
+                    ]}
+                    onPress={() => updateField('priority', p)}
+                  >
+                    <Text style={[
+                      styles.priorityText,
+                      formData.priority === p && styles.priorityTextActive
+                    ]}>
+                      {p.charAt(0).toUpperCase() + p.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </FormField>
+
+            <View style={styles.buttons}>
+              <TouchableOpacity style={[styles.btn, styles.cancelBtn]} onPress={onClose}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.btn, styles.saveBtn]} onPress={handleSave}>
+                <Text style={styles.saveText}>Save Task</Text>
+              </TouchableOpacity>
             </View>
-          </TouchableWithoutFeedback>
+
+            <View style={styles.bottomPadding} />
+          </View>
         </KeyboardAwareScrollView>
       </View>
     </Modal>
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  scrollContent: { flexGrow: 1, justifyContent: 'flex-end' },
-  content: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
-  title: { fontSize: 20, fontWeight: 'bold', marginBottom: 20, color: '#333' },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 10, padding: 12, fontSize: 16 },
-  projectRow: { flexDirection: 'row', alignItems: 'center' },
-  projectInput: { flex: 1, marginRight: 10 },
-  projectBtn: { padding: 12, backgroundColor: '#f5f5f5', borderRadius: 10 },
-  hint: { fontSize: 12, color: '#4CAF50', marginTop: 4, fontStyle: 'italic' },
-  tagRow: { flexDirection: 'row', alignItems: 'center' },
-  tagInput: { flex: 1, marginRight: 10 },
-  addTagBtn: { backgroundColor: '#4CAF50', width: 46, height: 46, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  
-  // NEW: Suggestions styles
+const createStyles = (theme) => StyleSheet.create({
+  overlay: { 
+    flex: 1, 
+    backgroundColor: theme.colors.overlay, 
+    justifyContent: 'flex-end' 
+  },
+  scrollContent: { 
+    flexGrow: 1, 
+    justifyContent: 'flex-end' 
+  },
+  content: { 
+    backgroundColor: theme.colors.background, 
+    borderTopLeftRadius: 16, 
+    borderTopRightRadius: 16, 
+    padding: 16,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+  },
+  title: { 
+    fontSize: 18, 
+    fontWeight: '700', 
+    marginBottom: 16, 
+    color: theme.colors.textPrimary 
+  },
+  input: { 
+    height: 40, // Match "add a new task" height
+    borderWidth: 0, 
+    borderRadius: 10, 
+    paddingHorizontal: 12, 
+    fontSize: 15,
+    color: theme.colors.inputText,
+    backgroundColor: theme.colors.inputBackground,
+  },
+  projectRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center' 
+  },
+  projectInput: { 
+    flex: 1, 
+    marginRight: 10 
+  },
+  projectBtn: { 
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: theme.colors.surfaceElevated, 
+    borderRadius: 10,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+  },
+  hint: { 
+    fontSize: 12, 
+    color: theme.colors.textSecondary, 
+    marginTop: 4, 
+    fontStyle: 'italic' 
+  },
+  tagRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center' 
+  },
+  tagInput: { 
+    flex: 1, 
+    marginRight: 10 
+  },
+  addTagBtn: { 
+    backgroundColor: theme.colors.surfaceElevated, 
+    width: 40, 
+    height: 40, 
+    borderRadius: 10, 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
   suggestionsContainer: {
-    backgroundColor: '#f9f9f9',
+    backgroundColor: theme.colors.surfaceElevated,
     borderRadius: 10,
     marginTop: 8,
     marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#eee',
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
     maxHeight: 150,
   },
   suggestionsLabel: {
     fontSize: 12,
-    color: '#999',
+    color: theme.colors.textTertiary,
     padding: 8,
     paddingBottom: 4,
   },
@@ -352,9 +450,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    backgroundColor: '#fff',
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
   },
   suggestionLast: {
     borderBottomWidth: 0,
@@ -362,7 +460,7 @@ const styles = StyleSheet.create({
   suggestionText: {
     flex: 1,
     fontSize: 14,
-    color: '#333',
+    color: theme.colors.textPrimary,
     marginLeft: 8,
   },
   allTagsRow: {
@@ -370,7 +468,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   allTagChip: {
-    backgroundColor: '#e3f2fd',
+    backgroundColor: theme.colors.surfaceElevated,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 15,
@@ -378,10 +476,8 @@ const styles = StyleSheet.create({
   },
   allTagText: {
     fontSize: 12,
-    color: '#2196F3',
+    color: theme.colors.textPrimary,
   },
-  
-  // Selected tags
   tagsContainer: { 
     flexDirection: 'row', 
     flexWrap: 'wrap', 
@@ -390,23 +486,80 @@ const styles = StyleSheet.create({
   selectedTagChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#e8f5e9',
+    backgroundColor: theme.colors.surfaceElevated,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
     marginRight: 8,
     marginBottom: 8,
   },
-  selectedTagText: { color: '#4CAF50', marginRight: 6, fontSize: 14 },
-  descInput: { height: 80, textAlignVertical: 'top' },
-  priorityRow: { flexDirection: 'row', marginBottom: 20 },
-  priorityBtn: { flex: 1, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', marginHorizontal: 5, alignItems: 'center' },
-  priorityText: { color: '#666', fontWeight: '600' },
-  priorityTextActive: { color: '#fff' },
-  buttons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 20, marginBottom: 30 },
-  btn: { flex: 1, padding: 15, borderRadius: 10, alignItems: 'center', marginHorizontal: 5 },
-  cancelBtn: { backgroundColor: '#f5f5f5' },
-  saveBtn: { backgroundColor: '#4CAF50' },
-  cancelText: { color: '#666', fontWeight: '600' },
-  saveText: { color: '#fff', fontWeight: '600' },
+  selectedTagText: { 
+    color: theme.colors.textPrimary, 
+    marginRight: 6, 
+    fontSize: 14 
+  },
+  descInput: { 
+    height: 80, 
+    textAlignVertical: 'top',
+    paddingTop: 10,
+  },
+  priorityRow: { 
+    flexDirection: 'row', 
+    marginBottom: 16 
+  },
+  priorityBtn: { 
+    flex: 1, 
+    paddingVertical: 10, 
+    borderRadius: 8, 
+    borderWidth: 0.5, 
+    borderColor: theme.colors.border, 
+    marginHorizontal: 5, 
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+  },
+  priorityText: { 
+    color: theme.colors.textTertiary, 
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  priorityTextActive: { 
+    color: theme.colors.background 
+  },
+  buttons: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    marginTop: 16, 
+    marginBottom: 16 
+  },
+  btn: { 
+    flex: 1, 
+    height: 44,
+    borderRadius: 10, 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    marginHorizontal: 5 
+  },
+  cancelBtn: { 
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+  },
+  cancelText: { 
+    color: theme.colors.textSecondary, 
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  saveBtn: { 
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+  },
+  saveText: { 
+    color: theme.colors.textPrimary, 
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  bottomPadding: {
+    height: 60,
+  },
 });

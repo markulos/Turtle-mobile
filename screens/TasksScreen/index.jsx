@@ -8,7 +8,9 @@ import {
   Animated,
   Alert,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useServer } from '../../context/ServerContext';
+import { useTheme } from '../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTaskData } from './hooks/useTaskData';
 import { useTaskFilters } from './hooks/useTaskFilters';
@@ -23,6 +25,8 @@ import {
 } from './components';
 
 export default function TasksScreen() {
+  const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
   const { isConnected, api } = useServer();
   const [menuAnimation] = useState(new Animated.Value(0));
   const [showDropdown, setShowDropdown] = useState(false);
@@ -36,14 +40,13 @@ export default function TasksScreen() {
   const {
     tasks, setTasks, projects, allTags,
     loadData, saveTasks, collectTags, addProject, deleteProject,
-    // NEW: Subtask handlers
     handleAddSubtask,
     handleToggleSubtask,
     handleDeleteSubtask,
     handleUpdateSubtask,
   } = useTaskData(api, isConnected);
 
-  const filters = useTaskFilters(tasks);
+  const filters = useTaskFilters(tasks, projects);
 
   useEffect(() => {
     if (showFilterMenu) {
@@ -123,10 +126,12 @@ export default function TasksScreen() {
     setEditingTask(null);
   };
 
+  const styles = createStyles(theme);
+
   if (!isConnected) {
     return (
-      <View style={styles.centerContainer}>
-        <Icon name="lan-disconnect" size={60} color="#999" />
+      <View style={[styles.centerContainer, { paddingTop: insets.top }]}>
+        <Icon name="lan-disconnect" size={64} color={theme.colors.textMuted} />
         <Text style={styles.offlineText}>Not connected to server</Text>
         <Text style={styles.offlineSubtext}>Go to Settings to configure connection</Text>
       </View>
@@ -134,16 +139,16 @@ export default function TasksScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Custom Header */}
       <View style={styles.header}>
         <TouchableOpacity 
           style={styles.projectSelector}
           onPress={() => setShowDropdown(true)}
         >
-          <Icon name="folder" size={24} color="#4CAF50" />
+          <Icon name="folder" size={20} color={theme.colors.textPrimary} />
           <Text style={styles.projectSelectorText} numberOfLines={1}>{filters.selectedProject}</Text>
-          <Icon name="chevron-down" size={20} color="#666" />
+          <Icon name="chevron-down" size={18} color={theme.colors.textTertiary} />
         </TouchableOpacity>
         
         <View style={styles.statsContainer}>
@@ -163,28 +168,28 @@ export default function TasksScreen() {
           <Animated.ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {!filters.showIncompleteOnly && (
               <View style={[styles.filterChip, styles.warningChip]}>
-                <Icon name="eye-off" size={12} color="#ff9800" />
+                <Icon name="eye-off" size={12} color={theme.colors.accentWarning} />
                 <Text style={[styles.filterChipText, styles.warningChipText]}>Showing Completed</Text>
                 <TouchableOpacity onPress={() => filters.setShowIncompleteOnly(true)}>
-                  <Icon name="close" size={14} color="#666" />
+                  <Icon name="close" size={14} color={theme.colors.textTertiary} />
                 </TouchableOpacity>
               </View>
             )}
             {filters.selectedProject !== 'All' && (
               <View style={styles.filterChip}>
-                <Icon name="folder" size={12} color="#4CAF50" />
+                <Icon name="folder" size={12} color={theme.colors.textPrimary} />
                 <Text style={styles.filterChipText}>{filters.selectedProject}</Text>
                 <TouchableOpacity onPress={() => filters.setSelectedProject('All')}>
-                  <Icon name="close" size={14} color="#666" />
+                  <Icon name="close" size={14} color={theme.colors.textTertiary} />
                 </TouchableOpacity>
               </View>
             )}
             {filters.selectedTags.map(tag => (
               <View key={tag} style={[styles.filterChip, styles.tagFilterChip]}>
-                <Icon name="tag" size={12} color="#2196F3" />
+                <Icon name="tag" size={12} color={theme.colors.textPrimary} />
                 <Text style={[styles.filterChipText, styles.tagFilterChipText]}>{tag}</Text>
                 <TouchableOpacity onPress={() => filters.toggleTagFilter(tag)}>
-                  <Icon name="close" size={14} color="#666" />
+                  <Icon name="close" size={14} color={theme.colors.textTertiary} />
                 </TouchableOpacity>
               </View>
             ))}
@@ -245,22 +250,15 @@ export default function TasksScreen() {
       <SectionList
         sections={filters.groupedTasks}
         keyExtractor={(item) => item.id}
-        // In the renderItem section, add logging:
         renderItem={({ item, section }) => {
           if (section.type === 'project') return null;
           const tagKey = `${section.project}-${section.title}`;
           if (filters.expandedTags[tagKey] === false) return null;
           
-          // DEBUG
-          console.log('Rendering task:', item.id, item.title, 'subtasks:', item.subtasks);
-          
           return (
             <TaskItem 
               item={item} 
-              onPress={() => {
-                console.log('Task pressed:', item); // DEBUG
-                openDetail(item);
-              }}
+              onPress={() => openDetail(item)}
               onToggleComplete={handleToggleComplete}
               onLongPress={openEditForm}
               onAddSubtask={handleAddSubtask}
@@ -282,7 +280,7 @@ export default function TasksScreen() {
         stickySectionHeadersEnabled={false}
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <Icon name="folder-open" size={60} color="#ccc" />
+            <Icon name="folder-open" size={64} color={theme.colors.textMuted} />
             <Text style={styles.emptyText}>
               {filters.showIncompleteOnly && tasks.some(t => t.completed)
                 ? 'No incomplete tasks match filters'
@@ -298,7 +296,7 @@ export default function TasksScreen() {
               }}
               style={styles.addNewTaskBtn}
             >
-              <Icon name="plus" size={20} color="#fff" />
+              <Icon name="plus" size={20} color={theme.colors.background} />
               <Text style={styles.addNewTaskText}>Add new task</Text>
             </TouchableOpacity>
           </View>
@@ -311,7 +309,7 @@ export default function TasksScreen() {
           style={[styles.filterFab, filters.hasActiveFilters && styles.filterFabActive]}
           onPress={() => setShowFilterMenu(true)}
         >
-          <Icon name="filter-variant" size={24} color="#fff" />
+          <Icon name="filter-variant" size={22} color={theme.colors.background} />
           {filters.hasActiveFilters && (
             <View style={styles.filterBadge}>
               <Text style={styles.filterBadgeText}>
@@ -337,113 +335,208 @@ export default function TasksScreen() {
           }}
           delayLongPress={500}
         >
-          <Icon name="plus" size={30} color="#fff" />
+          <Icon name="plus" size={28} color={theme.colors.background} />
         </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' },
-  offlineText: { fontSize: 18, color: '#666', marginTop: 10 },
-  offlineSubtext: { fontSize: 14, color: '#999', marginTop: 5 },
+const createStyles = (theme) => StyleSheet.create({
+  container: { 
+    flex: 1, 
+    backgroundColor: theme.colors.background 
+  },
+  centerContainer: { 
+    flex: 1, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    backgroundColor: theme.colors.background 
+  },
+  offlineText: { 
+    fontSize: 17, 
+    color: theme.colors.textSecondary, 
+    marginTop: 16,
+    fontWeight: '600',
+  },
+  offlineSubtext: { 
+    fontSize: 15, 
+    color: theme.colors.textTertiary, 
+    marginTop: 8 
+  },
   
   header: {
-    backgroundColor: '#fff',
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
   },
   projectSelector: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    borderRadius: 10,
-    flex: 1,
-    marginRight: 15,
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
   },
-  projectSelectorText: { fontSize: 16, fontWeight: '600', marginLeft: 10, flex: 1, color: '#333' },
-  statsContainer: { alignItems: 'flex-end' },
-  statsText: { fontSize: 14, color: '#666', marginBottom: 4 },
-  progressBar: { width: 60, height: 4, backgroundColor: '#e0e0e0', borderRadius: 2, overflow: 'hidden' },
-  progressFill: { height: '100%', backgroundColor: '#4CAF50', borderRadius: 2 },
+  projectSelectorText: { 
+    fontSize: 15, 
+    fontWeight: '600', 
+    marginLeft: 8, 
+    marginRight: 8,
+    color: theme.colors.textPrimary 
+  },
+  statsContainer: { 
+    alignItems: 'flex-end' 
+  },
+  statsText: { 
+    fontSize: 13, 
+    color: theme.colors.textTertiary, 
+    marginBottom: 4 
+  },
+  progressBar: { 
+    width: 60, 
+    height: 4, 
+    backgroundColor: theme.colors.surface, 
+    borderRadius: 2, 
+    overflow: 'hidden',
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+  },
+  progressFill: { 
+    height: '100%', 
+    backgroundColor: theme.colors.surfaceElevated, 
+    borderRadius: 2 
+  },
   
   activeFiltersBar: {
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.background,
     paddingVertical: 8,
-    paddingHorizontal: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    paddingHorizontal: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
   },
   filterChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#e8f5e9',
+    backgroundColor: theme.colors.surfaceElevated,
     paddingHorizontal: 10,
     paddingVertical: 5,
-    borderRadius: 15,
+    borderRadius: 12,
     marginRight: 8,
   },
-  tagFilterChip: { backgroundColor: '#e3f2fd' },
-  warningChip: { backgroundColor: '#fff3e0' },
-  filterChipText: { fontSize: 12, color: '#4CAF50', marginHorizontal: 4 },
-  tagFilterChipText: { color: '#2196F3' },
-  warningChipText: { color: '#ff9800' },
+  tagFilterChip: { 
+    backgroundColor: theme.colors.surface 
+  },
+  warningChip: { 
+    backgroundColor: 'rgba(255, 193, 7, 0.15)' 
+  },
+  filterChipText: { 
+    fontSize: 12, 
+    color: theme.colors.textPrimary, 
+    marginHorizontal: 4 
+  },
+  tagFilterChipText: { 
+    color: theme.colors.textSecondary 
+  },
+  warningChipText: { 
+    color: theme.colors.accentWarning 
+  },
   
-  list: { paddingBottom: 100 },
-  emptyState: { alignItems: 'center', marginTop: 100 },
-  emptyText: { marginTop: 10, color: '#999', fontSize: 16 },
-  clearFiltersBtn: { marginTop: 15, backgroundColor: '#4CAF50', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 },
-  clearFiltersText: { color: '#fff', fontWeight: '600' },
-  addNewTaskBtn: { marginTop: 20, backgroundColor: '#4CAF50', paddingHorizontal: 25, paddingVertical: 12, borderRadius: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  addNewTaskText: { color: '#fff', fontWeight: '600', marginLeft: 8, fontSize: 16 },
+  list: { 
+    paddingBottom: 100 
+  },
+  emptyState: { 
+    alignItems: 'center', 
+    marginTop: 80 
+  },
+  emptyText: { 
+    marginTop: 16, 
+    color: theme.colors.textSecondary, 
+    fontSize: 16 
+  },
+  clearFiltersBtn: { 
+    marginTop: 16, 
+    backgroundColor: theme.colors.surfaceElevated, 
+    paddingHorizontal: 20, 
+    paddingVertical: 10, 
+    borderRadius: 20 
+  },
+  clearFiltersText: { 
+    color: theme.colors.textPrimary, 
+    fontWeight: '600' 
+  },
+  addNewTaskBtn: { 
+    marginTop: 20, 
+    backgroundColor: theme.colors.surfaceElevated, 
+    paddingHorizontal: 24, 
+    paddingVertical: 12, 
+    borderRadius: 24, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center' 
+  },
+  addNewTaskText: { 
+    color: theme.colors.textPrimary, 
+    fontWeight: '600', 
+    marginLeft: 8, 
+    fontSize: 16 
+  },
 
-  fabContainer: { position: 'absolute', right: 20, bottom: 20, flexDirection: 'row', alignItems: 'flex-end' },
+  fabContainer: { 
+    position: 'absolute', 
+    right: 16, 
+    bottom: 16, 
+    flexDirection: 'row', 
+    alignItems: 'flex-end' 
+  },
   filterFab: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#2196F3',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: theme.colors.surfaceElevated,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
   },
-  filterFabActive: { backgroundColor: '#1976d2' },
+  filterFabActive: { 
+    backgroundColor: theme.colors.surfaceElevated 
+  },
   filterBadge: {
     position: 'absolute',
     top: -4,
     right: -4,
-    backgroundColor: '#f44336',
+    backgroundColor: theme.colors.accentError,
     borderRadius: 10,
     minWidth: 20,
     height: 20,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  filterBadgeText: { color: '#fff', fontSize: 12, fontWeight: 'bold', paddingHorizontal: 4 },
+  filterBadgeText: { 
+    color: theme.colors.textPrimary, 
+    fontSize: 12, 
+    fontWeight: 'bold', 
+    paddingHorizontal: 4 
+  },
   addFab: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#4CAF50',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: theme.colors.surfaceElevated,
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: theme.colors.border,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
     elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
   },
 });

@@ -1,15 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Modal,
   View,
   Text,
   TextInput,
   TouchableOpacity,
-  ScrollView,
   Alert,
   StyleSheet,
+  Platform,
+  Keyboard,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useTheme } from '../../../context/ThemeContext';
 
 export const ProjectManager = ({ 
   visible, 
@@ -19,100 +22,197 @@ export const ProjectManager = ({
   onAdd, 
   onDelete 
 }) => {
+  const { theme } = useTheme();
   const [newName, setNewName] = useState('');
+  const inputRef = useRef(null);
 
   const handleAdd = () => {
-    if (onAdd(newName)) setNewName('');
+    Keyboard.dismiss();
+    if (onAdd(newName)) {
+      setNewName('');
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
   };
 
   const confirmDelete = (name) => {
     const count = tasks.filter(t => t.project === name).length;
     Alert.alert(
       'Delete Project',
-      count > 0 ? `"${name}" has ${count} tasks. What should happen to them?` : `Delete "${name}"?`,
+      count > 0 
+        ? `"${name}" has ${count} tasks. Are you sure you want to delete this project? The tasks will be moved to "No Project".`
+        : `Delete "${name}"?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        ...(count > 0 ? [{
-          text: 'Move to "No Project"',
-          onPress: () => onDelete(name, { onMoveTasks: true })
-        }] : []),
         {
-          text: count > 0 ? 'Delete All' : 'Delete',
+          text: 'Delete',
           style: 'destructive',
-          onPress: () => onDelete(name, { onDeleteTasks: true })
+          onPress: () => onDelete(name, { onMoveTasks: count > 0 })
         }
       ]
     );
   };
 
+  const styles = createStyles(theme);
+
   return (
-    <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
+    <Modal 
+      animationType="slide" 
+      transparent 
+      visible={visible} 
+      onRequestClose={onClose}
+    >
       <View style={styles.overlay}>
         <View style={styles.content}>
           <View style={styles.header}>
-            <Text style={styles.title}>Manage Projects</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Icon name="close" size={24} color="#666" />
-            </TouchableOpacity>
+            <Text style={styles.title}>Edit Projects</Text>
           </View>
 
           <View style={styles.addRow}>
             <TextInput
+              ref={inputRef}
               style={styles.input}
               placeholder="New project name..."
+              placeholderTextColor={theme.colors.textPlaceholder}
               value={newName}
               onChangeText={setNewName}
               onSubmitEditing={handleAdd}
+              returnKeyType="done"
+              blurOnSubmit={false}
             />
             <TouchableOpacity style={styles.addBtn} onPress={handleAdd}>
-              <Icon name="plus" size={24} color="#fff" />
+              <Icon name="plus" size={22} color={theme.colors.background} />
             </TouchableOpacity>
           </View>
 
-          <ScrollView>
+          <KeyboardAwareScrollView
+            style={styles.list}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={true}
+          >
             {projects.map(item => (
               <View key={item} style={styles.listItem}>
-                <View style={styles.info}>
-                  <Icon name="folder" size={20} color="#4CAF50" />
-                  <Text style={styles.name}>{item}</Text>
-                  <Text style={styles.count}>
-                    {tasks.filter(t => t.project === item).length} tasks
-                  </Text>
-                </View>
-                <TouchableOpacity onPress={() => confirmDelete(item)} style={styles.deleteBtn}>
-                  <Icon name="delete" size={20} color="#f44336" />
+                <Icon name="folder" size={20} color={theme.colors.textPrimary} style={styles.folderIcon} />
+                <Text style={styles.name}>{item}</Text>
+                <TouchableOpacity 
+                  onPress={() => confirmDelete(item)} 
+                  style={styles.deleteBtn}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Icon name="close-circle" size={22} color={theme.colors.accentError} />
                 </TouchableOpacity>
               </View>
             ))}
             {projects.length === 0 && (
               <Text style={styles.empty}>No projects yet. Create one above!</Text>
             )}
-          </ScrollView>
+            <View style={styles.bottomPadding} />
+          </KeyboardAwareScrollView>
+
+          <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+            <Text style={styles.closeBtnText}>Close Edit</Text>
+          </TouchableOpacity>
         </View>
       </View>
     </Modal>
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+const createStyles = (theme) => StyleSheet.create({
+  overlay: { 
+    flex: 1, 
+    backgroundColor: theme.colors.overlay, 
+    justifyContent: 'flex-end' 
+  },
   content: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    maxHeight: '80%',
+    backgroundColor: theme.colors.background,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 16,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20, // iPhone safe area
+    maxHeight: '85%',
     minHeight: 400,
   },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  title: { fontSize: 20, fontWeight: 'bold', color: '#333' },
-  addRow: { flexDirection: 'row', marginBottom: 20 },
-  input: { flex: 1, borderWidth: 1, borderColor: '#ddd', borderRadius: 10, padding: 12, fontSize: 16, marginRight: 10 },
-  addBtn: { backgroundColor: '#4CAF50', width: 50, height: 50, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  listItem: { flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: '#f9f9f9', borderRadius: 10, marginBottom: 10 },
-  info: { flex: 1, flexDirection: 'row', alignItems: 'center' },
-  name: { flex: 1, fontSize: 16, marginLeft: 10, color: '#333' },
-  count: { fontSize: 12, color: '#999', backgroundColor: '#fff', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
-  deleteBtn: { padding: 5 },
-  empty: { textAlign: 'center', color: '#999', marginTop: 20, fontSize: 16 },
+  header: { 
+    flexDirection: 'row', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    marginBottom: 16 
+  },
+  title: { 
+    fontSize: 18, 
+    fontWeight: '700', 
+    color: theme.colors.textPrimary 
+  },
+  addRow: { 
+    flexDirection: 'row', 
+    marginBottom: 16 
+  },
+  input: { 
+    flex: 1, 
+    borderWidth: 0, 
+    borderRadius: 10, 
+    height: 44,
+    paddingHorizontal: 14, 
+    fontSize: 15, 
+    marginRight: 10,
+    backgroundColor: theme.colors.inputBackground,
+    color: theme.colors.inputText,
+  },
+  addBtn: { 
+    backgroundColor: theme.colors.surfaceElevated, 
+    width: 44, 
+    height: 44, 
+    borderRadius: 10, 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  list: {
+    maxHeight: 350,
+  },
+  listItem: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingVertical: 12,
+    paddingHorizontal: 12, 
+    backgroundColor: theme.colors.surface, 
+    borderRadius: 10, 
+    marginBottom: 8,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+  },
+  folderIcon: {
+    marginRight: 12,
+  },
+  name: { 
+    flex: 1, 
+    fontSize: 15, 
+    color: theme.colors.textPrimary,
+  },
+  deleteBtn: { 
+    padding: 5,
+  },
+  empty: { 
+    textAlign: 'center', 
+    color: theme.colors.textTertiary, 
+    marginTop: 20, 
+    fontSize: 15 
+  },
+  closeBtn: {
+    backgroundColor: theme.colors.surfaceElevated,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 12,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+    height: 44,
+  },
+  closeBtnText: {
+    color: theme.colors.textSecondary,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  bottomPadding: {
+    height: 20,
+  },
 });

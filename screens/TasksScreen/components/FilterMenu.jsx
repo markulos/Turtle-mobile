@@ -9,6 +9,7 @@ import {
   Switch,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useTheme } from '../../../context/ThemeContext';
 
 export const FilterMenu = ({ 
   visible, 
@@ -17,8 +18,11 @@ export const FilterMenu = ({
   filters,
   animation 
 }) => {
+  const { theme } = useTheme();
   const translateY = animation.interpolate({ inputRange: [0, 1], outputRange: [100, 0] });
   const opacity = animation.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+
+  const styles = createStyles(theme);
 
   return (
     <Modal transparent visible={visible} onRequestClose={onClose} animationType="none">
@@ -38,7 +42,7 @@ export const FilterMenu = ({
                   <Icon 
                     name={mode === 'tree' ? 'file-tree' : 'format-list-bulleted'} 
                     size={24} 
-                    color={filters.viewMode === mode ? '#4CAF50' : '#666'} 
+                    color={filters.viewMode === mode ? theme.colors.textPrimary : theme.colors.textSecondary} 
                   />
                   <Text style={[styles.viewText, filters.viewMode === mode && styles.viewTextActive]}>
                     {mode === 'tree' ? 'Tree' : 'List'}
@@ -55,8 +59,8 @@ export const FilterMenu = ({
               <Switch
                 value={filters.showIncompleteOnly}
                 onValueChange={filters.setShowIncompleteOnly}
-                trackColor={{ false: '#ddd', true: '#4CAF50' }}
-                thumbColor="#fff"
+                trackColor={{ false: theme.colors.surfaceHighlight, true: theme.colors.textSecondary }}
+                thumbColor={theme.colors.textPrimary}
               />
             </View>
             <Text style={styles.hint}>
@@ -104,7 +108,7 @@ export const FilterMenu = ({
                       onPress={() => filters.toggleTagFilter(tag)}
                     >
                       <Text style={[styles.tagText, isSelected && styles.tagTextActive]}>{tag}</Text>
-                      {isSelected && <Icon name="check" size={14} color="#fff" style={styles.check} />}
+                      {isSelected && <Icon name="check" size={14} color={theme.colors.textPrimary} style={styles.check} />}
                     </TouchableOpacity>
                   );
                 })
@@ -114,7 +118,7 @@ export const FilterMenu = ({
 
           {filters.hasActiveFilters && (
             <TouchableOpacity style={styles.clearAll} onPress={filters.clearFilters}>
-              <Icon name="filter-remove" size={20} color="#f44336" />
+              <Icon name="filter-remove" size={20} color={theme.colors.accentError} />
               <Text style={styles.clearAllText}>Clear All Filters</Text>
             </TouchableOpacity>
           )}
@@ -124,25 +128,60 @@ export const FilterMenu = ({
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+const createStyles = (theme) => StyleSheet.create({
+  overlay: { 
+    flex: 1, 
+    backgroundColor: theme.colors.overlay, 
+    justifyContent: 'flex-end' 
+  },
   container: {
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.background,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 20,
     maxHeight: '70%',
   },
-  section: { marginBottom: 20 },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#333' },
-  clear: { color: '#f44336', fontSize: 14 },
-  viewModeRow: { flexDirection: 'row', justifyContent: 'space-around' },
-  viewOption: { alignItems: 'center', padding: 15, borderRadius: 12, backgroundColor: '#f5f5f5', width: 100 },
-  viewActive: { backgroundColor: '#e8f5e9' },
-  viewText: { marginTop: 5, color: '#666' },
-  viewTextActive: { color: '#4CAF50', fontWeight: '600' },
-  // NEW: Toggle styles
+  section: { 
+    marginBottom: 20 
+  },
+  sectionHeader: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 10 
+  },
+  sectionTitle: { 
+    fontSize: 16, 
+    fontWeight: '600', 
+    color: theme.colors.textPrimary 
+  },
+  clear: { 
+    color: theme.colors.accentError, 
+    fontSize: 14 
+  },
+  viewModeRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-around' 
+  },
+  viewOption: { 
+    alignItems: 'center', 
+    padding: 15, 
+    borderRadius: 12, 
+    backgroundColor: theme.colors.surfaceElevated, 
+    width: 100 
+  },
+  viewActive: { 
+    backgroundColor: theme.colors.surfaceHighlight 
+  },
+  viewText: { 
+    marginTop: 5, 
+    color: theme.colors.textSecondary 
+  },
+  viewTextActive: { 
+    color: theme.colors.textPrimary, 
+    fontWeight: '600' 
+  },
+  // Toggle styles
   toggleRow: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
@@ -151,39 +190,85 @@ const styles = StyleSheet.create({
   },
   hint: { 
     fontSize: 12, 
-    color: '#999',
+    color: theme.colors.textMuted,
     marginTop: 4
   },
-  modeRow: { flexDirection: 'row', marginBottom: 15 },
-  modeBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderWidth: 1, borderColor: '#ddd', marginHorizontal: 5, borderRadius: 8 },
-  modeBtnActive: { backgroundColor: '#4CAF50', borderColor: '#4CAF50' },
-  modeText: { color: '#666' },
-  modeTextActive: { color: '#fff', fontWeight: '600' },
-  tagsGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  noTags: { color: '#999', fontSize: 14, textAlign: 'center', width: '100%', paddingVertical: 20 },
+  modeRow: { 
+    flexDirection: 'row', 
+    marginBottom: 15 
+  },
+  modeBtn: { 
+    flex: 1, 
+    paddingVertical: 8, 
+    alignItems: 'center', 
+    borderWidth: 0.5, 
+    borderColor: theme.colors.border, 
+    marginHorizontal: 5, 
+    borderRadius: 8,
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  modeBtnActive: { 
+    backgroundColor: theme.colors.surfaceHighlight, 
+    borderColor: theme.colors.border 
+  },
+  modeText: { 
+    color: theme.colors.textSecondary 
+  },
+  modeTextActive: { 
+    color: theme.colors.textPrimary, 
+    fontWeight: '600' 
+  },
+  tagsGrid: { 
+    flexDirection: 'row', 
+    flexWrap: 'wrap' 
+  },
+  noTags: { 
+    color: theme.colors.textMuted, 
+    fontSize: 14, 
+    textAlign: 'center', 
+    width: '100%', 
+    paddingVertical: 20 
+  },
   tagChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: theme.colors.surfaceElevated,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 20,
     margin: 4,
-    borderWidth: 1,
-    borderColor: '#ddd',
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
   },
-  tagChipActive: { backgroundColor: '#4CAF50', borderColor: '#4CAF50' },
-  tagText: { color: '#666', fontSize: 14 },
-  tagTextActive: { color: '#fff', fontWeight: '600' },
-  check: { marginLeft: 4 },
+  tagChipActive: { 
+    backgroundColor: theme.colors.surfaceHighlight, 
+    borderColor: theme.colors.border 
+  },
+  tagText: { 
+    color: theme.colors.textSecondary, 
+    fontSize: 14 
+  },
+  tagTextActive: { 
+    color: theme.colors.textPrimary, 
+    fontWeight: '600' 
+  },
+  check: { 
+    marginLeft: 4 
+  },
   clearAll: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 15,
-    backgroundColor: '#ffebee',
+    backgroundColor: theme.colors.surfaceElevated,
     borderRadius: 10,
     marginTop: 10,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
   },
-  clearAllText: { color: '#f44336', marginLeft: 8, fontWeight: '600' },
+  clearAllText: { 
+    color: theme.colors.accentError, 
+    marginLeft: 8, 
+    fontWeight: '600' 
+  },
 });

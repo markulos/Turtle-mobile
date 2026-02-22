@@ -1,258 +1,260 @@
-import * as Crypto from 'expo-crypto';
+import CryptoJS from 'crypto-js';
 import * as SecureStore from 'expo-secure-store';
 
-const MASTER_KEY_STORE = 'connected_pass_master_key';
-const SALT_STORE = 'connected_pass_salt';
+const MASTER_KEY_STORE = 'vault_master_key';
+const SALT_STORE = 'vault_salt';
 
-/**
- * Generate a random salt for key derivation
- */
-export const generateSalt = async () => {
-  const randomBytes = await Crypto.getRandomBytesAsync(16);
-  return Array.from(randomBytes)
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-};
-
-/**
- * Generate a random IV for AES encryption
- */
-export const generateIV = async () => {
-  const randomBytes = await Crypto.getRandomBytesAsync(12);
-  return Array.from(randomBytes)
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-};
-
-/**
- * Derive encryption key from master password using PBKDF2
- */
-export const deriveKey = async (password, salt) => {
-  const key = await Crypto.digestStringAsync(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    password + salt
-  );
-  return key;
-};
-
-/**
- * Convert hex string to Uint8Array
- */
-const hexToUint8Array = (hex) => {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+// Generate random hex string
+const generateRandomHex = (bytes) => {
+  const chars = '0123456789abcdef';
+  let result = '';
+  for (let i = 0; i < bytes * 2; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-  return bytes;
+  return result;
 };
 
-/**
- * Convert Uint8Array to hex string
- */
-const uint8ArrayToHex = (bytes) => {
-  return Array.from(bytes)
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
+// Generate salt for vault password hashing
+const generateVaultSalt = () => {
+  return generateRandomHex(16); // 32 hex chars
 };
 
-/**
- * Encrypt data using AES-GCM via Web Crypto API
- */
-export const encryptData = async (data, keyHex, ivHex) => {
-  try {
-    const keyData = hexToUint8Array(keyHex);
-    const iv = hexToUint8Array(ivHex);
-    
-    // Import key for AES-GCM
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyData,
-      { name: 'AES-GCM' },
-      false,
-      ['encrypt']
-    );
-    
-    // Encrypt
-    const encoded = new TextEncoder().encode(data);
-    const encrypted = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      cryptoKey,
-      encoded
-    );
-    
-    return uint8ArrayToHex(new Uint8Array(encrypted));
-  } catch (error) {
-    console.error('Encryption error:', error);
-    throw new Error('Failed to encrypt data');
-  }
+// Hash vault master password (for storing verification hash)
+const hashVaultPassword = (password) => {
+  const salt = generateVaultSalt();
+  const hash = CryptoJS.SHA256(password + salt).toString();
+  return { hash, salt };
 };
 
-/**
- * Decrypt data using AES-GCM via Web Crypto API
- */
-export const decryptData = async (encryptedHex, keyHex, ivHex) => {
-  try {
-    const keyData = hexToUint8Array(keyHex);
-    const iv = hexToUint8Array(ivHex);
-    const encrypted = hexToUint8Array(encryptedHex);
-    
-    // Import key for AES-GCM
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyData,
-      { name: 'AES-GCM' },
-      false,
-      ['decrypt']
-    );
-    
-    // Decrypt
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv },
-      cryptoKey,
-      encrypted
-    );
-    
-    return new TextDecoder().decode(decrypted);
-  } catch (error) {
-    console.error('Decryption error:', error);
-    throw new Error('Failed to decrypt data - wrong master password?');
-  }
+// Verify vault password
+const verifyVaultPassword = (password, storedHash, salt) => {
+  const hash = CryptoJS.SHA256(password + salt).toString();
+  return hash === storedHash;
 };
 
-/**
- * Store master key securely
- */
-export const storeMasterKey = async (key) => {
-  await SecureStore.setItemAsync(MASTER_KEY_STORE, key);
+// Generate encryption salt and IV
+const generateEncryptionSalt = () => generateRandomHex(16); // 32 hex chars
+const generateIV = () => generateRandomHex(16); // 32 hex chars = 16 bytes
+
+// Derive encryption key from master password + salt
+const deriveEncryptionKey = (masterPassword, salt) => {
+  // Use PBKDF2 for strong key derivation
+  return CryptoJS.PBKDF2(masterPassword, salt, {
+    keySize: 256 / 32,  // 256 bit key
+    iterations: 1000
+  });
 };
 
-/**
- * Retrieve master key from secure storage
- */
-export const getMasterKey = async () => {
-  return await SecureStore.getItemAsync(MASTER_KEY_STORE);
+// VAULT OPERATIONS
+
+export const setupVault = async (password) => {
+  const { hash, salt } = hashVaultPassword(password);
+  await SecureStore.setItemAsync(MASTER_KEY_STORE, hash);
+  await SecureStore.setItemAsync(SALT_STORE, salt);
+  return { success: true };
 };
 
-/**
- * Check if master key exists
- */
-export const hasMasterKey = async () => {
-  const key = await getMasterKey();
-  return !!key;
+export const checkVaultSetup = async () => {
+  const hash = await SecureStore.getItemAsync(MASTER_KEY_STORE);
+  return !!hash;
 };
 
-/**
- * Delete stored master key
- */
-export const deleteMasterKey = async () => {
-  await SecureStore.deleteItemAsync(MASTER_KEY_STORE);
-};
-
-/**
- * Encrypt a password entry
- */
-export const encryptPasswordEntry = async (entry, masterPassword) => {
-  const salt = await generateSalt();
-  const iv = await generateIV();
-  const key = await deriveKey(masterPassword, salt);
+export const unlockVault = async (password) => {
+  const storedHash = await SecureStore.getItemAsync(MASTER_KEY_STORE);
+  const salt = await SecureStore.getItemAsync(SALT_STORE);
   
-  const jsonData = JSON.stringify({
-    title: entry.title,
-    username: entry.username || '',
-    password: entry.password,
-    notes: entry.notes || '',
+  if (!storedHash || !salt) {
+    throw new Error('Vault not set up');
+  }
+  
+  const isValid = verifyVaultPassword(password, storedHash, salt);
+  if (!isValid) {
+    throw new Error('Invalid password');
+  }
+  
+  return { success: true, masterPassword: password };
+};
+
+export const lockVault = async () => {
+  return { success: true };
+};
+
+export const resetVault = async () => {
+  await SecureStore.deleteItemAsync(MASTER_KEY_STORE);
+  await SecureStore.deleteItemAsync(SALT_STORE);
+};
+
+// ENCRYPTION OPERATIONS
+
+export const encryptEntry = (entry, masterPassword) => {
+  console.log('\n=== ENCRYPT ===');
+  console.log('ID:', entry.id);
+  console.log('Title:', entry.title);
+  
+  // Generate unique salt and IV for this encryption
+  const salt = generateEncryptionSalt();
+  const iv = generateIV();
+  
+  console.log('Salt:', salt.substring(0, 16) + '...');
+  console.log('IV:', iv.substring(0, 16) + '...');
+  
+  // Derive key
+  const key = deriveEncryptionKey(masterPassword, salt);
+  console.log('Key derived successfully');
+  
+  // Prepare data
+  const data = JSON.stringify({ lines: entry.lines || [] });
+  console.log('Data:', data);
+  
+  // Encrypt
+  const encrypted = CryptoJS.AES.encrypt(data, key, {
+    iv: CryptoJS.enc.Hex.parse(iv),
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.Pkcs7
   });
   
-  const encryptedData = await encryptData(jsonData, key, iv);
+  const encryptedData = encrypted.toString();
+  console.log('Encrypted length:', encryptedData.length);
+  console.log('================\n');
   
   return {
     id: entry.id,
+    title: entry.title,
     encryptedData,
-    iv,
     salt,
+    iv,
     createdAt: entry.createdAt || Date.now(),
-    updatedAt: Date.now(),
+    updatedAt: Date.now()
   };
 };
 
-/**
- * Decrypt a password entry
- */
-export const decryptPasswordEntry = async (encryptedEntry, masterPassword) => {
-  const key = await deriveKey(masterPassword, encryptedEntry.salt);
+export const decryptEntry = (encryptedEntry, masterPassword) => {
+  console.log('\n=== DECRYPT ===');
+  console.log('ID:', encryptedEntry.id);
+  console.log('Title:', encryptedEntry.title);
   
-  const decryptedJson = await decryptData(
-    encryptedEntry.encryptedData,
-    key,
-    encryptedEntry.iv
-  );
+  try {
+    // Validate
+    if (!encryptedEntry.encryptedData || !encryptedEntry.salt || !encryptedEntry.iv) {
+      throw new Error('Missing encryption data');
+    }
+    
+    console.log('Salt:', encryptedEntry.salt.substring(0, 16) + '...');
+    console.log('IV:', encryptedEntry.iv.substring(0, 16) + '...');
+    console.log('Encrypted length:', encryptedEntry.encryptedData.length);
+    
+    // Derive key (must use same method as encryption)
+    const key = deriveEncryptionKey(masterPassword, encryptedEntry.salt);
+    console.log('Key derived');
+    
+    // Parse IV
+    const iv = CryptoJS.enc.Hex.parse(encryptedEntry.iv);
+    console.log('IV parsed');
+    
+    // Decrypt
+    const decrypted = CryptoJS.AES.decrypt(encryptedEntry.encryptedData, key, {
+      iv: iv,
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7
+    });
+    
+    console.log('Decryption executed, sigBytes:', decrypted.sigBytes);
+    
+    // Check if decryption returned valid data
+    if (decrypted.sigBytes <= 0) {
+      throw new Error('Decryption returned empty data - wrong password?');
+    }
+    
+    // Convert to string
+    const decryptedString = decrypted.toString(CryptoJS.enc.Utf8);
+    console.log('String length:', decryptedString.length);
+    
+    if (!decryptedString) {
+      throw new Error('Failed to convert to UTF-8 string');
+    }
+    
+    console.log('String preview:', decryptedString.substring(0, 50));
+    
+    // Parse JSON
+    const data = JSON.parse(decryptedString);
+    
+    console.log('=== SUCCESS ===\n');
+    
+    return {
+      id: encryptedEntry.id,
+      title: encryptedEntry.title,
+      lines: data.lines || [],
+      createdAt: encryptedEntry.createdAt,
+      updatedAt: encryptedEntry.updatedAt
+    };
+  } catch (error) {
+    console.error('=== FAILED ===');
+    console.error('Error:', error.message);
+    console.error('==============\n');
+    throw new Error('Failed to decrypt - wrong master password?');
+  }
+};
+
+export const encryptEntries = (entries, masterPassword) => {
+  return entries.map(entry => encryptEntry(entry, masterPassword));
+};
+
+export const decryptEntries = (encryptedEntries, masterPassword) => {
+  console.log('\n=== DECRYPT ALL ===');
+  console.log('Count:', encryptedEntries.length);
   
-  const data = JSON.parse(decryptedJson);
+  const results = [];
+  for (let i = 0; i < encryptedEntries.length; i++) {
+    console.log(`\n--- Entry ${i + 1}/${encryptedEntries.length} ---`);
+    try {
+      const decrypted = decryptEntry(encryptedEntries[i], masterPassword);
+      results.push(decrypted);
+    } catch (error) {
+      console.error(`Failed to decrypt entry ${i + 1}:`, encryptedEntries[i].id);
+      // Continue with other entries instead of failing completely
+      results.push({
+        id: encryptedEntries[i].id,
+        title: encryptedEntries[i].title + ' (⚠️ Decryption failed)',
+        lines: [],
+        createdAt: encryptedEntries[i].createdAt,
+        updatedAt: encryptedEntries[i].updatedAt
+      });
+    }
+  }
   
-  return {
-    id: encryptedEntry.id,
-    ...data,
-    createdAt: encryptedEntry.createdAt,
-    updatedAt: encryptedEntry.updatedAt,
+  console.log('\n===================\n');
+  return results;
+};
+
+// Test function to verify crypto works
+export const testCrypto = (masterPassword) => {
+  console.log('\n=== CRYPTO TEST ===');
+  
+  const testEntry = {
+    id: 'test-' + Date.now(),
+    title: 'Test Entry',
+    lines: ['Username: test', 'Password: 123'],
+    createdAt: Date.now()
   };
-};
-
-/**
- * Verify master password against stored key
- */
-export const verifyMasterPassword = async (password, salt) => {
-  const key = await deriveKey(password, salt);
-  const storedKey = await getMasterKey();
-  return key === storedKey;
-};
-
-/**
- * Setup master password for first time
- */
-export const setupMasterPassword = async (password) => {
-  const salt = await generateSalt();
-  const key = await deriveKey(password, salt);
   
-  await storeMasterKey(key);
-  await SecureStore.setItemAsync(SALT_STORE, salt);
+  console.log('Original:', JSON.stringify(testEntry));
   
-  return { key, salt };
-};
-
-/**
- * Get stored salt
- */
-export const getSalt = async () => {
-  return await SecureStore.getItemAsync(SALT_STORE);
-};
-
-/**
- * Change master password
- * Note: This only changes the master key. In a full implementation,
- * you would need to re-encrypt all existing passwords with the new key.
- */
-export const changeMasterPassword = async (currentPassword, newPassword) => {
-  const salt = await getSalt();
-  if (!salt) {
-    throw new Error('No existing vault found');
+  try {
+    const encrypted = encryptEntry(testEntry, masterPassword);
+    console.log('Encrypted successfully');
+    console.log('Salt:', encrypted.salt);
+    console.log('IV:', encrypted.iv);
+    
+    const decrypted = decryptEntry(encrypted, masterPassword);
+    console.log('Decrypted:', JSON.stringify(decrypted));
+    
+    const success = JSON.stringify(testEntry.lines) === JSON.stringify(decrypted.lines);
+    console.log('Test result:', success ? 'PASS' : 'FAIL');
+    console.log('===================\n');
+    return success;
+  } catch (error) {
+    console.error('Test failed:', error.message);
+    console.log('===================\n');
+    return false;
   }
-
-  // Verify current password
-  const currentKey = await deriveKey(currentPassword, salt);
-  const storedKey = await getMasterKey();
-  
-  if (currentKey !== storedKey) {
-    throw new Error('Current password is incorrect');
-  }
-
-  // Setup new password
-  return await setupMasterPassword(newPassword);
-};
-
-/**
- * Reset the password vault (WARNING: Destructive)
- */
-export const resetVault = async () => {
-  await deleteMasterKey();
-  await SecureStore.deleteItemAsync(SALT_STORE);
 };

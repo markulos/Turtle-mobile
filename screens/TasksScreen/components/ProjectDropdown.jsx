@@ -10,6 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useTheme } from '../../../context/ThemeContext';
 
 export const ProjectDropdown = ({ 
   visible, 
@@ -19,8 +20,9 @@ export const ProjectDropdown = ({
   selected, 
   onSelect, 
   onManage,
-  onAddProject // NEW
+  onAddProject
 }) => {
+  const { theme } = useTheme();
   const [newProjectName, setNewProjectName] = useState('');
   const [showAddInput, setShowAddInput] = useState(false);
 
@@ -45,6 +47,8 @@ export const ProjectDropdown = ({
     ...projects.map(p => ({ key: p, icon: 'folder', label: p }))
   ];
 
+  const styles = createStyles(theme);
+
   return (
     <Modal animationType="fade" transparent visible onRequestClose={onClose}>
       <TouchableOpacity style={styles.overlay} onPress={onClose}>
@@ -59,7 +63,7 @@ export const ProjectDropdown = ({
                 style={[styles.item, selected === key && styles.itemActive]}
                 onPress={() => { onSelect(key); onClose(); }}
               >
-                <Icon name={icon} size={20} color={selected === key ? '#4CAF50' : '#666'} />
+                <Icon name={icon} size={20} color={selected === key ? theme.colors.textPrimary : theme.colors.textSecondary} />
                 <Text style={[styles.text, selected === key && styles.textActive]} numberOfLines={1}>
                   {label}
                 </Text>
@@ -67,19 +71,19 @@ export const ProjectDropdown = ({
               </TouchableOpacity>
             ))}
             
-            {/* NEW: Inline add project */}
+            {/* Inline add project */}
             {showAddInput ? (
               <View style={styles.addInputRow}>
                 <TextInput
                   style={styles.addInput}
                   placeholder="New project name..."
+                  placeholderTextColor={theme.colors.textPlaceholder}
                   value={newProjectName}
                   onChangeText={setNewProjectName}
-                  autoFocus
                   onSubmitEditing={handleAddProject}
                 />
                 <TouchableOpacity style={styles.addBtn} onPress={handleAddProject}>
-                  <Icon name="check" size={20} color="#fff" />
+                  <Icon name="check" size={20} color={theme.colors.textPrimary} />
                 </TouchableOpacity>
                 <TouchableOpacity 
                   style={styles.cancelAddBtn} 
@@ -88,7 +92,7 @@ export const ProjectDropdown = ({
                     setNewProjectName('');
                   }}
                 >
-                  <Icon name="close" size={20} color="#666" />
+                  <Icon name="close" size={20} color={theme.colors.textSecondary} />
                 </TouchableOpacity>
               </View>
             ) : (
@@ -96,7 +100,7 @@ export const ProjectDropdown = ({
                 style={[styles.item, styles.addProjectItem]}
                 onPress={() => setShowAddInput(true)}
               >
-                <Icon name="plus-circle" size={20} color="#4CAF50" />
+                <Icon name="plus-circle" size={20} color={theme.colors.textPrimary} />
                 <Text style={[styles.text, styles.addProjectText]}>Add New Project</Text>
               </TouchableOpacity>
             )}
@@ -108,8 +112,8 @@ export const ProjectDropdown = ({
                 onManage();
               }}
             >
-              <Icon name="cog" size={20} color="#2196F3" />
-              <Text style={[styles.text, { color: '#2196F3' }]}>Manage Projects</Text>
+              <Icon name="playlist-edit" size={20} color={theme.colors.textSecondary} />
+              <Text style={[styles.text, styles.manageText]}>Edit Projects</Text>
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
@@ -118,10 +122,10 @@ export const ProjectDropdown = ({
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (theme) => StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: theme.colors.overlay,
     justifyContent: 'flex-start',
     paddingTop: 70,
     paddingHorizontal: 15,
@@ -130,7 +134,7 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   menu: {
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.background,
     borderRadius: 12,
     paddingVertical: 8,
     elevation: 5,
@@ -138,59 +142,73 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 4,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
   },
   item: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
   },
-  itemActive: { backgroundColor: '#e8f5e9' },
-  text: { flex: 1, fontSize: 16, marginLeft: 12, color: '#333' },
-  textActive: { color: '#4CAF50', fontWeight: '600' },
+  itemActive: { 
+    backgroundColor: theme.colors.surfaceElevated 
+  },
+  text: { 
+    flex: 1, 
+    fontSize: 16, 
+    marginLeft: 12, 
+    color: theme.colors.textPrimary 
+  },
+  textActive: { 
+    color: theme.colors.textPrimary, 
+    fontWeight: '600' 
+  },
   count: {
     fontSize: 14,
-    color: '#999',
-    backgroundColor: '#f5f5f5',
+    color: theme.colors.textMuted,
+    backgroundColor: theme.colors.surfaceElevated,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 10,
   },
-  // NEW: Add project styles
+  // Add project styles
   addProjectItem: {
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
+    borderTopWidth: 0.5,
+    borderTopColor: theme.colors.border,
   },
   addProjectText: {
-    color: '#4CAF50',
+    color: theme.colors.textPrimary,
   },
   addInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    backgroundColor: '#f9f9f9',
+    borderTopWidth: 0.5,
+    borderTopColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
   },
   addInput: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#ddd',
+    borderWidth: 0,
     borderRadius: 8,
     padding: 10,
     fontSize: 16,
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.inputBackground,
+    color: theme.colors.inputText,
     marginRight: 8,
   },
   addBtn: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: theme.colors.surfaceElevated,
     width: 40,
     height: 40,
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 8,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
   },
   cancelAddBtn: {
     width: 40,
@@ -199,8 +217,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   manageItem: {
-    borderTopWidth: 2,
-    borderTopColor: '#eee',
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
     marginTop: 5,
+  },
+  manageText: {
+    color: theme.colors.textSecondary,
   },
 });

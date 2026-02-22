@@ -8,6 +8,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useTheme } from '../../../context/ThemeContext';
 import { normalizeTags, getPriorityColor, areAllSubtasksCompleted } from '../utils/taskHelpers';
 
 export const TaskDetail = ({ 
@@ -19,6 +20,8 @@ export const TaskDetail = ({
   onDelete,
   onTagPress 
 }) => {
+  const { theme } = useTheme();
+  
   if (!task) return null;
 
   // Ensure subtasks exists
@@ -27,17 +30,19 @@ export const TaskDetail = ({
   const allSubtasksDone = areAllSubtasksCompleted(subtasks);
   const completedSubtasks = subtasks.filter(st => st.completed).length;
 
+  const styles = createStyles(theme);
+
   return (
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
       <View style={styles.overlay}>
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
           <View style={styles.content}>
             <View style={styles.header}>
-              <View style={[styles.badge, { backgroundColor: getPriorityColor(task.priority) }]}>
+              <View style={[styles.badge, { backgroundColor: getPriorityColor(task.priority, theme) }]}>
                 <Text style={styles.badgeText}>{task.priority}</Text>
               </View>
               <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-                <Icon name="close" size={24} color="#666" />
+                <Icon name="close" size={24} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
@@ -69,7 +74,7 @@ export const TaskDetail = ({
             <View style={styles.meta}>
               {task.project && (
                 <View style={styles.metaItem}>
-                  <Icon name="folder" size={16} color="#4CAF50" />
+                  <Icon name="folder" size={16} color={theme.colors.textPrimary} />
                   <Text style={styles.metaText}>{task.project}</Text>
                 </View>
               )}
@@ -82,7 +87,7 @@ export const TaskDetail = ({
                       style={styles.tagChip}
                       onPress={() => { onClose(); onTagPress(tag); }}
                     >
-                      <Icon name="tag" size={12} color="#2196F3" />
+                      <Icon name="tag" size={12} color={theme.colors.textPrimary} />
                       <Text style={styles.tagText}>{tag}</Text>
                     </TouchableOpacity>
                   ))}
@@ -91,13 +96,13 @@ export const TaskDetail = ({
 
               {task.dueDate && (
                 <View style={styles.metaItem}>
-                  <Icon name="calendar" size={16} color="#666" />
+                  <Icon name="calendar" size={16} color={theme.colors.textSecondary} />
                   <Text style={styles.metaText}>Due: {task.dueDate}</Text>
                 </View>
               )}
 
               <View style={styles.metaItem}>
-                <Icon name="clock-outline" size={16} color="#666" />
+                <Icon name="clock-outline" size={16} color={theme.colors.textSecondary} />
                 <Text style={styles.metaText}>
                   Created: {new Date(task.createdAt).toLocaleDateString()}
                 </Text>
@@ -105,7 +110,7 @@ export const TaskDetail = ({
 
               {task.completed && task.completedTime && (
                 <View style={[styles.metaItem, styles.completedItem]}>
-                  <Icon name="check-circle" size={16} color="#4CAF50" />
+                  <Icon name="check-circle" size={16} color={theme.colors.accentSuccess} />
                   <Text style={[styles.metaText, styles.completedText]}>
                     Done: {new Date(task.completedTime).toLocaleString()}
                   </Text>
@@ -129,7 +134,7 @@ export const TaskDetail = ({
                     <Icon 
                       name={subtask.completed ? "checkbox-marked" : "checkbox-blank-outline"} 
                       size={18} 
-                      color={subtask.completed ? "#4CAF50" : "#ccc"} 
+                      color={subtask.completed ? theme.colors.accentSuccess : theme.colors.textSecondary} 
                     />
                     <Text style={[
                       styles.subtaskText,
@@ -144,7 +149,7 @@ export const TaskDetail = ({
 
             <View style={styles.actions}>
               <TouchableOpacity style={[styles.actionBtn, styles.editBtn]} onPress={onEdit}>
-                <Icon name="pencil" size={20} color="#fff" />
+                <Icon name="pencil" size={20} color={theme.colors.textPrimary} />
                 <Text style={styles.actionText}>Edit</Text>
               </TouchableOpacity>
 
@@ -155,7 +160,7 @@ export const TaskDetail = ({
                 <Icon 
                   name={task.completed ? "checkbox-blank-outline" : "checkbox-marked"} 
                   size={20} 
-                  color="#fff" 
+                  color={theme.colors.textPrimary} 
                 />
                 <Text style={styles.actionText}>
                   {task.completed ? 'Mark Incomplete' : 'Complete'}
@@ -163,7 +168,7 @@ export const TaskDetail = ({
               </TouchableOpacity>
 
               <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={onDelete}>
-                <Icon name="delete" size={20} color="#fff" />
+                <Icon name="delete" size={20} color={theme.colors.textPrimary} />
                 <Text style={styles.actionText}>Delete</Text>
               </TouchableOpacity>
             </View>
@@ -174,12 +179,21 @@ export const TaskDetail = ({
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  scrollView: { maxHeight: '80%' },
-  scrollContent: { flexGrow: 1, justifyContent: 'flex-end' },
+const createStyles = (theme) => StyleSheet.create({
+  overlay: { 
+    flex: 1, 
+    backgroundColor: theme.colors.overlay, 
+    justifyContent: 'flex-end' 
+  },
+  scrollView: { 
+    maxHeight: '80%' 
+  },
+  scrollContent: { 
+    flexGrow: 1, 
+    justifyContent: 'flex-end' 
+  },
   content: { 
-    backgroundColor: '#fff', 
+    backgroundColor: theme.colors.background, 
     borderTopLeftRadius: 20, 
     borderTopRightRadius: 20, 
     padding: 20 
@@ -190,17 +204,19 @@ const styles = StyleSheet.create({
     alignItems: 'center', 
     marginBottom: 15 
   },
-  closeBtn: { padding: 5 },
+  closeBtn: { 
+    padding: 5 
+  },
   title: { 
     fontSize: 24, 
     fontWeight: 'bold', 
-    color: '#333', 
+    color: theme.colors.textPrimary, 
     marginBottom: 15 
   },
   
   // Subtask section
   subtaskSection: {
-    backgroundColor: '#f5f5f5',
+    backgroundColor: theme.colors.surfaceElevated,
     padding: 12,
     borderRadius: 10,
     marginBottom: 15,
@@ -214,68 +230,104 @@ const styles = StyleSheet.create({
   subtaskTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#333',
+    color: theme.colors.textPrimary,
   },
   subtaskCount: {
     fontSize: 12,
-    color: '#666',
+    color: theme.colors.textSecondary,
   },
   progressBar: {
     height: 4,
-    backgroundColor: '#e0e0e0',
+    backgroundColor: theme.colors.surfaceHighlight,
     borderRadius: 2,
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#4CAF50',
+    backgroundColor: theme.colors.textSecondary,
     borderRadius: 2,
   },
   allDoneText: {
     fontSize: 12,
-    color: '#4CAF50',
+    color: theme.colors.accentSuccess,
     marginTop: 8,
     fontStyle: 'italic',
   },
   
-  badge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15 },
-  badgeText: { color: '#fff', fontWeight: '600', textTransform: 'uppercase', fontSize: 12 },
+  badge: { 
+    paddingHorizontal: 12, 
+    paddingVertical: 6, 
+    borderRadius: 15 
+  },
+  badgeText: { 
+    color: theme.colors.background, 
+    fontWeight: '600', 
+    textTransform: 'uppercase', 
+    fontSize: 12 
+  },
   
-  meta: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 20 },
+  meta: { 
+    flexDirection: 'row', 
+    flexWrap: 'wrap', 
+    marginBottom: 20 
+  },
   metaItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: theme.colors.surfaceElevated,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 15,
     marginRight: 10,
     marginBottom: 5,
   },
-  metaText: { fontSize: 13, color: '#666', marginLeft: 6 },
-  tagsRow: { flexDirection: 'row', flexWrap: 'wrap', marginRight: 10, marginBottom: 5 },
+  metaText: { 
+    fontSize: 13, 
+    color: theme.colors.textSecondary, 
+    marginLeft: 6 
+  },
+  tagsRow: { 
+    flexDirection: 'row', 
+    flexWrap: 'wrap', 
+    marginRight: 10, 
+    marginBottom: 5 
+  },
   tagChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#e3f2fd',
+    backgroundColor: theme.colors.surfaceElevated,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
     marginRight: 6,
     marginBottom: 4,
   },
-  tagText: { fontSize: 12, color: '#2196F3', marginLeft: 4 },
-  completedItem: { backgroundColor: '#e8f5e9' },
-  completedText: { color: '#4CAF50' },
+  tagText: { 
+    fontSize: 12, 
+    color: theme.colors.textPrimary, 
+    marginLeft: 4 
+  },
+  completedItem: { 
+    backgroundColor: theme.colors.surfaceHighlight 
+  },
+  completedText: { 
+    color: theme.colors.accentSuccess 
+  },
   
-  section: { marginBottom: 20 },
+  section: { 
+    marginBottom: 20 
+  },
   sectionTitle: { 
     fontSize: 14, 
     fontWeight: '600', 
-    color: '#999', 
+    color: theme.colors.textSecondary, 
     marginBottom: 8, 
     textTransform: 'uppercase' 
   },
-  description: { fontSize: 16, color: '#333', lineHeight: 22 },
+  description: { 
+    fontSize: 16, 
+    color: theme.colors.textPrimary, 
+    lineHeight: 22 
+  },
   
   // Subtasks in detail
   subtaskRow: {
@@ -285,12 +337,12 @@ const styles = StyleSheet.create({
   },
   subtaskText: {
     fontSize: 14,
-    color: '#333',
+    color: theme.colors.textPrimary,
     marginLeft: 8,
   },
   subtaskCompleted: {
     textDecorationLine: 'line-through',
-    color: '#999',
+    color: theme.colors.textMuted,
   },
   
   actions: { 
@@ -298,7 +350,7 @@ const styles = StyleSheet.create({
     marginTop: 20, 
     paddingTop: 20, 
     borderTopWidth: 1, 
-    borderTopColor: '#eee' 
+    borderTopColor: theme.colors.border 
   },
   actionBtn: { 
     flex: 1, 
@@ -307,11 +359,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center', 
     padding: 12, 
     borderRadius: 10, 
-    marginHorizontal: 5 
+    marginHorizontal: 5,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
   },
-  editBtn: { backgroundColor: '#2196F3' },
-  completeBtn: { backgroundColor: '#4CAF50' },
-  uncompleteBtn: { backgroundColor: '#ff9800' },
-  deleteBtn: { backgroundColor: '#f44336' },
-  actionText: { color: '#fff', fontWeight: '600', marginLeft: 8 },
+  editBtn: { 
+    backgroundColor: theme.colors.surfaceElevated 
+  },
+  completeBtn: { 
+    backgroundColor: theme.colors.surfaceElevated 
+  },
+  uncompleteBtn: { 
+    backgroundColor: theme.colors.surfaceHighlight 
+  },
+  deleteBtn: { 
+    backgroundColor: theme.colors.surfaceElevated 
+  },
+  actionText: { 
+    color: theme.colors.textPrimary, 
+    fontWeight: '600', 
+    marginLeft: 8 
+  },
 });

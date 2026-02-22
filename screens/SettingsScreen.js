@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,22 +9,26 @@ import {
   Platform,
   Keyboard,
   TouchableWithoutFeedback,
-  ScrollView,
+  Switch,
+  AppState,
 } from 'react-native';
-import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
-import { useServer } from '../context/ServerContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
+import { useServer } from '../context/ServerContext';
+import { useTheme } from '../context/ThemeContext';
 import * as SecureStore from 'expo-secure-store';
-import { hasMasterKey, changeMasterPassword as changeMasterPasswordUtil, resetVault } from './PasswordsScreen/utils/crypto';
 
-const SALT_STORE = 'connected_pass_salt';
+const MASTER_KEY_STORE = 'vault_master_key';
+const SALT_STORE = 'vault_salt';
 
 export default function SettingsScreen() {
+  const { theme, isDark, toggleTheme } = useTheme();
+  const insets = useSafeAreaInsets();
   const { serverIP, isConnected, loading, saveIP, checkConnection } = useServer();
   const [ipInput, setIpInput] = useState(serverIP);
   const [hasVault, setHasVault] = useState(false);
   
-  // Change password form state
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -35,10 +39,22 @@ export default function SettingsScreen() {
     checkVaultStatus();
   }, []);
 
-  const checkVaultStatus = async () => {
-    const hasKey = await hasMasterKey();
-    setHasVault(hasKey);
-  };
+  // Recheck when app comes to foreground
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active') {
+        checkVaultStatus();
+      }
+    });
+    return () => subscription?.remove();
+  }, []);
+
+  const checkVaultStatus = useCallback(async () => {
+    console.log('Settings: Checking vault status...');
+    const hasKey = await SecureStore.getItemAsync(MASTER_KEY_STORE);
+    console.log('Settings: Has vault:', !!hasKey);
+    setHasVault(!!hasKey);
+  }, []);
 
   const handleSave = async () => {
     Keyboard.dismiss();
@@ -81,25 +97,21 @@ export default function SettingsScreen() {
 
     setIsChanging(true);
     try {
-      // Note: In a real implementation, we would need to re-encrypt all passwords
-      // For now, we'll just verify the current password and update the master key
       const salt = await SecureStore.getItemAsync(SALT_STORE);
       const { deriveKey, storeMasterKey } = await import('./PasswordsScreen/utils/crypto');
       
-      // Verify current password
       const currentKey = await deriveKey(currentPassword, salt);
-      const storedKey = await SecureStore.getItemAsync('connected_pass_master_key');
+      const storedKey = await SecureStore.getItemAsync(MASTER_KEY_STORE);
       
       if (currentKey !== storedKey) {
         Alert.alert('Error', 'Current password is incorrect');
         return;
       }
 
-      // Setup new password
       const { setupMasterPassword } = await import('./PasswordsScreen/utils/crypto');
       await setupMasterPassword(newPassword);
 
-      Alert.alert('Success', 'Master password changed successfully!\n\nNote: Your existing passwords remain encrypted with the new password.');
+      Alert.alert('Success', 'Master password changed successfully!');
       setShowChangePassword(false);
       setCurrentPassword('');
       setNewPassword('');
@@ -115,7 +127,7 @@ export default function SettingsScreen() {
   const handleResetVault = async () => {
     Alert.alert(
       '⚠️ Reset Password Vault',
-      'This will permanently delete your master password. All encrypted passwords will become UNRECOVERABLE unless you remember the password.\n\nAre you absolutely sure?',
+      'This will permanently delete your master password and all stored passwords.\n\nAre you absolutely sure?',
       [
         { text: 'Cancel', style: 'cancel' },
         { 
@@ -123,12 +135,30 @@ export default function SettingsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await SecureStore.deleteItemAsync('connected_pass_master_key');
+              // Clear server data first
+              if (isConnected) {
+                await fetch(`${getBaseUrl()}/passwords`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify([]),
+                });
+              }
+              
+              // Clear secure store
+              await SecureStore.deleteItemAsync(MASTER_KEY_STORE);
               await SecureStore.deleteItemAsync(SALT_STORE);
+              
+              // Update state
               setHasVault(false);
-              Alert.alert('Reset Complete', 'Your password vault has been reset. You will need to set up a new master password when you open the Passwords tab.');
+              setShowChangePassword(false);
+              setCurrentPassword('');
+              setNewPassword('');
+              setConfirmPassword('');
+              
+              Alert.alert('Reset Complete', 'Your password vault has been reset. Please restart the app or go to the Passwords tab to set up a new vault.');
             } catch (error) {
-              Alert.alert('Error', 'Failed to reset vault');
+              console.error('Reset error:', error);
+              Alert.alert('Error', 'Failed to reset vault: ' + error.message);
             }
           }
         },
@@ -136,21 +166,47 @@ export default function SettingsScreen() {
     );
   };
 
+  const styles = createStyles(theme);
+
   return (
-    <View style={styles.container}>
-      <KeyboardAwareScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        enableOnAndroid={true}
-        extraScrollHeight={Platform.OS === 'ios' ? 20 : 80}
-        enableResetScrollToCoords={false}
-      >
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Custom Header */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Settings</Text>
+      </View>
+
+      <KeyboardSafeScreen>
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <ScrollView style={styles.inner}>
+          <View style={styles.inner}>
+            {/* Appearance Section */}
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+                  <Icon name="palette" size={20} color={theme.colors.textPrimary} />
+                </View>
+                <Text style={styles.sectionTitle}>Appearance</Text>
+              </View>
+              
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Dark Mode</Text>
+                  <Text style={styles.settingDescription}>Use dark theme throughout the app</Text>
+                </View>
+                <Switch
+                  value={isDark}
+                  onValueChange={toggleTheme}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
+                  thumbColor={isDark ? theme.colors.textPrimary : theme.colors.textTertiary}
+                />
+              </View>
+            </View>
+
             {/* Server Connection Section */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Icon name="server-network" size={24} color="#4CAF50" />
+                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+                  <Icon name="server-network" size={20} color={theme.colors.textPrimary} />
+                </View>
                 <Text style={styles.sectionTitle}>Server Connection</Text>
               </View>
               
@@ -161,33 +217,39 @@ export default function SettingsScreen() {
                 </Text>
               </View>
 
-              <Text style={styles.label}>Computer IP Address:</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="192.168.1.100"
-                value={ipInput}
-                onChangeText={setIpInput}
-                keyboardType="decimal-pad"
-                autoCapitalize="none"
-                returnKeyType="done"
-                onSubmitEditing={Keyboard.dismiss}
-              />
+              <Text style={styles.label}>Computer IP Address</Text>
+              <View style={styles.inputContainer}>
+                <Icon name="ip-network" size={18} color={theme.colors.textTertiary} style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="192.168.1.100"
+                  placeholderTextColor={theme.colors.textPlaceholder}
+                  value={ipInput}
+                  onChangeText={setIpInput}
+                  keyboardType="decimal-pad"
+                  autoCapitalize="none"
+                  returnKeyType="done"
+                  onSubmitEditing={Keyboard.dismiss}
+                  blurOnSubmit={true}
+                />
+              </View>
               
               <Text style={styles.hint}>
-                Example: 192.168.1.5{'\n'}
-                Make sure your phone and computer are on the same WiFi network
+                Your phone and computer must be on the same WiFi network
               </Text>
 
-              <TouchableOpacity style={styles.button} onPress={handleSave}>
-                <Text style={styles.buttonText}>Save & Connect</Text>
+              <TouchableOpacity style={styles.primaryButton} onPress={handleSave}>
+                <Icon name="content-save" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
+                <Text style={styles.primaryButtonText}>Save & Connect</Text>
               </TouchableOpacity>
 
               {serverIP && (
                 <TouchableOpacity 
-                  style={[styles.button, styles.testButton]} 
+                  style={styles.secondaryButton} 
                   onPress={handleTest}
                 >
-                  <Text style={styles.buttonText}>Test Connection</Text>
+                  <Icon name="connection" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
+                  <Text style={styles.secondaryButtonText}>Test Connection</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -196,19 +258,23 @@ export default function SettingsScreen() {
             {hasVault && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <Icon name="shield-key" size={24} color="#4CAF50" />
+                  <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+                    <Icon name="shield-key" size={20} color={theme.colors.textPrimary} />
+                  </View>
                   <Text style={styles.sectionTitle}>Password Vault</Text>
                 </View>
 
-                <Text style={styles.vaultStatus}>
-                  <Icon name="check-circle" size={16} color="#4CAF50" /> Vault is set up
-                </Text>
+                <View style={styles.vaultStatus}>
+                  <Icon name="check-circle" size={14} color={theme.colors.accentSuccess} />
+                  <Text style={styles.vaultStatusText}>Vault is set up and secure</Text>
+                </View>
 
                 <TouchableOpacity 
-                  style={[styles.button, styles.secondaryButton]} 
+                  style={styles.secondaryButton} 
                   onPress={() => setShowChangePassword(!showChangePassword)}
                 >
-                  <Text style={styles.buttonText}>
+                  <Icon name="lock-reset" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
+                  <Text style={styles.secondaryButtonText}>
                     {showChangePassword ? 'Cancel' : 'Change Master Password'}
                   </Text>
                 </TouchableOpacity>
@@ -216,32 +282,42 @@ export default function SettingsScreen() {
                 {showChangePassword && (
                   <View style={styles.changePasswordForm}>
                     <TextInput
-                      style={styles.input}
+                      style={styles.passwordInput}
                       placeholder="Current Master Password"
+                      placeholderTextColor={theme.colors.textPlaceholder}
                       value={currentPassword}
                       onChangeText={setCurrentPassword}
                       secureTextEntry
+                      returnKeyType="next"
+                      blurOnSubmit={false}
                     />
                     <TextInput
-                      style={styles.input}
+                      style={styles.passwordInput}
                       placeholder="New Master Password (min 8 chars)"
+                      placeholderTextColor={theme.colors.textPlaceholder}
                       value={newPassword}
                       onChangeText={setNewPassword}
                       secureTextEntry
+                      returnKeyType="next"
+                      blurOnSubmit={false}
                     />
                     <TextInput
-                      style={styles.input}
+                      style={styles.passwordInput}
                       placeholder="Confirm New Password"
+                      placeholderTextColor={theme.colors.textPlaceholder}
                       value={confirmPassword}
                       onChangeText={setConfirmPassword}
                       secureTextEntry
+                      returnKeyType="done"
+                      onSubmitEditing={handleChangePassword}
+                      blurOnSubmit={true}
                     />
                     <TouchableOpacity 
-                      style={[styles.button, isChanging && styles.buttonDisabled]}
+                      style={[styles.primaryButton, isChanging && styles.buttonDisabled]}
                       onPress={handleChangePassword}
                       disabled={isChanging}
                     >
-                      <Text style={styles.buttonText}>
+                      <Text style={styles.primaryButtonText}>
                         {isChanging ? 'Changing...' : 'Update Password'}
                       </Text>
                     </TouchableOpacity>
@@ -249,27 +325,27 @@ export default function SettingsScreen() {
                 )}
 
                 <TouchableOpacity 
-                  style={[styles.button, styles.dangerButton]} 
+                  style={styles.dangerButton} 
                   onPress={handleResetVault}
                 >
-                  <Text style={styles.buttonText}>Reset Password Vault</Text>
+                  <Icon name="delete-forever" size={16} color={theme.colors.accentError} style={styles.buttonIcon} />
+                  <Text style={styles.dangerButtonText}>Reset Password Vault</Text>
                 </TouchableOpacity>
-
-                <Text style={styles.warningText}>
-                  ⚠️ Resetting will permanently delete your master password. Your encrypted passwords cannot be recovered without the password!
-                </Text>
               </View>
             )}
 
             {!hasVault && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <Icon name="shield-off" size={24} color="#f44336" />
+                  <View style={[styles.iconContainer, { backgroundColor: 'rgba(244, 67, 54, 0.15)' }]}>
+                    <Icon name="shield-off" size={20} color={theme.colors.accentError} />
+                  </View>
                   <Text style={styles.sectionTitle}>Password Vault</Text>
                 </View>
-                <Text style={styles.vaultStatusInactive}>
-                  <Icon name="alert-circle" size={16} color="#f44336" /> No vault set up
-                </Text>
+                <View style={styles.vaultStatus}>
+                  <Icon name="alert-circle" size={14} color={theme.colors.accentError} />
+                  <Text style={[styles.vaultStatusText, { color: theme.colors.accentError }]}>No vault set up</Text>
+                </View>
                 <Text style={styles.hint}>
                   Go to the Passwords tab to set up your encrypted password vault.
                 </Text>
@@ -278,157 +354,257 @@ export default function SettingsScreen() {
 
             {/* Info Section */}
             <View style={styles.infoBox}>
-              <Text style={styles.infoTitle}>Security Info:</Text>
-              <Text style={styles.infoText}>
-                • Passwords are encrypted on your device before syncing{'\n'}
-                • Server never sees your plaintext passwords{'\n'}
-                • Your master password is never stored on the server{'\n'}
-                • Data is stored in SQLite database on the server
-              </Text>
+              <Icon name="information" size={18} color={theme.colors.textPrimary} style={styles.infoIcon} />
+              <View style={styles.infoContent}>
+                <Text style={styles.infoTitle}>Security Info</Text>
+                <Text style={styles.infoText}>
+                  Passwords are encrypted on your device before syncing. The server never sees your plaintext passwords.
+                </Text>
+              </View>
             </View>
-          </ScrollView>
+
+            <View style={styles.bottomPadding} />
+          </View>
         </TouchableWithoutFeedback>
-      </KeyboardAwareScrollView>
+      </KeyboardSafeScreen>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: theme.colors.background,
   },
-  scrollContent: {
-    flexGrow: 1,
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
   },
   inner: {
-    flex: 1,
-    padding: 20,
+    padding: 16,
   },
   section: {
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.surface,
     borderRadius: 12,
-    padding: 20,
-    marginBottom: 20,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
   },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 15,
+    marginBottom: 16,
+  },
+  iconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginLeft: 10,
-    color: '#333',
+    fontSize: 17,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
+  },
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+  },
+  settingInfo: {
+    flex: 1,
+  },
+  settingLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: theme.colors.textPrimary,
+    marginBottom: 2,
+  },
+  settingDescription: {
+    fontSize: 13,
+    color: theme.colors.textTertiary,
   },
   statusContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     marginRight: 8,
   },
   connected: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: theme.colors.accentSuccess,
   },
   disconnected: {
-    backgroundColor: '#f44336',
+    backgroundColor: theme.colors.accentError,
   },
   statusText: {
-    fontSize: 16,
-    color: '#666',
+    fontSize: 15,
+    color: theme.colors.textSecondary,
   },
   label: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: '600',
-    marginBottom: 8,
-    color: '#333',
+    marginBottom: 6,
+    color: theme.colors.textTertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.inputBackground,
+    borderRadius: 10,
+    borderWidth: 0,
+    height: 44,
+  },
+  inputIcon: {
+    marginLeft: 12,
+    marginRight: 8,
   },
   input: {
-    backgroundColor: '#f5f5f5',
-    padding: 15,
-    borderRadius: 10,
-    fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    marginBottom: 10,
+    flex: 1,
+    height: 44,
+    paddingRight: 12,
+    fontSize: 15,
+    color: theme.colors.inputText,
   },
   hint: {
-    fontSize: 12,
-    color: '#666',
-    marginBottom: 15,
-    lineHeight: 18,
+    fontSize: 13,
+    color: theme.colors.textTertiary,
+    marginTop: 6,
+    marginBottom: 16,
   },
-  button: {
-    backgroundColor: '#4CAF50',
-    padding: 15,
+  primaryButton: {
+    flexDirection: 'row',
+    backgroundColor: theme.colors.surfaceElevated,
+    height: 44,
     borderRadius: 10,
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 10,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
   },
-  buttonDisabled: {
-    backgroundColor: '#a5d6a7',
-  },
-  testButton: {
-    backgroundColor: '#2196F3',
+  primaryButtonText: {
+    color: theme.colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
   },
   secondaryButton: {
-    backgroundColor: '#ff9800',
+    flexDirection: 'row',
+    backgroundColor: theme.colors.surfaceHighlight,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+    marginBottom: 10,
   },
-  dangerButton: {
-    backgroundColor: '#f44336',
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
+  secondaryButtonText: {
+    color: theme.colors.textPrimary,
+    fontSize: 15,
     fontWeight: '600',
   },
-  vaultStatus: {
-    fontSize: 14,
-    color: '#4CAF50',
-    marginBottom: 15,
+  dangerButton: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(244, 67, 54, 0.1)',
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 0.5,
+    borderColor: theme.colors.accentError,
   },
-  vaultStatusInactive: {
+  dangerButtonText: {
+    color: theme.colors.accentError,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  buttonIcon: {
+    marginRight: 8,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  vaultStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+    padding: 10,
+    borderRadius: 8,
+  },
+  vaultStatusText: {
+    marginLeft: 8,
+    color: theme.colors.accentSuccess,
+    fontWeight: '500',
     fontSize: 14,
-    color: '#f44336',
-    marginBottom: 15,
   },
   changePasswordForm: {
-    backgroundColor: '#f5f5f5',
-    padding: 15,
+    backgroundColor: theme.colors.surface,
+    padding: 12,
     borderRadius: 10,
-    marginVertical: 10,
+    marginVertical: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
   },
-  warningText: {
-    fontSize: 12,
-    color: '#f44336',
-    marginTop: 10,
-    lineHeight: 16,
+  passwordInput: {
+    backgroundColor: theme.colors.inputBackground,
+    height: 44,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    fontSize: 15,
+    color: theme.colors.inputText,
+    marginBottom: 10,
+    borderWidth: 0,
   },
   infoBox: {
-    backgroundColor: '#e3f2fd',
-    padding: 15,
+    flexDirection: 'row',
+    backgroundColor: theme.colors.surfaceElevated,
+    padding: 14,
     borderRadius: 10,
-    marginTop: 10,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  infoIcon: {
+    marginRight: 12,
+    marginTop: 2,
+  },
+  infoContent: {
+    flex: 1,
   },
   infoTitle: {
-    fontWeight: 'bold',
-    marginBottom: 8,
-    color: '#1976d2',
+    fontWeight: '700',
+    marginBottom: 4,
+    color: theme.colors.textPrimary,
+    fontSize: 14,
   },
   infoText: {
-    color: '#555',
-    lineHeight: 22,
+    color: theme.colors.textSecondary,
+    lineHeight: 18,
     fontSize: 13,
+  },
+  bottomPadding: {
+    height: 100,
   },
 });

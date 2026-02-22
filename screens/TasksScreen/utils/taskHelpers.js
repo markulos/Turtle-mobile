@@ -12,7 +12,17 @@ export const sortTasks = (a, b) => {
   return a.completed ? 1 : -1;
 };
 
-export const getPriorityColor = (priority) => {
+export const getPriorityColor = (priority, theme) => {
+  if (theme) {
+    // Use theme colors for dark mode
+    const colors = { 
+      high: theme.colors.accentError, 
+      medium: theme.colors.accentWarning, 
+      low: theme.colors.accentSuccess 
+    };
+    return colors[priority] || theme.colors.textTertiary;
+  }
+  // Fallback for non-theme usage
   const colors = { high: '#f44336', medium: '#ff9800', low: '#4caf50' };
   return colors[priority] || '#999';
 };

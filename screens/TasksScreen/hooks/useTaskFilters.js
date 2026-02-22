@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { normalizeTags, sortTasks } from '../utils/taskHelpers';
 
-export const useTaskFilters = (tasks) => {
+export const useTaskFilters = (tasks, projects = []) => {
   const [selectedProject, setSelectedProject] = useState('All');
   const [selectedTags, setSelectedTags] = useState([]);
   const [tagFilterMode, setTagFilterMode] = useState('any');
@@ -54,6 +54,31 @@ export const useTaskFilters = (tasks) => {
 
   const groupedTasks = useMemo(() => {
     const byProject = {};
+    
+    // Count TOTAL tasks per project (not just filtered) to determine truly empty
+    const projectTaskCounts = {};
+    tasks.forEach(task => {
+      const proj = task.project || 'No Project';
+      projectTaskCounts[proj] = (projectTaskCounts[proj] || 0) + 1;
+    });
+    
+    // Initialize with all projects to include empty ones
+    const projectsToShow = selectedProject === 'All' 
+      ? projects 
+      : selectedProject === 'No Project'
+        ? ['No Project']
+        : [selectedProject];
+    
+    projectsToShow.forEach(proj => {
+      byProject[proj] = {};
+    });
+    
+    // Add 'No Project' if showing all projects
+    if (selectedProject === 'All' && !projects.includes('No Project')) {
+      byProject['No Project'] = {};
+    }
+    
+    // Fill with FILTERED tasks
     filteredTasks.forEach(task => {
       const proj = task.project || 'No Project';
       if (!byProject[proj]) byProject[proj] = {};
@@ -68,30 +93,43 @@ export const useTaskFilters = (tasks) => {
 
     const sections = [];
     
-    // FIXED: Properly iterate through byProject
+    // Build sections from byProject
     Object.entries(byProject).forEach(([project, tags]) => {
-      sections.push({ title: project, type: 'project', data: [], project });
+      const visibleTasks = Object.values(tags).flat();
+      const totalTaskCount = projectTaskCounts[project] || 0;
+      const isTrulyEmpty = totalTaskCount === 0; // Only truly empty if no tasks at all
       
-      Object.entries(tags).forEach(([tagKey, tagTasks]) => {
-        // Parse the tag string back into array
-        const tagArray = tagKey === 'Untagged' 
-          ? [] 
-          : tagKey.split(',').map(t => t.trim()).filter(Boolean);
-        
-        sections.push({
-          title: tagKey,
-          type: 'tag',
-          project,
-          data: tagTasks.sort(sortTasks),
-          completedCount: tagTasks.filter(t => t.completed).length,
-          totalCount: tagTasks.length,
-          tags: tagArray
-        });
+      sections.push({ 
+        title: project, 
+        type: 'project', 
+        data: [], 
+        project,
+        isEmpty: isTrulyEmpty, // Only true if project has NO tasks (not just filtered out)
+        taskCount: totalTaskCount
       });
+      
+      // Only show tag groups if project has VISIBLE tasks
+      if (visibleTasks.length > 0) {
+        Object.entries(tags).forEach(([tagKey, tagTasks]) => {
+          const tagArray = tagKey === 'Untagged' 
+            ? [] 
+            : tagKey.split(',').map(t => t.trim()).filter(Boolean);
+          
+          sections.push({
+            title: tagKey,
+            type: 'tag',
+            project,
+            data: tagTasks.sort(sortTasks),
+            completedCount: tagTasks.filter(t => t.completed).length,
+            totalCount: tagTasks.length,
+            tags: tagArray
+          });
+        });
+      }
     });
     
     return sections;
-  }, [filteredTasks]);
+  }, [filteredTasks, tasks, projects, selectedProject]);
 
   const stats = useMemo(() => ({
     completed: filteredTasks.filter(t => t.completed).length,

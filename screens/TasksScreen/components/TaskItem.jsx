@@ -9,6 +9,7 @@ import {
   Easing
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useTheme } from '../../../context/ThemeContext';
 import { getPriorityColor, areAllSubtasksCompleted } from '../utils/taskHelpers';
 
 export const TaskItem = ({ 
@@ -21,6 +22,7 @@ export const TaskItem = ({
   onDeleteSubtask,
   onUpdateSubtask
 }) => {
+  const { theme } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [showAddSubtask, setShowAddSubtask] = useState(false);
@@ -39,16 +41,6 @@ export const TaskItem = ({
     }).start();
     setExpanded(!expanded);
   };
-
-  const height = animation.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 'auto']
-  });
-
-  const opacity = animation.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 1]
-  });
 
   const handleAddSubtask = () => {
     if (!newSubtaskTitle.trim()) return;
@@ -74,6 +66,8 @@ export const TaskItem = ({
   const allSubtasksDone = areAllSubtasksCompleted(subtasks);
   const progress = subtasks.length > 0 ? completedSubtasks / subtasks.length : 0;
 
+  const styles = createStyles(theme);
+
   return (
     <View style={[styles.container, item.completed && styles.completed]}>
       {/* Main task row */}
@@ -87,14 +81,13 @@ export const TaskItem = ({
           style={styles.checkbox}
           onPress={(e) => { 
             e.stopPropagation(); 
-            // Only toggle if no subtasks or all subtasks done manually
             onToggleComplete(item.id); 
           }}
         >
           <Icon 
             name={item.completed ? "checkbox-marked" : "checkbox-blank-circle-outline"} 
-            size={20} 
-            color={item.completed ? "#4CAF50" : "#ccc"} 
+            size={22} 
+            color={item.completed ? theme.colors.accentSuccess : theme.colors.textTertiary} 
           />
         </TouchableOpacity>
         
@@ -122,9 +115,8 @@ export const TaskItem = ({
         </View>
         
         <View style={styles.rightSection}>
-          <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(item.priority) }]} />
+          <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(item.priority, theme) }]} />
           
-          {/* Expand/chevron for subtasks */}
           <TouchableOpacity
             style={styles.expandBtn}
             onPress={(e) => { e.stopPropagation(); toggleExpand(); }}
@@ -132,7 +124,7 @@ export const TaskItem = ({
             <Icon
               name={expanded ? "chevron-up" : "chevron-down"}
               size={20}
-              color="#666"
+              color={theme.colors.textTertiary}
             />
           </TouchableOpacity>
         </View>
@@ -141,7 +133,6 @@ export const TaskItem = ({
       {/* Expanded subtasks section */}
       {expanded && (
         <View style={styles.expandedContent}>
-          {/* Subtasks list */}
           {subtasks.map((subtask, index) => (
             <View 
               key={subtask.id} 
@@ -157,7 +148,7 @@ export const TaskItem = ({
                 <Icon 
                   name={subtask.completed ? "checkbox-marked" : "checkbox-blank-outline"} 
                   size={18} 
-                  color={subtask.completed ? "#4CAF50" : "#ccc"} 
+                  color={subtask.completed ? theme.colors.accentSuccess : theme.colors.textTertiary} 
                 />
               </TouchableOpacity>
               
@@ -167,11 +158,11 @@ export const TaskItem = ({
                     style={styles.editSubtaskInput}
                     value={editSubtaskTitle}
                     onChangeText={setEditSubtaskTitle}
-                    autoFocus
                     onSubmitEditing={saveEditSubtask}
+                    placeholderTextColor={theme.colors.textPlaceholder}
                   />
                   <TouchableOpacity onPress={saveEditSubtask}>
-                    <Icon name="check" size={18} color="#4CAF50" />
+                    <Icon name="check" size={18} color={theme.colors.accentSuccess} />
                   </TouchableOpacity>
                 </View>
               ) : (
@@ -187,13 +178,13 @@ export const TaskItem = ({
                       style={styles.subtaskAction}
                       onPress={() => handleEditSubtask(subtask)}
                     >
-                      <Icon name="pencil" size={16} color="#666" />
+                      <Icon name="pencil" size={16} color={theme.colors.textTertiary} />
                     </TouchableOpacity>
                     <TouchableOpacity 
                       style={styles.subtaskAction}
                       onPress={() => onDeleteSubtask(item.id, subtask.id)}
                     >
-                      <Icon name="delete" size={16} color="#f44336" />
+                      <Icon name="delete" size={16} color={theme.colors.accentError} />
                     </TouchableOpacity>
                   </View>
                 </>
@@ -207,13 +198,13 @@ export const TaskItem = ({
               <TextInput
                 style={styles.addSubtaskInput}
                 placeholder="New subtask..."
+                placeholderTextColor={theme.colors.textPlaceholder}
                 value={newSubtaskTitle}
                 onChangeText={setNewSubtaskTitle}
-                autoFocus
                 onSubmitEditing={handleAddSubtask}
               />
               <TouchableOpacity style={styles.addSubtaskBtn} onPress={handleAddSubtask}>
-                <Icon name="check" size={18} color="#fff" />
+                <Icon name="check" size={18} color={theme.colors.background} />
               </TouchableOpacity>
               <TouchableOpacity 
                 style={styles.cancelSubtaskBtn}
@@ -222,7 +213,7 @@ export const TaskItem = ({
                   setNewSubtaskTitle('');
                 }}
               >
-                <Icon name="close" size={18} color="#666" />
+                <Icon name="close" size={18} color={theme.colors.textTertiary} />
               </TouchableOpacity>
             </View>
           ) : (
@@ -230,7 +221,7 @@ export const TaskItem = ({
               style={styles.addSubtaskTrigger}
               onPress={() => setShowAddSubtask(true)}
             >
-              <Icon name="plus" size={16} color="#4CAF50" />
+              <Icon name="plus" size={16} color={theme.colors.textPrimary} />
               <Text style={styles.addSubtaskText}>Add subtask</Text>
             </TouchableOpacity>
           )}
@@ -241,14 +232,14 @@ export const TaskItem = ({
               <Icon 
                 name={allSubtasksDone ? "check-circle" : "progress-clock"} 
                 size={14} 
-                color={allSubtasksDone ? "#4CAF50" : "#ff9800"} 
+                color={allSubtasksDone ? theme.colors.accentSuccess : theme.colors.accentWarning} 
               />
               <Text style={[
                 styles.completionText,
                 allSubtasksDone && styles.completionDone
               ]}>
                 {allSubtasksDone 
-                  ? 'All subtasks completed - task will auto-complete' 
+                  ? 'All subtasks completed' 
                   : `${completedSubtasks} of ${subtasks.length} subtasks done`}
               </Text>
             </View>
@@ -259,39 +250,40 @@ export const TaskItem = ({
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (theme) => StyleSheet.create({
   container: {
-    backgroundColor: '#fafafa',
+    backgroundColor: theme.colors.surfaceElevated,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: theme.colors.border,
   },
   completed: {
-    opacity: 0.7,
+    opacity: 0.6,
   },
   mainRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 10,
-    paddingLeft: 45,
+    padding: theme.spacing.sm,
+    paddingLeft: theme.spacing.md,
   },
   checkbox: {
-    marginRight: 10,
+    marginRight: theme.spacing.sm,
   },
   content: {
     flex: 1,
   },
   title: {
-    fontSize: 14,
-    color: '#333',
+    fontSize: theme.typography.body,
+    color: theme.colors.textPrimary,
+    fontWeight: '500',
   },
   description: {
-    fontSize: 12,
-    color: '#999',
+    fontSize: theme.typography.small,
+    color: theme.colors.textTertiary,
     marginTop: 2,
   },
   completedText: {
     textDecorationLine: 'line-through',
-    color: '#999',
+    color: theme.colors.textTertiary,
   },
   rightSection: {
     flexDirection: 'row',
@@ -301,10 +293,10 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    marginRight: 8,
+    marginRight: theme.spacing.sm,
   },
   expandBtn: {
-    padding: 4,
+    padding: theme.spacing.xs,
   },
   
   // Subtask summary
@@ -316,56 +308,57 @@ const styles = StyleSheet.create({
   progressBar: {
     flex: 1,
     height: 3,
-    backgroundColor: '#e0e0e0',
+    backgroundColor: theme.colors.surfaceHighlight,
     borderRadius: 2,
-    marginRight: 8,
+    marginRight: theme.spacing.sm,
     maxWidth: 60,
+    overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#4CAF50',
+    backgroundColor: theme.colors.textSecondary,
     borderRadius: 2,
   },
   subtaskCount: {
-    fontSize: 11,
-    color: '#999',
+    fontSize: theme.typography.small,
+    color: theme.colors.textTertiary,
   },
 
   // Expanded section
   expandedContent: {
-    paddingLeft: 75,
-    paddingRight: 15,
-    paddingBottom: 10,
-    backgroundColor: '#f5f5f5',
+    paddingLeft: theme.spacing.xxl,
+    paddingRight: theme.spacing.md,
+    paddingBottom: theme.spacing.sm,
+    backgroundColor: theme.colors.surface,
   },
   subtaskRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: theme.spacing.xs,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: theme.colors.border,
   },
   subtaskLast: {
     borderBottomWidth: 0,
   },
   subtaskCheckbox: {
-    marginRight: 10,
+    marginRight: theme.spacing.sm,
   },
   subtaskText: {
     flex: 1,
-    fontSize: 13,
-    color: '#333',
+    fontSize: theme.typography.small,
+    color: theme.colors.textSecondary,
   },
   subtaskCompleted: {
     textDecorationLine: 'line-through',
-    color: '#999',
+    color: theme.colors.textTertiary,
   },
   subtaskActions: {
     flexDirection: 'row',
   },
   subtaskAction: {
-    padding: 4,
-    marginLeft: 8,
+    padding: theme.spacing.xs,
+    marginLeft: theme.spacing.xs,
   },
   
   // Edit subtask
@@ -376,45 +369,45 @@ const styles = StyleSheet.create({
   },
   editSubtaskInput: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#ddd',
+    borderWidth: 0,
     borderRadius: 6,
     padding: 6,
-    fontSize: 13,
+    fontSize: theme.typography.small,
+    color: theme.colors.inputText,
     marginRight: 8,
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.inputBackground,
   },
 
   // Add subtask
   addSubtaskTrigger: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    marginTop: 5,
+    paddingVertical: theme.spacing.sm,
+    marginTop: 4,
   },
   addSubtaskText: {
-    fontSize: 13,
-    color: '#4CAF50',
+    fontSize: theme.typography.small,
+    color: theme.colors.textPrimary,
     marginLeft: 6,
   },
   addSubtaskRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
-    marginTop: 5,
+    paddingVertical: theme.spacing.xs,
+    marginTop: 4,
   },
   addSubtaskInput: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#4CAF50',
+    borderWidth: 0,
     borderRadius: 6,
     padding: 8,
-    fontSize: 13,
+    fontSize: theme.typography.small,
+    color: theme.colors.inputText,
     marginRight: 8,
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.inputBackground,
   },
   addSubtaskBtn: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: theme.colors.surfaceElevated,
     width: 32,
     height: 32,
     borderRadius: 16,
@@ -433,18 +426,18 @@ const styles = StyleSheet.create({
   completionStatus: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 10,
-    paddingTop: 10,
+    marginTop: theme.spacing.sm,
+    paddingTop: theme.spacing.sm,
     borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
+    borderTopColor: theme.colors.border,
   },
   completionText: {
-    fontSize: 11,
-    color: '#666',
+    fontSize: theme.typography.small,
+    color: theme.colors.textTertiary,
     marginLeft: 6,
     fontStyle: 'italic',
   },
   completionDone: {
-    color: '#4CAF50',
+    color: theme.colors.accentSuccess,
   },
 });
