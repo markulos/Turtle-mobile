@@ -8,7 +8,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { normalizeTags, getPriorityColor } from '../utils/taskHelpers';
+import { normalizeTags, getPriorityColor, areAllSubtasksCompleted } from '../utils/taskHelpers';
 
 export const TaskDetail = ({ 
   task, 
@@ -21,7 +21,11 @@ export const TaskDetail = ({
 }) => {
   if (!task) return null;
 
+  // Ensure subtasks exists
+  const subtasks = task.subtasks || [];
   const tags = normalizeTags(task.tags);
+  const allSubtasksDone = areAllSubtasksCompleted(subtasks);
+  const completedSubtasks = subtasks.filter(st => st.completed).length;
 
   return (
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
@@ -38,6 +42,29 @@ export const TaskDetail = ({
             </View>
 
             <Text style={styles.title}>{task.title}</Text>
+
+            {/* Subtasks progress */}
+            {subtasks.length > 0 && (
+              <View style={styles.subtaskSection}>
+                <View style={styles.subtaskHeader}>
+                  <Text style={styles.subtaskTitle}>Subtasks</Text>
+                  <Text style={styles.subtaskCount}>
+                    {completedSubtasks}/{subtasks.length}
+                  </Text>
+                </View>
+                <View style={styles.progressBar}>
+                  <View 
+                    style={[
+                      styles.progressFill, 
+                      { width: `${(completedSubtasks / subtasks.length) * 100}%` }
+                    ]} 
+                  />
+                </View>
+                {allSubtasksDone && (
+                  <Text style={styles.allDoneText}>All subtasks completed!</Text>
+                )}
+              </View>
+            )}
 
             <View style={styles.meta}>
               {task.project && (
@@ -93,6 +120,28 @@ export const TaskDetail = ({
               </View>
             )}
 
+            {/* Subtasks list in detail */}
+            {subtasks.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Subtasks</Text>
+                {subtasks.map((subtask, idx) => (
+                  <View key={subtask.id} style={styles.subtaskRow}>
+                    <Icon 
+                      name={subtask.completed ? "checkbox-marked" : "checkbox-blank-outline"} 
+                      size={18} 
+                      color={subtask.completed ? "#4CAF50" : "#ccc"} 
+                    />
+                    <Text style={[
+                      styles.subtaskText,
+                      subtask.completed && styles.subtaskCompleted
+                    ]}>
+                      {subtask.title}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
             <View style={styles.actions}>
               <TouchableOpacity style={[styles.actionBtn, styles.editBtn]} onPress={onEdit}>
                 <Icon name="pencil" size={20} color="#fff" />
@@ -103,7 +152,11 @@ export const TaskDetail = ({
                 style={[styles.actionBtn, styles.completeBtn, task.completed && styles.uncompleteBtn]}
                 onPress={onToggleComplete}
               >
-                <Icon name={task.completed ? "checkbox-blank-outline" : "checkbox-marked"} size={20} color="#fff" />
+                <Icon 
+                  name={task.completed ? "checkbox-blank-outline" : "checkbox-marked"} 
+                  size={20} 
+                  color="#fff" 
+                />
                 <Text style={styles.actionText}>
                   {task.completed ? 'Mark Incomplete' : 'Complete'}
                 </Text>
@@ -125,10 +178,68 @@ const styles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   scrollView: { maxHeight: '80%' },
   scrollContent: { flexGrow: 1, justifyContent: 'flex-end' },
-  content: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  content: { 
+    backgroundColor: '#fff', 
+    borderTopLeftRadius: 20, 
+    borderTopRightRadius: 20, 
+    padding: 20 
+  },
+  header: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 15 
+  },
   closeBtn: { padding: 5 },
-  title: { fontSize: 24, fontWeight: 'bold', color: '#333', marginBottom: 15 },
+  title: { 
+    fontSize: 24, 
+    fontWeight: 'bold', 
+    color: '#333', 
+    marginBottom: 15 
+  },
+  
+  // Subtask section
+  subtaskSection: {
+    backgroundColor: '#f5f5f5',
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 15,
+  },
+  subtaskHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  subtaskTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+  subtaskCount: {
+    fontSize: 12,
+    color: '#666',
+  },
+  progressBar: {
+    height: 4,
+    backgroundColor: '#e0e0e0',
+    borderRadius: 2,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#4CAF50',
+    borderRadius: 2,
+  },
+  allDoneText: {
+    fontSize: 12,
+    color: '#4CAF50',
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  
+  badge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15 },
+  badgeText: { color: '#fff', fontWeight: '600', textTransform: 'uppercase', fontSize: 12 },
+  
   meta: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 20 },
   metaItem: {
     flexDirection: 'row',
@@ -155,16 +266,52 @@ const styles = StyleSheet.create({
   tagText: { fontSize: 12, color: '#2196F3', marginLeft: 4 },
   completedItem: { backgroundColor: '#e8f5e9' },
   completedText: { color: '#4CAF50' },
+  
   section: { marginBottom: 20 },
-  sectionTitle: { fontSize: 14, fontWeight: '600', color: '#999', marginBottom: 8, textTransform: 'uppercase' },
+  sectionTitle: { 
+    fontSize: 14, 
+    fontWeight: '600', 
+    color: '#999', 
+    marginBottom: 8, 
+    textTransform: 'uppercase' 
+  },
   description: { fontSize: 16, color: '#333', lineHeight: 22 },
-  actions: { flexDirection: 'row', marginTop: 20, paddingTop: 20, borderTopWidth: 1, borderTopColor: '#eee' },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 10, marginHorizontal: 5 },
+  
+  // Subtasks in detail
+  subtaskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  subtaskText: {
+    fontSize: 14,
+    color: '#333',
+    marginLeft: 8,
+  },
+  subtaskCompleted: {
+    textDecorationLine: 'line-through',
+    color: '#999',
+  },
+  
+  actions: { 
+    flexDirection: 'row', 
+    marginTop: 20, 
+    paddingTop: 20, 
+    borderTopWidth: 1, 
+    borderTopColor: '#eee' 
+  },
+  actionBtn: { 
+    flex: 1, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    padding: 12, 
+    borderRadius: 10, 
+    marginHorizontal: 5 
+  },
   editBtn: { backgroundColor: '#2196F3' },
   completeBtn: { backgroundColor: '#4CAF50' },
   uncompleteBtn: { backgroundColor: '#ff9800' },
   deleteBtn: { backgroundColor: '#f44336' },
   actionText: { color: '#fff', fontWeight: '600', marginLeft: 8 },
-  badge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15 },
-  badgeText: { color: '#fff', fontWeight: '600', textTransform: 'uppercase', fontSize: 12 },
 });

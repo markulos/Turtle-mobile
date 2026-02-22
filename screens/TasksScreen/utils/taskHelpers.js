@@ -16,3 +16,34 @@ export const getPriorityColor = (priority) => {
   const colors = { high: '#f44336', medium: '#ff9800', low: '#4caf50' };
   return colors[priority] || '#999';
 };
+
+// NEW: Subtask utilities
+export const areAllSubtasksCompleted = (subtasks) => {
+  if (!subtasks || subtasks.length === 0) return false;
+  return subtasks.every(st => st.completed);
+};
+
+export const toggleSubtaskComplete = (subtasks, subtaskId) => {
+  return subtasks.map(st => 
+    st.id === subtaskId ? { ...st, completed: !st.completed } : st
+  );
+};
+
+export const addSubtask = (subtasks, title) => {
+  return [...(subtasks || []), {
+    id: Date.now().toString(),
+    title: title.trim(),
+    completed: false,
+    createdAt: Date.now()
+  }];
+};
+
+export const deleteSubtask = (subtasks, subtaskId) => {
+  return subtasks.filter(st => st.id !== subtaskId);
+};
+
+export const updateSubtask = (subtasks, subtaskId, updates) => {
+  return subtasks.map(st => 
+    st.id === subtaskId ? { ...st, ...updates } : st
+  );
+};

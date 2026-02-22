@@ -32,12 +32,15 @@ export default function TasksScreen() {
   const [showDetail, setShowDetail] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [selectedTask, setSelectedTask] = useState(null);
-  // MISSING: Add prefillData state
-  const [prefillData, setPrefillData] = useState({ project: '', tags: [] });
 
   const {
     tasks, setTasks, projects, allTags,
-    loadData, saveTasks, collectTags, addProject, deleteProject
+    loadData, saveTasks, collectTags, addProject, deleteProject,
+    // NEW: Subtask handlers
+    handleAddSubtask,
+    handleToggleSubtask,
+    handleDeleteSubtask,
+    handleUpdateSubtask,
   } = useTaskData(api, isConnected);
 
   const filters = useTaskFilters(tasks);
@@ -50,38 +53,12 @@ export default function TasksScreen() {
     }
   }, [showFilterMenu, menuAnimation]);
 
-  // MOVED: Define openTaskForm BEFORE handleAddFromSection
-  const openTaskForm = (task = null, project = '', tags = []) => {
-    setEditingTask(task);
-    
-    let prefilledProject = project;
-    if (!prefilledProject && filters.selectedProject !== 'All') {
-      prefilledProject = filters.selectedProject === 'No Project' ? '' : filters.selectedProject;
-    }
-    
-    const prefilledTags = Array.isArray(tags) ? tags : [];
-    
-    
-    setPrefillData({ 
-      project: prefilledProject,
-      tags: prefilledTags
-    });
-    
-    setShowTaskForm(true);
-  };
-
-  // MOVED: Define handleAddFromSection AFTER openTaskForm
-  const handleAddFromSection = (project, tags) => {
-    const actualProject = project === 'No Project' ? '' : project;
-    openTaskForm(null, actualProject, tags);
-  };
-
   const handleSaveTask = async (taskData) => {
-    if (taskData.tags.length > 0) await collectTags(taskData.tags);
+    if (taskData.tags?.length > 0) await collectTags(taskData.tags);
     
     const newTasks = taskData.id && tasks.find(t => t.id === taskData.id)
       ? tasks.map(t => t.id === taskData.id ? taskData : t)
-      : [...tasks, taskData];
+      : [...tasks, { ...taskData, subtasks: [] }];
     
     await saveTasks(newTasks);
   };
@@ -112,13 +89,39 @@ export default function TasksScreen() {
     ]);
   };
 
+  const handleInlineAdd = (project, tags, title) => {
+    const actualProject = project === 'No Project' ? '' : project;
+    
+    const newTask = {
+      title: title,
+      description: '',
+      priority: 'medium',
+      completed: false,
+      project: actualProject,
+      dueDate: '',
+      tags: tags || [],
+      subtasks: [],
+      id: Date.now().toString(),
+      createdAt: Date.now()
+    };
+    
+    handleSaveTask(newTask);
+  };
+
+  const openEditForm = (task) => {
+    setEditingTask(task);
+    setShowTaskForm(true);
+  };
+
   const openDetail = (task) => {
     setSelectedTask(task);
     setShowDetail(true);
   };
 
-  // Debug logs - move inside component but after all function definitions
-  console.log('Current prefillData:', prefillData);
+  const closeTaskForm = () => {
+    setShowTaskForm(false);
+    setEditingTask(null);
+  };
 
   if (!isConnected) {
     return (
@@ -198,6 +201,7 @@ export default function TasksScreen() {
         selected={filters.selectedProject}
         onSelect={filters.setSelectedProject}
         onManage={() => setShowProjectManager(true)}
+        onAddProject={addProject}
       />
 
       <FilterMenu
@@ -219,20 +223,19 @@ export default function TasksScreen() {
 
       <TaskForm
         visible={showTaskForm}
-        onClose={() => setShowTaskForm(false)}
+        onClose={closeTaskForm}
         onSave={handleSaveTask}
         initialData={editingTask}
         projects={projects}
+        allTags={allTags}
         onAddProject={addProject}
-        prefillProject={prefillData.project}
-        prefillTags={prefillData.tags}
       />
 
       <TaskDetail
         task={selectedTask}
         visible={showDetail}
         onClose={() => setShowDetail(false)}
-        onEdit={() => { setShowDetail(false); openTaskForm(selectedTask); }}
+        onEdit={() => { setShowDetail(false); openEditForm(selectedTask); }}
         onToggleComplete={() => handleToggleComplete(selectedTask.id)}
         onDelete={() => { handleDelete(selectedTask.id); setShowDetail(false); }}
         onTagPress={filters.toggleTagFilter}
@@ -242,22 +245,28 @@ export default function TasksScreen() {
       <SectionList
         sections={filters.groupedTasks}
         keyExtractor={(item) => item.id}
+        // In the renderItem section, add logging:
         renderItem={({ item, section }) => {
-          // Don't render project headers as items
           if (section.type === 'project') return null;
-          
-          // Check if this tag section is expanded
           const tagKey = `${section.project}-${section.title}`;
-          const isExpanded = filters.expandedTags[tagKey] !== false;
+          if (filters.expandedTags[tagKey] === false) return null;
           
-          // Don't render items if collapsed
-          if (!isExpanded) return null;
+          // DEBUG
+          console.log('Rendering task:', item.id, item.title, 'subtasks:', item.subtasks);
           
           return (
             <TaskItem 
               item={item} 
-              onPress={openDetail}
+              onPress={() => {
+                console.log('Task pressed:', item); // DEBUG
+                openDetail(item);
+              }}
               onToggleComplete={handleToggleComplete}
+              onLongPress={openEditForm}
+              onAddSubtask={handleAddSubtask}
+              onToggleSubtask={handleToggleSubtask}
+              onDeleteSubtask={handleDeleteSubtask}
+              onUpdateSubtask={handleUpdateSubtask}
             />
           );
         }}
@@ -266,7 +275,7 @@ export default function TasksScreen() {
             section={section} 
             expandedTags={filters.expandedTags}
             onToggleExpand={filters.toggleTagExpand}
-            onAddTask={handleAddFromSection}
+            onAddTask={handleInlineAdd}
           />
         )}
         contentContainerStyle={styles.list}
@@ -304,7 +313,20 @@ export default function TasksScreen() {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.addFab} onPress={() => openTaskForm()}>
+        <TouchableOpacity 
+          style={styles.addFab} 
+          onPress={() => {
+            const targetProject = filters.selectedProject !== 'All' 
+              ? filters.selectedProject 
+              : (projects[0] || '');
+            handleInlineAdd(targetProject, [], 'New Task');
+          }}
+          onLongPress={() => {
+            setEditingTask(null);
+            setShowTaskForm(true);
+          }}
+          delayLongPress={500}
+        >
           <Icon name="plus" size={30} color="#fff" />
         </TouchableOpacity>
       </View>

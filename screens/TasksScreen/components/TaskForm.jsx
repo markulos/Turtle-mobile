@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Modal,
   View,
@@ -10,6 +10,7 @@ import {
   Platform,
   StyleSheet,
   Alert,
+  ScrollView,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -23,16 +24,15 @@ export const TaskForm = ({
   onSave, 
   initialData, 
   projects, 
+  allTags, // NEW: Pass existing tags for suggestions
   onAddProject,
-  // NEW: Pre-fill props
-  prefillProject,
-  prefillTags
 }) => {
   const [formData, setFormData] = useState({
     title: '', description: '', priority: 'medium', completed: false,
     project: '', dueDate: '', tags: []
   });
   const [tagInput, setTagInput] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false); // NEW
   const isEditing = !!initialData?.id;
 
   useEffect(() => {
@@ -42,21 +42,25 @@ export const TaskForm = ({
           ...initialData,
           tags: normalizeTags(initialData.tags)
         });
-      } else {
-        // NEW: Use prefill values if provided
-        setFormData({
-          title: '', 
-          description: '', 
-          priority: 'medium', 
-          completed: false,
-          project: prefillProject || '',
-          dueDate: '', 
-          tags: prefillTags ? [...prefillTags] : []
-        });
       }
       setTagInput('');
+      setShowSuggestions(false);
     }
-  }, [visible, initialData, prefillProject, prefillTags]);
+  }, [visible, initialData]);
+
+  // NEW: Filter suggestions based on input
+  const suggestions = useMemo(() => {
+    if (!tagInput.trim() || !showSuggestions) return [];
+    
+    const input = tagInput.toLowerCase().trim();
+    const currentTags = formData.tags.map(t => t.toLowerCase());
+    
+    // Filter out already selected tags and match input
+    return allTags.filter(tag => 
+      !currentTags.includes(tag.toLowerCase()) &&
+      tag.toLowerCase().includes(input)
+    ).slice(0, 5); // Limit to 5 suggestions
+  }, [tagInput, allTags, formData.tags, showSuggestions]);
 
   const handleSave = async () => {
     if (!formData.title.trim()) {
@@ -68,23 +72,41 @@ export const TaskForm = ({
       await onAddProject(formData.project);
     }
     
-    onSave({
+    const finalTask = {
       ...formData,
       id: initialData?.id || Date.now().toString(),
-      createdAt: initialData?.createdAt || Date.now()
-    });
+      createdAt: initialData?.createdAt || Date.now(),
+      title: formData.title.trim()
+    };
+    
+    onSave(finalTask);
     onClose();
   };
 
-  const addTag = () => {
-    const newTags = parseTags(tagInput);
-    const unique = [...new Set([...formData.tags, ...newTags])];
-    setFormData(prev => ({ ...prev, tags: unique }));
+  const addTag = (tag) => {
+    const tagToAdd = tag || tagInput.trim();
+    if (!tagToAdd) return;
+    
+    // Prevent duplicates
+    if (formData.tags.some(t => t.toLowerCase() === tagToAdd.toLowerCase())) {
+      setTagInput('');
+      setShowSuggestions(false);
+      return;
+    }
+    
+    setFormData(prev => ({ 
+      ...prev, 
+      tags: [...prev.tags, tagToAdd] 
+    }));
     setTagInput('');
+    setShowSuggestions(false);
   };
 
   const removeTag = (tag) => {
-    setFormData(prev => ({ ...prev, tags: prev.tags.filter(t => t !== tag) }));
+    setFormData(prev => ({ 
+      ...prev, 
+      tags: prev.tags.filter(t => t !== tag) 
+    }));
   };
 
   const selectProject = () => {
@@ -92,7 +114,10 @@ export const TaskForm = ({
       'Select Project',
       '',
       [
-        ...projects.map(p => ({ text: p, onPress: () => setFormData(prev => ({ ...prev, project: p })) })),
+        ...projects.map(p => ({ 
+          text: p, 
+          onPress: () => setFormData(prev => ({ ...prev, project: p })) 
+        })),
         { text: 'No Project', onPress: () => setFormData(prev => ({ ...prev, project: '' })) },
         { text: 'Cancel', style: 'cancel' }
       ]
@@ -101,6 +126,11 @@ export const TaskForm = ({
 
   const updateField = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  // NEW: Handle suggestion selection
+  const selectSuggestion = (suggestion) => {
+    addTag(suggestion);
   };
 
   return (
@@ -139,28 +169,85 @@ export const TaskForm = ({
                   placeholder="What needs to be done?"
                   value={formData.title}
                   onChangeText={text => updateField('title', text)}
-                  autoFocus={!isEditing} // NEW: Auto-focus when creating new
+                  autoFocus={!isEditing}
                 />
               </FormField>
 
-              <FormField label="Tags (comma separated)">
+              {/* UPDATED: Tags with suggestions */}
+              <FormField label="Tags">
                 <View style={styles.tagRow}>
                   <TextInput
                     style={[styles.input, styles.tagInput]}
-                    placeholder="work, urgent, meeting..."
+                    placeholder="Type to see suggestions..."
                     value={tagInput}
-                    onChangeText={setTagInput}
-                    onSubmitEditing={addTag}
+                    onChangeText={(text) => {
+                      setTagInput(text);
+                      setShowSuggestions(text.length > 0);
+                    }}
+                    onSubmitEditing={() => addTag()}
+                    onFocus={() => setShowSuggestions(tagInput.length > 0)}
                   />
-                  <TouchableOpacity style={styles.addTagBtn} onPress={addTag}>
+                  <TouchableOpacity style={styles.addTagBtn} onPress={() => addTag()}>
                     <Icon name="plus" size={20} color="#fff" />
                   </TouchableOpacity>
                 </View>
+                
+                {/* NEW: Suggestions dropdown */}
+                {showSuggestions && suggestions.length > 0 && (
+                  <View style={styles.suggestionsContainer}>
+                    <ScrollView 
+                      keyboardShouldPersistTaps="handled"
+                      nestedScrollEnabled
+                    >
+                      {suggestions.map((suggestion, index) => (
+                        <TouchableOpacity
+                          key={suggestion}
+                          style={[
+                            styles.suggestionItem,
+                            index === suggestions.length - 1 && styles.suggestionLast
+                          ]}
+                          onPress={() => selectSuggestion(suggestion)}
+                        >
+                          <Icon name="tag" size={14} color="#2196F3" />
+                          <Text style={styles.suggestionText}>{suggestion}</Text>
+                          <Icon name="plus-circle" size={16} color="#4CAF50" />
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+                
+                {/* Show all available tags if no input and focused */}
+                {showSuggestions && tagInput.length === 0 && allTags.length > 0 && (
+                  <View style={styles.suggestionsContainer}>
+                    <Text style={styles.suggestionsLabel}>All tags:</Text>
+                    <ScrollView 
+                      horizontal 
+                      showsHorizontalScrollIndicator={false}
+                      keyboardShouldPersistTaps="handled"
+                      style={styles.allTagsRow}
+                    >
+                      {allTags
+                        .filter(tag => !formData.tags.includes(tag))
+                        .map(tag => (
+                          <TouchableOpacity
+                            key={tag}
+                            style={styles.allTagChip}
+                            onPress={() => selectSuggestion(tag)}
+                          >
+                            <Text style={styles.allTagText}>{tag}</Text>
+                          </TouchableOpacity>
+                        ))}
+                    </ScrollView>
+                  </View>
+                )}
+                
+                {/* Selected tags */}
                 {formData.tags.length > 0 && (
                   <View style={styles.tagsContainer}>
                     {formData.tags.map((tag, idx) => (
-                      <View key={idx} style={styles.tagChip}>
-                        <Text style={styles.tagText}>{tag}</Text>
+                      <View key={idx} style={styles.selectedTagChip}>
+                        <Text style={styles.selectedTagText}>{tag}</Text>
                         <TouchableOpacity onPress={() => removeTag(tag)}>
                           <Icon name="close-circle" size={16} color="#f44336" />
                         </TouchableOpacity>
@@ -244,8 +331,63 @@ const styles = StyleSheet.create({
   tagRow: { flexDirection: 'row', alignItems: 'center' },
   tagInput: { flex: 1, marginRight: 10 },
   addTagBtn: { backgroundColor: '#4CAF50', width: 46, height: 46, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  tagsContainer: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 10, marginBottom: 10 },
-  tagChip: {
+  
+  // NEW: Suggestions styles
+  suggestionsContainer: {
+    backgroundColor: '#f9f9f9',
+    borderRadius: 10,
+    marginTop: 8,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#eee',
+    maxHeight: 150,
+  },
+  suggestionsLabel: {
+    fontSize: 12,
+    color: '#999',
+    padding: 8,
+    paddingBottom: 4,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    backgroundColor: '#fff',
+  },
+  suggestionLast: {
+    borderBottomWidth: 0,
+  },
+  suggestionText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#333',
+    marginLeft: 8,
+  },
+  allTagsRow: {
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+  },
+  allTagChip: {
+    backgroundColor: '#e3f2fd',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    marginRight: 8,
+  },
+  allTagText: {
+    fontSize: 12,
+    color: '#2196F3',
+  },
+  
+  // Selected tags
+  tagsContainer: { 
+    flexDirection: 'row', 
+    flexWrap: 'wrap', 
+    marginTop: 10 
+  },
+  selectedTagChip: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#e8f5e9',
@@ -255,7 +397,7 @@ const styles = StyleSheet.create({
     marginRight: 8,
     marginBottom: 8,
   },
-  tagText: { color: '#4CAF50', marginRight: 6, fontSize: 14 },
+  selectedTagText: { color: '#4CAF50', marginRight: 6, fontSize: 14 },
   descInput: { height: 80, textAlignVertical: 'top' },
   priorityRow: { flexDirection: 'row', marginBottom: 20 },
   priorityBtn: { flex: 1, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', marginHorizontal: 5, alignItems: 'center' },

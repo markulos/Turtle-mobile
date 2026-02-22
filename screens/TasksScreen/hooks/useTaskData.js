@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Alert } from 'react-native';
+import { 
+  toggleSubtaskComplete, 
+  addSubtask, 
+  deleteSubtask, 
+  updateSubtask,
+  areAllSubtasksCompleted 
+} from '../utils/taskHelpers';
 
 export const useTaskData = (api, isConnected) => {
   const [tasks, setTasks] = useState([]);
@@ -16,10 +23,12 @@ export const useTaskData = (api, isConnected) => {
         api.get('/projects'),
         api.get('/tags')
       ]);
-      setTasks(tasksData);
+      // Ensure subtasks array exists on each task
+      setTasks(tasksData.map(t => ({ ...t, subtasks: t.subtasks || [] })));
       setProjects(projectsData);
       setAllTags(tagsData || []);
     } catch (error) {
+      console.error('Load data error:', error);
       Alert.alert('Error', 'Failed to load data');
     } finally {
       setLoading(false);
@@ -31,7 +40,77 @@ export const useTaskData = (api, isConnected) => {
       await api.post('/tasks', newTasks);
       setTasks(newTasks);
     } catch (error) {
+      console.error('Save tasks error:', error);
       Alert.alert('Error', 'Failed to save tasks');
+      throw error; // Re-throw so caller knows it failed
+    }
+  };
+
+  // Subtask handlers
+  const handleAddSubtask = async (taskId, title) => {
+    try {
+      const newTasks = tasks.map(t => {
+        if (t.id !== taskId) return t;
+        return {
+          ...t,
+          subtasks: addSubtask(t.subtasks, title)
+        };
+      });
+      await saveTasks(newTasks);
+    } catch (error) {
+      console.error('Add subtask error:', error);
+    }
+  };
+
+  const handleToggleSubtask = async (taskId, subtaskId) => {
+    try {
+      const newTasks = tasks.map(t => {
+        if (t.id !== taskId) return t;
+        
+        const updatedSubtasks = toggleSubtaskComplete(t.subtasks, subtaskId);
+        const allDone = areAllSubtasksCompleted(updatedSubtasks);
+        
+        return {
+          ...t,
+          subtasks: updatedSubtasks,
+          completed: allDone,
+          completedAt: allDone ? Date.now() : null,
+          completedTime: allDone ? new Date().toISOString() : null
+        };
+      });
+      await saveTasks(newTasks);
+    } catch (error) {
+      console.error('Toggle subtask error:', error);
+    }
+  };
+
+  const handleDeleteSubtask = async (taskId, subtaskId) => {
+    try {
+      const newTasks = tasks.map(t => {
+        if (t.id !== taskId) return t;
+        return {
+          ...t,
+          subtasks: deleteSubtask(t.subtasks, subtaskId)
+        };
+      });
+      await saveTasks(newTasks);
+    } catch (error) {
+      console.error('Delete subtask error:', error);
+    }
+  };
+
+  const handleUpdateSubtask = async (taskId, subtaskId, updates) => {
+    try {
+      const newTasks = tasks.map(t => {
+        if (t.id !== taskId) return t;
+        return {
+          ...t,
+          subtasks: updateSubtask(t.subtasks, subtaskId, updates)
+        };
+      });
+      await saveTasks(newTasks);
+    } catch (error) {
+      console.error('Update subtask error:', error);
     }
   };
 
@@ -40,7 +119,7 @@ export const useTaskData = (api, isConnected) => {
     if (newTags.length === 0) return;
     try {
       await api.post('/tags/collect', { tags: newTags });
-      setAllTags(prev => [...prev, ...newTags].sort());
+      setAllTags([...allTags, ...newTags].sort());
     } catch (error) {
       console.error('Failed to collect tags', error);
     }
@@ -53,6 +132,7 @@ export const useTaskData = (api, isConnected) => {
       await loadData();
       return true;
     } catch (error) {
+      console.error('Add project error:', error);
       Alert.alert('Error', 'Failed to add project');
       return false;
     }
@@ -61,14 +141,17 @@ export const useTaskData = (api, isConnected) => {
   const deleteProject = async (name, options = {}) => {
     const { onDeleteTasks } = options;
     try {
+      // First update tasks if needed
       if (onDeleteTasks) {
         const newTasks = tasks.filter(t => t.project !== name);
         await api.post('/tasks', newTasks);
       }
+      // Then delete project - FIXED: use correct endpoint format
       await api.delete(`/projects/${encodeURIComponent(name)}`);
       await loadData();
       return true;
     } catch (error) {
+      console.error('Delete project error:', error);
       Alert.alert('Error', 'Failed to delete project');
       return false;
     }
@@ -80,6 +163,10 @@ export const useTaskData = (api, isConnected) => {
 
   return {
     tasks, setTasks, projects, setProjects, allTags, setAllTags, loading,
-    loadData, saveTasks, collectTags, addProject, deleteProject
+    loadData, saveTasks, collectTags, addProject, deleteProject,
+    handleAddSubtask,
+    handleToggleSubtask,
+    handleDeleteSubtask,
+    handleUpdateSubtask,
   };
 };
