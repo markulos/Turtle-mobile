@@ -80,7 +80,7 @@ export const ProjectManager = ({
               blurOnSubmit={false}
             />
             <TouchableOpacity style={styles.addBtn} onPress={handleAdd}>
-              <Icon name="plus" size={22} color={theme.colors.background} />
+              <Icon name="plus" size={22} color={theme.colors.textPrimary} />
             </TouchableOpacity>
           </View>
 

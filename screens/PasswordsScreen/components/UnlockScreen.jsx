@@ -64,7 +64,7 @@ export const UnlockScreen = ({ onUnlock, isProcessing }) => {
           disabled={!password || isProcessing}
         >
           {isProcessing ? (
-            <ActivityIndicator color={theme.colors.background} />
+            <ActivityIndicator color={theme.colors.textPrimary} />
           ) : (
             <Text style={styles.buttonText}>Unlock</Text>
           )}

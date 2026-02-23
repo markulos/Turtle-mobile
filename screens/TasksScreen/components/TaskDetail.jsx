@@ -259,7 +259,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderRadius: 15 
   },
   badgeText: { 
-    color: theme.colors.background, 
+    color: theme.colors.textPrimary, 
     fontWeight: '600', 
     textTransform: 'uppercase', 
     fontSize: 12 

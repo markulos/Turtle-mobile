@@ -296,7 +296,7 @@ export default function TasksScreen() {
               }}
               style={styles.addNewTaskBtn}
             >
-              <Icon name="plus" size={20} color={theme.colors.background} />
+              <Icon name="plus" size={20} color={theme.colors.textPrimary} />
               <Text style={styles.addNewTaskText}>Add new task</Text>
             </TouchableOpacity>
           </View>
@@ -309,7 +309,7 @@ export default function TasksScreen() {
           style={[styles.filterFab, filters.hasActiveFilters && styles.filterFabActive]}
           onPress={() => setShowFilterMenu(true)}
         >
-          <Icon name="filter-variant" size={22} color={theme.colors.background} />
+          <Icon name="filter-variant" size={22} color={theme.colors.textPrimary} />
           {filters.hasActiveFilters && (
             <View style={styles.filterBadge}>
               <Text style={styles.filterBadgeText}>
@@ -335,7 +335,7 @@ export default function TasksScreen() {
           }}
           delayLongPress={500}
         >
-          <Icon name="plus" size={28} color={theme.colors.background} />
+          <Icon name="plus" size={28} color={theme.colors.textPrimary} />
         </TouchableOpacity>
       </View>
     </View>

@@ -8,8 +8,9 @@ import {
 } from 'react-native';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { FieldInput } from './FieldInput';
 
-export const PasswordItem = ({ item, onSave, onDelete }) => {
+export const PasswordItem = ({ item, onSave, onDelete, allEntries }) => {
   const { theme } = useTheme();
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(item.title || '');
@@ -69,13 +70,12 @@ export const PasswordItem = ({ item, onSave, onDelete }) => {
         })}
 
         <View style={styles.addLineRow}>
-          <TextInput
-            style={styles.lineInput}
-            placeholder="field: content"
-            placeholderTextColor={theme.colors.textPlaceholder}
+          <FieldInput
             value={newLine}
             onChangeText={setNewLine}
-            onSubmitEditing={handleAddLine}
+            onSubmit={handleAddLine}
+            entries={allEntries}
+            placeholder="field: content"
           />
           <TouchableOpacity style={styles.addBtn} onPress={handleAddLine}>
             <Icon name="plus" size={20} color={theme.colors.textPrimary} />
@@ -124,7 +124,7 @@ export const PasswordItem = ({ item, onSave, onDelete }) => {
   );
 };
 
-export const NewEntryForm = ({ onSave, onCancel }) => {
+export const NewEntryForm = ({ onSave, onCancel, allEntries }) => {
   const { theme } = useTheme();
   const [title, setTitle] = useState('');
   const [lines, setLines] = useState([]);
@@ -195,13 +195,12 @@ export const NewEntryForm = ({ onSave, onCancel }) => {
       })}
 
       <View style={styles.addLineRow}>
-        <TextInput
-          style={styles.lineInput}
-          placeholder="field: content"
-          placeholderTextColor={theme.colors.textPlaceholder}
+        <FieldInput
           value={newLine}
           onChangeText={setNewLine}
-          onSubmitEditing={handleAddLine}
+          onSubmit={handleAddLine}
+          entries={allEntries}
+          placeholder="field: content"
         />
         <TouchableOpacity style={styles.addBtn} onPress={handleAddLine}>
           <Icon name="plus" size={20} color={theme.colors.textPrimary} />
@@ -273,17 +272,8 @@ const createStyles = (theme) =>
     },
     addLineRow: {
       flexDirection: 'row',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       marginTop: 8,
-    },
-    lineInput: {
-      flex: 1,
-      fontSize: 14,
-      color: theme.colors.inputText,
-      backgroundColor: theme.colors.inputBackground,
-      paddingVertical: 10,
-      paddingHorizontal: 12,
-      borderRadius: 8,
     },
     addBtn: {
       padding: 8,

@@ -121,6 +121,7 @@ export default function PasswordsScreen() {
           <NewEntryForm
             onSave={handleSave}
             onCancel={() => setShowNewForm(false)}
+            allEntries={entries}
           />
         )}
         
@@ -133,6 +134,7 @@ export default function PasswordsScreen() {
               item={item}
               onSave={handleSave}
               onDelete={deleteEntry}
+              allEntries={entries}
             />
           )}
           ListEmptyComponent={

@@ -220,7 +220,7 @@ export const TaskForm = ({
                   returnKeyType="done"
                 />
                 <TouchableOpacity style={styles.addTagBtn} onPress={() => addTag()}>
-                  <Icon name="plus" size={20} color={theme.colors.background} />
+                  <Icon name="plus" size={20} color={theme.colors.textPrimary} />
                 </TouchableOpacity>
               </View>
               
@@ -523,7 +523,7 @@ const createStyles = (theme) => StyleSheet.create({
     fontSize: 14,
   },
   priorityTextActive: { 
-    color: theme.colors.background 
+    color: theme.colors.textPrimary 
   },
   buttons: { 
     flexDirection: 'row', 

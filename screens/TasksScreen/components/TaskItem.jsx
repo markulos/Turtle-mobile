@@ -204,7 +204,7 @@ export const TaskItem = ({
                 onSubmitEditing={handleAddSubtask}
               />
               <TouchableOpacity style={styles.addSubtaskBtn} onPress={handleAddSubtask}>
-                <Icon name="check" size={18} color={theme.colors.background} />
+                <Icon name="check" size={18} color={theme.colors.textPrimary} />
               </TouchableOpacity>
               <TouchableOpacity 
                 style={styles.cancelSubtaskBtn}
@@ -263,7 +263,7 @@ const createStyles = (theme) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: theme.spacing.sm,
-    paddingLeft: theme.spacing.md,
+    paddingLeft: theme.spacing.xl,
   },
   checkbox: {
     marginRight: theme.spacing.sm,
@@ -324,7 +324,7 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textTertiary,
   },
 
-  // Expanded section
+  // Expanded section - subtasks indented more than parent task
   expandedContent: {
     paddingLeft: theme.spacing.xxl,
     paddingRight: theme.spacing.md,

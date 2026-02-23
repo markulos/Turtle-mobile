@@ -56,12 +56,12 @@ const DARK_THEME = {
     primaryDark: '#CCCCCC',
     primaryMuted: 'rgba(255, 255, 255, 0.1)',
     
-    // Text - White on black
-    textPrimary: '#FFFFFF',           // Pure white
-    textSecondary: 'rgba(255, 255, 255, 0.7)',
-    textTertiary: 'rgba(255, 255, 255, 0.5)',
+    // Text - Light grey on black for readability
+    textPrimary: '#E0E0E0',           // Light grey (not pure white)
+    textSecondary: 'rgba(255, 255, 255, 0.6)',
+    textTertiary: 'rgba(255, 255, 255, 0.45)',
     textMuted: 'rgba(255, 255, 255, 0.3)',
-    textPlaceholder: 'rgba(255, 255, 255, 0.4)',
+    textPlaceholder: 'rgba(255, 255, 255, 0.55)',
     
     // Accents
     accentSuccess: '#4ADE80',
@@ -77,9 +77,9 @@ const DARK_THEME = {
     overlay: 'rgba(0, 0, 0, 0.9)',
     overlayLight: 'rgba(0, 0, 0, 0.7)',
     
-    // Input specific - Black background, white text
-    inputBackground: '#000000',
-    inputText: '#FFFFFF',
+    // Input specific - Dark grey background, light grey text
+    inputBackground: '#0D0D0D',
+    inputText: '#E0E0E0',
   },
   spacing: SPACING,
   typography: TYPOGRAPHY,
@@ -146,8 +146,8 @@ const LIGHT_THEME = {
     overlay: 'rgba(0, 0, 0, 0.5)',
     overlayLight: 'rgba(0, 0, 0, 0.3)',
     
-    inputBackground: '#000000',
-    inputText: '#FFFFFF',
+    inputBackground: '#F5F5F5',
+    inputText: '#000000',
   },
   spacing: SPACING,
   typography: TYPOGRAPHY,

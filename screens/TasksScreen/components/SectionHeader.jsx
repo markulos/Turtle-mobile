@@ -67,7 +67,7 @@ export const SectionHeader = ({ section, expandedTags, onToggleExpand, onAddTask
               autoFocus={false}
             />
             <TouchableOpacity style={styles.inlineSubmitBtn} onPress={handleSubmit}>
-              <Icon name="check" size={18} color={theme.colors.background} />
+              <Icon name="check" size={18} color={theme.colors.textPrimary} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.inlineCancelBtn} onPress={handleCancel}>
               <Icon name="close" size={18} color={theme.colors.textTertiary} />
@@ -129,7 +129,7 @@ export const SectionHeader = ({ section, expandedTags, onToggleExpand, onAddTask
             returnKeyType="done"
           />
           <TouchableOpacity style={styles.inlineSubmitBtn} onPress={handleSubmit}>
-            <Icon name="check" size={18} color={theme.colors.background} />
+            <Icon name="check" size={18} color={theme.colors.textPrimary} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.inlineCancelBtn} onPress={handleCancel}>
             <Icon name="close" size={18} color={theme.colors.textTertiary} />
@@ -213,7 +213,7 @@ const createStyles = (theme) => StyleSheet.create({
   },
   emptyBadgeText: {
     fontSize: theme.typography.small,
-    color: theme.colors.background,
+    color: '#000000',
     fontWeight: '600',
   },
   tagHeader: {
@@ -221,7 +221,7 @@ const createStyles = (theme) => StyleSheet.create({
     alignItems: 'center',
     backgroundColor: theme.colors.surfaceElevated,
     padding: theme.spacing.sm,
-    paddingLeft: theme.spacing.xl,
+    paddingLeft: theme.spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
@@ -255,7 +255,7 @@ const createStyles = (theme) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: theme.spacing.md,
-    paddingLeft: theme.spacing.xl,
+    paddingLeft: theme.spacing.md,
   },
   inlineInput: {
     flex: 1,
@@ -288,7 +288,7 @@ const createStyles = (theme) => StyleSheet.create({
     alignItems: 'center',
     marginTop: -theme.spacing.xs,
     marginLeft: 2,
-    paddingLeft: theme.spacing.xl,
+    paddingLeft: theme.spacing.md,
     paddingBottom: theme.spacing.sm,
   },
   inlineContextText: {
@@ -306,7 +306,7 @@ const createStyles = (theme) => StyleSheet.create({
     alignItems: 'center',
     backgroundColor: theme.colors.surfaceElevated,
     paddingVertical: theme.spacing.sm,
-    paddingLeft: theme.spacing.xl,
+    paddingLeft: theme.spacing.md,
     paddingRight: theme.spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,

@@ -77,7 +77,7 @@ export const SetupScreen = ({ onSetup, isProcessing }) => {
           disabled={isProcessing}
         >
           {isProcessing ? (
-            <ActivityIndicator color={theme.colors.background} />
+            <ActivityIndicator color={theme.colors.textPrimary} />
           ) : (
             <Text style={styles.buttonText}>Create Vault</Text>
           )}
