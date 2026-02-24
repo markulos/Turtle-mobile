@@ -6,3 +6,5 @@ export { TaskForm } from './TaskForm';
 export { TaskDetail } from './TaskDetail';
 export { TaskItem } from './TaskItem';
 export { SectionHeader } from './SectionHeader';
+export { CalendarView } from './CalendarView';
+export { DatePickerModal } from './DatePickerModal';

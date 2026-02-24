@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Platform,
   Keyboard,
+  Animated,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -25,6 +26,38 @@ export const ProjectManager = ({
   const { theme } = useTheme();
   const [newName, setNewName] = useState('');
   const inputRef = useRef(null);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [isClosing, setIsClosing] = useState(false);
+  
+  useEffect(() => {
+    if (visible) {
+      setIsClosing(false);
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    } else if (isClosing) {
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => {
+        setIsClosing(false);
+      });
+    }
+  }, [visible, isClosing, fadeAnim]);
+  
+  const handleClose = () => {
+    setIsClosing(true);
+    Animated.timing(fadeAnim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      onClose();
+    });
+  };
 
   const handleAdd = () => {
     Keyboard.dismiss();
@@ -56,12 +89,12 @@ export const ProjectManager = ({
 
   return (
     <Modal 
-      animationType="slide" 
+      animationType="none" 
       transparent 
       visible={visible} 
-      onRequestClose={onClose}
+      onRequestClose={handleClose}
     >
-      <View style={styles.overlay}>
+      <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
         <View style={styles.content}>
           <View style={styles.header}>
             <Text style={styles.title}>Edit Projects</Text>
@@ -108,11 +141,11 @@ export const ProjectManager = ({
             <View style={styles.bottomPadding} />
           </KeyboardAwareScrollView>
 
-          <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+          <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
             <Text style={styles.closeBtnText}>Close Edit</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </Animated.View>
     </Modal>
   );
 };
@@ -120,7 +153,7 @@ export const ProjectManager = ({
 const createStyles = (theme) => StyleSheet.create({
   overlay: { 
     flex: 1, 
-    backgroundColor: theme.colors.overlay, 
+    backgroundColor: 'rgba(0, 0, 0, 0.5)', 
     justifyContent: 'flex-end' 
   },
   content: {
@@ -139,7 +172,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 16 
   },
   title: { 
-    fontSize: 18, 
+    fontSize: theme.typography.body, 
     fontWeight: '700', 
     color: theme.colors.textPrimary 
   },
@@ -153,7 +186,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderRadius: 10, 
     height: 44,
     paddingHorizontal: 14, 
-    fontSize: 15, 
+    fontSize: theme.typography.body, 
     marginRight: 10,
     backgroundColor: theme.colors.inputBackground,
     color: theme.colors.inputText,
@@ -185,7 +218,7 @@ const createStyles = (theme) => StyleSheet.create({
   },
   name: { 
     flex: 1, 
-    fontSize: 15, 
+    fontSize: theme.typography.body, 
     color: theme.colors.textPrimary,
   },
   deleteBtn: { 
@@ -195,7 +228,7 @@ const createStyles = (theme) => StyleSheet.create({
     textAlign: 'center', 
     color: theme.colors.textTertiary, 
     marginTop: 20, 
-    fontSize: 15 
+    fontSize: theme.typography.body 
   },
   closeBtn: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -209,7 +242,7 @@ const createStyles = (theme) => StyleSheet.create({
   },
   closeBtnText: {
     color: theme.colors.textSecondary,
-    fontSize: 15,
+    fontSize: theme.typography.body,
     fontWeight: '600',
   },
   bottomPadding: {

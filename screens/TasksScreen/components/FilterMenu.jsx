@@ -14,7 +14,8 @@ import { useTheme } from '../../../context/ThemeContext';
 export const FilterMenu = ({ 
   visible, 
   onClose, 
-  allTags, 
+  tasks,
+  selectedProject,
   filters,
   animation 
 }) => {
@@ -23,44 +24,50 @@ export const FilterMenu = ({
   const opacity = animation.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
 
   const styles = createStyles(theme);
+  
+  // Overlay opacity for fade animation
+  const overlayOpacity = animation.interpolate({ inputRange: [0, 1], outputRange: [0, 0.5] });
+  
+  // Get tags that exist in the selected project
+  const relevantTags = React.useMemo(() => {
+    // Filter tasks by selected project
+    const projectTasks = selectedProject === 'All' 
+      ? tasks 
+      : tasks.filter(t => selectedProject === 'No Project' 
+          ? !t.project 
+          : t.project === selectedProject);
+    
+    // Extract unique tags from those tasks
+    const tagSet = new Set();
+    projectTasks.forEach(task => {
+      if (task.tags && Array.isArray(task.tags)) {
+        task.tags.forEach(tag => tagSet.add(tag));
+      }
+    });
+    
+    return Array.from(tagSet).sort();
+  }, [tasks, selectedProject]);
 
   return (
     <Modal transparent visible={visible} onRequestClose={onClose} animationType="none">
-      <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose}>
-        <Animated.View style={[styles.container, { transform: [{ translateY }], opacity }]}>
+      <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+      </Animated.View>
+      <Animated.View 
+        style={[styles.container, { transform: [{ translateY }], opacity }]}
+        onStartShouldSetResponder={() => true}
+        onTouchEnd={(e) => e.stopPropagation()}
+      >
           
-          {/* View Mode */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>View Mode</Text>
-            <View style={styles.viewModeRow}>
-              {['tree', 'flat'].map(mode => (
-                <TouchableOpacity
-                  key={mode}
-                  style={[styles.viewOption, filters.viewMode === mode && styles.viewActive]}
-                  onPress={() => filters.setViewMode(mode)}
-                >
-                  <Icon 
-                    name={mode === 'tree' ? 'file-tree' : 'format-list-bulleted'} 
-                    size={24} 
-                    color={filters.viewMode === mode ? theme.colors.textPrimary : theme.colors.textSecondary} 
-                  />
-                  <Text style={[styles.viewText, filters.viewMode === mode && styles.viewTextActive]}>
-                    {mode === 'tree' ? 'Tree' : 'List'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-
-          {/* NEW: Incomplete Filter Toggle */}
+          {/* Incomplete Filter Toggle */}
           <View style={styles.section}>
             <View style={styles.toggleRow}>
               <Text style={styles.sectionTitle}>Show Incomplete Only</Text>
               <Switch
                 value={filters.showIncompleteOnly}
                 onValueChange={filters.setShowIncompleteOnly}
-                trackColor={{ false: theme.colors.surfaceHighlight, true: theme.colors.textSecondary }}
-                thumbColor={theme.colors.textPrimary}
+                trackColor={{ false: theme.colors.surfaceHighlight, true: '#CCFF00' }}
+                thumbColor={filters.showIncompleteOnly ? '#FFFFFF' : theme.colors.textPrimary}
               />
             </View>
             <Text style={styles.hint}>
@@ -96,10 +103,12 @@ export const FilterMenu = ({
             </View>
 
             <View style={styles.tagsGrid}>
-              {allTags.length === 0 ? (
-                <Text style={styles.noTags}>No tags yet</Text>
+              {relevantTags.length === 0 ? (
+                <Text style={styles.noTags}>
+                  {selectedProject === 'All' ? 'No tags yet' : 'No tags in this project'}
+                </Text>
               ) : (
-                allTags.map(tag => {
+                relevantTags.map(tag => {
                   const isSelected = filters.selectedTags.includes(tag);
                   return (
                     <TouchableOpacity
@@ -122,19 +131,21 @@ export const FilterMenu = ({
               <Text style={styles.clearAllText}>Clear All Filters</Text>
             </TouchableOpacity>
           )}
-        </Animated.View>
-      </TouchableOpacity>
+      </Animated.View>
     </Modal>
   );
 };
 
 const createStyles = (theme) => StyleSheet.create({
   overlay: { 
-    flex: 1, 
-    backgroundColor: theme.colors.overlay, 
-    justifyContent: 'flex-end' 
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000000',
   },
   container: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
     backgroundColor: theme.colors.background,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -151,35 +162,13 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 10 
   },
   sectionTitle: { 
-    fontSize: 16, 
+    fontSize: theme.typography.body, 
     fontWeight: '600', 
     color: theme.colors.textPrimary 
   },
   clear: { 
     color: theme.colors.accentError, 
-    fontSize: 14 
-  },
-  viewModeRow: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-around' 
-  },
-  viewOption: { 
-    alignItems: 'center', 
-    padding: 15, 
-    borderRadius: 12, 
-    backgroundColor: theme.colors.surfaceElevated, 
-    width: 100 
-  },
-  viewActive: { 
-    backgroundColor: theme.colors.surfaceHighlight 
-  },
-  viewText: { 
-    marginTop: 5, 
-    color: theme.colors.textSecondary 
-  },
-  viewTextActive: { 
-    color: theme.colors.textPrimary, 
-    fontWeight: '600' 
+    fontSize: theme.typography.body 
   },
   // Toggle styles
   toggleRow: { 
@@ -189,7 +178,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 5
   },
   hint: { 
-    fontSize: 12, 
+    fontSize: theme.typography.body, 
     color: theme.colors.textMuted,
     marginTop: 4
   },
@@ -212,11 +201,13 @@ const createStyles = (theme) => StyleSheet.create({
     borderColor: theme.colors.border 
   },
   modeText: { 
-    color: theme.colors.textSecondary 
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.body,
   },
   modeTextActive: { 
     color: theme.colors.textPrimary, 
-    fontWeight: '600' 
+    fontWeight: '600',
+    fontSize: theme.typography.body,
   },
   tagsGrid: { 
     flexDirection: 'row', 
@@ -224,7 +215,7 @@ const createStyles = (theme) => StyleSheet.create({
   },
   noTags: { 
     color: theme.colors.textMuted, 
-    fontSize: 14, 
+    fontSize: theme.typography.body, 
     textAlign: 'center', 
     width: '100%', 
     paddingVertical: 20 
@@ -246,11 +237,12 @@ const createStyles = (theme) => StyleSheet.create({
   },
   tagText: { 
     color: theme.colors.textSecondary, 
-    fontSize: 14 
+    fontSize: theme.typography.body 
   },
   tagTextActive: { 
     color: theme.colors.textPrimary, 
-    fontWeight: '600' 
+    fontWeight: '600',
+    fontSize: theme.typography.body,
   },
   check: { 
     marginLeft: 4 
@@ -269,6 +261,7 @@ const createStyles = (theme) => StyleSheet.create({
   clearAllText: { 
     color: theme.colors.accentError, 
     marginLeft: 8, 
-    fontWeight: '600' 
+    fontWeight: '600',
+    fontSize: theme.typography.body,
   },
 });

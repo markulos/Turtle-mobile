@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { normalizeTags, sortTasks } from '../utils/taskHelpers';
 
 export const useTaskFilters = (tasks, projects = []) => {
@@ -7,6 +7,7 @@ export const useTaskFilters = (tasks, projects = []) => {
   const [tagFilterMode, setTagFilterMode] = useState('any');
   const [viewMode, setViewMode] = useState('tree');
   const [expandedTags, setExpandedTags] = useState({});
+  const [initialized, setInitialized] = useState(false);
   const [showIncompleteOnly, setShowIncompleteOnly] = useState(true);
 
   const toggleTagFilter = useCallback((tag) => {
@@ -20,10 +21,11 @@ export const useTaskFilters = (tasks, projects = []) => {
     setTagFilterMode('any');
     setSelectedProject('All');
     setShowIncompleteOnly(true);
+    setInitialized(false);
   }, []);
 
   const toggleTagExpand = useCallback((tagKey) => {
-    setExpandedTags(prev => ({ ...prev, [tagKey]: !prev[tagKey] }));
+    setExpandedTags(prev => ({ ...prev, [tagKey]: !(prev[tagKey] ?? false) }));
   }, []);
 
   const filteredTasks = useMemo(() => {
@@ -130,6 +132,27 @@ export const useTaskFilters = (tasks, projects = []) => {
     
     return sections;
   }, [filteredTasks, tasks, projects, selectedProject]);
+
+  // Reset initialization when filters change (to re-collapse new sections)
+  useEffect(() => {
+    setInitialized(false);
+    setExpandedTags({});
+  }, [selectedProject, selectedTags.join(','), showIncompleteOnly]);
+
+  // Initialize all sections as collapsed by default
+  useEffect(() => {
+    if (!initialized && groupedTasks.length > 0) {
+      const initialCollapsed = {};
+      groupedTasks.forEach(section => {
+        if (section.type === 'tag') {
+          const tagKey = `${section.project}-${section.title}`;
+          initialCollapsed[tagKey] = false; // false = collapsed
+        }
+      });
+      setExpandedTags(prev => ({ ...prev, ...initialCollapsed }));
+      setInitialized(true);
+    }
+  }, [groupedTasks, initialized]);
 
   const stats = useMemo(() => ({
     completed: filteredTasks.filter(t => t.completed).length,

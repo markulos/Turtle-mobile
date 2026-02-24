@@ -16,5 +16,5 @@ export const FormField = ({ label, children }) => {
 
 const createStyles = (theme) => StyleSheet.create({
   container: { marginBottom: 10 },
-  label: { fontSize: 14, fontWeight: '600', color: theme.colors.textSecondary, marginBottom: 8 },
+  label: { fontSize: theme.typography.body, fontWeight: '600', color: theme.colors.textSecondary, marginBottom: 8 },
 });

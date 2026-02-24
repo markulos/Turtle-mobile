@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal,
   View,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ScrollView,
   StyleSheet,
+  Animated,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
@@ -18,9 +19,42 @@ export const TaskDetail = ({
   onEdit, 
   onToggleComplete, 
   onDelete,
-  onTagPress 
+  onTagPress,
+  onToggleSubtask
 }) => {
   const { theme } = useTheme();
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [isClosing, setIsClosing] = useState(false);
+  
+  useEffect(() => {
+    if (visible) {
+      setIsClosing(false);
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    } else if (isClosing) {
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => {
+        setIsClosing(false);
+      });
+    }
+  }, [visible, isClosing, fadeAnim]);
+  
+  const handleClose = () => {
+    setIsClosing(true);
+    Animated.timing(fadeAnim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      onClose();
+    });
+  };
   
   if (!task) return null;
 
@@ -33,15 +67,15 @@ export const TaskDetail = ({
   const styles = createStyles(theme);
 
   return (
-    <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
-      <View style={styles.overlay}>
+    <Modal animationType="none" transparent visible={visible} onRequestClose={handleClose}>
+      <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
           <View style={styles.content}>
             <View style={styles.header}>
               <View style={[styles.badge, { backgroundColor: getPriorityColor(task.priority, theme) }]}>
                 <Text style={styles.badgeText}>{task.priority}</Text>
               </View>
-              <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+              <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
                 <Icon name="close" size={24} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
@@ -130,7 +164,12 @@ export const TaskDetail = ({
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Subtasks</Text>
                 {subtasks.map((subtask, idx) => (
-                  <View key={subtask.id} style={styles.subtaskRow}>
+                  <TouchableOpacity 
+                    key={subtask.id} 
+                    style={styles.subtaskRow}
+                    onPress={() => onToggleSubtask?.(task.id, subtask.id)}
+                    activeOpacity={0.7}
+                  >
                     <Icon 
                       name={subtask.completed ? "checkbox-marked" : "checkbox-blank-outline"} 
                       size={18} 
@@ -142,7 +181,7 @@ export const TaskDetail = ({
                     ]}>
                       {subtask.title}
                     </Text>
-                  </View>
+                  </TouchableOpacity>
                 ))}
               </View>
             )}
@@ -174,7 +213,7 @@ export const TaskDetail = ({
             </View>
           </View>
         </ScrollView>
-      </View>
+      </Animated.View>
     </Modal>
   );
 };
@@ -182,7 +221,7 @@ export const TaskDetail = ({
 const createStyles = (theme) => StyleSheet.create({
   overlay: { 
     flex: 1, 
-    backgroundColor: theme.colors.overlay, 
+    backgroundColor: 'rgba(0, 0, 0, 0.5)', 
     justifyContent: 'flex-end' 
   },
   scrollView: { 
@@ -208,7 +247,7 @@ const createStyles = (theme) => StyleSheet.create({
     padding: 5 
   },
   title: { 
-    fontSize: 24, 
+    fontSize: theme.typography.body, 
     fontWeight: 'bold', 
     color: theme.colors.textPrimary, 
     marginBottom: 15 
@@ -228,12 +267,12 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 8,
   },
   subtaskTitle: {
-    fontSize: 14,
+    fontSize: theme.typography.body,
     fontWeight: '600',
     color: theme.colors.textPrimary,
   },
   subtaskCount: {
-    fontSize: 12,
+    fontSize: theme.typography.body,
     color: theme.colors.textSecondary,
   },
   progressBar: {
@@ -247,7 +286,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderRadius: 2,
   },
   allDoneText: {
-    fontSize: 12,
+    fontSize: theme.typography.body,
     color: theme.colors.accentSuccess,
     marginTop: 8,
     fontStyle: 'italic',
@@ -262,7 +301,7 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textPrimary, 
     fontWeight: '600', 
     textTransform: 'uppercase', 
-    fontSize: 12 
+    fontSize: theme.typography.body 
   },
   
   meta: { 
@@ -281,7 +320,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 5,
   },
   metaText: { 
-    fontSize: 13, 
+    fontSize: theme.typography.body, 
     color: theme.colors.textSecondary, 
     marginLeft: 6 
   },
@@ -302,7 +341,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 4,
   },
   tagText: { 
-    fontSize: 12, 
+    fontSize: theme.typography.body, 
     color: theme.colors.textPrimary, 
     marginLeft: 4 
   },
@@ -317,14 +356,14 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 20 
   },
   sectionTitle: { 
-    fontSize: 14, 
+    fontSize: theme.typography.body, 
     fontWeight: '600', 
     color: theme.colors.textSecondary, 
     marginBottom: 8, 
     textTransform: 'uppercase' 
   },
   description: { 
-    fontSize: 16, 
+    fontSize: theme.typography.body, 
     color: theme.colors.textPrimary, 
     lineHeight: 22 
   },
@@ -336,7 +375,7 @@ const createStyles = (theme) => StyleSheet.create({
     paddingVertical: 6,
   },
   subtaskText: {
-    fontSize: 14,
+    fontSize: theme.typography.body,
     color: theme.colors.textPrimary,
     marginLeft: 8,
   },

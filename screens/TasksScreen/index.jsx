@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,14 +6,20 @@ import {
   TouchableOpacity,
   StyleSheet,
   Animated,
+  Easing,
   Alert,
+  Keyboard,
+  findNodeHandle,
+  Platform,
+  KeyboardAvoidingView,
+  TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useServer } from '../../context/ServerContext';
 import { useTheme } from '../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTaskData } from './hooks/useTaskData';
-import { useTaskFilters } from './hooks/useTaskFilters';
+import { useCollapsibleTasks } from './hooks/useCollapsibleTasks';
 import {
   ProjectDropdown,
   FilterMenu,
@@ -22,6 +28,7 @@ import {
   TaskDetail,
   TaskItem,
   SectionHeader,
+  CalendarView,
 } from './components';
 
 export default function TasksScreen() {
@@ -36,7 +43,46 @@ export default function TasksScreen() {
   const [showDetail, setShowDetail] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [selectedTask, setSelectedTask] = useState(null);
-
+  const [showIncompleteOnly, setShowIncompleteOnly] = useState(true);
+  const [selectedProject, setSelectedProject] = useState('All');
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [tagFilterMode, setTagFilterMode] = useState('any');
+  const [viewMode, setViewMode] = useState('list'); // 'list' or 'calendar'
+  
+  // Inline add task state per project
+  const [inlineAddingProject, setInlineAddingProject] = useState(null);
+  const [inlineTaskTitle, setInlineTaskTitle] = useState('');
+  const inlineInputRef = useRef(null);
+  
+  // Ref for scrolling to items when keyboard appears
+  const listRef = useRef(null);
+  const scrollY = useRef(0);
+  
+  // Keyboard handling
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  
+  useEffect(() => {
+    const showListener = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        setKeyboardHeight(e.endCoordinates.height);
+        setKeyboardVisible(true);
+      }
+    );
+    const hideListener = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        setKeyboardHeight(0);
+        setKeyboardVisible(false);
+      }
+    );
+    return () => {
+      showListener.remove();
+      hideListener.remove();
+    };
+  }, []);
+  
   const {
     tasks, setTasks, projects, allTags,
     loadData, saveTasks, collectTags, addProject, deleteProject,
@@ -44,15 +90,121 @@ export default function TasksScreen() {
     handleToggleSubtask,
     handleDeleteSubtask,
     handleUpdateSubtask,
+    loading,
   } = useTaskData(api, isConnected);
+  
+  // Project colors - distinct colors that work well with green/yellow palette
+  const projectColors = [
+    '#4CAF50', // Green
+    '#2196F3', // Blue
+    '#9C27B0', // Purple
+    '#FF5722', // Deep Orange
+    '#00BCD4', // Cyan
+    '#795548', // Brown
+    '#E91E63', // Pink
+    '#3F51B5', // Indigo
+    '#009688', // Teal
+    '#FF9800', // Orange
+    '#607D8B', // Blue Grey
+    '#8BC34A', // Light Green
+    '#00E676', // Bright Green
+    '#2979FF', // Bright Blue
+    '#D500F9', // Bright Purple
+    '#FF3D00', // Bright Orange
+    '#00B0FF', // Light Blue
+    '#76FF03', // Lime
+    '#FFEA00', // Yellow
+    '#FF9100', // Amber
+  ];
 
-  const filters = useTaskFilters(tasks, projects);
+  // Create a memoized mapping of project names to colors
+  const projectColorMap = useMemo(() => {
+    const map = {};
+    projects.forEach((project, index) => {
+      map[project] = projectColors[index % projectColors.length];
+    });
+    return map;
+  }, [projects]);
+
+  // Get color for a project
+  const getProjectColor = (projectName) => {
+    if (!projectName || projectName === 'All') return theme.colors.textSecondary;
+    return projectColorMap[projectName] || theme.colors.textSecondary;
+  };
+  
+  // Use collapsible tasks hook - ALL collapsed by default
+  const collapsible = useCollapsibleTasks(tasks, projects, { 
+    showIncompleteOnly, 
+    selectedProject,
+    selectedTags,
+    tagFilterMode
+  });
+  
+  // Function to scroll to a specific item
+  const scrollToItem = useCallback((itemId) => {
+    if (!collapsible?.groupedData) return;
+    
+    // Find the section and index of the item
+    let itemIndex = -1;
+    let sectionIndex = -1;
+    
+    for (let i = 0; i < collapsible.groupedData.length; i++) {
+      const section = collapsible.groupedData[i];
+      if (section.type === 'tag' && section.data) {
+        const idx = section.data.findIndex(item => item.id === itemId);
+        if (idx !== -1) {
+          sectionIndex = i;
+          itemIndex = idx;
+          break;
+        }
+      }
+    }
+    
+    if (sectionIndex !== -1 && itemIndex !== -1 && listRef.current) {
+      listRef.current.scrollToLocation({
+        sectionIndex,
+        itemIndex,
+        viewOffset: 100, // Scroll so item is not at the very bottom
+        animated: true,
+      });
+    }
+  }, [collapsible?.groupedData]);
+  
+  // Project chevron rotation animations
+  const projectRotations = useRef({}).current;
+  
+  // Initialize rotation animations for projects
+  useEffect(() => {
+    projects.forEach(project => {
+      if (!projectRotations[project]) {
+        projectRotations[project] = new Animated.Value(0);
+      }
+    });
+  }, [projects]);
+  
+  // Animate project chevron when expanded state changes
+  useEffect(() => {
+    Object.entries(collapsible.expandedProjects).forEach(([project, isExpanded]) => {
+      if (projectRotations[project]) {
+        Animated.timing(projectRotations[project], {
+          toValue: isExpanded ? 1 : 0,
+          duration: 200,
+          useNativeDriver: true,
+        }).start();
+      }
+    });
+  }, [collapsible.expandedProjects]);
 
   useEffect(() => {
     if (showFilterMenu) {
       Animated.spring(menuAnimation, { toValue: 1, useNativeDriver: true, friction: 8 }).start();
     } else {
-      Animated.timing(menuAnimation, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+      Animated.timing(menuAnimation, { 
+        toValue: 0, 
+        duration: 200, 
+        useNativeDriver: true,
+        easing: Easing.out(Easing.ease)
+      }).start();
     }
   }, [showFilterMenu, menuAnimation]);
 
@@ -80,8 +232,25 @@ export default function TasksScreen() {
     });
     await saveTasks(newTasks);
   };
+  
+  const handleUpdateTask = async (taskId, updates) => {
+    const newTasks = tasks.map(t => {
+      if (t.id !== taskId) return t;
+      return { ...t, ...updates };
+    });
+    await saveTasks(newTasks);
+  };
 
   const handleDelete = (id) => {
+    const task = tasks.find(t => t.id === id);
+    const hasSubtasks = task?.subtasks && task.subtasks.length > 0;
+    
+    // Skip confirmation if no subtasks
+    if (!hasSubtasks) {
+      saveTasks(tasks.filter(t => t.id !== id));
+      return;
+    }
+    
     Alert.alert('Delete Task', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
       { 
@@ -111,6 +280,55 @@ export default function TasksScreen() {
     handleSaveTask(newTask);
   };
 
+  const handleRenameTag = async (project, oldTag, newTag) => {
+    // Update all tasks that have the old tag
+    const updatedTasks = tasks.map(task => {
+      if (!task.tags || task.tags.length === 0) return task;
+      
+      // Check if task has the old tag
+      const tagIndex = task.tags.indexOf(oldTag);
+      if (tagIndex === -1) return task;
+      
+      // Replace old tag with new tag
+      const newTags = [...task.tags];
+      newTags[tagIndex] = newTag;
+      
+      return { ...task, tags: newTags };
+    });
+    
+    await saveTasks(updatedTasks);
+  };
+
+  const handleAddTagToSection = async (project, existingTags, newTag) => {
+    // Find all tasks in this section (matching project and existing tags)
+    const updatedTasks = tasks.map(task => {
+      // Check if task matches this section
+      const taskProject = task.project || 'No Project';
+      const sectionProject = project || 'No Project';
+      
+      if (taskProject !== sectionProject) return task;
+      
+      // For Untagged section, we want tasks with no tags
+      // For tagged sections, we want tasks with the existing tags
+      const taskTags = task.tags || [];
+      const isUntaggedSection = !existingTags || existingTags.length === 0;
+      const isTaskUntagged = !taskTags || taskTags.length === 0;
+      
+      if (isUntaggedSection && !isTaskUntagged) return task;
+      if (!isUntaggedSection) {
+        // Check if task has any of the section's tags
+        const hasMatchingTag = existingTags.some(tag => taskTags.includes(tag));
+        if (!hasMatchingTag) return task;
+      }
+      
+      // Add the new tag to the task
+      return { ...task, tags: [...taskTags, newTag] };
+    });
+    
+    await saveTasks(updatedTasks);
+    await collectTags([newTag]);
+  };
+
   const openEditForm = (task) => {
     setEditingTask(task);
     setShowTaskForm(true);
@@ -138,6 +356,9 @@ export default function TasksScreen() {
     );
   }
 
+  // Check if any filters active
+  const hasActiveFilters = !showIncompleteOnly || selectedTags.length > 0;
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Custom Header */}
@@ -146,49 +367,62 @@ export default function TasksScreen() {
           style={styles.projectSelector}
           onPress={() => setShowDropdown(true)}
         >
-          <Icon name="folder" size={20} color={theme.colors.textPrimary} />
-          <Text style={styles.projectSelectorText} numberOfLines={1}>{filters.selectedProject}</Text>
+          <View style={[styles.projectSelectorSquare, { backgroundColor: getProjectColor(selectedProject) }]} />
+          <Text style={styles.projectSelectorText} numberOfLines={1}>
+            {selectedProject === 'All' ? 'All' : selectedProject}
+          </Text>
           <Icon name="chevron-down" size={18} color={theme.colors.textTertiary} />
         </TouchableOpacity>
         
-        <View style={styles.statsContainer}>
-          <Text style={styles.statsText}>{filters.stats.completed}/{filters.stats.total}</Text>
-          <View style={styles.progressBar}>
-            <View style={[
-              styles.progressFill, 
-              { width: filters.stats.total ? `${(filters.stats.completed/filters.stats.total)*100}%` : '0%' }
-            ]} />
+        <View style={styles.headerRight}>
+          {/* View Mode Toggle */}
+          <View style={styles.viewToggle}>
+            <TouchableOpacity
+              style={[styles.viewBtn, viewMode === 'list' && styles.viewBtnActive]}
+              onPress={() => setViewMode('list')}
+            >
+              <Icon name="format-list-bulleted" size={20} color={viewMode === 'list' ? theme.colors.textPrimary : theme.colors.textTertiary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.viewBtn, viewMode === 'calendar' && styles.viewBtnActive]}
+              onPress={() => setViewMode('calendar')}
+            >
+              <Icon name="calendar-month" size={20} color={viewMode === 'calendar' ? theme.colors.textPrimary : theme.colors.textTertiary} />
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.statsContainer}>
+            <Text style={styles.statsText}>{collapsible.stats.completed}/{collapsible.stats.total}</Text>
+            <View style={styles.progressBar}>
+              <View style={[
+                styles.progressFill, 
+                { width: collapsible.stats.total ? `${(collapsible.stats.completed/collapsible.stats.total)*100}%` : '0%' }
+              ]} />
+            </View>
           </View>
         </View>
       </View>
 
       {/* Active Filters */}
-      {filters.hasActiveFilters && (
+      {hasActiveFilters && (
         <View style={styles.activeFiltersBar}>
           <Animated.ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {!filters.showIncompleteOnly && (
+            {!showIncompleteOnly && (
               <View style={[styles.filterChip, styles.warningChip]}>
                 <Icon name="eye-off" size={12} color={theme.colors.accentWarning} />
                 <Text style={[styles.filterChipText, styles.warningChipText]}>Showing Completed</Text>
-                <TouchableOpacity onPress={() => filters.setShowIncompleteOnly(true)}>
+                <TouchableOpacity onPress={() => setShowIncompleteOnly(true)}>
                   <Icon name="close" size={14} color={theme.colors.textTertiary} />
                 </TouchableOpacity>
               </View>
             )}
-            {filters.selectedProject !== 'All' && (
-              <View style={styles.filterChip}>
-                <Icon name="folder" size={12} color={theme.colors.textPrimary} />
-                <Text style={styles.filterChipText}>{filters.selectedProject}</Text>
-                <TouchableOpacity onPress={() => filters.setSelectedProject('All')}>
-                  <Icon name="close" size={14} color={theme.colors.textTertiary} />
-                </TouchableOpacity>
-              </View>
-            )}
-            {filters.selectedTags.map(tag => (
+            {selectedTags.map(tag => (
               <View key={tag} style={[styles.filterChip, styles.tagFilterChip]}>
                 <Icon name="tag" size={12} color={theme.colors.textPrimary} />
                 <Text style={[styles.filterChipText, styles.tagFilterChipText]}>{tag}</Text>
-                <TouchableOpacity onPress={() => filters.toggleTagFilter(tag)}>
+                <TouchableOpacity onPress={() => 
+                  setSelectedTags(prev => prev.filter(t => t !== tag))
+                }>
                   <Icon name="close" size={14} color={theme.colors.textTertiary} />
                 </TouchableOpacity>
               </View>
@@ -203,8 +437,11 @@ export default function TasksScreen() {
         onClose={() => setShowDropdown(false)}
         projects={projects}
         tasks={tasks}
-        selected={filters.selectedProject}
-        onSelect={filters.setSelectedProject}
+        selected={selectedProject}
+        onSelect={(project) => {
+          setSelectedProject(project);
+          setShowDropdown(false);
+        }}
         onManage={() => setShowProjectManager(true)}
         onAddProject={addProject}
       />
@@ -212,8 +449,27 @@ export default function TasksScreen() {
       <FilterMenu
         visible={showFilterMenu}
         onClose={() => setShowFilterMenu(false)}
-        allTags={allTags}
-        filters={filters}
+        tasks={tasks}
+        selectedProject={selectedProject}
+        filters={{
+          showIncompleteOnly,
+          setShowIncompleteOnly,
+          selectedTags,
+          setSelectedTags,
+          toggleTagFilter: (tag) => {
+            setSelectedTags(prev => 
+              prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+            );
+          },
+          tagFilterMode,
+          setTagFilterMode,
+          clearFilters: () => {
+            setShowIncompleteOnly(true);
+            setSelectedTags([]);
+            setTagFilterMode('any');
+          },
+          hasActiveFilters: selectedTags.length > 0 || !showIncompleteOnly
+        }}
         animation={menuAnimation}
       />
 
@@ -234,6 +490,7 @@ export default function TasksScreen() {
         projects={projects}
         allTags={allTags}
         onAddProject={addProject}
+        onCollectTags={collectTags}
       />
 
       <TaskDetail
@@ -243,101 +500,212 @@ export default function TasksScreen() {
         onEdit={() => { setShowDetail(false); openEditForm(selectedTask); }}
         onToggleComplete={() => handleToggleComplete(selectedTask.id)}
         onDelete={() => { handleDelete(selectedTask.id); setShowDetail(false); }}
-        onTagPress={filters.toggleTagFilter}
+        onTagPress={() => {}}
+        onToggleSubtask={handleToggleSubtask}
       />
 
-      {/* Task List */}
-      <SectionList
-        sections={filters.groupedTasks}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item, section }) => {
-          if (section.type === 'project') return null;
-          const tagKey = `${section.project}-${section.title}`;
-          if (filters.expandedTags[tagKey] === false) return null;
-          
-          return (
-            <TaskItem 
-              item={item} 
-              onPress={() => openDetail(item)}
-              onToggleComplete={handleToggleComplete}
-              onLongPress={openEditForm}
-              onAddSubtask={handleAddSubtask}
-              onToggleSubtask={handleToggleSubtask}
-              onDeleteSubtask={handleDeleteSubtask}
-              onUpdateSubtask={handleUpdateSubtask}
-            />
-          );
-        }}
-        renderSectionHeader={({ section }) => (
-          <SectionHeader
-            section={section}
-            expandedTags={filters.expandedTags}
-            onToggleExpand={filters.toggleTagExpand}
-            onAddTask={handleInlineAdd}
+      {/* Task List or Calendar View */}
+      {viewMode === 'calendar' ? (
+        <CalendarView
+          tasks={tasks}
+          selectedProject={selectedProject}
+          selectedTags={selectedTags}
+          tagFilterMode={tagFilterMode}
+          onTaskPress={openDetail}
+          onTaskLongPress={openEditForm}
+          onToggleComplete={handleToggleComplete}
+          onUpdateTask={handleUpdateTask}
+          onAddTask={(title, project, dueDate) => {
+            const newTask = {
+              title: title,
+              description: '',
+              priority: 'medium',
+              completed: false,
+              project: project,
+              dueDate: dueDate,
+              tags: [],
+              subtasks: [],
+              id: Date.now().toString(),
+              createdAt: Date.now()
+            };
+            handleSaveTask(newTask);
+          }}
+        />
+      ) : (
+        <View style={{ flex: 1 }}>
+          <SectionList
+            ref={listRef}
+            sections={collapsible.groupedData}
+            keyExtractor={(item, index) => item?.id || `section-${index}`}
+            onScroll={(e) => { scrollY.current = e.nativeEvent.contentOffset.y; }}
+            scrollEventThrottle={16}
+            renderItem={({ item, section }) => {
+              if (!item) return null;
+              // Only render tasks if tag group is expanded
+              if (section.type !== 'tag') return null;
+              if (!section.isExpanded) return null;
+              
+              return (
+                <TaskItem 
+                  item={item} 
+                  onPress={() => openDetail(item)}
+                  onToggleComplete={handleToggleComplete}
+                  onLongPress={openEditForm}
+                  onAddSubtask={handleAddSubtask}
+                  onToggleSubtask={handleToggleSubtask}
+                  onDeleteSubtask={handleDeleteSubtask}
+                  onUpdateSubtask={handleUpdateSubtask}
+                  onUpdateTask={handleUpdateTask}
+                  onDeleteTask={handleDelete}
+                  listRef={listRef}
+                  scrollY={scrollY}
+                  scrollToItem={() => scrollToItem(item.id)}
+                  keyboardVisible={keyboardVisible}
+                />
+              );
+            }}
+            renderSectionHeader={({ section }) => {
+              if (section.type === 'project') {
+                // Project header with collapse toggle
+                return (
+                  <View>
+                    <TouchableOpacity
+                      style={styles.projectHeader}
+                      onPress={() => collapsible.toggleProjectExpand(section.project)}
+                      activeOpacity={0.7}
+                    >
+                      <Animated.View style={{
+                        transform: [{
+                          rotate: (projectRotations[section.project] || new Animated.Value(0)).interpolate({
+                            inputRange: [0, 1],
+                            outputRange: ['0deg', '90deg']
+                          })
+                        }]
+                      }}>
+                        <Icon name="chevron-right" size={24} color={getProjectColor(section.project)} />
+                      </Animated.View>
+                      <Text style={styles.projectHeaderText}>{section.title}</Text>
+                      <Text style={styles.projectTaskCount}>
+                        {section.visibleTaskCount}/{section.taskCount}
+                      </Text>
+                    </TouchableOpacity>
+                    
+                    {/* Add task input - shown when project is expanded */}
+                    {section.isExpanded && (
+                      inlineAddingProject === section.project ? (
+                        // Inline input mode
+                        <View style={styles.projectAddTaskContainer}>
+                          <TextInput
+                            ref={inlineInputRef}
+                            style={styles.projectAddTaskInputField}
+                            placeholder="Add a new task"
+                            placeholderTextColor={theme.colors.textPlaceholder}
+                            value={inlineTaskTitle}
+                            onChangeText={setInlineTaskTitle}
+                            onSubmitEditing={() => {
+                              if (inlineTaskTitle.trim()) {
+                                handleInlineAdd(section.project, [], inlineTaskTitle.trim());
+                                setInlineTaskTitle('');
+                                setInlineAddingProject(null);
+                              }
+                            }}
+                            autoFocus
+                            blurOnSubmit={false}
+                            returnKeyType="done"
+                            onBlur={() => {
+                              // Delay to allow button press first
+                              setTimeout(() => {
+                                setInlineTaskTitle('');
+                                setInlineAddingProject(null);
+                              }, 200);
+                            }}
+                          />
+                          <TouchableOpacity 
+                            style={styles.projectAddTaskClose}
+                            onPress={() => {
+                              setInlineTaskTitle('');
+                            setInlineAddingProject(null);
+                            }}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          >
+                            <Icon name="close" size={18} color={theme.colors.textTertiary} />
+                          </TouchableOpacity>
+                        </View>
+                      ) : (
+                        // Placeholder mode
+                        <TouchableOpacity
+                          style={styles.projectAddTaskPlaceholder}
+                          onPress={() => setInlineAddingProject(section.project)}
+                          activeOpacity={0.7}
+                        >
+                          <View style={styles.projectAddTaskInput} pointerEvents="none">
+                            <Text style={styles.projectAddTaskText}>Add a new task</Text>
+                          </View>
+                        </TouchableOpacity>
+                      )
+                    )}
+                  </View>
+                );
+              }
+              
+              // Tag group header - only shown if parent project is expanded
+              return (
+                <SectionHeader
+                  section={section}
+                  expanded={section.isExpanded}
+                  onToggleExpand={() => collapsible.toggleTagGroupExpand(section.project, section.title)}
+                  onAddTask={handleInlineAdd}
+                  onRenameTag={handleRenameTag}
+                  onAddTagToSection={handleAddTagToSection}
+                  projectColor={getProjectColor(section.project)}
+                />
+              );
+            }}
+            contentContainerStyle={[
+              styles.list,
+              { paddingBottom: Math.max(100, keyboardHeight + 20) }
+            ]}
+            stickySectionHeadersEnabled={false}
+            refreshing={loading}
+            onRefresh={loadData}
+            ListEmptyComponent={(
+              <View style={styles.emptyState}>
+                <Icon name="folder-open" size={64} color={theme.colors.textMuted} />
+                <Text style={styles.emptyText}>
+                  {showIncompleteOnly && tasks.some(t => t.completed)
+                    ? 'No incomplete tasks'
+                    : 'No tasks yet'}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setEditingTask(null);
+                    setShowTaskForm(true);
+                  }}
+                  style={styles.addNewTaskBtn}
+                >
+                  <Icon name="plus" size={20} color={theme.colors.textPrimary} />
+                  <Text style={styles.addNewTaskText}>Add new task</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           />
-        )}
-        contentContainerStyle={styles.list}
-        stickySectionHeadersEnabled={false}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Icon name="folder-open" size={64} color={theme.colors.textMuted} />
-            <Text style={styles.emptyText}>
-              {filters.showIncompleteOnly && tasks.some(t => t.completed)
-                ? 'No incomplete tasks match filters'
-                : 'No tasks match filters'}
+        </View>
+      )}
+
+      {/* Filter FAB */}
+      <TouchableOpacity 
+        style={[styles.filterFab, hasActiveFilters && styles.filterFabActive]}
+        onPress={() => setShowFilterMenu(true)}
+      >
+        <Icon name="filter-variant" size={22} color={theme.colors.textPrimary} />
+        {hasActiveFilters && (
+          <View style={styles.filterBadge}>
+            <Text style={styles.filterBadgeText}>
+              {selectedTags.length + (!showIncompleteOnly ? 1 : 0)}
             </Text>
-            <TouchableOpacity onPress={filters.clearFilters} style={styles.clearFiltersBtn}>
-              <Text style={styles.clearFiltersText}>Clear filters</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => {
-                setEditingTask(null);
-                setShowTaskForm(true);
-              }}
-              style={styles.addNewTaskBtn}
-            >
-              <Icon name="plus" size={20} color={theme.colors.textPrimary} />
-              <Text style={styles.addNewTaskText}>Add new task</Text>
-            </TouchableOpacity>
           </View>
-        }
-      />
-
-      {/* FABs */}
-      <View style={styles.fabContainer}>
-        <TouchableOpacity 
-          style={[styles.filterFab, filters.hasActiveFilters && styles.filterFabActive]}
-          onPress={() => setShowFilterMenu(true)}
-        >
-          <Icon name="filter-variant" size={22} color={theme.colors.textPrimary} />
-          {filters.hasActiveFilters && (
-            <View style={styles.filterBadge}>
-              <Text style={styles.filterBadgeText}>
-                {filters.selectedTags.length + 
-                 (filters.selectedProject !== 'All' ? 1 : 0) +
-                 (!filters.showIncompleteOnly ? 1 : 0)}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.addFab} 
-          onPress={() => {
-            const targetProject = filters.selectedProject !== 'All' 
-              ? filters.selectedProject 
-              : (projects[0] || '');
-            handleInlineAdd(targetProject, [], 'New Task');
-          }}
-          onLongPress={() => {
-            setEditingTask(null);
-            setShowTaskForm(true);
-          }}
-          delayLongPress={500}
-        >
-          <Icon name="plus" size={28} color={theme.colors.textPrimary} />
-        </TouchableOpacity>
-      </View>
+        )}
+      </TouchableOpacity>
     </View>
   );
 }
@@ -354,13 +722,13 @@ const createStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.background 
   },
   offlineText: { 
-    fontSize: 17, 
+    fontSize: theme.typography.body, 
     color: theme.colors.textSecondary, 
     marginTop: 16,
     fontWeight: '600',
   },
   offlineSubtext: { 
-    fontSize: 15, 
+    fontSize: theme.typography.body, 
     color: theme.colors.textTertiary, 
     marginTop: 8 
   },
@@ -385,17 +753,22 @@ const createStyles = (theme) => StyleSheet.create({
     borderColor: theme.colors.border,
   },
   projectSelectorText: { 
-    fontSize: 15, 
+    fontSize: theme.typography.body, 
     fontWeight: '600', 
     marginLeft: 8, 
     marginRight: 8,
     color: theme.colors.textPrimary 
   },
+  projectSelectorSquare: {
+    width: 16,
+    height: 16,
+    borderRadius: 3,
+  },
   statsContainer: { 
     alignItems: 'flex-end' 
   },
   statsText: { 
-    fontSize: 13, 
+    fontSize: theme.typography.body, 
     color: theme.colors.textTertiary, 
     marginBottom: 4 
   },
@@ -414,6 +787,99 @@ const createStyles = (theme) => StyleSheet.create({
     borderRadius: 2 
   },
   
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  viewToggle: {
+    flexDirection: 'row',
+    backgroundColor: theme.colors.surface,
+    borderRadius: 8,
+    padding: 2,
+    marginRight: 12,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+  },
+  viewBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  viewBtnActive: {
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  
+  projectHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
+  },
+  projectHeaderText: {
+    fontSize: theme.typography.body,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
+    marginLeft: theme.spacing.sm,
+    flex: 1,
+  },
+  projectTaskCount: {
+    fontSize: theme.typography.body,
+    color: theme.colors.textTertiary,
+    backgroundColor: theme.colors.surfaceHighlight,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 2,
+    borderRadius: theme.borderRadius.pill,
+    marginRight: theme.spacing.sm,
+  },
+
+  projectAddTaskPlaceholder: {
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
+  },
+  projectAddTaskInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.inputBackground,
+    borderRadius: 6,
+    padding: 8,
+    paddingLeft: theme.spacing.xl,
+  },
+  projectAddTaskText: {
+    fontSize: theme.typography.body,
+    color: theme.colors.textPlaceholder,
+  },
+  projectAddTaskContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
+  },
+  projectAddTaskInputField: {
+    flex: 1,
+    backgroundColor: theme.colors.inputBackground,
+    borderRadius: 6,
+    padding: 8,
+    paddingLeft: theme.spacing.xl,
+    fontSize: theme.typography.body,
+    color: theme.colors.textPrimary,
+    marginRight: 8,
+  },
+  projectAddTaskClose: {
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  
   activeFiltersBar: {
     backgroundColor: theme.colors.background,
     paddingVertical: 8,
@@ -430,46 +896,37 @@ const createStyles = (theme) => StyleSheet.create({
     borderRadius: 12,
     marginRight: 8,
   },
-  tagFilterChip: { 
-    backgroundColor: theme.colors.surface 
-  },
   warningChip: { 
     backgroundColor: 'rgba(255, 193, 7, 0.15)' 
   },
+  tagFilterChip: { 
+    backgroundColor: theme.colors.surface 
+  },
   filterChipText: { 
-    fontSize: 12, 
+    fontSize: theme.typography.body, 
     color: theme.colors.textPrimary, 
     marginHorizontal: 4 
   },
-  tagFilterChipText: { 
-    color: theme.colors.textSecondary 
-  },
   warningChipText: { 
     color: theme.colors.accentWarning 
+  },
+  tagFilterChipText: { 
+    color: theme.colors.textSecondary 
   },
   
   list: { 
     paddingBottom: 100 
   },
   emptyState: { 
-    alignItems: 'center', 
-    marginTop: 80 
+    alignItems: 'flex-start',
+    marginTop: 80,
+    paddingLeft: theme.spacing.xl,
+    paddingRight: theme.spacing.md,
   },
   emptyText: { 
     marginTop: 16, 
     color: theme.colors.textSecondary, 
-    fontSize: 16 
-  },
-  clearFiltersBtn: { 
-    marginTop: 16, 
-    backgroundColor: theme.colors.surfaceElevated, 
-    paddingHorizontal: 20, 
-    paddingVertical: 10, 
-    borderRadius: 20 
-  },
-  clearFiltersText: { 
-    color: theme.colors.textPrimary, 
-    fontWeight: '600' 
+    fontSize: theme.typography.body 
   },
   addNewTaskBtn: { 
     marginTop: 20, 
@@ -485,26 +942,26 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textPrimary, 
     fontWeight: '600', 
     marginLeft: 8, 
-    fontSize: 16 
+    fontSize: theme.typography.body 
   },
 
-  fabContainer: { 
-    position: 'absolute', 
-    right: 16, 
-    bottom: 16, 
-    flexDirection: 'row', 
-    alignItems: 'flex-end' 
-  },
   filterFab: {
+    position: 'absolute',
+    right: 16,
+    bottom: 16,
     width: 48,
     height: 48,
     borderRadius: 24,
     backgroundColor: theme.colors.surfaceElevated,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    shadowColor: theme.colors.border,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   filterFabActive: { 
     backgroundColor: theme.colors.surfaceElevated 
@@ -521,22 +978,9 @@ const createStyles = (theme) => StyleSheet.create({
     alignItems: 'center',
   },
   filterBadgeText: { 
-    color: theme.colors.textPrimary, 
-    fontSize: 12, 
+    color: '#FFFFFF', 
+    fontSize: theme.typography.body, 
     fontWeight: 'bold', 
     paddingHorizontal: 4 
-  },
-  addFab: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: theme.colors.surfaceElevated,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: theme.colors.border,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
   },
 });

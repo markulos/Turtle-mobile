@@ -10,11 +10,13 @@ import {
   Alert,
   ScrollView,
   Keyboard,
+  Animated,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { FormField } from './FormField';
+import { DatePickerModal } from './DatePickerModal';
 import { normalizeTags, parseTags, getPriorityColor } from '../utils/taskHelpers';
 import { PRIORITIES } from '../utils/constants';
 
@@ -26,6 +28,7 @@ export const TaskForm = ({
   projects, 
   allTags,
   onAddProject,
+  onCollectTags,
 }) => {
   const { theme } = useTheme();
   const [formData, setFormData] = useState({
@@ -34,19 +37,42 @@ export const TaskForm = ({
   });
   const [tagInput, setTagInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
   
   const titleInputRef = useRef(null);
   const descInputRef = useRef(null);
   const dueDateInputRef = useRef(null);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [isClosing, setIsClosing] = useState(false);
   
   const isEditing = !!initialData?.id;
 
   useEffect(() => {
     if (visible) {
+      setIsClosing(false);
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
       if (initialData) {
+        // Check if task is an appointment (createdAt matches dueDate)
+        const isAppointment = initialData.dueDate && initialData.createdAt && (() => {
+          const [y, m, d] = initialData.dueDate.split('-').map(Number);
+          const dueDateTime = new Date(y, m - 1, d).getTime();
+          const createdDate = new Date(initialData.createdAt);
+          const createdDateTime = new Date(
+            createdDate.getFullYear(),
+            createdDate.getMonth(),
+            createdDate.getDate()
+          ).getTime();
+          return dueDateTime === createdDateTime;
+        })();
+        
         setFormData({
           ...initialData,
-          tags: normalizeTags(initialData.tags)
+          tags: normalizeTags(initialData.tags),
+          isAppointment: !!isAppointment
         });
       } else {
         setFormData({
@@ -56,8 +82,27 @@ export const TaskForm = ({
       }
       setTagInput('');
       setShowSuggestions(false);
+    } else if (isClosing) {
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => {
+        setIsClosing(false);
+      });
     }
-  }, [visible, initialData]);
+  }, [visible, isClosing, initialData, fadeAnim]);
+  
+  const handleClose = () => {
+    setIsClosing(true);
+    Animated.timing(fadeAnim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      onClose();
+    });
+  };
 
   const suggestions = useMemo(() => {
     if (!tagInput.trim() || !showSuggestions) return [];
@@ -83,31 +128,53 @@ export const TaskForm = ({
       await onAddProject(formData.project);
     }
     
-    const finalTask = {
+    let finalTask = {
       ...formData,
       id: initialData?.id || Date.now().toString(),
       createdAt: initialData?.createdAt || Date.now(),
       title: formData.title.trim()
     };
     
+    // If appointment mode is enabled, set createdAt to match dueDate
+    if (formData.isAppointment && formData.dueDate) {
+      const [y, m, d] = formData.dueDate.split('-').map(Number);
+      const appointmentDate = new Date(y, m - 1, d);
+      finalTask.createdAt = appointmentDate.getTime();
+    }
+    
+    // Remove the isAppointment field before saving (it's just a UI helper)
+    delete finalTask.isAppointment;
+    
     onSave(finalTask);
-    onClose();
+    handleClose();
   };
 
   const addTag = (tag) => {
     const tagToAdd = tag || tagInput.trim();
     if (!tagToAdd) return;
     
-    if (formData.tags.some(t => t.toLowerCase() === tagToAdd.toLowerCase())) {
-      setTagInput('');
-      setShowSuggestions(false);
-      return;
+    // Split by comma and process each tag separately
+    const tagsToAdd = tagToAdd.split(',').map(t => t.trim()).filter(Boolean);
+    
+    const newTags = [];
+    tagsToAdd.forEach(t => {
+      if (!formData.tags.some(existing => existing.toLowerCase() === t.toLowerCase())) {
+        newTags.push(t);
+      }
+    });
+    
+    if (newTags.length > 0) {
+      setFormData(prev => ({ 
+        ...prev, 
+        tags: [...prev.tags, ...newTags] 
+      }));
+      
+      // Immediately collect new tags to update the global tag list
+      if (onCollectTags) {
+        onCollectTags(newTags);
+      }
     }
     
-    setFormData(prev => ({ 
-      ...prev, 
-      tags: [...prev.tags, tagToAdd] 
-    }));
     setTagInput('');
     setShowSuggestions(false);
   };
@@ -151,12 +218,12 @@ export const TaskForm = ({
 
   return (
     <Modal 
-      animationType="slide" 
+      animationType="none" 
       transparent 
       visible={visible} 
-      onRequestClose={onClose}
+      onRequestClose={handleClose}
     >
-      <View style={styles.overlay}>
+      <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
         <KeyboardAwareScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
@@ -304,18 +371,79 @@ export const TaskForm = ({
             </FormField>
 
             <FormField label="Due Date">
-              <TextInput
-                ref={dueDateInputRef}
-                style={styles.input}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={theme.colors.textPlaceholder}
-                value={formData.dueDate}
-                onChangeText={text => updateField('dueDate', text)}
-                returnKeyType="done"
-                blurOnSubmit={true}
-                onSubmitEditing={handleSave}
-              />
+              <TouchableOpacity 
+                style={styles.datePickerButton}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Icon name="calendar" size={20} color={theme.colors.textSecondary} />
+                <Text style={[
+                  styles.datePickerText,
+                  !formData.dueDate && styles.datePickerPlaceholder
+                ]}>
+                  {formData.dueDate 
+                    ? (() => {
+                        // Parse YYYY-MM-DD and create date in local timezone
+                        const [y, m, d] = formData.dueDate.split('-').map(Number);
+                        const date = new Date(y, m - 1, d);
+                        return date.toLocaleDateString('en-US', { 
+                          weekday: 'short', 
+                          month: 'short', 
+                          day: 'numeric',
+                          year: 'numeric'
+                        });
+                      })()
+                    : 'Select a date...'
+                  }
+                </Text>
+                <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
+              </TouchableOpacity>
+              
+              {formData.dueDate && (
+                <TouchableOpacity 
+                  style={styles.clearDateBtn}
+                  onPress={() => updateField('dueDate', '')}
+                >
+                  <Text style={styles.clearDateText}>Clear date</Text>
+                </TouchableOpacity>
+              )}
+              
+              {/* Appointment option - only when due date is set */}
+              {formData.dueDate && (
+                <TouchableOpacity 
+                  style={styles.appointmentToggle}
+                  onPress={() => updateField('isAppointment', !formData.isAppointment)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[
+                    styles.checkbox,
+                    formData.isAppointment && styles.checkboxChecked
+                  ]}>
+                    {formData.isAppointment && (
+                      <Icon name="check" size={14} color="#fff" />
+                    )}
+                  </View>
+                  <Text style={styles.appointmentText}>Single event (appointment)</Text>
+                  <Icon 
+                    name="calendar-clock" 
+                    size={16} 
+                    color={formData.isAppointment ? theme.colors.accentSuccess : theme.colors.textTertiary}
+                    style={styles.appointmentIcon}
+                  />
+                </TouchableOpacity>
+              )}
             </FormField>
+            
+            {/* Date Picker Modal */}
+            <DatePickerModal
+              visible={showDatePicker}
+              onClose={() => setShowDatePicker(false)}
+              onSelect={(date) => {
+                updateField('dueDate', date);
+                setShowDatePicker(false);
+              }}
+              selectedDate={formData.dueDate}
+              theme={theme}
+            />
 
             <FormField label="Priority">
               <View style={styles.priorityRow}>
@@ -343,7 +471,7 @@ export const TaskForm = ({
             </FormField>
 
             <View style={styles.buttons}>
-              <TouchableOpacity style={[styles.btn, styles.cancelBtn]} onPress={onClose}>
+              <TouchableOpacity style={[styles.btn, styles.cancelBtn]} onPress={handleClose}>
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.btn, styles.saveBtn]} onPress={handleSave}>
@@ -354,7 +482,7 @@ export const TaskForm = ({
             <View style={styles.bottomPadding} />
           </View>
         </KeyboardAwareScrollView>
-      </View>
+      </Animated.View>
     </Modal>
   );
 };
@@ -362,7 +490,7 @@ export const TaskForm = ({
 const createStyles = (theme) => StyleSheet.create({
   overlay: { 
     flex: 1, 
-    backgroundColor: theme.colors.overlay, 
+    backgroundColor: 'rgba(0, 0, 0, 0.5)', 
     justifyContent: 'flex-end' 
   },
   scrollContent: { 
@@ -377,7 +505,7 @@ const createStyles = (theme) => StyleSheet.create({
     paddingBottom: Platform.OS === 'ios' ? 34 : 20,
   },
   title: { 
-    fontSize: 18, 
+    fontSize: theme.typography.body, 
     fontWeight: '700', 
     marginBottom: 16, 
     color: theme.colors.textPrimary 
@@ -387,7 +515,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderWidth: 0, 
     borderRadius: 10, 
     paddingHorizontal: 12, 
-    fontSize: 15,
+    fontSize: theme.typography.body,
     color: theme.colors.inputText,
     backgroundColor: theme.colors.inputBackground,
   },
@@ -410,7 +538,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderColor: theme.colors.border,
   },
   hint: { 
-    fontSize: 12, 
+    fontSize: theme.typography.body, 
     color: theme.colors.textSecondary, 
     marginTop: 4, 
     fontStyle: 'italic' 
@@ -441,7 +569,7 @@ const createStyles = (theme) => StyleSheet.create({
     maxHeight: 150,
   },
   suggestionsLabel: {
-    fontSize: 12,
+    fontSize: theme.typography.body,
     color: theme.colors.textTertiary,
     padding: 8,
     paddingBottom: 4,
@@ -459,7 +587,7 @@ const createStyles = (theme) => StyleSheet.create({
   },
   suggestionText: {
     flex: 1,
-    fontSize: 14,
+    fontSize: theme.typography.body,
     color: theme.colors.textPrimary,
     marginLeft: 8,
   },
@@ -475,7 +603,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginRight: 8,
   },
   allTagText: {
-    fontSize: 12,
+    fontSize: theme.typography.body,
     color: theme.colors.textPrimary,
   },
   tagsContainer: { 
@@ -496,7 +624,7 @@ const createStyles = (theme) => StyleSheet.create({
   selectedTagText: { 
     color: theme.colors.textPrimary, 
     marginRight: 6, 
-    fontSize: 14 
+    fontSize: theme.typography.body 
   },
   descInput: { 
     height: 80, 
@@ -520,7 +648,7 @@ const createStyles = (theme) => StyleSheet.create({
   priorityText: { 
     color: theme.colors.textTertiary, 
     fontWeight: '600',
-    fontSize: 14,
+    fontSize: theme.typography.body,
   },
   priorityTextActive: { 
     color: theme.colors.textPrimary 
@@ -547,7 +675,7 @@ const createStyles = (theme) => StyleSheet.create({
   cancelText: { 
     color: theme.colors.textSecondary, 
     fontWeight: '600',
-    fontSize: 15,
+    fontSize: theme.typography.body,
   },
   saveBtn: { 
     backgroundColor: theme.colors.surfaceElevated,
@@ -557,9 +685,69 @@ const createStyles = (theme) => StyleSheet.create({
   saveText: { 
     color: theme.colors.textPrimary, 
     fontWeight: '700',
-    fontSize: 15,
+    fontSize: theme.typography.body,
   },
   bottomPadding: {
     height: 60,
+  },
+  datePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.surfaceElevated,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+  },
+  datePickerText: {
+    flex: 1,
+    fontSize: theme.typography.body,
+    color: theme.colors.textPrimary,
+    marginLeft: 10,
+  },
+  datePickerPlaceholder: {
+    color: theme.colors.textPlaceholder,
+    fontStyle: 'italic',
+  },
+  clearDateBtn: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+  },
+  clearDateText: {
+    fontSize: 12,
+    color: theme.colors.accentError,
+  },
+  appointmentToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: theme.colors.surfaceHighlight,
+    borderRadius: 8,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: theme.colors.textTertiary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  checkboxChecked: {
+    backgroundColor: theme.colors.accentSuccess,
+    borderColor: theme.colors.accentSuccess,
+  },
+  appointmentText: {
+    flex: 1,
+    fontSize: 14,
+    color: theme.colors.textPrimary,
+    fontWeight: '500',
+  },
+  appointmentIcon: {
+    marginLeft: 8,
   },
 });

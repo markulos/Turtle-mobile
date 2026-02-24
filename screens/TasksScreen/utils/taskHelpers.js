@@ -34,9 +34,16 @@ export const areAllSubtasksCompleted = (subtasks) => {
 };
 
 export const toggleSubtaskComplete = (subtasks, subtaskId) => {
-  return subtasks.map(st => 
-    st.id === subtaskId ? { ...st, completed: !st.completed } : st
-  );
+  return subtasks.map(st => {
+    if (st.id !== subtaskId) return st;
+    const newCompleted = !st.completed;
+    return {
+      ...st,
+      completed: newCompleted,
+      completedAt: newCompleted ? Date.now() : null,
+      completedTime: newCompleted ? new Date().toISOString() : null
+    };
+  });
 };
 
 export const addSubtask = (subtasks, title) => {
