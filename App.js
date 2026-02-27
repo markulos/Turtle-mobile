@@ -9,6 +9,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import SettingsScreen from './screens/SettingsScreen';
 import PasswordsScreen from './screens/PasswordsScreen';
 import TasksScreen from './screens/TasksScreen';
+import TurtleScreen from './screens/TurtleScreen';
 import { ServerProvider } from './context/ServerContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 
@@ -25,6 +26,7 @@ function TabNavigator() {
           let iconName;
           if (route.name === 'Passwords') iconName = focused ? 'shield-key' : 'shield-key-outline';
           else if (route.name === 'Tasks') iconName = focused ? 'checkbox-marked-circle' : 'checkbox-marked-circle-outline';
+          else if (route.name === 'Turtle') iconName = 'turtle';
           else if (route.name === 'Settings') iconName = focused ? 'cog' : 'cog-outline';
           return <Icon name={iconName} size={24} color={color} />;
         },
@@ -55,6 +57,11 @@ function TabNavigator() {
         name="Tasks" 
         component={TasksScreen}
         options={{ title: 'Tasks' }}
+      />
+      <Tab.Screen 
+        name="Turtle" 
+        component={TurtleScreen}
+        options={{ title: 'Turtle' }}
       />
       <Tab.Screen 
         name="Settings" 

@@ -90,6 +90,7 @@ export default function TasksScreen() {
     handleToggleSubtask,
     handleDeleteSubtask,
     handleUpdateSubtask,
+    deleteTask,
     loading,
   } = useTaskData(api, isConnected);
   
@@ -486,6 +487,7 @@ export default function TasksScreen() {
         visible={showTaskForm}
         onClose={closeTaskForm}
         onSave={handleSaveTask}
+        onDelete={deleteTask}
         initialData={editingTask}
         projects={projects}
         allTags={allTags}
@@ -585,9 +587,6 @@ export default function TasksScreen() {
                         <Icon name="chevron-right" size={24} color={getProjectColor(section.project)} />
                       </Animated.View>
                       <Text style={styles.projectHeaderText}>{section.title}</Text>
-                      <Text style={styles.projectTaskCount}>
-                        {section.visibleTaskCount}/{section.taskCount}
-                      </Text>
                     </TouchableOpacity>
                     
                     {/* Add task input - shown when project is expanded */}

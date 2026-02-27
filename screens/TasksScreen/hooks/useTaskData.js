@@ -138,6 +138,18 @@ export const useTaskData = (api, isConnected) => {
     }
   };
 
+  const deleteTask = async (taskId) => {
+    try {
+      const newTasks = tasks.filter(t => t.id !== taskId);
+      await saveTasks(newTasks);
+      return true;
+    } catch (error) {
+      console.error('Delete task error:', error);
+      Alert.alert('Error', 'Failed to delete task');
+      return false;
+    }
+  };
+
   const deleteProject = async (name, options = {}) => {
     const { onDeleteTasks } = options;
     try {
@@ -163,7 +175,7 @@ export const useTaskData = (api, isConnected) => {
 
   return {
     tasks, setTasks, projects, setProjects, allTags, setAllTags, loading,
-    loadData, saveTasks, collectTags, addProject, deleteProject,
+    loadData, saveTasks, collectTags, addProject, deleteProject, deleteTask,
     handleAddSubtask,
     handleToggleSubtask,
     handleDeleteSubtask,

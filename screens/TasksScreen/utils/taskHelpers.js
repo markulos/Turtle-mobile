@@ -8,8 +8,22 @@ export const parseTags = (input) =>
   input.split(/[,\s]+/).map(t => t.trim().toLowerCase()).filter(Boolean);
 
 export const sortTasks = (a, b) => {
-  if (a.completed === b.completed) return (b.createdAt || 0) - (a.createdAt || 0);
-  return a.completed ? 1 : -1;
+  // First sort by completion status (incomplete first)
+  if (a.completed !== b.completed) {
+    return a.completed ? 1 : -1;
+  }
+  
+  // Then sort by time (earliest to latest) if both have time
+  if (a.time && b.time) {
+    return a.time.localeCompare(b.time);
+  }
+  
+  // Tasks with time come before tasks without time
+  if (a.time && !b.time) return -1;
+  if (!a.time && b.time) return 1;
+  
+  // Finally sort by createdAt (newest first)
+  return (b.createdAt || 0) - (a.createdAt || 0);
 };
 
 export const getPriorityColor = (priority, theme) => {
@@ -46,12 +60,13 @@ export const toggleSubtaskComplete = (subtasks, subtaskId) => {
   });
 };
 
-export const addSubtask = (subtasks, title) => {
+export const addSubtask = (subtasks, title, time = null) => {
   return [...(subtasks || []), {
     id: Date.now().toString(),
     title: title.trim(),
     completed: false,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    time: time
   }];
 };
 

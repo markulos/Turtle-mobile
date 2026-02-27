@@ -21,12 +21,18 @@ export const ServerProvider = ({ children }) => {
   };
 
   const apiPost = async (endpoint, data) => {
-    const response = await fetch(`${getBaseUrl()}${endpoint}`, {
+    const url = `${getBaseUrl()}${endpoint}`;
+    console.log(`[API POST] ${url}`, data);
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    if (!response.ok) throw new Error('API Error');
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error(`[API ERROR] ${response.status}: ${errorText}`);
+      throw new Error(`API Error ${response.status}: ${errorText}`);
+    }
     return response.json();
   };
 

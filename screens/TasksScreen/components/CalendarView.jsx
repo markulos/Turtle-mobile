@@ -314,7 +314,7 @@ export const CalendarView = ({
   // Tasks for selected date
   const selectedDateTasks = useMemo(() => {
     const dateStr = toDateString(selectedDate);
-    return tasks.filter(task => {
+    const filtered = tasks.filter(task => {
       // Filter by project
       if (selectedProject !== 'All') {
         const taskProject = task.project || 'No Project';
@@ -362,6 +362,14 @@ export const CalendarView = ({
         return toDateString(new Date(task.createdAt)) === dateStr;
       }
       return false;
+    });
+    
+    // Sort by time (earliest to latest), tasks without time go to the end
+    return filtered.sort((a, b) => {
+      if (a.time && b.time) return a.time.localeCompare(b.time);
+      if (a.time) return -1;
+      if (b.time) return 1;
+      return 0;
     });
   }, [selectedDate, tasks, selectedProject, selectedTags, tagFilterMode, dueDateOnly]);
 
@@ -423,7 +431,7 @@ export const CalendarView = ({
     const query = searchQuery.toLowerCase();
     const selectedDateStr = toDateString(selectedDate);
     
-    return tasks.filter(task => {
+    const filtered = tasks.filter(task => {
       // Exclude tasks already on this date
       const taskDate = task.dueDate || (task.createdAt ? toDateString(new Date(task.createdAt)) : '');
       if (taskDate === selectedDateStr) return false;
@@ -455,7 +463,17 @@ export const CalendarView = ({
       // Search in title and description
       return task.title.toLowerCase().includes(query) || 
              (task.description && task.description.toLowerCase().includes(query));
-    }).slice(0, 10); // Limit to 10 results
+    });
+    
+    // Sort by time (earliest to latest), tasks without time go to the end
+    filtered.sort((a, b) => {
+      if (a.time && b.time) return a.time.localeCompare(b.time);
+      if (a.time) return -1;
+      if (b.time) return 1;
+      return 0;
+    });
+    
+    return filtered.slice(0, 10); // Limit to 10 results
   }, [searchQuery, tasks, selectedDate, selectedProject, selectedTags, tagFilterMode]);
 
   const handleSelectExistingTask = (task) => {
@@ -480,13 +498,6 @@ export const CalendarView = ({
           <Text style={styles.collapseHeaderText}>
             {MONTHS[currentDate.getMonth()]} {currentDate.getFullYear()}
           </Text>
-          {calendarData.filter(d => d.type === 'day' && d.tasks.length > 0).length > 0 && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>
-                {calendarData.filter(d => d.type === 'day' && d.tasks.length > 0).length}
-              </Text>
-            </View>
-          )}
         </View>
         
         <View style={styles.chevronContainer}>

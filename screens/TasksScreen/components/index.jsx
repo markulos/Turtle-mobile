@@ -8,3 +8,4 @@ export { TaskItem } from './TaskItem';
 export { SectionHeader } from './SectionHeader';
 export { CalendarView } from './CalendarView';
 export { DatePickerModal } from './DatePickerModal';
+export { TimePicker } from './TimePicker';

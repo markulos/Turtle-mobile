@@ -243,7 +243,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     backgroundColor: theme.colors.background,
   },
   addInputRowWithKeyboard: {
-    marginBottom: 20, // Extra breathing space when keyboard is active
+    marginBottom: 100, // Extra breathing space when keyboard is active
   },
   addInput: {
     flex: 1,

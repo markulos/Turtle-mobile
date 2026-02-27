@@ -11,6 +11,7 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { getPriorityColor, areAllSubtasksCompleted } from '../utils/taskHelpers';
+import { TimePicker } from './TimePicker';
 
 export const TaskItem = ({ 
   item, 
@@ -33,6 +34,8 @@ export const TaskItem = ({
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [editingSubtaskId, setEditingSubtaskId] = useState(null);
   const [editSubtaskTitle, setEditSubtaskTitle] = useState('');
+  const [editSubtaskTime, setEditSubtaskTime] = useState('');
+  const [showSubtaskTimePicker, setShowSubtaskTimePicker] = useState(false);
   
   // Inline editing for main task
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -64,15 +67,20 @@ export const TaskItem = ({
   const handleEditSubtask = (subtask) => {
     setEditingSubtaskId(subtask.id);
     setEditSubtaskTitle(subtask.title);
+    setEditSubtaskTime(subtask.time || '');
     // Scroll into view after state update
     setTimeout(() => scrollToItem?.(), 150);
   };
 
   const saveEditSubtask = () => {
     if (!editSubtaskTitle.trim()) return;
-    onUpdateSubtask(item.id, editingSubtaskId, { title: editSubtaskTitle.trim() });
+    onUpdateSubtask(item.id, editingSubtaskId, { 
+      title: editSubtaskTitle.trim(),
+      time: editSubtaskTime || null
+    });
     setEditingSubtaskId(null);
     setEditSubtaskTitle('');
+    setEditSubtaskTime('');
   };
   
   // Main task inline editing
@@ -193,9 +201,24 @@ export const TaskItem = ({
           </TouchableOpacity>
           
           <View style={styles.content}>
-            <Text style={[styles.title, item.completed && styles.completedText]}>
-              {item.title}
-            </Text>
+            <View style={styles.titleRow}>
+              <Text style={[styles.title, item.completed && styles.completedText]}>
+                {item.title}
+              </Text>
+              {item.time && (
+                <View style={styles.timeBadge}>
+                  <Icon name="clock" size={10} color={theme.colors.accentPrimary} />
+                  <Text style={styles.timeText}>
+                    {(() => {
+                      const [h, m] = item.time.split(':').map(Number);
+                      const isPM = h >= 12;
+                      const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                      return `${displayH}:${m.toString().padStart(2, '0')} ${isPM ? 'PM' : 'AM'}`;
+                    })()}
+                  </Text>
+                </View>
+              )}
+            </View>
             {item.description && !expanded && (
               <Text style={styles.description} numberOfLines={1}>
                 {item.description.split('\n')[0]}
@@ -255,31 +278,64 @@ export const TaskItem = ({
               </TouchableOpacity>
               
               {editingSubtaskId === subtask.id ? (
-                <View style={styles.editSubtaskRow} ref={editingSubtaskId === subtask.id ? editSubtaskRef : null}>
-                  <TextInput
-                    style={styles.editSubtaskInput}
-                    value={editSubtaskTitle}
-                    onChangeText={setEditSubtaskTitle}
-                    onSubmitEditing={saveEditSubtask}
-                    autoFocus
-                    placeholderTextColor={theme.colors.textPlaceholder}
-                  />
-                  <TouchableOpacity onPress={saveEditSubtask}>
-                    <Icon name="check" size={18} color={theme.colors.accentSuccess} />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => { setEditingSubtaskId(null); setEditSubtaskTitle(''); }}>
-                    <Icon name="close" size={18} color={theme.colors.accentError} />
-                  </TouchableOpacity>
+                <View style={styles.editSubtaskContainer} ref={editingSubtaskId === subtask.id ? editSubtaskRef : null}>
+                  <View style={styles.editSubtaskRow}>
+                    <TextInput
+                      style={styles.editSubtaskInput}
+                      value={editSubtaskTitle}
+                      onChangeText={setEditSubtaskTitle}
+                      onSubmitEditing={saveEditSubtask}
+                      autoFocus
+                      placeholderTextColor={theme.colors.textPlaceholder}
+                    />
+                    <TouchableOpacity onPress={saveEditSubtask}>
+                      <Icon name="check" size={18} color={theme.colors.accentSuccess} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowSubtaskTimePicker(true)}>
+                      <Icon name="clock" size={18} color={editSubtaskTime ? theme.colors.accentPrimary : theme.colors.textTertiary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => { setEditingSubtaskId(null); setEditSubtaskTitle(''); setEditSubtaskTime(''); }}>
+                      <Icon name="close" size={18} color={theme.colors.accentError} />
+                    </TouchableOpacity>
+                  </View>
+                  {editSubtaskTime && (
+                    <View style={styles.editSubtaskTimeBadge}>
+                      <Icon name="clock" size={10} color={theme.colors.accentPrimary} />
+                      <Text style={styles.editSubtaskTimeText}>
+                        {(() => {
+                          const [h, m] = editSubtaskTime.split(':').map(Number);
+                          const isPM = h >= 12;
+                          const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                          return `${displayH}:${m.toString().padStart(2, '0')} ${isPM ? 'PM' : 'AM'}`;
+                        })()}
+                      </Text>
+                    </View>
+                  )}
                 </View>
               ) : (
                 <>
                   <View style={styles.subtaskContent}>
-                    <Text style={[
-                      styles.subtaskText,
-                      subtask.completed && styles.subtaskCompleted
-                    ]}>
-                      {subtask.title}
-                    </Text>
+                    <View style={styles.subtaskTitleRow}>
+                      <Text style={[
+                        styles.subtaskText,
+                        subtask.completed && styles.subtaskCompleted
+                      ]}>
+                        {subtask.title}
+                      </Text>
+                      {subtask.time && (
+                        <View style={styles.subtaskTimeBadge}>
+                          <Icon name="clock" size={8} color={theme.colors.accentPrimary} />
+                          <Text style={styles.subtaskTimeText}>
+                            {(() => {
+                              const [h, m] = subtask.time.split(':').map(Number);
+                              const isPM = h >= 12;
+                              const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                              return `${displayH}:${m.toString().padStart(2, '0')}`;
+                            })()}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                     {subtask.completed && subtask.completedTime && (
                       <Text style={styles.completionTime}>
                         Done: {new Date(subtask.completedTime).toLocaleString()}
@@ -304,6 +360,17 @@ export const TaskItem = ({
               )}
             </View>
           ))}
+
+          {/* Time Picker for subtask */}
+          <TimePicker
+            visible={showSubtaskTimePicker}
+            onClose={() => setShowSubtaskTimePicker(false)}
+            onSelect={(time) => {
+              setEditSubtaskTime(time);
+              setShowSubtaskTimePicker(false);
+            }}
+            initialTime={editSubtaskTime}
+          />
 
           {/* Add subtask input - always visible */}
           <View style={styles.addSubtaskRow}>
@@ -384,6 +451,46 @@ const createStyles = (theme) => StyleSheet.create({
     fontSize: theme.typography.body,
     color: theme.colors.textPrimary,
     fontWeight: '500',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  timeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${theme.colors.accentPrimary}20`,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    gap: 3,
+  },
+  timeText: {
+    fontSize: 11,
+    color: theme.colors.accentPrimary,
+    fontWeight: '600',
+  },
+  subtaskTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  subtaskTimeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${theme.colors.accentPrimary}20`,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 3,
+    gap: 2,
+  },
+  subtaskTimeText: {
+    fontSize: 9,
+    color: theme.colors.accentPrimary,
+    fontWeight: '600',
   },
   description: {
     fontSize: theme.typography.body,
@@ -509,8 +616,10 @@ const createStyles = (theme) => StyleSheet.create({
   },
   
   // Edit subtask
-  editSubtaskRow: {
+  editSubtaskContainer: {
     flex: 1,
+  },
+  editSubtaskRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -523,6 +632,22 @@ const createStyles = (theme) => StyleSheet.create({
     fontSize: theme.typography.body,
     color: theme.colors.textPrimary,
     marginRight: 8,
+  },
+  editSubtaskTimeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${theme.colors.accentPrimary}20`,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    gap: 4,
+    marginTop: 4,
+    alignSelf: 'flex-start',
+  },
+  editSubtaskTimeText: {
+    fontSize: 11,
+    color: theme.colors.accentPrimary,
+    fontWeight: '600',
   },
 
   // Add subtask

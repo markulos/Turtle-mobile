@@ -17,6 +17,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { FormField } from './FormField';
 import { DatePickerModal } from './DatePickerModal';
+import { TimePicker } from './TimePicker';
 import { normalizeTags, parseTags, getPriorityColor } from '../utils/taskHelpers';
 import { PRIORITIES } from '../utils/constants';
 
@@ -24,6 +25,7 @@ export const TaskForm = ({
   visible, 
   onClose, 
   onSave, 
+  onDelete,
   initialData, 
   projects, 
   allTags,
@@ -33,11 +35,12 @@ export const TaskForm = ({
   const { theme } = useTheme();
   const [formData, setFormData] = useState({
     title: '', description: '', priority: 'medium', completed: false,
-    project: '', dueDate: '', tags: []
+    project: '', dueDate: '', time: '', tags: []
   });
   const [tagInput, setTagInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
   
   const titleInputRef = useRef(null);
   const descInputRef = useRef(null);
@@ -77,7 +80,7 @@ export const TaskForm = ({
       } else {
         setFormData({
           title: '', description: '', priority: 'medium', completed: false,
-          project: '', dueDate: '', tags: []
+          project: '', dueDate: '', time: '', tags: []
         });
       }
       setTagInput('');
@@ -432,6 +435,51 @@ export const TaskForm = ({
                 </TouchableOpacity>
               )}
             </FormField>
+
+            {/* Time Field */}
+            <FormField label="Time (optional)">
+              <TouchableOpacity 
+                style={styles.datePickerButton}
+                onPress={() => setShowTimePicker(true)}
+              >
+                <Icon name="clock-outline" size={20} color={formData.time ? theme.colors.accentPrimary : theme.colors.textSecondary} />
+                <Text style={[
+                  styles.datePickerText,
+                  !formData.time && styles.datePickerPlaceholder
+                ]}>
+                  {formData.time 
+                    ? (() => {
+                        const [h, m] = formData.time.split(':').map(Number);
+                        const isPM = h >= 12;
+                        const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                        return `${displayH}:${m.toString().padStart(2, '0')} ${isPM ? 'PM' : 'AM'}`;
+                      })()
+                    : 'Set a time...'
+                  }
+                </Text>
+                <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
+              </TouchableOpacity>
+              
+              {formData.time && (
+                <TouchableOpacity 
+                  style={styles.clearDateBtn}
+                  onPress={() => updateField('time', '')}
+                >
+                  <Text style={styles.clearDateText}>Clear time</Text>
+                </TouchableOpacity>
+              )}
+            </FormField>
+            
+            {/* Time Picker Modal */}
+            <TimePicker
+              visible={showTimePicker}
+              onClose={() => setShowTimePicker(false)}
+              onSelect={(time) => {
+                updateField('time', time);
+                setShowTimePicker(false);
+              }}
+              initialTime={formData.time}
+            />
             
             {/* Date Picker Modal */}
             <DatePickerModal
@@ -478,6 +526,33 @@ export const TaskForm = ({
                 <Text style={styles.saveText}>Save Task</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Delete Button - only show when editing */}
+            {isEditing && onDelete && (
+              <TouchableOpacity 
+                style={styles.deleteBtn} 
+                onPress={() => {
+                  Alert.alert(
+                    'Delete Task?',
+                    `Are you sure you want to delete "${formData.title}"?`,
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { 
+                        text: 'Delete', 
+                        style: 'destructive',
+                        onPress: () => {
+                          onDelete(initialData.id);
+                          handleClose();
+                        }
+                      }
+                    ]
+                  );
+                }}
+              >
+                <Icon name="trash-can" size={20} color={theme.colors.accentError} />
+                <Text style={styles.deleteText}>Delete Task</Text>
+              </TouchableOpacity>
+            )}
 
             <View style={styles.bottomPadding} />
           </View>
@@ -689,6 +764,24 @@ const createStyles = (theme) => StyleSheet.create({
   },
   bottomPadding: {
     height: 60,
+  },
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    marginTop: 8,
+    marginBottom: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.colors.accentError,
+    backgroundColor: 'transparent',
+    gap: 8,
+  },
+  deleteText: {
+    color: theme.colors.accentError,
+    fontWeight: '600',
+    fontSize: theme.typography.body,
   },
   datePickerButton: {
     flexDirection: 'row',
