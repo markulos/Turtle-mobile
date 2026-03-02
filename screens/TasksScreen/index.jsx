@@ -13,6 +13,7 @@ import {
   Platform,
   KeyboardAvoidingView,
   TextInput,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useServer } from '../../context/ServerContext';
@@ -47,7 +48,7 @@ export default function TasksScreen() {
   const [selectedProject, setSelectedProject] = useState('All');
   const [selectedTags, setSelectedTags] = useState([]);
   const [tagFilterMode, setTagFilterMode] = useState('any');
-  const [viewMode, setViewMode] = useState('list'); // 'list' or 'calendar'
+  const [viewMode, setViewMode] = useState('calendar'); // 'list' or 'calendar'
   
   // Inline add task state per project
   const [inlineAddingProject, setInlineAddingProject] = useState(null);
@@ -92,6 +93,9 @@ export default function TasksScreen() {
     handleUpdateSubtask,
     deleteTask,
     loading,
+    refreshing,
+    onRefresh,
+    lazyRefresh,
   } = useTaskData(api, isConnected);
   
   // Project colors - distinct colors that work well with green/yellow palette
@@ -532,6 +536,9 @@ export default function TasksScreen() {
             };
             handleSaveTask(newTask);
           }}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          onDateChange={lazyRefresh}
         />
       ) : (
         <View style={{ flex: 1 }}>
@@ -665,8 +672,14 @@ export default function TasksScreen() {
               { paddingBottom: Math.max(100, keyboardHeight + 20) }
             ]}
             stickySectionHeadersEnabled={false}
-            refreshing={loading}
-            onRefresh={loadData}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={theme.colors.accentPrimary}
+                colors={[theme.colors.accentPrimary]}
+              />
+            }
             ListEmptyComponent={(
               <View style={styles.emptyState}>
                 <Icon name="folder-open" size={64} color={theme.colors.textMuted} />

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Alert } from 'react-native';
 import { 
   toggleSubtaskComplete, 
@@ -13,10 +13,24 @@ export const useTaskData = (api, isConnected) => {
   const [projects, setProjects] = useState([]);
   const [allTags, setAllTags] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  
+  // Track last refresh time for lazy loading (min interval between refreshes)
+  const lastRefreshRef = useRef(0);
+  const MIN_REFRESH_INTERVAL = 2000; // 2 seconds minimum between manual refreshes
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (opts = {}) => {
+    const { silent = false, force = false } = opts;
     if (!isConnected) return;
-    setLoading(true);
+    
+    // Lazy loading: prevent rapid successive refreshes unless forced
+    const now = Date.now();
+    if (!force && !silent && now - lastRefreshRef.current < MIN_REFRESH_INTERVAL) {
+      console.log('[useTaskData] Skipping refresh - too soon');
+      return;
+    }
+    
+    if (!silent) setLoading(true);
     try {
       const [tasksData, projectsData, tagsData] = await Promise.all([
         api.get('/tasks'),
@@ -27,13 +41,26 @@ export const useTaskData = (api, isConnected) => {
       setTasks(tasksData.map(t => ({ ...t, subtasks: t.subtasks || [] })));
       setProjects(projectsData);
       setAllTags(tagsData || []);
+      lastRefreshRef.current = now;
     } catch (error) {
       console.error('Load data error:', error);
-      Alert.alert('Error', 'Failed to load data');
+      if (!silent) Alert.alert('Error', 'Failed to load data');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [api, isConnected]);
+  
+  // Pull-to-refresh handler
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData({ silent: true, force: true });
+    setRefreshing(false);
+  }, [loadData]);
+  
+  // Lazy refresh - only refreshes if enough time has passed
+  const lazyRefresh = useCallback(async () => {
+    await loadData({ silent: true });
+  }, [loadData]);
 
   const saveTasks = async (newTasks) => {
     try {
@@ -180,5 +207,8 @@ export const useTaskData = (api, isConnected) => {
     handleToggleSubtask,
     handleDeleteSubtask,
     handleUpdateSubtask,
+    refreshing,
+    onRefresh,
+    lazyRefresh,
   };
 };

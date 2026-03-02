@@ -17,6 +17,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
 import { useServer } from '../context/ServerContext';
 import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 import * as SecureStore from 'expo-secure-store';
 
 const MASTER_KEY_STORE = 'vault_master_key';
@@ -26,6 +27,7 @@ export default function SettingsScreen() {
   const { theme, isDark, toggleTheme } = useTheme();
   const insets = useSafeAreaInsets();
   const { serverIP, isConnected, loading, saveIP, checkConnection } = useServer();
+  const { logout } = useAuth();
   const [ipInput, setIpInput] = useState(serverIP);
   const [hasVault, setHasVault] = useState(false);
   
@@ -351,6 +353,39 @@ export default function SettingsScreen() {
                 </Text>
               </View>
             )}
+
+            {/* Account Section */}
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+                  <Icon name="account-circle" size={20} color={theme.colors.textPrimary} />
+                </View>
+                <Text style={styles.sectionTitle}>Account</Text>
+              </View>
+              
+              <TouchableOpacity 
+                style={styles.dangerButton} 
+                onPress={() => {
+                  Alert.alert(
+                    'Sign Out',
+                    'Are you sure you want to sign out?',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { 
+                        text: 'Sign Out', 
+                        style: 'destructive',
+                        onPress: async () => {
+                          await logout();
+                        }
+                      },
+                    ]
+                  );
+                }}
+              >
+                <Icon name="logout" size={16} color={theme.colors.accentError} style={styles.buttonIcon} />
+                <Text style={styles.dangerButtonText}>Sign Out</Text>
+              </TouchableOpacity>
+            </View>
 
             {/* Info Section */}
             <View style={styles.infoBox}>

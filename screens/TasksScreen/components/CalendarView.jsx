@@ -12,6 +12,7 @@ import {
   UIManager,
   TextInput,
   Keyboard,
+  RefreshControl,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
@@ -39,7 +40,10 @@ export const CalendarView = ({
   selectedTags,
   tagFilterMode,
   onAddTask,
-  onUpdateTask
+  onUpdateTask,
+  refreshing,
+  onRefresh,
+  onDateChange
 }) => {
   const { theme } = useTheme();
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -122,12 +126,16 @@ export const CalendarView = ({
       // Configure layout animation
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     } else {
-      // Single tap on new date - just select the date
+      // Single tap on new date - select the date and trigger lazy refresh
       setSelectedDate(date);
+      // Trigger data refresh when changing dates (lazy loading)
+      if (onDateChange) {
+        onDateChange();
+      }
     }
     
     lastTapRef.current = now;
-  }, [rotateAnim, opacityAnim, selectedDate]);
+  }, [rotateAnim, opacityAnim, selectedDate, onDateChange]);
   
   const toggleExpand = useCallback(() => {
     const newValue = !isExpanded;
@@ -667,6 +675,14 @@ export const CalendarView = ({
           style={styles.taskList}
           contentContainerStyle={{ paddingBottom: Math.max(100, keyboardHeight + 20) }}
           scrollEventThrottle={16}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing || false}
+              onRefresh={onRefresh}
+              tintColor={theme.colors.accentPrimary}
+              colors={[theme.colors.accentPrimary]}
+            />
+          }
         >
           {/* Add Task Input */}
           {isAddingTask ? (
@@ -811,12 +827,27 @@ export const CalendarView = ({
                 </TouchableOpacity>
                 
                 <View style={styles.taskContent}>
-                  <Text style={[
-                    styles.taskTitle,
-                    task.completed && styles.taskTitleCompleted
-                  ]}>
-                    {task.title}
-                  </Text>
+                  <View style={styles.taskTitleRow}>
+                    <Text style={[
+                      styles.taskTitle,
+                      task.completed && styles.taskTitleCompleted
+                    ]}>
+                      {task.title}
+                    </Text>
+                    {task.time && (
+                      <View style={styles.taskTimeBadge}>
+                        <Icon name="clock-outline" size={12} color={theme.colors.background} />
+                        <Text style={styles.taskTimeText}>
+                          {(() => {
+                            const [h, m] = task.time.split(':').map(Number);
+                            const isPM = h >= 12;
+                            const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                            return `${displayH}:${m.toString().padStart(2, '0')} ${isPM ? 'PM' : 'AM'}`;
+                          })()}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                   {task.project && selectedProject === 'All' && (
                     <View style={styles.projectTag}>
                       <View style={[styles.projectColorCircle, { backgroundColor: getProjectColor(task.project) }]} />
@@ -1196,10 +1227,30 @@ const createStyles = (theme) => StyleSheet.create({
   taskContent: {
     flex: 1,
   },
+  taskTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
   taskTitle: {
     fontSize: theme.typography.body,
     color: theme.colors.textPrimary,
     fontWeight: '500',
+  },
+  taskTimeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.textPrimary,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    gap: 4,
+  },
+  taskTimeText: {
+    fontSize: 13,
+    color: theme.colors.background,
+    fontWeight: '700',
   },
   taskTitleCompleted: {
     textDecorationLine: 'line-through',

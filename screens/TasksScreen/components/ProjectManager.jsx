@@ -5,6 +5,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   Alert,
   StyleSheet,
   Platform,
@@ -94,8 +95,10 @@ export const ProjectManager = ({
       visible={visible} 
       onRequestClose={handleClose}
     >
-      <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
-        <View style={styles.content}>
+      <TouchableWithoutFeedback onPress={handleClose}>
+        <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
+          <TouchableWithoutFeedback>
+            <View style={styles.content}>
           <View style={styles.header}>
             <Text style={styles.title}>Edit Projects</Text>
           </View>
@@ -144,8 +147,10 @@ export const ProjectManager = ({
           <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
             <Text style={styles.closeBtnText}>Close Edit</Text>
           </TouchableOpacity>
-        </View>
+          </View>
+        </TouchableWithoutFeedback>
       </Animated.View>
+    </TouchableWithoutFeedback>
     </Modal>
   );
 };
@@ -185,7 +190,8 @@ const createStyles = (theme) => StyleSheet.create({
     borderWidth: 0, 
     borderRadius: 10, 
     height: 44,
-    paddingHorizontal: 14, 
+    paddingHorizontal: 14,
+    paddingBottom: 10, 
     fontSize: theme.typography.body, 
     marginRight: 10,
     backgroundColor: theme.colors.inputBackground,

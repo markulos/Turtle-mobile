@@ -20,7 +20,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 const PULL_THRESHOLD = 80;
 const MAX_PULL = 120;
 
-export const UnlockScreen = ({ onUnlock, isProcessing }) => {
+export const UnlockScreen = ({ onUnlock, isProcessing, errorMessage }) => {
   const { theme, isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const [password, setPassword] = useState('');
@@ -142,6 +142,10 @@ export const UnlockScreen = ({ onUnlock, isProcessing }) => {
           <Text style={styles.subtitle}>
             Enter your master password to view your passwords
           </Text>
+          
+          {errorMessage && (
+            <Text style={styles.errorText}>{errorMessage}</Text>
+          )}
 
           <View style={styles.inputContainer}>
             <Icon name="lock" size={20} color={theme.colors.textTertiary} />
@@ -188,7 +192,7 @@ const createStyles = (theme, insets, isDark) =>
     },
     refreshBarContainer: {
       position: 'absolute',
-      top: insets.top,
+      top: 48, // Position right under the Password Vault header (~48px height)
       left: 0,
       right: 0,
       height: 2,
@@ -224,6 +228,13 @@ const createStyles = (theme, insets, isDark) =>
       color: theme.colors.textSecondary,
       textAlign: 'center',
       marginBottom: 32,
+    },
+    errorText: {
+      fontSize: 14,
+      color: theme.colors.accentError,
+      textAlign: 'center',
+      marginBottom: 16,
+      paddingHorizontal: 24,
     },
     inputContainer: {
       flexDirection: 'row',

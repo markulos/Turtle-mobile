@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../../context/ThemeContext';
 import { FormField } from './FormField';
 import { DatePickerModal } from './DatePickerModal';
@@ -33,9 +34,17 @@ export const TaskForm = ({
   onCollectTags,
 }) => {
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
+  const RECURRING_OPTIONS = [
+    { value: 'none', label: 'No', icon: 'repeat-off' },
+    { value: 'daily', label: 'Daily', icon: 'calendar-today' },
+    { value: 'weekly', label: 'Weekly', icon: 'calendar-week' },
+    { value: 'biweekly', label: 'Biweekly', icon: 'calendar-range' },
+  ];
+
   const [formData, setFormData] = useState({
     title: '', description: '', priority: 'medium', completed: false,
-    project: '', dueDate: '', time: '', tags: []
+    project: '', dueDate: '', time: '', tags: [], recurring: 'none'
   });
   const [tagInput, setTagInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -75,12 +84,13 @@ export const TaskForm = ({
         setFormData({
           ...initialData,
           tags: normalizeTags(initialData.tags),
-          isAppointment: !!isAppointment
+          isAppointment: !!isAppointment,
+          recurring: initialData.recurring || 'none'
         });
       } else {
         setFormData({
           title: '', description: '', priority: 'medium', completed: false,
-          project: '', dueDate: '', time: '', tags: []
+          project: '', dueDate: '', time: '', tags: [], recurring: 'none'
         });
       }
       setTagInput('');
@@ -148,8 +158,24 @@ export const TaskForm = ({
     // Remove the isAppointment field before saving (it's just a UI helper)
     delete finalTask.isAppointment;
     
+    // Show save confirmation with details
+    const confirmationDetails = [
+      `Title: ${finalTask.title}`,
+      finalTask.time ? `Time: ${finalTask.time}` : null,
+      finalTask.dueDate ? `Due: ${finalTask.dueDate}` : null,
+      finalTask.recurring && finalTask.recurring !== 'none' ? `Repeats: ${finalTask.recurring}` : null
+    ].filter(Boolean).join('\n');
+    
+    console.log('[TaskForm] Saving task:', finalTask);
+    
     onSave(finalTask);
-    handleClose();
+    
+    // Show confirmation alert
+    Alert.alert(
+      'Task Saved',
+      confirmationDetails,
+      [{ text: 'OK', onPress: handleClose }]
+    );
   };
 
   const addTag = (tag) => {
@@ -217,7 +243,7 @@ export const TaskForm = ({
     ref?.current?.focus();
   };
 
-  const styles = createStyles(theme);
+  const styles = createStyles(theme, insets);
 
   return (
     <Modal 
@@ -518,6 +544,33 @@ export const TaskForm = ({
               </View>
             </FormField>
 
+            <FormField label="Repeat">
+              <View style={styles.recurringRow}>
+                {RECURRING_OPTIONS.map(option => (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[
+                      styles.recurringBtn,
+                      formData.recurring === option.value && styles.recurringBtnActive
+                    ]}
+                    onPress={() => updateField('recurring', option.value)}
+                  >
+                    <Icon 
+                      name={option.icon} 
+                      size={16} 
+                      color={formData.recurring === option.value ? theme.colors.textPrimary : theme.colors.textTertiary} 
+                    />
+                    <Text style={[
+                      styles.recurringText,
+                      formData.recurring === option.value && styles.recurringTextActive
+                    ]}>
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </FormField>
+
             <View style={styles.buttons}>
               <TouchableOpacity style={[styles.btn, styles.cancelBtn]} onPress={handleClose}>
                 <Text style={styles.cancelText}>Cancel</Text>
@@ -562,7 +615,7 @@ export const TaskForm = ({
   );
 };
 
-const createStyles = (theme) => StyleSheet.create({
+const createStyles = (theme, insets) => StyleSheet.create({
   overlay: { 
     flex: 1, 
     backgroundColor: 'rgba(0, 0, 0, 0.5)', 
@@ -577,6 +630,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderTopLeftRadius: 16, 
     borderTopRightRadius: 16, 
     padding: 16,
+    paddingTop: 16 + insets.top, // Add safe area for notch
     paddingBottom: Platform.OS === 'ios' ? 34 : 20,
   },
   title: { 
@@ -727,6 +781,37 @@ const createStyles = (theme) => StyleSheet.create({
   },
   priorityTextActive: { 
     color: theme.colors.textPrimary 
+  },
+  recurringRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  recurringBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    gap: 6,
+  },
+  recurringBtnActive: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderColor: theme.colors.accentPrimary,
+  },
+  recurringText: {
+    fontSize: 13,
+    color: theme.colors.textTertiary,
+    fontWeight: '500',
+  },
+  recurringTextActive: {
+    color: theme.colors.textPrimary,
+    fontWeight: '600',
   },
   buttons: { 
     flexDirection: 'row', 

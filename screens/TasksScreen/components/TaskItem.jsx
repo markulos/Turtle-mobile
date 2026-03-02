@@ -207,7 +207,7 @@ export const TaskItem = ({
               </Text>
               {item.time && (
                 <View style={styles.timeBadge}>
-                  <Icon name="clock" size={10} color={theme.colors.accentPrimary} />
+                  <Icon name="clock" size={12} color={theme.colors.background} />
                   <Text style={styles.timeText}>
                     {(() => {
                       const [h, m] = item.time.split(':').map(Number);
@@ -215,6 +215,24 @@ export const TaskItem = ({
                       const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
                       return `${displayH}:${m.toString().padStart(2, '0')} ${isPM ? 'PM' : 'AM'}`;
                     })()}
+                  </Text>
+                </View>
+              )}
+              {item.recurring && item.recurring !== 'none' && (
+                <View style={styles.recurringBadge}>
+                  <Icon 
+                    name={
+                      item.recurring === 'daily' ? 'calendar-today' : 
+                      item.recurring === 'weekly' ? 'calendar-week' : 
+                      'calendar-range'
+                    } 
+                    size={10} 
+                    color={theme.colors.accentSuccess} 
+                  />
+                  <Text style={styles.recurringText}>
+                    {item.recurring === 'daily' ? 'Daily' : 
+                     item.recurring === 'weekly' ? 'Weekly' : 
+                     'Biweekly'}
                   </Text>
                 </View>
               )}
@@ -300,7 +318,7 @@ export const TaskItem = ({
                   </View>
                   {editSubtaskTime && (
                     <View style={styles.editSubtaskTimeBadge}>
-                      <Icon name="clock" size={10} color={theme.colors.accentPrimary} />
+                      <Icon name="clock" size={12} color={theme.colors.background} />
                       <Text style={styles.editSubtaskTimeText}>
                         {(() => {
                           const [h, m] = editSubtaskTime.split(':').map(Number);
@@ -461,15 +479,30 @@ const createStyles = (theme) => StyleSheet.create({
   timeBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: `${theme.colors.accentPrimary}20`,
+    backgroundColor: theme.colors.textPrimary,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    gap: 4,
+  },
+  timeText: {
+    fontSize: 13,
+    color: theme.colors.background,
+    fontWeight: '700',
+  },
+  recurringBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${theme.colors.accentSuccess}20`,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
     gap: 3,
+    marginLeft: 6,
   },
-  timeText: {
+  recurringText: {
     fontSize: 11,
-    color: theme.colors.accentPrimary,
+    color: theme.colors.accentSuccess,
     fontWeight: '600',
   },
   subtaskTitleRow: {

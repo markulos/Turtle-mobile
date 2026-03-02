@@ -152,8 +152,8 @@ export const ProjectDropdown = ({
             <Text style={[styles.text, styles.manageText]}>Edit Projects</Text>
           </TouchableOpacity>
 
-          {/* Bottom padding for keyboard */}
-          <View style={[styles.bottomPadding, { height: Math.max(20, keyboardHeight) }]} />
+          {/* Bottom padding for keyboard - matches Turtle chatbox spacing */}
+          <View style={[styles.bottomPadding, { height: keyboardHeight > 0 ? keyboardHeight + (insets.bottom > 0 ? insets.bottom / 2 : 8) : 20 }]} />
         </ScrollView>
     </View>
   );
@@ -243,7 +243,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     backgroundColor: theme.colors.background,
   },
   addInputRowWithKeyboard: {
-    marginBottom: 100, // Extra breathing space when keyboard is active
+    paddingBottom: insets.bottom > 0 ? insets.bottom / 2 + 8 : 16, // Same spacing as Turtle chatbox
   },
   addInput: {
     flex: 1,
