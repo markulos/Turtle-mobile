@@ -29,7 +29,9 @@
         {
           "faceIDPermission": "Allow $(PRODUCT_NAME) to use Face ID to unlock your passwords."
         }
-      ]
+      ],
+      "expo-video",
+      "expo-secure-store"
     ]
   }
 }

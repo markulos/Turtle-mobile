@@ -18,27 +18,30 @@ import { useAuth } from '../../context/AuthContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { interceptAndSend } from '../../services/AICommandInterceptor';
 import VaultOverlay from './components/VaultOverlay';
-import PomodoroWidget from './components/PomodoroWidget';
+import TimerMessage from './components/TimerMessage';
 import PomodoroSettings from './components/PomodoroSettings';
-import { useSocket } from './hooks/useSocket';
+import MediaGallery from './components/MediaGallery';
+import { usePomodoroTimer } from './hooks/usePomodoroTimer';
 
 const turtleIcon = require('../../assets/turtle-icon.svg');
 
 // Regex to match /vault command (with optional quoted password)
 const VAULT_COMMAND_REGEX = /^\/vault(?:\s+"([^"]*)")?$/;
 
-// Regex to match /pomodoro commands
-const POMODORO_COMMAND_REGEX = /^\/pomodoro\s+(focus|break|stop|settings)$/;
+// Default durations (in minutes)
+const DEFAULT_FOCUS_MINUTES = 25;
+const DEFAULT_BREAK_MINUTES = 5;
 
 const HEADER_HEIGHT = 60;
 const DEBUG_TOGGLE_HEIGHT = 44;
-const COLLAPSIBLE_HEIGHT = HEADER_HEIGHT + DEBUG_TOGGLE_HEIGHT;
 
 export default function TurtleScreen() {
   const { theme } = useTheme();
   const { api, isConnected, getBaseUrl } = useServer();
   const { token } = useAuth();
   const insets = useSafeAreaInsets();
+  
+  // Chat state
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -50,42 +53,168 @@ export default function TurtleScreen() {
   const [isVaultOpen, setIsVaultOpen] = useState(false);
   const [vaultPassword, setVaultPassword] = useState(null);
   
-  // Socket.io for Pomodoro
-  const sessionId = useRef(`session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`).current;
-  const {
-    timerState,
-    durations,
-    showSettings,
-    startPomodoro,
-    stopPomodoro,
-    updateDurations,
-    openSettings,
-    closeSettings,
-  } = useSocket(getBaseUrl(), sessionId);
+  // Photo Gallery state
+  const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  
+  // LOCAL Pomodoro timer state (no server dependency)
+  const [timerState, setTimerState] = useState(null);
+  const [durations, setDurations] = useState({ 
+    focus: DEFAULT_FOCUS_MINUTES, 
+    break: DEFAULT_BREAK_MINUTES 
+  });
+  const [showSettings, setShowSettings] = useState(false);
+  
+  // Local Pomodoro countdown hook
+  const timer = usePomodoroTimer(timerState, handlePomodoroComplete);
+  
+  // Track timer message ID
+  const timerMessageIdRef = useRef(null);
   
   // Slash command autocomplete state
   const [slashCommands, setSlashCommands] = useState([]);
   const [showAutocomplete, setShowAutocomplete] = useState(false);
   const [autocompleteSuggestions, setAutocompleteSuggestions] = useState([]);
   const inputRef = useRef(null);
-  
   const scrollViewRef = useRef(null);
 
   // Fetch slash commands on mount
   useEffect(() => {
     const fetchSlashCommands = async () => {
       try {
-        const response = await api.get('/slash-commands');
+        const response = await api.get('/turtle/commands');
         if (response.success) {
           setSlashCommands(response.commands || []);
         }
       } catch (error) {
         console.log('[Turtle] Failed to fetch slash commands:', error);
+        // Fallback commands if server fails
+        setSlashCommands([
+          { command: '/pomodoro focus', description: 'Start 25m focus timer' },
+          { command: '/pomodoro break', description: 'Start 5m break timer' },
+          { command: '/pomodoro stop', description: 'Stop active timer' },
+          { command: '/pomodoro settings', description: 'Adjust timer durations' },
+        ]);
       }
     };
     
     fetchSlashCommands();
   }, [api]);
+
+  // Handle timer start - add timer message to chat
+  useEffect(() => {
+    if (timer.isActive && timerMessageIdRef.current === null) {
+      // New timer started - add timer message
+      const timerId = `timer_${Date.now()}`;
+      timerMessageIdRef.current = timerId;
+      
+      const generateId = () => (Date.now() + Math.random()).toString();
+      const modeText = timer.isFocus ? 'Focus' : 'Break';
+      
+      setMessages(prev => [...prev, {
+        id: generateId(),
+        text: `${timer.isFocus ? '🍅' : '☕'} ${modeText} timer started`,
+        sender: 'system',
+        timestamp: new Date().toISOString(),
+      }]);
+    }
+  }, [timer.isActive, timer.isFocus]);
+  
+  // Update or remove timer message
+  useEffect(() => {
+    if (!timerMessageIdRef.current) return;
+    
+    if (!timer.isActive) {
+      // Timer stopped - remove message
+      setMessages(prev => prev.filter(msg => msg.id !== timerMessageIdRef.current));
+      timerMessageIdRef.current = null;
+      return;
+    }
+    
+    // Timer active - update or insert timer message
+    setMessages(prev => {
+      const existingIndex = prev.findIndex(msg => msg.id === timerMessageIdRef.current);
+      
+      if (existingIndex >= 0) {
+        // Update existing timer message
+        return prev.map(msg => 
+          msg.id === timerMessageIdRef.current
+            ? {
+                ...msg,
+                displayTime: timer.displayTime,
+                progress: timer.progress,
+                mode: timer.mode,
+                totalDuration: timer.totalDuration,
+              }
+            : msg
+        );
+      } else {
+        // Insert timer message at the end
+        return [...prev, {
+          id: timerMessageIdRef.current,
+          type: 'timer',
+          displayTime: timer.displayTime,
+          progress: timer.progress,
+          mode: timer.mode,
+          totalDuration: timer.totalDuration,
+          sender: 'timer',
+          timestamp: new Date().toISOString(),
+        }];
+      }
+    });
+  }, [timer.displayTime, timer.progress, timer.isActive, timer.mode, timer.totalDuration]);
+  
+  // Handle timer completion
+  function handlePomodoroComplete() {
+    const generateId = () => (Date.now() + Math.random()).toString();
+    
+    // Clear timer message ref
+    timerMessageIdRef.current = null;
+    
+    // Add completion message
+    setMessages(prev => [...prev, {
+      id: generateId(),
+      text: timer.isFocus 
+        ? '🎉 Focus session complete! Take a break.' 
+        : '☕ Break is over! Ready to focus?',
+      sender: 'system',
+      timestamp: new Date().toISOString(),
+    }]);
+    
+    // Clear timer state
+    setTimerState(null);
+  }
+  
+  // Handle timer stop
+  const handleStopTimer = useCallback(() => {
+    setTimerState(null);
+    timerMessageIdRef.current = null;
+    
+    const generateId = () => (Date.now() + Math.random()).toString();
+    setMessages(prev => [...prev, {
+      id: generateId(),
+      text: '⏹️ Timer stopped',
+      sender: 'system',
+      timestamp: new Date().toISOString(),
+    }]);
+  }, []);
+  
+  // Handle timer start
+  const handleStartTimer = useCallback((mode) => {
+    const minutes = mode === 'focus' ? durations.focus : durations.break;
+    const endTime = Date.now() + (minutes * 60 * 1000);
+    
+    setTimerState({
+      endTime,
+      totalDuration: minutes * 60,
+      mode,
+      isRunning: true,
+    });
+  }, [durations]);
+  
+  // Handle settings update
+  const handleUpdateDurations = useCallback((focusMinutes, breakMinutes) => {
+    setDurations({ focus: focusMinutes, break: breakMinutes });
+  }, []);
 
   // Handle input changes for autocomplete
   const handleInputChange = (text) => {
@@ -97,26 +226,11 @@ export default function TurtleScreen() {
       const suggestions = [];
       
       slashCommands.forEach(cmd => {
-        // Match main command
+        // Match command (server returns flat list like "/pomodoro focus")
         if (cmd.command.toLowerCase().startsWith(query)) {
           suggestions.push({
             text: cmd.command,
             description: cmd.description,
-            isCommand: true,
-          });
-        }
-        
-        // Match subcommands if parent command is typed
-        if (cmd.subcommands && query.startsWith(cmd.command.toLowerCase() + ' ')) {
-          const subQuery = query.slice(cmd.command.length + 1);
-          cmd.subcommands.forEach(sub => {
-            if (sub.toLowerCase().startsWith(subQuery)) {
-              suggestions.push({
-                text: `${cmd.command} ${sub}`,
-                description: `${cmd.description} - ${sub}`,
-                isCommand: false,
-              });
-            }
           });
         }
       });
@@ -135,6 +249,7 @@ export default function TurtleScreen() {
     inputRef.current?.focus();
   };
 
+  // Initialize encryption key and welcome message
   useEffect(() => {
     const DEV_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     setEncryptionKey(DEV_KEY);
@@ -179,21 +294,7 @@ export default function TurtleScreen() {
     setVaultPassword(null);
   }, []);
 
-  // Handle Pomodoro completion
-  const handlePomodoroComplete = useCallback(() => {
-    const generateId = () => (Date.now() + Math.random()).toString();
-    setMessages(prev => [...prev, {
-      id: generateId(),
-      text: timerState?.mode === 'focus' 
-        ? '🎉 Focus session complete! Take a break.' 
-        : '☕ Break is over! Ready to focus?',
-      sender: 'system',
-      timestamp: new Date().toISOString(),
-    }]);
-  }, [timerState]);
-
-
-
+  // Send message handler
   const sendMessage = useCallback(async () => {
     const generateId = () => (Date.now() + Math.random()).toString();
     
@@ -204,7 +305,9 @@ export default function TurtleScreen() {
 
     const currentInput = inputText.trim();
     
-    // Check for /vault command BEFORE sending to AI
+    // ===== COMMAND INTERCEPTION (BEFORE AI) =====
+    
+    // Check for /vault command
     const vaultMatch = currentInput.match(VAULT_COMMAND_REGEX);
     if (vaultMatch) {
       const password = vaultMatch[1] || null;
@@ -227,14 +330,12 @@ export default function TurtleScreen() {
         timestamp: new Date().toISOString(),
       }]);
       
-      return;
+      return; // STOP HERE - don't send to AI
     }
 
-    // Check for /pomodoro commands BEFORE sending to AI
-    const pomodoroMatch = currentInput.match(POMODORO_COMMAND_REGEX);
-    if (pomodoroMatch) {
-      const command = pomodoroMatch[1];
-      console.log('[Turtle] Pomodoro command detected:', command);
+    // Check for /pomodoro commands
+    if (currentInput === '/pomodoro focus' || currentInput.startsWith('/pomodoro focus ')) {
+      console.log('[Turtle] Pomodoro focus command detected');
       
       setMessages(prev => [...prev, {
         id: generateId(),
@@ -244,49 +345,94 @@ export default function TurtleScreen() {
       }]);
       
       setInputText('');
+      handleStartTimer('focus');
       
-      switch (command) {
-        case 'focus':
-          startPomodoro('focus');
-          setMessages(prev => [...prev, {
-            id: generateId(),
-            text: `🍅 Focus timer started (${durations.focus} min)`,
-            sender: 'system',
-            timestamp: new Date().toISOString(),
-          }]);
-          break;
-        case 'break':
-          startPomodoro('break');
-          setMessages(prev => [...prev, {
-            id: generateId(),
-            text: `☕ Break timer started (${durations.break} min)`,
-            sender: 'system',
-            timestamp: new Date().toISOString(),
-          }]);
-          break;
-        case 'stop':
-          stopPomodoro();
-          setMessages(prev => [...prev, {
-            id: generateId(),
-            text: '⏹️ Timer stopped',
-            sender: 'system',
-            timestamp: new Date().toISOString(),
-          }]);
-          break;
-        case 'settings':
-          openSettings();
-          setMessages(prev => [...prev, {
-            id: generateId(),
-            text: '⚙️ Opening Pomodoro settings...',
-            sender: 'system',
-            timestamp: new Date().toISOString(),
-          }]);
-          break;
-      }
-      
-      return;
+      return; // STOP HERE - don't send to AI
     }
+    
+    if (currentInput === '/pomodoro break' || currentInput.startsWith('/pomodoro break ')) {
+      console.log('[Turtle] Pomodoro break command detected');
+      
+      setMessages(prev => [...prev, {
+        id: generateId(),
+        text: currentInput,
+        sender: 'user',
+        timestamp: new Date().toISOString(),
+      }]);
+      
+      setInputText('');
+      handleStartTimer('break');
+      
+      return; // STOP HERE - don't send to AI
+    }
+    
+    if (currentInput === '/pomodoro stop') {
+      console.log('[Turtle] Pomodoro stop command detected');
+      
+      setMessages(prev => [...prev, {
+        id: generateId(),
+        text: currentInput,
+        sender: 'user',
+        timestamp: new Date().toISOString(),
+      }]);
+      
+      setInputText('');
+      handleStopTimer();
+      
+      return; // STOP HERE - don't send to AI
+    }
+    
+    if (currentInput === '/pomodoro settings') {
+      console.log('[Turtle] Pomodoro settings command detected');
+      
+      setMessages(prev => [...prev, {
+        id: generateId(),
+        text: currentInput,
+        sender: 'user',
+        timestamp: new Date().toISOString(),
+      }]);
+      
+      setInputText('');
+      setShowSettings(true);
+      
+      setMessages(prev => [...prev, {
+        id: generateId(),
+        text: '⚙️ Opening Pomodoro settings...',
+        sender: 'system',
+        timestamp: new Date().toISOString(),
+      }]);
+      
+      return; // STOP HERE - don't send to AI
+    }
+    
+    // Check for /photos command
+    if (currentInput === '/photos') {
+      console.log('[Turtle] Photos command detected');
+      
+      setMessages(prev => [...prev, {
+        id: generateId(),
+        text: currentInput,
+        sender: 'user',
+        timestamp: new Date().toISOString(),
+      }]);
+      
+      setInputText('');
+      setIsLoading(false);
+      setIsGalleryOpen(true);
+      
+      setMessages(prev => [...prev, {
+        id: generateId(),
+        text: '📸 Opening Photo Vault...',
+        sender: 'system',
+        timestamp: new Date().toISOString(),
+      }]);
+      
+      return; // STOP HERE - don't send to AI
+    }
+    
+    // ===== END COMMAND INTERCEPTION =====
 
+    // Add user message to chat
     const userMessage = {
       id: generateId(),
       text: currentInput,
@@ -302,6 +448,7 @@ export default function TurtleScreen() {
     try {
       addDebugLog('AI Request', `Sending: "${currentInput}"`);
       
+      // Prepare chat history
       const chatHistoryArray = messages
         .filter(msg => msg.sender === 'user' || msg.sender === 'assistant')
         .slice(-10)
@@ -310,6 +457,7 @@ export default function TurtleScreen() {
           content: msg.text
         }));
       
+      // Send to AI
       const aiResponse = await api.post('/turtle/chat', {
         message: currentInput,
         history: chatHistoryArray,
@@ -317,6 +465,7 @@ export default function TurtleScreen() {
 
       const { reply, intent } = aiResponse;
 
+      // Add AI reply
       setMessages(prev => [...prev, {
         id: generateId(),
         text: reply || 'Command processed.',
@@ -324,6 +473,7 @@ export default function TurtleScreen() {
         timestamp: new Date().toISOString(),
       }]);
 
+      // Handle encrypted intent if present
       if (intent && typeof intent === 'object' && intent.payload) {
         const serverUrl = getBaseUrl();
         const result = await interceptAndSend(
@@ -359,9 +509,18 @@ export default function TurtleScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [inputText, isConnected, encryptionKey, getBaseUrl, api, messages, token, debugMode, addDebugLog, handleOpenVault, startPomodoro, stopPomodoro, openSettings, durations]);
+  }, [inputText, isConnected, encryptionKey, getBaseUrl, api, messages, token, debugMode, addDebugLog, handleOpenVault, handleStartTimer, handleStopTimer, durations]);
 
   const styles = createStyles(theme, insets);
+
+  // Show Media Gallery overlay when open
+  if (isGalleryOpen) {
+    return (
+      <View style={[styles.container, { flex: 1 }]}>
+        <MediaGallery onClose={() => setIsGalleryOpen(false)} />
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
@@ -369,24 +528,22 @@ export default function TurtleScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={0}
     >
-      {/* Static Safe Area Overlay - always covers the notch */}
+      {/* Static Safe Area Overlay */}
       <View 
         style={[
           styles.safeAreaOverlay, 
-          { 
-            height: insets.top,
-          }
+          { height: insets.top }
         ]} 
       />
 
-      {/* Messages - header is now inline at top */}
+      {/* Messages */}
       <ScrollView
         ref={scrollViewRef}
         style={styles.messagesContainer}
         contentContainerStyle={styles.messagesContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Inline Header - scrolls naturally with chat */}
+        {/* Inline Header */}
         <View style={styles.inlineHeader}>
           <View style={styles.header}>
             <Text style={styles.headerTitle}>TURTLEDO</Text>
@@ -424,15 +581,7 @@ export default function TurtleScreen() {
           </View>
         </View>
 
-        {/* Pomodoro Widget - shown when timer is active */}
-        {timerState && (
-          <PomodoroWidget
-            timerState={timerState}
-            onStop={stopPomodoro}
-            onComplete={handlePomodoroComplete}
-          />
-        )}
-
+        {/* Messages content */}
         {messages.length === 0 ? (
           <View style={styles.emptyState}>
             <Image
@@ -449,48 +598,65 @@ export default function TurtleScreen() {
             </Text>
           </View>
         ) : (
-          messages.map(message => (
-            <View
-              key={message.id}
-              style={[
-                styles.messageBubble,
-                message.isWelcome ? styles.welcomeBubble : 
-                message.sender === 'user'
-                  ? styles.userBubble
-                  : message.sender === 'error'
-                  ? styles.errorBubble
-                  : styles.serverBubble,
-              ]}
-            >
-              {/* Show turtle SVG only for welcome message */}
-              {message.isWelcome && (
-                <Image
-                  source={turtleIcon}
-                  style={styles.watermarkImage}
-                  contentFit="contain"
-                />
-              )}
-              <Text
+          messages.map(message => {
+            // Render timer message specially
+            if (message.type === 'timer') {
+              return (
+                <View key={message.id} style={styles.timerBubble}>
+                  <TimerMessage
+                    displayTime={message.displayTime}
+                    progress={message.progress}
+                    mode={message.mode}
+                    totalDuration={message.totalDuration}
+                    onStop={handleStopTimer}
+                    theme={theme}
+                  />
+                </View>
+              );
+            }
+            
+            return (
+              <View
+                key={message.id}
                 style={[
-                  styles.messageText,
-                  message.isWelcome ? styles.welcomeText :
+                  styles.messageBubble,
+                  message.isWelcome ? styles.welcomeBubble : 
                   message.sender === 'user'
-                    ? styles.userText
-                    : styles.serverText,
+                    ? styles.userBubble
+                    : message.sender === 'error'
+                    ? styles.errorBubble
+                    : styles.serverBubble,
                 ]}
               >
-                {message.text}
-              </Text>
-              {!message.isWelcome && (
-                <Text style={styles.timestamp}>
-                  {new Date(message.timestamp).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
+                {message.isWelcome && (
+                  <Image
+                    source={turtleIcon}
+                    style={styles.watermarkImage}
+                    contentFit="contain"
+                  />
+                )}
+                <Text
+                  style={[
+                    styles.messageText,
+                    message.isWelcome ? styles.welcomeText :
+                    message.sender === 'user'
+                      ? styles.userText
+                      : styles.serverText,
+                  ]}
+                >
+                  {message.text}
                 </Text>
-              )}
-            </View>
-          ))
+                {!message.isWelcome && (
+                  <Text style={styles.timestamp}>
+                    {new Date(message.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </Text>
+                )}
+              </View>
+            );
+          })
         )}
         {isLoading && (
           <View style={styles.loadingBubble}>
@@ -499,60 +665,65 @@ export default function TurtleScreen() {
         )}
       </ScrollView>
 
-      {/* Autocomplete Dropdown */}
-      {showAutocomplete && (
-        <View style={styles.autocompleteContainer}>
-          <ScrollView 
-            style={styles.autocompleteScroll}
-            keyboardShouldPersistTaps="handled"
-          >
-            {autocompleteSuggestions.map((suggestion, index) => (
-              <TouchableOpacity
-                key={index}
-                style={styles.autocompleteItem}
-                onPress={() => applySuggestion(suggestion)}
-              >
-                <Text style={styles.autocompleteCommand}>{suggestion.text}</Text>
-                <Text style={styles.autocompleteDescription}>{suggestion.description}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
+      {/* Input Area - moves with keyboard */}
+      <View style={styles.inputArea}>
+        {/* Autocomplete Dropdown */}
+        {showAutocomplete && (
+          <View style={styles.autocompleteContainer}>
+            <ScrollView 
+              style={styles.autocompleteScroll}
+              keyboardShouldPersistTaps="handled"
+            >
+              {autocompleteSuggestions.map((suggestion, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={styles.autocompleteItem}
+                  onPress={() => applySuggestion(suggestion)}
+                >
+                  <Text style={styles.autocompleteCommand}>{suggestion.text}</Text>
+                  <Text style={styles.autocompleteDescription}>{suggestion.description}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
 
-      {/* Input */}
-      <View style={styles.inputContainer}>
-        <View style={styles.inputWrapper}>
-          <TextInput
-            ref={inputRef}
-            style={styles.input}
-            value={inputText}
-            onChangeText={handleInputChange}
-            placeholder="Message..."
-            placeholderTextColor={theme.colors.textMuted}
-            multiline
-            maxLength={500}
-            editable={isConnected}
-          />
+        {/* Input Row */}
+        <View style={styles.inputContainer}>
+          <View style={styles.inputWrapper}>
+            <TextInput
+              ref={inputRef}
+              style={styles.input}
+              value={inputText}
+              onChangeText={handleInputChange}
+              placeholder="Message..."
+              placeholderTextColor={theme.colors.textMuted}
+              multiline
+              maxLength={500}
+              editable={isConnected}
+              autoComplete="off"
+              textContentType="none"
+            />
+          </View>
+          <TouchableOpacity
+            style={styles.sendButton}
+            onPress={sendMessage}
+            disabled={!inputText.trim() || !isConnected}
+          >
+            <Icon
+              name="send-circle"
+              size={32}
+              color={
+                inputText.trim() && isConnected
+                  ? '#4ADE80'
+                  : theme.colors.textMuted
+              }
+            />
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity
-          style={styles.sendButton}
-          onPress={sendMessage}
-          disabled={!inputText.trim() || !isConnected}
-        >
-          <Icon
-            name="send-circle"
-            size={32}
-            color={
-              inputText.trim() && isConnected
-                ? '#4ADE80'
-                : theme.colors.textMuted
-            }
-          />
-        </TouchableOpacity>
       </View>
 
-      {/* Vault Overlay - rendered on top when open */}
+      {/* Vault Overlay */}
       {isVaultOpen && (
         <VaultOverlay
           initialPassword={vaultPassword}
@@ -563,9 +734,9 @@ export default function TurtleScreen() {
       {/* Pomodoro Settings Modal */}
       <PomodoroSettings
         visible={showSettings}
-        onClose={closeSettings}
+        onClose={() => setShowSettings(false)}
         onSave={({ focusMinutes, breakMinutes }) => {
-          updateDurations(focusMinutes, breakMinutes);
+          handleUpdateDurations(focusMinutes, breakMinutes);
           const generateId = () => (Date.now() + Math.random()).toString();
           setMessages(prev => [...prev, {
             id: generateId(),
@@ -587,7 +758,6 @@ const createStyles = (theme, insets) =>
       flex: 1,
       backgroundColor: theme.colors.background,
     },
-    // Static Safe Area Overlay - always covers the notch
     safeAreaOverlay: {
       position: 'absolute',
       top: 0,
@@ -601,11 +771,11 @@ const createStyles = (theme, insets) =>
       height: 200,
       opacity: 0.55,
     },
-    // Inline header - scrolls naturally with chat
     inlineHeader: {
       backgroundColor: theme.colors.surface,
       borderBottomWidth: 0.5,
       borderBottomColor: theme.colors.border,
+      marginHorizontal: -theme.spacing.sm,
     },
     header: {
       flexDirection: 'row',
@@ -680,6 +850,10 @@ const createStyles = (theme, insets) =>
       borderRadius: 20,
       marginBottom: theme.spacing.xs,
     },
+    timerBubble: {
+      alignSelf: 'flex-start',
+      marginBottom: theme.spacing.sm,
+    },
     welcomeBubble: {
       alignSelf: 'center',
       backgroundColor: 'transparent',
@@ -734,13 +908,15 @@ const createStyles = (theme, insets) =>
       color: theme.colors.textMuted,
       fontStyle: 'italic',
     },
+    inputArea: {
+      backgroundColor: theme.colors.background,
+      paddingBottom: insets.bottom > 0 ? insets.bottom / 2 : 8,
+    },
     inputContainer: {
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: theme.spacing.sm,
       paddingTop: 4,
-      paddingBottom: insets.bottom > 0 ? insets.bottom / 2 : 1,
-      borderTopWidth: 0,
       backgroundColor: theme.colors.background,
     },
     inputWrapper: {
@@ -756,15 +932,13 @@ const createStyles = (theme, insets) =>
     },
     input: {
       flex: 1,
-      minHeight: 36,
+      fontSize: 15,
+      color: theme.colors.textPrimary,
       maxHeight: 100,
-      backgroundColor: 'transparent',
-      paddingHorizontal: theme.spacing.xs,
       paddingTop: 8,
       paddingBottom: 8,
-      color: theme.colors.textPrimary,
-      fontSize: 15,
-      textAlignVertical: 'center',
+      paddingHorizontal: 4,
+      backgroundColor: 'transparent',
     },
     sendButton: {
       marginLeft: theme.spacing.xs,
@@ -805,18 +979,14 @@ const createStyles = (theme, insets) =>
       fontSize: 12,
       color: theme.colors.textSecondary,
     },
-    // Autocomplete styles
     autocompleteContainer: {
-      position: 'absolute',
-      bottom: 60 + (insets.bottom > 0 ? insets.bottom / 2 : 8),
-      left: 12,
-      right: 12,
+      marginHorizontal: 12,
+      marginBottom: 8,
       backgroundColor: theme.colors.surfaceElevated,
       borderRadius: 12,
       borderWidth: 1,
       borderColor: theme.colors.border,
       maxHeight: 200,
-      zIndex: 50,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: -2 },
       shadowOpacity: 0.2,
