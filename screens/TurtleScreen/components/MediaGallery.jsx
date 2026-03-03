@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,8 @@ import {
   Platform,
   Easing,
   PanResponder,
+  InteractionManager,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -44,7 +46,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const { api, getBaseUrl } = useServer();
   const insets = useSafeAreaInsets();
   
-  // Tab state: 'uploads' or 'turtle-base'
+  // === TAB & DATA STATE ===
   const [activeTab, setActiveTab] = useState('uploads');
   
   // Data state
@@ -54,19 +56,29 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   
-  // Pagination state
+  // === PAGINATION STATE ===
   const [hasMoreUploads, setHasMoreUploads] = useState(true);
   const [hasMoreServer, setHasMoreServer] = useState(true);
   const [uploadOffset, setUploadOffset] = useState(0);
   const [serverOffset, setServerOffset] = useState(0);
   const LIMIT = 150;
 
-  // Full-screen viewer state
+  // === VIEWER STATE ===
   const [selectedMedia, setSelectedMedia] = useState(null);
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const [infoVisible, setInfoVisible] = useState(true);
   const infoOpacityAnim = useRef(new Animated.Value(1)).current;
+  
+  // === ALBUM & TAG STATE ===
+  const [globalAlbums, setGlobalAlbums] = useState(['Phone Uploads']);
+  const [uploadModalVisible, setUploadModalVisible] = useState(false);
+  const [pendingAssets, setPendingAssets] = useState([]);
+  const [selectedTags, setSelectedTags] = useState([]);
+  
+  // Tag editor state
+  const [editTagsVisible, setEditTagsVisible] = useState(false);
+  const [editingTags, setEditingTags] = useState([]);
   
   // Scroll position for parallax effect
   const scrollX = useRef(new Animated.Value(0)).current;
@@ -86,9 +98,11 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     })
   ).current;
   
+  // === REFS ===
   // Grid ref for scroll-to-bottom (iOS Photos style)
   const gridRef = useRef(null);
 
+  // === DERIVED DATA ===
   // Get current items based on active tab
   // Data is [oldest, ..., newest] - FlatList renders top-to-bottom, so newest appears at bottom
   const currentItems = activeTab === 'uploads' ? uploadItems : serverItems;
@@ -97,7 +111,44 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // Calculate photo/video breakdown
   const videoCount = currentItems.filter(item => item.type === 'video').length;
   const photoCount = currentItems.length - videoCount;
+  
+  // Filter state
+  const [selectedAlbum, setSelectedAlbum] = useState('All');
+  const [isDropdownVisible, setIsDropdownVisible] = useState(false);
 
+  // === O(1) HASH MAP FILTERING ===
+  // 1. Build the O(1) Dictionary ONCE when data loads
+  const tagDictionary = useMemo(() => {
+    const dict = { 'All': currentItems };
+    currentItems.forEach(item => {
+      try {
+        const tags = JSON.parse(item.tags || '[]');
+        // If the item has no valid tags, we optionally group it under a fallback or just leave it in 'All'
+        if (Array.isArray(tags)) {
+          tags.forEach(tag => {
+            if (!dict[tag]) dict[tag] = [];
+            dict[tag].push(item);
+          });
+        }
+      } catch(e) {}
+    });
+    return dict;
+  }, [currentItems]);
+
+  // 2. Derive dropdown list instantly from the dictionary + global DB
+  const availableAlbums = useMemo(() => {
+    const loadedTags = Object.keys(tagDictionary).filter(k => k !== 'All');
+    const allUnique = new Set([...globalAlbums, ...loadedTags]);
+    const sortedUnique = Array.from(allUnique).sort();
+    return ['All', ...sortedUnique];
+  }, [tagDictionary, globalAlbums]);
+
+  // 3. Filter items instantly in O(1) time
+  const filteredItems = useMemo(() => {
+    return tagDictionary[selectedAlbum] || [];
+  }, [tagDictionary, selectedAlbum]);
+
+  // === API CALLS ===
   // Fetch uploads from database
   const fetchUploads = useCallback(async (isRefresh = false) => {
     try {
@@ -179,6 +230,19 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     } else if (activeTab === 'turtle-base' && serverItems.length === 0) {
       loadData(true);
     }
+  }, [activeTab]);
+  
+  // Fetch global albums on mount
+  useEffect(() => {
+    const fetchAlbums = async () => {
+      try {
+        const res = await api.get('/media/albums');
+        if (res.success && res.albums.length > 0) setGlobalAlbums(res.albums);
+      } catch (e) { 
+        console.log('[MediaGallery] Failed to fetch albums'); 
+      }
+    };
+    fetchAlbums();
   }, [activeTab]);
 
   // Handle pull-to-refresh
@@ -267,6 +331,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   }, [infoVisible, infoOpacityAnim]);
 
   // Upload photos/videos
+  // New handleUpload - just shows picker and modal
   const handleUpload = useCallback(async () => {
     try {
       // Request permissions
@@ -274,11 +339,6 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       if (pickerStatus !== 'granted') {
         Alert.alert('Permission Required', 'Please allow access to photos and videos to upload.');
         return;
-      }
-
-      const { status: mediaStatus } = await MediaLibrary.requestPermissionsAsync();
-      if (mediaStatus !== 'granted') {
-        console.log('[MediaGallery] MediaLibrary permission not granted - upload only, no delete');
       }
 
       // Open image picker - now accepts images AND videos
@@ -293,27 +353,70 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         return;
       }
 
-      setUploading(true);
+      // Show pre-upload modal with album selection
+      setPendingAssets(result.assets);
+      setUploadModalVisible(true);
+    } catch (error) {
+      console.error('[MediaGallery] Upload error:', error);
+      Alert.alert('Error', 'Failed to open image picker.');
+    }
+  }, []);
+
+  // Execute upload after modal confirmation
+  // Execute upload after modal confirmation
+  const executeUpload = useCallback(async () => {
+    setUploadModalVisible(false);
+    setUploading(true);
+    
+    try {
       const serverUrl = getBaseUrl();
       
-      const uploadPromises = result.assets.map(async (asset) => {
+      const { status: mediaStatus } = await MediaLibrary.requestPermissionsAsync();
+      if (mediaStatus !== 'granted') {
+        console.log('[MediaGallery] MediaLibrary permission not granted - upload only, no delete');
+      }
+      
+      const assetsToUpload = [...pendingAssets];
+      setPendingAssets([]);
+    
+    const uploadPromises = assetsToUpload.map(async (asset) => {
         const formData = new FormData();
         
-        // Get original creation date from asset info
-        let originalDate = null;
+        // Get full asset info including EXIF metadata
+        let assetInfo = null;
         if (asset.assetId) {
           try {
-            const assetInfo = await MediaLibrary.getAssetInfoAsync(asset.assetId);
-            originalDate = assetInfo.creationTime || null;
-            console.log('[MediaGallery] Asset creation time:', originalDate, new Date(originalDate).toISOString());
+            assetInfo = await MediaLibrary.getAssetInfoAsync(asset.assetId);
+            console.log('[MediaGallery] Asset info retrieved');
           } catch (infoError) {
             console.log('[MediaGallery] Could not get asset info:', infoError.message);
           }
         }
         
-        // Add original date to form data
+        // Extract original creation date
+        const originalDate = assetInfo?.creationTime || null;
         if (originalDate) {
           formData.append('originalDate', originalDate.toString());
+        }
+        
+        // Extract and append rich metadata
+        if (assetInfo) {
+          // Dimensions
+          if (assetInfo.width) formData.append('width', assetInfo.width.toString());
+          if (assetInfo.height) formData.append('height', assetInfo.height.toString());
+          
+          // Location (GPS)
+          if (assetInfo.location) {
+            formData.append('location', JSON.stringify(assetInfo.location));
+          }
+          
+          // EXIF camera metadata
+          const exif = assetInfo.exif || {};
+          if (exif.Model) formData.append('cameraModel', exif.Model);
+          if (exif.LensModel) formData.append('lensModel', exif.LensModel);
+          
+          // Send tags array
+          formData.append('tags', JSON.stringify(selectedTags.length > 0 ? selectedTags : ['Phone Uploads']));
         }
         
         const originalFilename = asset.fileName || asset.uri.split('/').pop() || 'file';
@@ -347,6 +450,11 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             name: 'thumbnail.jpg',
             type: 'image/jpeg',
           });
+          
+          // Append video duration (in seconds) for phone uploads
+          if (asset.duration) {
+            formData.append('duration', Math.round(asset.duration / 1000).toString());
+          }
           
         } else {
           // Handle IMAGE upload (with HEIC conversion)
@@ -423,6 +531,14 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       // Switch to uploads tab
       setActiveTab('uploads');
       
+      // Refresh global albums after upload so dropdown updates instantly
+      try {
+        const res = await api.get('/media/albums');
+        if (res.success) setGlobalAlbums(res.albums);
+      } catch (e) {
+        console.log('[MediaGallery] Could not refresh albums');
+      }
+      
       Alert.alert('Success', `${results.length} item(s) uploaded successfully!`);
     } catch (error) {
       console.error('[MediaGallery] Upload error:', error);
@@ -430,7 +546,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     } finally {
       setUploading(false);
     }
-  }, [getBaseUrl, fetchUploads]);
+  }, [pendingAssets, selectedTags, getBaseUrl, fetchUploads, api]);
 
   // Delete photo/video (only for uploads)
   const handleDelete = useCallback((id) => {
@@ -463,6 +579,14 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     const baseUrl = getBaseUrl().replace(/\/api$/, '');
     return `${baseUrl}${path}`;
   }, [getBaseUrl]);
+
+  // Format seconds to MM:SS
+  const formatDuration = (seconds) => {
+    if (!seconds) return null;
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
 
   // Track failed images to show fallback
   const [failedImages, setFailedImages] = useState(new Set());
@@ -498,63 +622,19 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     }
   }, [currentItems, preloadThumbnails]);
 
-  // Render grid item with error handling
-  const renderItem = useCallback(({ item }) => {
-    const imageUrl = item.thumbnailUrl 
-      ? getFullUrl(item.thumbnailUrl)
-      : getFullUrl(item.url);
-    
-    const isVideo = item.type === 'video';
-    const hasFailed = failedImages.has(item.id);
-    
-    return (
-      <TouchableOpacity
-        style={styles.thumbnailContainer}
-        onPress={() => openViewer(item)}
-        onLongPress={() => handleDelete(item.id)}
-        activeOpacity={0.8}
-      >
-        {hasFailed ? (
-          // Fallback for failed images
-          <View style={[styles.thumbnail, styles.failedThumbnail]}>
-            <Icon 
-              name={isVideo ? 'video-off' : 'image-off'} 
-              size={32} 
-              color={theme.colors.textMuted} 
-            />
-            <Text style={styles.failedText}>
-              {isVideo ? 'Video' : 'Image'}
-            </Text>
-          </View>
-        ) : (
-          <Image
-            source={{ uri: imageUrl }}
-            style={styles.thumbnail}
-            contentFit="cover"
-            transition={200}
-            cachePolicy="memory-disk"
-            placeholder={{ blurhash: 'LKO2?U%2Tw=w]~RBVZRi};RPxuwH' }}
-            placeholderContentFit="cover"
-            onError={() => {
-              console.log('[MediaGallery] Image failed to load:', item.id, item.filename);
-              setFailedImages(prev => new Set([...prev, item.id]));
-            }}
-          />
-        )}
-        {isVideo && (
-          <View style={styles.videoOverlay}>
-            <Icon name="play-circle" size={32} color="#fff" />
-            <Text style={styles.videoLabel}>VIDEO</Text>
-          </View>
-        )}
-        {item.type === 'document' && (
-          <View style={styles.documentOverlay}>
-            <Icon name="file-document" size={32} color={theme.colors.textMuted} />
-          </View>
-        )}
-      </TouchableOpacity>
-    );
-  }, [getFullUrl, handleDelete, openViewer, theme, failedImages]);
+  // Render grid item using memoized component
+  // === RENDERERS ===
+  const renderItem = useCallback(({ item }) => (
+    <GridItem 
+      item={item} 
+      activeTab={activeTab}
+      openViewer={openViewer}
+      handleDelete={handleDelete}
+      getFullUrl={getFullUrl}
+      getBaseUrl={getBaseUrl}
+      styles={styles}
+    />
+  ), [activeTab, openViewer, handleDelete, getFullUrl, getBaseUrl, styles]);
 
   // Render empty state
   const renderEmpty = () => (
@@ -580,8 +660,12 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const handleMomentumScrollEnd = useCallback((event) => {
     const slideSize = event.nativeEvent.layoutMeasurement.width;
     const index = Math.round(event.nativeEvent.contentOffset.x / slideSize);
+    
     if (currentItems[index] && currentItems[index].id !== selectedMedia?.id) {
-      setSelectedMedia(currentItems[index]);
+      // Queue the heavy re-render until AFTER the swipe animation is 100% complete
+      InteractionManager.runAfterInteractions(() => {
+        setSelectedMedia(currentItems[index]);
+      });
     }
   }, [currentItems, selectedMedia]);
 
@@ -831,16 +915,24 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             </Text>
           </Animated.View>
 
-          {/* Close button */}
+          {/* Close & Tag buttons */}
           <Animated.View 
             style={[
               styles.viewerCloseButton, 
               { 
                 top: insets.top + 16,
                 opacity: opacityAnim,
+                flexDirection: 'row',
+                gap: 16,
               }
             ]}
           >
+            <TouchableOpacity onPress={() => {
+              try { setEditingTags(JSON.parse(selectedMedia.tags || '[]')); } catch(e){ setEditingTags([]); }
+              setEditTagsVisible(true);
+            }}>
+              <Icon name="tag-multiple" size={26} color="#fff" />
+            </TouchableOpacity>
             <TouchableOpacity 
               onPress={closeViewer}
               activeOpacity={0.6}
@@ -899,17 +991,174 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               </Text>
             )}
           </Animated.View>
+
+          {/* Inline Tag Editor Overlay */}
+          {editTagsVisible && (
+            <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', zIndex: 100 }]}>
+              <View style={[styles.uploadModalContent, { backgroundColor: theme.colors.surfaceElevated }]}>
+                <Text style={[styles.uploadModalTitle, { color: theme.colors.textPrimary }]}>Edit Tags</Text>
+                
+                <Text style={[styles.uploadModalLabel, { color: theme.colors.textSecondary }]}>Selected Tags:</Text>
+                <TextInput
+                  style={[styles.albumInput, { color: theme.colors.textPrimary, borderColor: theme.colors.border }]}
+                  value={editingTags.join(', ')}
+                  onChangeText={(text) => setEditingTags(text.split(',').map(t => t.trim()).filter(Boolean))}
+                  placeholder="Type tags separated by commas..."
+                  placeholderTextColor={theme.colors.textMuted}
+                />
+
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickSelectScroll}>
+                  {globalAlbums.map(album => (
+                    <TouchableOpacity 
+                      key={album} 
+                      style={[styles.quickSelectChip, editingTags.includes(album) && { backgroundColor: theme.colors.primary }]}
+                      onPress={() => {
+                        if (editingTags.includes(album)) {
+                          setEditingTags(editingTags.filter(t => t !== album));
+                        } else {
+                          setEditingTags([...editingTags, album]);
+                        }
+                      }}
+                    >
+                      <Text style={[styles.quickSelectText, editingTags.includes(album) && { color: '#fff' }]}>{album}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                
+                <View style={styles.uploadModalButtons}>
+                  <TouchableOpacity 
+                    style={[styles.uploadModalButton, { backgroundColor: theme.colors.surface }]}
+                    onPress={() => setEditTagsVisible(false)}
+                  >
+                    <Text style={{ color: theme.colors.textPrimary }}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary }]}
+                    onPress={async () => {
+                      try {
+                        const res = await api.put(`/media/${selectedMedia.id}/tags`, { tags: editingTags });
+                        if (res.success) {
+                          setUploadItems(prev => prev.map(i => i.id === selectedMedia.id ? { ...i, tags: JSON.stringify(editingTags) } : i));
+                          setSelectedMedia(prev => ({ ...prev, tags: JSON.stringify(editingTags) }));
+                          setEditTagsVisible(false);
+                        }
+                      } catch(e) { Alert.alert('Error', 'Failed to update tags'); }
+                    }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: 'bold' }}>Save Tags</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
         </Pressable>
       </Modal>
     );
   };
 
-  const styles = createStyles(theme);
+  // === MEMOIZED STYLES ===
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Full-screen viewer modal */}
       {renderFullScreenViewer()}
+
+      {/* Pre-Upload Album Selection Modal */}
+      <Modal visible={uploadModalVisible} transparent={true} animationType="slide">
+        <View style={styles.uploadModalOverlay}>
+          <View style={[styles.uploadModalContent, { backgroundColor: theme.colors.surfaceElevated }]}>
+            <Text style={[styles.uploadModalTitle, { color: theme.colors.textPrimary }]}>
+              Upload {pendingAssets.length} Item{pendingAssets.length > 1 ? 's' : ''}
+            </Text>
+            
+            <Text style={[styles.uploadModalLabel, { color: theme.colors.textSecondary }]}>Save to Album:</Text>
+            <TextInput
+              style={[styles.albumInput, { color: theme.colors.textPrimary, borderColor: theme.colors.border }]}
+              value={selectedTags.join(', ')}
+              onChangeText={(text) => setSelectedTags(text.split(',').map(t => t.trim()).filter(Boolean))}
+              placeholder="Type album name..."
+              placeholderTextColor={theme.colors.textMuted}
+            />
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickSelectScroll}>
+              {globalAlbums.map(album => (
+                <TouchableOpacity 
+                  key={album} 
+                  style={[styles.quickSelectChip, selectedTags.includes(album) && { backgroundColor: theme.colors.primary }]}
+                  onPress={() => {
+                    if (selectedTags.includes(album)) {
+                      setSelectedTags(selectedTags.filter(t => t !== album));
+                    } else {
+                      setSelectedTags([...selectedTags, album]);
+                    }
+                  }}
+                >
+                  <Text style={[styles.quickSelectText, selectedTags.includes(album) && { color: '#fff' }]}>{album}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            
+            <View style={styles.uploadModalButtons}>
+              <TouchableOpacity 
+                style={[styles.uploadModalButton, { backgroundColor: theme.colors.surface }]}
+                onPress={() => { setUploadModalVisible(false); setPendingAssets([]); }}
+              >
+                <Text style={{ color: theme.colors.textPrimary }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary }]}
+                onPress={executeUpload}
+              >
+                <Text style={{ color: '#fff', fontWeight: 'bold' }}>Upload Now</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Album Filter Dropdown */}
+      <Modal
+        visible={isDropdownVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsDropdownVisible(false)}
+      >
+        <TouchableOpacity 
+          style={styles.dropdownOverlay} 
+          activeOpacity={1} 
+          onPress={() => setIsDropdownVisible(false)}
+        >
+          <View style={[styles.dropdownMenu, { backgroundColor: theme.colors.surfaceElevated }]}>
+            <ScrollView bounces={false} style={{ maxHeight: height * 0.4 }}>
+              {availableAlbums.map((album) => (
+                <TouchableOpacity
+                  key={album}
+                  style={[
+                    styles.dropdownItem,
+                    selectedAlbum === album && { backgroundColor: 'rgba(0,0,0,0.05)' }
+                  ]}
+                  onPress={() => {
+                    setSelectedAlbum(album);
+                    setIsDropdownVisible(false);
+                  }}
+                >
+                  <Text style={[
+                    styles.dropdownItemText, 
+                    { color: theme.colors.textPrimary },
+                    selectedAlbum === album && { fontWeight: '700', color: theme.colors.primary }
+                  ]}>
+                    {album}
+                  </Text>
+                  {selectedAlbum === album && (
+                    <Icon name="check" size={18} color={theme.colors.primary} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Header */}
       <View style={styles.header}>
@@ -920,9 +1169,16 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         ) : (
           <View style={styles.closeButton} />
         )}
-        <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]}>
-          Photo Vault
-        </Text>
+        <TouchableOpacity 
+          style={styles.headerTitleContainer} 
+          onPress={() => setIsDropdownVisible(true)}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]}>
+            {selectedAlbum === 'All' ? 'Photo Vault' : selectedAlbum}
+          </Text>
+          <Icon name="chevron-down" size={20} color={theme.colors.textPrimary} style={{ marginLeft: 4 }} />
+        </TouchableOpacity>
         <View style={styles.placeholder} />
       </View>
 
@@ -976,7 +1232,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       ) : (
         <FlatList
           ref={gridRef}
-          data={currentItems}
+          data={filteredItems}
           renderItem={renderItem}
           keyExtractor={(item) => item.id}
           numColumns={3}
@@ -1029,6 +1285,106 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   );
 }
 
+// Memoized grid item component for performance
+// === GRID ITEM COMPONENT (Memoized) ===
+const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBaseUrl, activeTab, styles }) => {
+  const isVideo = item.type === 'video';
+  const [duration, setDuration] = useState(item.duration);
+  const [hasFailed, setHasFailed] = useState(false);
+  
+  // Format seconds to MM:SS
+  const formatDuration = (seconds) => {
+    if (!seconds) return null;
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+  
+  // Self-healing: Fetch missing duration independently without parent re-render
+  useEffect(() => {
+    let isMounted = true;
+    
+    // Trigger if it's a video, has no duration, and has ANY valid identifier
+    if (isVideo && !duration && (item.filename || item.id)) {
+      const fetchMissingInfo = async () => {
+        try {
+          // Send filename if it exists, otherwise rely on the ID
+          const fileNameParam = item.filename ? `&filename=${encodeURIComponent(item.filename)}` : '';
+          const idParam = item.id ? `&id=${item.id}` : '';
+          
+          const url = `${getBaseUrl()}/media/duration?tab=${activeTab}${fileNameParam}${idParam}`;
+          
+          const res = await fetch(url);
+          const data = await res.json();
+          if (data.success && data.duration && isMounted) {
+            setDuration(data.duration);
+          }
+        } catch (err) {
+          console.log('[GridItem] Failed to fetch missing duration', err.message);
+        }
+      };
+      fetchMissingInfo();
+    }
+    
+    return () => { isMounted = false; };
+  }, [isVideo, duration, item, activeTab, getBaseUrl]);
+  
+  const imageUrl = item.thumbnailUrl 
+    ? getFullUrl(item.thumbnailUrl)
+    : getFullUrl(item.url);
+  
+  return (
+    <TouchableOpacity
+      style={styles.thumbnailContainer}
+      onPress={() => openViewer(item)}
+      onLongPress={() => handleDelete(item.id)}
+      activeOpacity={0.8}
+    >
+      {hasFailed ? (
+        // Fallback for failed images
+        <View style={[styles.thumbnail, styles.failedThumbnail]}>
+          <Icon 
+            name={isVideo ? 'video-off' : 'image-off'} 
+            size={32} 
+            color="#888" 
+          />
+          <Text style={styles.failedText}>
+            {isVideo ? 'Video' : 'Image'}
+          </Text>
+        </View>
+      ) : (
+        <Image
+          source={{ uri: imageUrl }}
+          style={styles.thumbnail}
+          contentFit="cover"
+          transition={200}
+          cachePolicy="memory-disk"
+          placeholder={{ blurhash: 'LKO2?U%2Tw=w]~RBVZRi};RPxuwH' }}
+          placeholderContentFit="cover"
+          onError={() => {
+            console.log('[GridItem] Image failed to load:', item.id, item.filename);
+            setHasFailed(true);
+          }}
+        />
+      )}
+      {isVideo && (
+        <View style={styles.durationBadge}>
+          {duration ? (
+            <Text style={styles.durationText}>{formatDuration(duration)}</Text>
+          ) : (
+            <Icon name="play" size={12} color="#fff" />
+          )}
+        </View>
+      )}
+      {item.type === 'document' && (
+        <View style={styles.documentOverlay}>
+          <Icon name="file-document" size={32} color="#888" />
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+});
+
 const createStyles = (theme) =>
   StyleSheet.create({
     container: {
@@ -1053,6 +1409,41 @@ const createStyles = (theme) =>
     headerTitle: {
       fontSize: 18,
       fontWeight: '600',
+    },
+    headerTitleContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    dropdownOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.3)',
+      justifyContent: 'flex-start',
+      alignItems: 'center',
+      paddingTop: Platform.OS === 'ios' ? 90 : 70, // Position below header
+    },
+    dropdownMenu: {
+      width: width * 0.6,
+      borderRadius: 12,
+      overflow: 'hidden',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.15,
+      shadowRadius: 12,
+      elevation: 8,
+    },
+    dropdownItem: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 14,
+      paddingHorizontal: 16,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: 'rgba(0,0,0,0.05)',
+    },
+    dropdownItemText: {
+      fontSize: 16,
+      fontWeight: '500',
     },
     placeholder: {
       width: 40,
@@ -1120,18 +1511,22 @@ const createStyles = (theme) =>
       color: theme.colors.textMuted,
       marginTop: 4,
     },
-    videoOverlay: {
-      ...StyleSheet.absoluteFillObject,
+    durationBadge: {
+      position: 'absolute',
+      bottom: 4,
+      right: 4,
+      backgroundColor: 'rgba(0,0,0,0.7)',
+      paddingHorizontal: 5,
+      paddingVertical: 2,
+      borderRadius: 4,
       justifyContent: 'center',
       alignItems: 'center',
-      backgroundColor: 'rgba(0,0,0,0.4)',
     },
-    videoLabel: {
+    durationText: {
       color: '#fff',
       fontSize: 10,
-      fontWeight: '700',
-      marginTop: 4,
-      letterSpacing: 1,
+      fontWeight: '600',
+      letterSpacing: 0.5,
     },
     documentOverlay: {
       ...StyleSheet.absoluteFillObject,
@@ -1265,6 +1660,65 @@ const createStyles = (theme) =>
       borderRadius: 22,
       backgroundColor: 'rgba(0,0,0,0.5)',
       justifyContent: 'center',
+      alignItems: 'center',
+    },
+    // Upload modal styles
+    uploadModalOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    uploadModalContent: {
+      width: width * 0.85,
+      padding: 24,
+      borderRadius: 16,
+      elevation: 5,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25,
+      shadowRadius: 4,
+    },
+    uploadModalTitle: {
+      fontSize: 18,
+      fontWeight: 'bold',
+      marginBottom: 16,
+      textAlign: 'center',
+    },
+    uploadModalLabel: {
+      fontSize: 14,
+      marginBottom: 8,
+    },
+    albumInput: {
+      borderWidth: 1,
+      borderRadius: 8,
+      padding: 12,
+      fontSize: 16,
+      marginBottom: 12,
+    },
+    quickSelectScroll: {
+      flexGrow: 0,
+      marginBottom: 24,
+    },
+    quickSelectChip: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 16,
+      backgroundColor: 'rgba(0,0,0,0.05)',
+      marginRight: 8,
+    },
+    quickSelectText: {
+      fontSize: 13,
+    },
+    uploadModalButtons: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+    uploadModalButton: {
+      flex: 1,
+      paddingVertical: 12,
+      borderRadius: 8,
       alignItems: 'center',
     },
   });
