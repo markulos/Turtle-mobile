@@ -733,18 +733,18 @@ export default function MediaGallery({ onClose }) {
         <TouchableOpacity
           style={[
             styles.tabButton,
-            activeTab === 'uploads' && { backgroundColor: theme.colors.primary }
+            activeTab === 'uploads' && { backgroundColor: '#fff' }
           ]}
           onPress={() => setActiveTab('uploads')}
         >
           <Icon 
             name="cellphone" 
             size={16} 
-            color={activeTab === 'uploads' ? '#fff' : theme.colors.textSecondary} 
+            color={activeTab === 'uploads' ? '#000' : theme.colors.textSecondary} 
           />
           <Text style={[
             styles.tabText,
-            activeTab === 'uploads' && { color: '#fff' }
+            activeTab === 'uploads' && { color: '#000' }
           ]}>
             Phone Uploads
           </Text>
@@ -811,17 +811,17 @@ export default function MediaGallery({ onClose }) {
       {activeTab === 'uploads' && (
         <View style={[styles.bottomContainer, { paddingBottom: insets.bottom + 12 }]}>
           <TouchableOpacity
-            style={[styles.uploadButton, { backgroundColor: theme.colors.primary }]}
+            style={[styles.uploadButton, { backgroundColor: '#fff' }]}
             onPress={handleUpload}
             disabled={uploading}
             activeOpacity={0.8}
           >
             {uploading ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color="#000" />
             ) : (
               <>
-                <Icon name="cloud-upload" size={20} color="#fff" />
-                <Text style={styles.uploadButtonText}>Upload Photos</Text>
+                <Icon name="cloud-upload" size={20} color="#000" />
+                <Text style={[styles.uploadButtonText, { color: '#000' }]}>Upload Photos</Text>
               </>
             )}
           </TouchableOpacity>
