@@ -11,6 +11,7 @@ import SettingsScreen from './screens/SettingsScreen';
 import TasksScreen from './screens/TasksScreen';
 import TurtleScreen from './screens/TurtleScreen';
 import LoginScreen from './screens/LoginScreen';
+import PhotosScreen from './screens/PhotosScreen';
 import { ServerProvider } from './context/ServerContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { VaultProvider } from './context/VaultContext';
@@ -29,6 +30,7 @@ function TabNavigator() {
           let iconName;
           if (route.name === 'Tasks') iconName = focused ? 'checkbox-marked-circle' : 'checkbox-marked-circle-outline';
           else if (route.name === 'Turtle') iconName = 'turtle';
+          else if (route.name === 'Photos') iconName = focused ? 'image' : 'image-outline';
           else if (route.name === 'Settings') iconName = focused ? 'cog' : 'cog-outline';
           return <Icon name={iconName} size={24} color={color} />;
         },
@@ -59,6 +61,11 @@ function TabNavigator() {
         name="Turtle" 
         component={TurtleScreen}
         options={{ title: 'Turtle' }}
+      />
+      <Tab.Screen 
+        name="Photos" 
+        component={PhotosScreen}
+        options={{ title: 'Photos' }}
       />
       <Tab.Screen 
         name="Settings" 

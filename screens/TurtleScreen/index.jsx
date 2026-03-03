@@ -55,6 +55,7 @@ export default function TurtleScreen() {
   
   // Photo Gallery state
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  const [galleryAutoUpload, setGalleryAutoUpload] = useState(false);
   
   // LOCAL Pomodoro timer state (no server dependency)
   const [timerState, setTimerState] = useState(null);
@@ -93,6 +94,9 @@ export default function TurtleScreen() {
           { command: '/pomodoro break', description: 'Start 5m break timer' },
           { command: '/pomodoro stop', description: 'Stop active timer' },
           { command: '/pomodoro settings', description: 'Adjust timer durations' },
+          { command: '/photos', description: 'Open Photo Vault' },
+          { command: '/photos upload', description: 'Upload photos to vault' },
+          { command: '/vault', description: 'Open Password Vault' },
         ]);
       }
     };
@@ -405,7 +409,7 @@ export default function TurtleScreen() {
       return; // STOP HERE - don't send to AI
     }
     
-    // Check for /photos command
+    // Check for /photos commands
     if (currentInput === '/photos') {
       console.log('[Turtle] Photos command detected');
       
@@ -423,6 +427,33 @@ export default function TurtleScreen() {
       setMessages(prev => [...prev, {
         id: generateId(),
         text: '📸 Opening Photo Vault...',
+        sender: 'system',
+        timestamp: new Date().toISOString(),
+      }]);
+      
+      return; // STOP HERE - don't send to AI
+    }
+    
+    // Check for /photos upload command - opens gallery in upload mode
+    if (currentInput === '/photos upload') {
+      console.log('[Turtle] Photos upload command detected');
+      
+      setMessages(prev => [...prev, {
+        id: generateId(),
+        text: currentInput,
+        sender: 'user',
+        timestamp: new Date().toISOString(),
+      }]);
+      
+      setInputText('');
+      setIsLoading(false);
+      // Open gallery and trigger upload immediately
+      setGalleryAutoUpload(true);
+      setIsGalleryOpen(true);
+      
+      setMessages(prev => [...prev, {
+        id: generateId(),
+        text: '📸 Opening Photo Vault for upload...',
         sender: 'system',
         timestamp: new Date().toISOString(),
       }]);
@@ -517,7 +548,13 @@ export default function TurtleScreen() {
   if (isGalleryOpen) {
     return (
       <View style={[styles.container, { flex: 1 }]}>
-        <MediaGallery onClose={() => setIsGalleryOpen(false)} />
+        <MediaGallery 
+          onClose={() => {
+            setIsGalleryOpen(false);
+            setGalleryAutoUpload(false);
+          }} 
+          autoUpload={galleryAutoUpload}
+        />
       </View>
     );
   }

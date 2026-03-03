@@ -12,6 +12,8 @@ import {
   Animated,
   Pressable,
   ScrollView,
+  Platform,
+  Easing,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -25,15 +27,16 @@ import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
 
 const { width, height } = Dimensions.get('window');
-const THUMBNAIL_SIZE = width / 3 - 4; // 3 columns with small gap
+const THUMBNAIL_SIZE = width / 3 - 1; // 3 columns with ~0.5px gap on each side
 
 /**
  * MediaGallery - Photo/Video vault gallery grid with Phone Uploads / Turtle Base toggle
  * 
  * Props:
  * - onClose: () => void - Called when user wants to close the gallery (optional for tab usage)
+ * - autoUpload: boolean - If true, immediately opens image picker on mount (for /photos upload command)
  */
-export default function MediaGallery({ onClose }) {
+export default function MediaGallery({ onClose, autoUpload = false }) {
   const { theme } = useTheme();
   const { api, getBaseUrl } = useServer();
   const insets = useSafeAreaInsets();
@@ -53,29 +56,43 @@ export default function MediaGallery({ onClose }) {
   const [hasMoreServer, setHasMoreServer] = useState(true);
   const [uploadOffset, setUploadOffset] = useState(0);
   const [serverOffset, setServerOffset] = useState(0);
-  const LIMIT = 30;
+  const LIMIT = 150;
 
   // Full-screen viewer state
   const [selectedMedia, setSelectedMedia] = useState(null);
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
+  const [infoVisible, setInfoVisible] = useState(true);
+  const infoOpacityAnim = useRef(new Animated.Value(1)).current;
+  
+  // Scroll position for parallax effect
+  const scrollX = useRef(new Animated.Value(0)).current;
+  
+  // Grid ref for scroll-to-bottom (iOS Photos style)
+  const gridRef = useRef(null);
 
   // Get current items based on active tab
+  // Data is [oldest, ..., newest] - FlatList renders top-to-bottom, so newest appears at bottom
   const currentItems = activeTab === 'uploads' ? uploadItems : serverItems;
   const currentHasMore = activeTab === 'uploads' ? hasMoreUploads : hasMoreServer;
 
   // Fetch uploads from database
   const fetchUploads = useCallback(async (isRefresh = false) => {
     try {
+      // For iOS Photos style: we want oldest first in array (top), newest last (bottom)
+      // When loading more, we fetch the next batch of older items (lower offset)
       const currentOffset = isRefresh ? 0 : uploadOffset;
-      const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}`);
+      const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}&order=asc`);
       
       if (response.success) {
         if (isRefresh) {
+          // Replace with fresh data, oldest first
           setUploadItems(response.items || []);
           setUploadOffset(LIMIT);
         } else {
-          setUploadItems(prev => [...prev, ...(response.items || [])]);
+          // Prepend older items to the beginning of the array
+          // (older items have smaller offset in ascending order)
+          setUploadItems(prev => [...(response.items || []), ...prev]);
           setUploadOffset(currentOffset + LIMIT);
         }
         setHasMoreUploads(response.pagination?.hasMore || false);
@@ -89,10 +106,10 @@ export default function MediaGallery({ onClose }) {
   // Fetch server files from turtle-base
   const fetchServerFiles = useCallback(async (isRefresh = false) => {
     try {
-      const response = await api.get('/media/server-files');
+      const response = await api.get('/media/server-files?order=asc');
       
       if (response.success) {
-        // Server files don't have pagination for now
+        // Server files already sorted ascending (oldest first) from server
         setServerItems(response.items || []);
         setHasMoreServer(false);
       }
@@ -111,12 +128,26 @@ export default function MediaGallery({ onClose }) {
       await fetchServerFiles(isRefresh);
     }
     setLoading(false);
+    
+    // Scroll to bottom after data loads (iOS Photos style - newest at bottom)
+    setTimeout(() => {
+      gridRef.current?.scrollToEnd({ animated: false });
+    }, 100);
   }, [activeTab, fetchUploads, fetchServerFiles]);
 
   // Initial load
   useEffect(() => {
     loadData(true);
-  }, []);
+    
+    // Auto-trigger upload if prop is set (for /photos upload command)
+    if (autoUpload) {
+      // Small delay to let the gallery render first
+      const timer = setTimeout(() => {
+        handleUpload();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [autoUpload]);
 
   // Reload when tab changes
   useEffect(() => {
@@ -178,8 +209,34 @@ export default function MediaGallery({ onClose }) {
       }),
     ]).start(() => {
       setSelectedMedia(null);
+      setInfoVisible(true);
+      infoOpacityAnim.setValue(1);
     });
-  }, [scaleAnim, opacityAnim]);
+  }, [scaleAnim, opacityAnim, infoOpacityAnim]);
+
+  // Toggle info visibility on tap - fade out smooth, fade in fast
+  const toggleInfoVisibility = useCallback(() => {
+    const newValue = !infoVisible;
+    setInfoVisible(newValue);
+    
+    if (newValue) {
+      // Fade in fast with bezier easing
+      Animated.timing(infoOpacityAnim, {
+        toValue: 1,
+        duration: 200,
+        easing: Easing.bezier(0.4, 0.0, 0.2, 1),
+        useNativeDriver: true,
+      }).start();
+    } else {
+      // Fade out smoothly
+      Animated.timing(infoOpacityAnim, {
+        toValue: 0,
+        duration: 400,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [infoVisible, infoOpacityAnim]);
 
   // Upload photos/videos
   const handleUpload = useCallback(async () => {
@@ -213,6 +270,23 @@ export default function MediaGallery({ onClose }) {
       
       const uploadPromises = result.assets.map(async (asset) => {
         const formData = new FormData();
+        
+        // Get original creation date from asset info
+        let originalDate = null;
+        if (asset.assetId) {
+          try {
+            const assetInfo = await MediaLibrary.getAssetInfoAsync(asset.assetId);
+            originalDate = assetInfo.creationTime || null;
+            console.log('[MediaGallery] Asset creation time:', originalDate, new Date(originalDate).toISOString());
+          } catch (infoError) {
+            console.log('[MediaGallery] Could not get asset info:', infoError.message);
+          }
+        }
+        
+        // Add original date to form data
+        if (originalDate) {
+          formData.append('originalDate', originalDate.toString());
+        }
         
         const originalFilename = asset.fileName || asset.uri.split('/').pop() || 'file';
         const isVideo = asset.mediaType === 'video' || /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|3gp)$/i.test(originalFilename);
@@ -392,7 +466,7 @@ export default function MediaGallery({ onClose }) {
   useEffect(() => {
     if (currentItems.length > 0) {
       // Prefetch first 30 thumbnails
-      preloadThumbnails(currentItems.slice(0, 30));
+      preloadThumbnails(currentItems.slice(0, 150));
     }
   }, [currentItems, preloadThumbnails]);
 
@@ -474,17 +548,14 @@ export default function MediaGallery({ onClose }) {
     </View>
   );
 
-  // Viewability config for tracking visible item
-  const viewabilityConfig = useRef({
-    itemVisiblePercentThreshold: 50,
-  }).current;
-
-  // Handle viewable items change - update selectedMedia as user swipes
-  const onViewableItemsChanged = useCallback(({ viewableItems }) => {
-    if (viewableItems.length > 0) {
-      setSelectedMedia(viewableItems[0].item);
+  // Handle scroll end - update selectedMedia when swipe completes (better performance)
+  const handleMomentumScrollEnd = useCallback((event) => {
+    const slideSize = event.nativeEvent.layoutMeasurement.width;
+    const index = Math.round(event.nativeEvent.contentOffset.x / slideSize);
+    if (currentItems[index] && currentItems[index].id !== selectedMedia?.id) {
+      setSelectedMedia(currentItems[index]);
     }
-  }, []);
+  }, [currentItems, selectedMedia]);
 
   // Render individual viewer item with pinch-to-zoom
   // Full-screen video player sub-component using new expo-video API
@@ -492,28 +563,42 @@ export default function MediaGallery({ onClose }) {
     const player = useVideoPlayer(sourceUrl, player => {
       player.loop = true;
     });
+    const [isPlaying, setIsPlaying] = useState(isActive);
     
     // Play/pause based on visibility
     useEffect(() => {
       if (isActive) {
         player.play();
+        setIsPlaying(true);
       } else {
         player.pause();
+        setIsPlaying(false);
       }
     }, [isActive, player]);
     
+    const togglePlay = () => {
+      if (isPlaying) {
+        player.pause();
+      } else {
+        player.play();
+      }
+      setIsPlaying(!isPlaying);
+    };
+    
     return (
-      <VideoView 
-        style={styles.viewerVideo} 
-        player={player} 
-        contentFit="contain" 
-        nativeControls={true}
-      />
+      <Pressable onPress={togglePlay} style={styles.viewerVideoContainer}>
+        <VideoView 
+          style={styles.viewerVideo} 
+          player={player} 
+          contentFit="contain" 
+          nativeControls={false}
+        />
+      </Pressable>
     );
   }, []);
 
-  // Separate component for image viewer with double-tap (hooks at top level)
-  const ImageViewer = ({ fullResUrl, mediaId }) => {
+  // Separate component for image viewer with double-tap and parallax (hooks at top level)
+  const ImageViewer = ({ fullResUrl, mediaId, parallaxStyle }) => {
     const scrollRef = useRef(null);
     const lastTapRef = useRef(0);
     const isZoomedRef = useRef(false);
@@ -563,51 +648,76 @@ export default function MediaGallery({ onClose }) {
     }, []);
     
     return (
-      <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={styles.viewerScrollContent}
-        maximumZoomScale={4}
-        minimumZoomScale={1}
-        bouncesZoom={true}
-        showsHorizontalScrollIndicator={false}
-        showsVerticalScrollIndicator={false}
-        pinchGestureEnabled={true}
-      >
-        <Pressable onPress={handleDoubleTap}>
-          <Image
-            source={{ uri: fullResUrl }}
-            style={styles.viewerImage}
-            contentFit="contain"
-            transition={300}
-            cachePolicy="memory-disk"
-            onError={(error) => console.error('[MediaGallery] Full-res load error:', error)}
-          />
-        </Pressable>
-      </ScrollView>
+      <Animated.View style={[styles.viewerItemContainer, parallaxStyle]}>
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.viewerScrollContent}
+          maximumZoomScale={4}
+          minimumZoomScale={1}
+          bouncesZoom={true}
+          showsHorizontalScrollIndicator={false}
+          showsVerticalScrollIndicator={false}
+          pinchGestureEnabled={true}
+        >
+          <Pressable onPress={handleDoubleTap}>
+            <Image
+              source={{ uri: fullResUrl }}
+              style={styles.viewerImage}
+              contentFit="contain"
+              transition={0}
+              cachePolicy="memory-disk"
+              priority="high"
+              onError={(error) => console.error('[MediaGallery] Full-res load error:', error)}
+            />
+          </Pressable>
+        </ScrollView>
+      </Animated.View>
     );
   };
 
-  const renderViewerItem = useCallback(({ item }) => {
+  const renderViewerItem = useCallback(({ item, index }) => {
     const isVideo = item.type === 'video';
     const fullResPath = item.rawUrl || item.url || '';
     const fullResUrl = getFullUrl(fullResPath);
     const isActive = item.id === selectedMedia?.id;
 
+    // Parallax effect: calculate offset based on scroll position
+    // The adjacent images move at 15% of the scroll speed for depth effect
+    const parallaxTranslate = scrollX.interpolate({
+      inputRange: [
+        (index - 1) * width,
+        index * width,
+        (index + 1) * width,
+      ],
+      outputRange: [width * 0.15, 0, -width * 0.15],
+      extrapolate: 'clamp',
+    });
+
+    const parallaxStyle = {
+      transform: [{ translateX: parallaxTranslate }],
+    };
+
     return (
       <View style={styles.viewerItemContainer}>
         {isVideo ? (
           // Video player using new expo-video API
-          <FullScreenVideoPlayer 
-            sourceUrl={fullResUrl} 
-            isActive={isActive}
-          />
+          <Animated.View style={[styles.viewerVideoContainer, parallaxStyle]}>
+            <FullScreenVideoPlayer 
+              sourceUrl={fullResUrl} 
+              isActive={isActive}
+            />
+          </Animated.View>
         ) : (
-          // Image viewer with pinch-to-zoom and double-tap
-          <ImageViewer fullResUrl={fullResUrl} mediaId={item.id} />
+          // Image viewer with pinch-to-zoom, double-tap, and parallax
+          <ImageViewer 
+            fullResUrl={fullResUrl} 
+            mediaId={item.id} 
+            parallaxStyle={parallaxStyle}
+          />
         )}
       </View>
     );
-  }, [getFullUrl, FullScreenVideoPlayer, selectedMedia]);
+  }, [getFullUrl, FullScreenVideoPlayer, selectedMedia, scrollX]);
 
   // Get layout for initialScrollIndex
   const getItemLayout = useCallback((data, index) => ({
@@ -630,7 +740,10 @@ export default function MediaGallery({ onClose }) {
         animationType="fade"
         onRequestClose={closeViewer}
       >
-        <View style={styles.viewerContainer}>
+        <Pressable 
+          style={styles.viewerContainer}
+          onPress={toggleInfoVisibility}
+        >
           {/* Black background */}
           <Animated.View 
             style={[
@@ -639,69 +752,103 @@ export default function MediaGallery({ onClose }) {
             ]} 
           />
           
-          {/* Close button */}
-          <TouchableOpacity 
-            style={[styles.viewerCloseButton, { top: insets.top + 16 }]}
-            onPress={closeViewer}
-            activeOpacity={0.8}
-          >
-            <View style={styles.viewerCloseButtonBg}>
-              <Icon name="close" size={24} color="#fff" />
-            </View>
-          </TouchableOpacity>
-
-          {/* Horizontal swipeable FlatList */}
+          {/* Date info - at top of image */}
           <Animated.View 
             style={[
-              styles.viewerFlatListContainer,
+              styles.viewerInfoTop,
               { 
-                transform: [{ scale: scaleAnim }],
+                opacity: Animated.multiply(opacityAnim, infoOpacityAnim),
+                top: insets.top + 56,
+              }
+            ]}
+          >
+            <Text style={styles.viewerInfoDate} numberOfLines={1}>
+              {selectedMedia.originalDate 
+                ? new Date(selectedMedia.originalDate).toLocaleDateString('en-US', { 
+                    year: 'numeric', 
+                    month: 'short', 
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })
+                : new Date(selectedMedia.uploadDate).toLocaleDateString('en-US', { 
+                    year: 'numeric', 
+                    month: 'short', 
+                    day: 'numeric' 
+                  })
+              }
+            </Text>
+          </Animated.View>
+
+          {/* Close button */}
+          <Animated.View 
+            style={[
+              styles.viewerCloseButton, 
+              { 
+                top: insets.top + 16,
                 opacity: opacityAnim,
               }
             ]}
           >
-            <FlatList
+            <TouchableOpacity 
+              onPress={closeViewer}
+              activeOpacity={0.6}
+            >
+              <Icon name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+          </Animated.View>
+
+          {/* Horizontal swipeable FlatList */}
+          <View style={styles.viewerFlatListContainer}>
+            <Animated.FlatList
               data={currentItems}
               renderItem={renderViewerItem}
               keyExtractor={(item) => item.id}
               horizontal={true}
               pagingEnabled={true}
               showsHorizontalScrollIndicator={false}
+              // Aggressive preloading for smooth swiping
               initialNumToRender={3}
-              windowSize={3}
-              maxToRenderPerBatch={3}
-              removeClippedSubviews={true}
-              initialScrollIndex={initialIndex >= 0 ? initialIndex : 0}
+              windowSize={5}
+              maxToRenderPerBatch={5}
+              // Keep adjacent items mounted for smooth parallax
+              removeClippedSubviews={false}
+              // Use getItemLayout for instant scroll positioning
               getItemLayout={getItemLayout}
-              onViewableItemsChanged={onViewableItemsChanged}
-              viewabilityConfig={viewabilityConfig}
-              decelerationRate="fast"
+              initialScrollIndex={initialIndex >= 0 ? initialIndex : 0}
+              // Animated scroll for parallax
+              onScroll={Animated.event(
+                [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+                { useNativeDriver: true }
+              )}
+              scrollEventThrottle={16}
+              onMomentumScrollEnd={handleMomentumScrollEnd}
+              // Smooth deceleration for natural feel
+              decelerationRate={0.9}
+              // Disable snap for smooth parallax, re-enable with custom physics
               snapToInterval={width}
               snapToAlignment="center"
             />
-          </Animated.View>
+          </View>
 
-          {/* Media info - synced to current visible item */}
+          {/* Resolution info - at bottom of image */}
           <Animated.View 
             style={[
-              styles.viewerInfo,
+              styles.viewerInfoBottom,
               { 
-                opacity: opacityAnim,
+                opacity: Animated.multiply(opacityAnim, infoOpacityAnim),
                 bottom: insets.bottom + 24,
               }
             ]}
           >
-            <Text style={styles.viewerInfoText} numberOfLines={1}>
-              {selectedMedia.originalName || selectedMedia.filename}
-            </Text>
             {selectedMedia.width && selectedMedia.height && (
-              <Text style={styles.viewerInfoSubtext}>
+              <Text style={styles.viewerInfoResolution}>
                 {selectedMedia.width} × {selectedMedia.height}
                 {selectedMedia.type === 'video' && ' • Video'}
               </Text>
             )}
           </Animated.View>
-        </View>
+        </Pressable>
       </Modal>
     );
   };
@@ -709,7 +856,7 @@ export default function MediaGallery({ onClose }) {
   const styles = createStyles(theme);
 
   return (
-    <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>
+    <SafeAreaView style={styles.container}>
       {/* Full-screen viewer modal */}
       {renderFullScreenViewer()}
 
@@ -785,6 +932,7 @@ export default function MediaGallery({ onClose }) {
         </View>
       ) : (
         <FlatList
+          ref={gridRef}
           data={currentItems}
           renderItem={renderItem}
           keyExtractor={(item) => item.id}
@@ -794,9 +942,9 @@ export default function MediaGallery({ onClose }) {
           onRefresh={handleRefresh}
           refreshing={refreshing}
           onEndReached={handleLoadMore}
-          onEndReachedThreshold={0.5}
+          onEndReachedThreshold={3}
           ListEmptyComponent={renderEmpty}
-          ListFooterComponent={
+          ListHeaderComponent={
             currentHasMore && currentItems.length > 0 ? (
               <ActivityIndicator 
                 style={styles.loadMoreIndicator} 
@@ -804,29 +952,30 @@ export default function MediaGallery({ onClose }) {
               />
             ) : null
           }
+          ListFooterComponent={
+            activeTab === 'uploads' ? (
+              <View style={[styles.bottomContainer, { paddingBottom: insets.bottom + 40 }]}>
+                <TouchableOpacity
+                  style={[styles.uploadButton, { backgroundColor: '#fff' }]}
+                  onPress={handleUpload}
+                  disabled={uploading}
+                  activeOpacity={0.8}
+                >
+                  {uploading ? (
+                    <ActivityIndicator color="#000" />
+                  ) : (
+                    <>
+                      <Icon name="cloud-upload" size={20} color="#000" />
+                      <Text style={[styles.uploadButtonText, { color: '#000' }]}>Upload Photos</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            ) : null
+          }
         />
       )}
 
-      {/* Upload Button - only show for uploads tab */}
-      {activeTab === 'uploads' && (
-        <View style={[styles.bottomContainer, { paddingBottom: insets.bottom + 12 }]}>
-          <TouchableOpacity
-            style={[styles.uploadButton, { backgroundColor: '#fff' }]}
-            onPress={handleUpload}
-            disabled={uploading}
-            activeOpacity={0.8}
-          >
-            {uploading ? (
-              <ActivityIndicator color="#000" />
-            ) : (
-              <>
-                <Icon name="cloud-upload" size={20} color="#000" />
-                <Text style={[styles.uploadButtonText, { color: '#000' }]}>Upload Photos</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
-      )}
     </SafeAreaView>
   );
 }
@@ -844,9 +993,8 @@ const createStyles = (theme) =>
       paddingHorizontal: 16,
       paddingTop: 8,
       paddingBottom: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-      backgroundColor: theme.colors.surface,
+      borderBottomWidth: 0,
+      backgroundColor: 'transparent',
     },
     closeButton: {
       padding: 8,
@@ -865,7 +1013,7 @@ const createStyles = (theme) =>
       paddingHorizontal: 16,
       paddingVertical: 12,
       gap: 12,
-      backgroundColor: theme.colors.background,
+      backgroundColor: 'transparent',
     },
     tabButton: {
       flex: 1,
@@ -886,24 +1034,23 @@ const createStyles = (theme) =>
     countContainer: {
       paddingHorizontal: 16,
       paddingBottom: 8,
-      backgroundColor: theme.colors.background,
+      backgroundColor: 'transparent',
     },
     countText: {
       fontSize: 14,
     },
     gridContent: {
-      padding: 2,
-      paddingBottom: activeTab => activeTab === 'uploads' ? 100 : 20,
+      padding: 0.5,
+      paddingBottom: Platform.OS === 'ios' ? 40 : 20, // Minimal space at bottom
     },
     thumbnailContainer: {
       width: THUMBNAIL_SIZE,
       height: THUMBNAIL_SIZE,
-      margin: 2,
-      borderRadius: 8,
+      margin: 0.5,
+      borderRadius: 0,
       overflow: 'hidden',
       backgroundColor: theme.colors.surfaceElevated,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
+      borderWidth: 0,
     },
     thumbnail: {
       width: '100%',
@@ -964,16 +1111,11 @@ const createStyles = (theme) =>
       marginVertical: 16,
     },
     bottomContainer: {
-      position: 'absolute',
-      bottom: 0,
-      left: 0,
-      right: 0,
       paddingHorizontal: 16,
-      paddingVertical: 12,
-      paddingBottom: 24,
-      backgroundColor: theme.colors.background,
-      borderTopWidth: 1,
-      borderTopColor: theme.colors.border,
+      paddingVertical: 8,
+      paddingBottom: 12,
+      backgroundColor: 'transparent',
+      borderTopWidth: 0,
     },
     uploadButton: {
       flexDirection: 'row',
@@ -1003,14 +1145,7 @@ const createStyles = (theme) =>
       right: 16,
       zIndex: 10,
     },
-    viewerCloseButtonBg: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor: 'rgba(255,255,255,0.2)',
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
+
     viewerFlatListContainer: {
       width: width,
       height: height * 0.85,
@@ -1035,21 +1170,36 @@ const createStyles = (theme) =>
       width: width,
       height: height * 0.85,
     },
-    viewerInfo: {
+    viewerVideoContainer: {
+      width: width,
+      height: height * 0.85,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    viewerInfoTop: {
       position: 'absolute',
       left: 24,
       right: 24,
       alignItems: 'center',
     },
-    viewerInfoText: {
-      color: '#fff',
-      fontSize: 16,
-      fontWeight: '600',
-      textAlign: 'center',
-    },
-    viewerInfoSubtext: {
-      color: 'rgba(255,255,255,0.7)',
+    viewerInfoDate: {
+      color: 'rgba(255,255,255,0.5)',
       fontSize: 14,
-      marginTop: 4,
+      fontWeight: '300',
+      textAlign: 'center',
+      letterSpacing: 0.5,
+    },
+    viewerInfoBottom: {
+      position: 'absolute',
+      left: 24,
+      right: 24,
+      alignItems: 'center',
+    },
+    viewerInfoResolution: {
+      color: 'rgba(255,255,255,0.8)',
+      fontSize: 12,
+      fontWeight: '300',
+      textAlign: 'center',
+      letterSpacing: 0.5,
     },
   });
