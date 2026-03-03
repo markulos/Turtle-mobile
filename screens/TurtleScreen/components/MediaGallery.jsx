@@ -196,6 +196,12 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
   // Open full-screen viewer with animation
   const openViewer = useCallback((item) => {
+    // Set initial scroll position for parallax to prevent offset bug
+    const index = currentItems.findIndex(i => i.id === item.id);
+    if (index !== -1) {
+      scrollX.setValue(index * ITEM_WIDTH);
+    }
+    
     setSelectedMedia(item);
     // Reset and start animations
     scaleAnim.setValue(0.8);
@@ -214,7 +220,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         useNativeDriver: true,
       }),
     ]).start();
-  }, [scaleAnim, opacityAnim]);
+  }, [scaleAnim, opacityAnim, currentItems, scrollX]);
 
   // Close full-screen viewer
   const closeViewer = useCallback(() => {
