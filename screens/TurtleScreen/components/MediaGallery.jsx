@@ -14,6 +14,7 @@ import {
   ScrollView,
   Platform,
   Easing,
+  PanResponder,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -27,7 +28,9 @@ import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
 
 const { width, height } = Dimensions.get('window');
-const THUMBNAIL_SIZE = width / 3 - 1; // 3 columns with ~0.5px gap on each side
+const THUMBNAIL_SIZE = width / 3 - 0.5; // 3 columns with ultra-thin hairline gap
+const GAP = 4;
+const ITEM_WIDTH = width + GAP;
 
 /**
  * MediaGallery - Photo/Video vault gallery grid with Phone Uploads / Turtle Base toggle
@@ -68,6 +71,21 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // Scroll position for parallax effect
   const scrollX = useRef(new Animated.Value(0)).current;
   
+  // Swipe-down to dismiss responder
+  const swipeDownResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        // Only claim the gesture if the user is swiping distinctly downwards
+        return gestureState.dy > 20 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx);
+      },
+      onPanResponderRelease: (evt, gestureState) => {
+        if (gestureState.dy > 100 && gestureState.vy > 0.5) {
+          closeViewer();
+        }
+      },
+    })
+  ).current;
+  
   // Grid ref for scroll-to-bottom (iOS Photos style)
   const gridRef = useRef(null);
 
@@ -75,6 +93,10 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // Data is [oldest, ..., newest] - FlatList renders top-to-bottom, so newest appears at bottom
   const currentItems = activeTab === 'uploads' ? uploadItems : serverItems;
   const currentHasMore = activeTab === 'uploads' ? hasMoreUploads : hasMoreServer;
+  
+  // Calculate photo/video breakdown
+  const videoCount = currentItems.filter(item => item.type === 'video').length;
+  const photoCount = currentItems.length - videoCount;
 
   // Fetch uploads from database
   const fetchUploads = useCallback(async (isRefresh = false) => {
@@ -562,8 +584,10 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const FullScreenVideoPlayer = useCallback(({ sourceUrl, isActive }) => {
     const player = useVideoPlayer(sourceUrl, player => {
       player.loop = true;
+      player.muted = true;
     });
     const [isPlaying, setIsPlaying] = useState(isActive);
+    const [isMuted, setIsMuted] = useState(true);
     
     // Play/pause based on visibility
     useEffect(() => {
@@ -572,6 +596,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         setIsPlaying(true);
       } else {
         player.pause();
+        player.currentTime = 0; // Reset video to beginning
+        player.muted = true; // Reset to muted state for next time
+        setIsMuted(true);
         setIsPlaying(false);
       }
     }, [isActive, player]);
@@ -585,6 +612,11 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       setIsPlaying(!isPlaying);
     };
     
+    const toggleMute = () => {
+      player.muted = !isMuted;
+      setIsMuted(!isMuted);
+    };
+    
     return (
       <Pressable onPress={togglePlay} style={styles.viewerVideoContainer}>
         <VideoView 
@@ -593,6 +625,18 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           contentFit="contain" 
           nativeControls={false}
         />
+        {/* Mute toggle button */}
+        <TouchableOpacity 
+          style={styles.muteButton}
+          onPress={toggleMute}
+          activeOpacity={0.7}
+        >
+          <Icon 
+            name={isMuted ? 'volume-off' : 'volume-high'} 
+            size={24} 
+            color="#fff" 
+          />
+        </TouchableOpacity>
       </Pressable>
     );
   }, []);
@@ -685,9 +729,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     // The adjacent images move at 15% of the scroll speed for depth effect
     const parallaxTranslate = scrollX.interpolate({
       inputRange: [
-        (index - 1) * width,
-        index * width,
-        (index + 1) * width,
+        (index - 1) * ITEM_WIDTH,
+        index * ITEM_WIDTH,
+        (index + 1) * ITEM_WIDTH,
       ],
       outputRange: [width * 0.15, 0, -width * 0.15],
       extrapolate: 'clamp',
@@ -721,8 +765,8 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
   // Get layout for initialScrollIndex
   const getItemLayout = useCallback((data, index) => ({
-    length: width,
-    offset: width * index,
+    length: ITEM_WIDTH,
+    offset: ITEM_WIDTH * index,
     index,
   }), []);
 
@@ -743,6 +787,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         <Pressable 
           style={styles.viewerContainer}
           onPress={toggleInfoVisibility}
+          {...swipeDownResponder.panHandlers}
         >
           {/* Black background */}
           <Animated.View 
@@ -826,7 +871,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               // Smooth deceleration for natural feel
               decelerationRate={0.9}
               // Disable snap for smooth parallax, re-enable with custom physics
-              snapToInterval={width}
+              snapToInterval={ITEM_WIDTH}
               snapToAlignment="center"
             />
           </View>
@@ -856,7 +901,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const styles = createStyles(theme);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {/* Full-screen viewer modal */}
       {renderFullScreenViewer()}
 
@@ -917,14 +962,6 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         </TouchableOpacity>
       </View>
 
-      {/* Photo Count */}
-      <View style={styles.countContainer}>
-        <Text style={[styles.countText, { color: theme.colors.textSecondary }]}>
-          {currentItems.length} {currentItems.length === 1 ? 'item' : 'items'}
-          {activeTab === 'turtle-base' && ' from PC'}
-        </Text>
-      </View>
-
       {/* Gallery Grid */}
       {loading && currentItems.length === 0 ? (
         <View style={styles.loadingContainer}>
@@ -944,17 +981,23 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           onEndReached={handleLoadMore}
           onEndReachedThreshold={3}
           ListEmptyComponent={renderEmpty}
-          ListHeaderComponent={
-            currentHasMore && currentItems.length > 0 ? (
-              <ActivityIndicator 
-                style={styles.loadMoreIndicator} 
-                color={theme.colors.textMuted} 
-              />
-            ) : null
-          }
           ListFooterComponent={
-            activeTab === 'uploads' ? (
-              <View style={[styles.bottomContainer, { paddingBottom: insets.bottom + 40 }]}>
+            <View style={[styles.bottomContainer, { paddingBottom: insets.bottom + 16, paddingTop: 16 }]}>
+              {/* Photo Count (Always visible at bottom) */}
+              <View style={styles.countContainer}>
+                <Text style={[styles.countText, { color: theme.colors.textSecondary }]}>
+                  {photoCount > 0 && videoCount > 0 
+                    ? `${photoCount} Photos, ${videoCount} Videos`
+                    : photoCount > 0 
+                      ? `${photoCount} ${photoCount === 1 ? 'Photo' : 'Photos'}`
+                      : `${videoCount} ${videoCount === 1 ? 'Video' : 'Videos'}`
+                  }
+                  {activeTab === 'turtle-base' && ' from PC'}
+                </Text>
+              </View>
+
+              {/* Upload Button (Only for phone uploads tab) */}
+              {activeTab === 'uploads' && (
                 <TouchableOpacity
                   style={[styles.uploadButton, { backgroundColor: '#fff' }]}
                   onPress={handleUpload}
@@ -970,8 +1013,8 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                     </>
                   )}
                 </TouchableOpacity>
-              </View>
-            ) : null
+              )}
+            </View>
           }
         />
       )}
@@ -991,8 +1034,8 @@ const createStyles = (theme) =>
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingHorizontal: 16,
-      paddingTop: 8,
-      paddingBottom: 12,
+      paddingTop: 0,
+      paddingBottom: 8,
       borderBottomWidth: 0,
       backgroundColor: 'transparent',
     },
@@ -1011,7 +1054,8 @@ const createStyles = (theme) =>
     tabContainer: {
       flexDirection: 'row',
       paddingHorizontal: 16,
-      paddingVertical: 12,
+      paddingTop: 0,
+      paddingBottom: 8,
       gap: 12,
       backgroundColor: 'transparent',
     },
@@ -1032,21 +1076,25 @@ const createStyles = (theme) =>
       color: theme.colors.textSecondary,
     },
     countContainer: {
-      paddingHorizontal: 16,
-      paddingBottom: 8,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 16,
       backgroundColor: 'transparent',
     },
     countText: {
-      fontSize: 14,
+      fontSize: 13,
+      fontWeight: '500',
+      textAlign: 'center',
+      letterSpacing: 0.5,
     },
     gridContent: {
-      padding: 0.5,
-      paddingBottom: Platform.OS === 'ios' ? 40 : 20, // Minimal space at bottom
+      padding: 0,
+      paddingBottom: 0,
     },
     thumbnailContainer: {
       width: THUMBNAIL_SIZE,
       height: THUMBNAIL_SIZE,
-      margin: 0.5,
+      margin: 0.25,
       borderRadius: 0,
       overflow: 'hidden',
       backgroundColor: theme.colors.surfaceElevated,
@@ -1112,8 +1160,8 @@ const createStyles = (theme) =>
     },
     bottomContainer: {
       paddingHorizontal: 16,
-      paddingVertical: 8,
-      paddingBottom: 12,
+      paddingVertical: 0,
+      paddingBottom: 0,
       backgroundColor: 'transparent',
       borderTopWidth: 0,
     },
@@ -1151,7 +1199,7 @@ const createStyles = (theme) =>
       height: height * 0.85,
     },
     viewerItemContainer: {
-      width: width,
+      width: width + GAP,
       height: height * 0.85,
       justifyContent: 'center',
       alignItems: 'center',
@@ -1201,5 +1249,16 @@ const createStyles = (theme) =>
       fontWeight: '300',
       textAlign: 'center',
       letterSpacing: 0.5,
+    },
+    muteButton: {
+      position: 'absolute',
+      bottom: 20,
+      right: 20,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      justifyContent: 'center',
+      alignItems: 'center',
     },
   });
