@@ -44,9 +44,26 @@ export const ServerProvider = ({ children }) => {
     return response.json();
   };
 
+  const apiPut = async (endpoint, data) => {
+    const url = `${getBaseUrl()}${endpoint}`;
+    console.log(`[API PUT] ${url}`, data);
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error(`[API ERROR] ${response.status}: ${errorText}`);
+      throw new Error(`API Error ${response.status}: ${errorText}`);
+    }
+    return response.json();
+  };
+
   const api = {
     get: apiGet,
     post: apiPost,
+    put: apiPut,
     delete: apiDelete,
   };
 
