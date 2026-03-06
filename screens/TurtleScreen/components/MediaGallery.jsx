@@ -17,6 +17,8 @@ import {
   PanResponder,
   InteractionManager,
   TextInput,
+  Keyboard,
+  InputAccessoryView,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -25,6 +27,8 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as MediaLibrary from 'expo-media-library';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../../context/ThemeContext';
@@ -54,9 +58,18 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const [uploadItems, setUploadItems] = useState([]);
   const [serverItems, setServerItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isPaginating, setIsPaginating] = useState(false); // Prevents overlapping fetch calls
   const [uploading, setUploading] = useState(false);
-  const [uploadStats, setUploadStats] = useState({ current: 0, total: 0, failed: 0 });
+  const [uploadStats, setUploadStats] = useState({ current: 0, total: 0, failed: 0, fileProgress: 0 });
   const [refreshing, setRefreshing] = useState(false);
+  
+  // === LOCAL SYNC GALLERY STATE ===
+  const [localPickerVisible, setLocalPickerVisible] = useState(false);
+  const [localAssets, setLocalAssets] = useState([]);
+  const [selectedLocalAssets, setSelectedLocalAssets] = useState(new Set());
+  const [localHasNextPage, setLocalHasNextPage] = useState(true);
+  const [localEndCursor, setLocalEndCursor] = useState(null);
+  const [isLoadingLocal, setIsLoadingLocal] = useState(false);
   
   // === PAGINATION STATE ===
   const [hasMoreUploads, setHasMoreUploads] = useState(true);
@@ -71,6 +84,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const [infoVisible, setInfoVisible] = useState(true);
   const infoOpacityAnim = useRef(new Animated.Value(1)).current;
+  const [zoomScale, setZoomScale] = useState(1); // Track zoom level for close prevention
   
   // === ALBUM & TAG STATE ===
   const [globalAlbums, setGlobalAlbums] = useState(['Phone Uploads']);
@@ -80,39 +94,168 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const [selectedTags, setSelectedTags] = useState([]);
   
   // Tag editor state
+  // === TAG EDITOR STATE & ANIMATION ===
   const [editTagsVisible, setEditTagsVisible] = useState(false);
   const [editingTags, setEditingTags] = useState([]);
+  const [tagInputValue, setTagInputValue] = useState('');
+  const tagFadeAnim = useRef(new Animated.Value(0)).current;
+
+  const openTagEditor = useCallback(() => {
+    try { setEditingTags(JSON.parse(selectedMedia.tags || '[]')); } catch(e){ setEditingTags([]); }
+    setTagInputValue('');
+    setEditTagsVisible(true);
+    Animated.timing(tagFadeAnim, {
+      toValue: 1,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  }, [selectedMedia, tagFadeAnim]);
+
+  const closeTagEditor = useCallback(() => {
+    Animated.timing(tagFadeAnim, {
+      toValue: 0,
+      duration: 150,
+      useNativeDriver: true,
+    }).start(() => {
+      setEditTagsVisible(false);
+    });
+  }, [tagFadeAnim]);
   
   // Scroll position for parallax effect
   const scrollX = useRef(new Animated.Value(0)).current;
-  
-  // Swipe-down to dismiss responder
-  const swipeDownResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (evt, gestureState) => {
-        // Only claim the gesture if the user is swiping distinctly downwards
-        return gestureState.dy > 20 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx);
-      },
-      onPanResponderRelease: (evt, gestureState) => {
-        if (gestureState.dy > 100 && gestureState.vy > 0.5) {
-          closeViewer();
-        }
-      },
-    })
-  ).current;
   
   // === REFS ===
   // Grid ref for scroll-to-bottom (iOS Photos style)
   const gridRef = useRef(null);
 
+  // === UPLOAD MODAL DRAG PHYSICS ===
+  const uploadModalY = useRef(new Animated.Value(0)).current;
+
+  // Reset modal position when it opens - CRITICAL: stop any running animation first
+  useEffect(() => {
+    if (uploadModalVisible) {
+      uploadModalY.stopAnimation();
+      uploadModalY.setValue(0);
+      // Also reset any animated value flattening issues
+      uploadModalY.flattenOffset();
+    }
+  }, [uploadModalVisible, uploadModalY]);
+
+  const dismissUploadModal = useCallback(() => {
+    Keyboard.dismiss();
+    uploadModalY.stopAnimation();
+    Animated.timing(uploadModalY, {
+      toValue: height, // Slide it off the bottom of the screen
+      duration: 250,
+      easing: Easing.out(Easing.ease),
+      useNativeDriver: true,
+    }).start(() => {
+      setUploadModalVisible(false);
+      setPendingAssets([]);
+    });
+  }, [uploadModalY]);
+
+  const uploadPanResponder = useRef(
+    PanResponder.create({
+      // Only capture the drag if it's a distinct vertical swipe down (protects horizontal chip scrolling)
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return gestureState.dy > 10 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx);
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dy > 0) { // Only allow dragging downwards
+          uploadModalY.setValue(gestureState.dy);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dy > 120 || gestureState.vy > 1.5) {
+          // User dragged far enough or fast enough -> dismiss
+          dismissUploadModal();
+        } else {
+          // Snap back to center
+          Animated.spring(uploadModalY, {
+            toValue: 0,
+            useNativeDriver: true,
+            bounciness: 8,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
+  // === HEADER VISIBILITY STATE ===
+  // Simple state-based header that always starts visible on tab change
+  const [headerVisible, setHeaderVisible] = useState(true);
+  const headerTranslateY = useRef(new Animated.Value(0)).current;
+  const lastScrollY = useRef(0);
+  
+  // Animate header when visibility changes
+  useEffect(() => {
+    Animated.timing(headerTranslateY, {
+      toValue: headerVisible ? 0 : -110,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  }, [headerVisible]);
+  
+  // Always show header when switching tabs
+  useEffect(() => {
+    setHeaderVisible(true);
+    lastScrollY.current = 0;
+  }, [activeTab]);
+  
+  // Handle scroll to show/hide header
+  const handleScroll = useCallback((event) => {
+    const currentY = event.nativeEvent.contentOffset.y;
+    const diff = currentY - lastScrollY.current;
+    
+    // Hide header when scrolling down past threshold, show when scrolling up
+    if (diff > 10 && currentY > 50) {
+      setHeaderVisible(false);
+    } else if (diff < -10) {
+      setHeaderVisible(true);
+    }
+    
+    lastScrollY.current = currentY;
+  }, []);
+
   // === DERIVED DATA ===
   // Get current items based on active tab
-  // Data is [oldest, ..., newest] - FlatList renders top-to-bottom, so newest appears at bottom
   const currentItems = activeTab === 'uploads' ? uploadItems : serverItems;
   const currentHasMore = activeTab === 'uploads' ? hasMoreUploads : hasMoreServer;
   
   // Filter state
   const [selectedAlbum, setSelectedAlbum] = useState('All');
+
+  // Intercept global albums to forcefully pin "Favourites" to the beginning of the list
+  const pinnedAlbums = useMemo(() => {
+    const albums = [...globalAlbums];
+    const favIndex = albums.indexOf('Favourites');
+    
+    if (favIndex > -1) {
+      albums.splice(favIndex, 1);
+      albums.unshift('Favourites');
+    }
+    return albums;
+  }, [globalAlbums]);
+
+  // Instagram-style edge swipe to go back from album filter
+  const edgeSwipeResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        // Only respond to horizontal swipes from left edge when album is filtered
+        return selectedAlbum !== 'All' && 
+               gestureState.moveX < 50 && // Left edge area
+               Math.abs(gestureState.dx) > 20 && // Significant horizontal movement
+               Math.abs(gestureState.dy) < 50; // Not too much vertical movement
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        // If swiped right more than 50px, go back
+        if (gestureState.dx > 50) {
+          setSelectedAlbum('All');
+        }
+      },
+    })
+  ).current;
 
   // === O(1) HASH MAP FILTERING ===
   // 1. Build the O(1) Dictionary ONCE when data loads
@@ -136,15 +279,27 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // 2. Derive dropdown list instantly from the dictionary + global DB
   const availableAlbums = useMemo(() => {
     const loadedTags = Object.keys(tagDictionary).filter(k => k !== 'All');
-    const allUnique = new Set([...globalAlbums, ...loadedTags]);
+    const allUnique = new Set([...pinnedAlbums, ...loadedTags]);
     const sortedUnique = Array.from(allUnique).sort();
     return ['All', ...sortedUnique];
-  }, [tagDictionary, globalAlbums]);
+  }, [tagDictionary, pinnedAlbums]);
 
   // 3. Filter items (Bypassed: Server natively filters the payload)
   const filteredItems = useMemo(() => {
     return currentItems || [];
   }, [currentItems]);
+
+  // 4. Phantom Skeleton Padding for seamless infinite scroll
+  const displayItems = useMemo(() => {
+    const items = [...filteredItems];
+    // If there is more data to fetch, pad with skeletons
+    if (currentHasMore && !loading && items.length > 0) {
+      for (let i = 0; i < 21; i++) {
+        items.push({ id: `phantom_skel_${i}`, isSkeleton: true });
+      }
+    }
+    return items;
+  }, [filteredItems, currentHasMore, loading]);
   
   // Calculate photo/video breakdown based ONLY on what is currently visible in the filter
   const videoCount = filteredItems.filter(item => item.type === 'video').length;
@@ -159,34 +314,48 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   }, [selectedAlbum, activeTab, fetchUploads]);
 
   // === API CALLS ===
-  // Fetch uploads from database
+  // Fetch uploads from database with strict deduplication
   const fetchUploads = useCallback(async (isRefresh = false) => {
+    // Prevent simultaneous pagination fetches
+    if (!isRefresh && isPaginating) return;
+    
     try {
-      // For iOS Photos style: we want oldest first in array (top), newest last (bottom)
-      // When loading more, we fetch the next batch of older items (lower offset)
-      const currentOffset = isRefresh ? 0 : uploadOffset;
+      if (!isRefresh) setIsPaginating(true);
       
-      // Append the selected tag to the query
+      const currentOffset = isRefresh ? 0 : uploadOffset;
       const tagParam = selectedAlbum !== 'All' ? `&tag=${encodeURIComponent(selectedAlbum)}` : '';
-      const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}&order=asc${tagParam}`);
+      const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}&order=desc${tagParam}`);
       
       if (response.success) {
         if (isRefresh) {
-          // Replace with fresh data, oldest first
+          // Pure refresh - just set the items
           setUploadItems(response.items || []);
           setUploadOffset(LIMIT);
         } else {
-          // Prepend older items to the beginning of the array
-          setUploadItems(prev => [...(response.items || []), ...prev]);
+          // Pagination - merge and strictly deduplicate by ID to prevent jumping
+          setUploadItems(prev => {
+            const combined = [...(response.items || []), ...prev];
+            // Use Map to ensure absolute uniqueness by ID
+            const uniqueMap = new Map();
+            combined.forEach(item => {
+              if (item && item.id) uniqueMap.set(item.id, item);
+            });
+            
+            // Convert back to array and maintain chronological sort (newest first for inverted list)
+            return Array.from(uniqueMap.values()).sort((a, b) => 
+              new Date(b.uploadDate) - new Date(a.uploadDate)
+            );
+          });
           setUploadOffset(currentOffset + LIMIT);
         }
         setHasMoreUploads(response.pagination?.hasMore || false);
       }
     } catch (error) {
       console.error('[MediaGallery] Fetch uploads error:', error);
-      Alert.alert('Error', 'Failed to load uploads');
+    } finally {
+      if (!isRefresh) setIsPaginating(false);
     }
-  }, [api, uploadOffset, selectedAlbum]); // <--- CRITICAL FIX: Added selectedAlbum to dependencies
+  }, [api, uploadOffset, selectedAlbum, isPaginating]);
 
   // Fetch server files from turtle-base
   const fetchServerFiles = useCallback(async (isRefresh = false) => {
@@ -206,6 +375,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
   // Load data based on active tab
   const loadData = useCallback(async (isRefresh = false) => {
+    if (isPaginating) return; // Prevent overlapping calls
     setLoading(true);
     if (activeTab === 'uploads') {
       await fetchUploads(isRefresh);
@@ -213,12 +383,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       await fetchServerFiles(isRefresh);
     }
     setLoading(false);
-    
-    // Scroll to bottom after data loads (iOS Photos style - newest at bottom)
-    setTimeout(() => {
-      gridRef.current?.scrollToEnd({ animated: false });
-    }, 100);
-  }, [activeTab, fetchUploads, fetchServerFiles]);
+  }, [activeTab, fetchUploads, fetchServerFiles, isPaginating]);
 
   // Initial load
   useEffect(() => {
@@ -266,12 +431,11 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     loadData(true).then(() => setRefreshing(false));
   }, [loadData]);
 
-  // Handle load more (pagination - only for uploads)
   const handleLoadMore = useCallback(() => {
-    if (currentHasMore && !loading && !refreshing && activeTab === 'uploads') {
+    if (currentHasMore && !loading && !refreshing && !isPaginating && activeTab === 'uploads') {
       fetchUploads(false);
     }
-  }, [currentHasMore, loading, refreshing, activeTab, fetchUploads]);
+  }, [currentHasMore, loading, refreshing, isPaginating, activeTab, fetchUploads]);
 
   // Open full-screen viewer with animation and large file warning
   const openViewer = useCallback((item) => {
@@ -319,8 +483,16 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     }
   }, [scaleAnim, opacityAnim, currentItems, scrollX]);
 
-  // Close full-screen viewer
+  // Close full-screen viewer (only if zoomed to 100%)
   const closeViewer = useCallback(() => {
+    // Prevent closing if zoomed in
+    if (zoomScale > 1.05) {
+      // Animate back to zoom 1 first
+      if (scrollRef.current) {
+        scrollRef.current.scrollTo({ x: 0, y: 0, animated: true });
+      }
+      return;
+    }
     Animated.parallel([
       Animated.timing(scaleAnim, {
         toValue: 0.8,
@@ -337,7 +509,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       setInfoVisible(true);
       infoOpacityAnim.setValue(1);
     });
-  }, [scaleAnim, opacityAnim, infoOpacityAnim]);
+  }, [scaleAnim, opacityAnim, infoOpacityAnim, zoomScale]);
 
   // Toggle info visibility on tap - fade out smooth, fade in fast
   const toggleInfoVisibility = useCallback(() => {
@@ -363,6 +535,40 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     }
   }, [infoVisible, infoOpacityAnim]);
 
+  // Swipe-down to dismiss or show info responder (disabled when zoomed)
+  const swipeDownResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        // Disable swipe-to-dismiss when zoomed in
+        if (zoomScale > 1.05) return false;
+        // More permissive swipe detection
+        return gestureState.dy > 10 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 0.5;
+      },
+      onPanResponderMove: (evt, gestureState) => {
+        // Show info when pulling down (like iOS Photos)
+        if (gestureState.dy > 20 && !infoVisible) {
+          toggleInfoVisibility();
+        }
+      },
+      onPanResponderRelease: (evt, gestureState) => {
+        // Close viewer only if pulled far enough
+        if (gestureState.dy > 120) {
+          closeViewer();
+        }
+      },
+    })
+  ).current;
+
+  // Placeholder for expo-image-manipulator UI integration
+  const openImageEditor = useCallback(() => {
+    if (!selectedMedia || selectedMedia.type === 'video') return;
+    Alert.alert(
+      "Edit Image",
+      "Image Editor coming soon! This will trigger the crop/rotate UI.",
+      [{ text: "OK", style: "cancel" }]
+    );
+  }, [selectedMedia]);
+
   // Upload photos/videos - Unlocked Selection Limit
   const handleUpload = useCallback(async () => {
     try {
@@ -375,7 +581,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
       // Open image picker - unlocked limit for enterprise queue
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All, // Better Expo standard syntax
+        mediaTypes: ['images', 'videos'], // Updated API - array of MediaType strings
         allowsMultipleSelection: true,
         selectionLimit: 0, // 0 = UNLIMITED SELECTION
         orderedSelection: true,
@@ -395,15 +601,86 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     }
   }, []);
 
-  // Execute upload after modal confirmation
-  // Execute upload after modal confirmation
-  const executeUpload = useCallback(async () => {
-    setUploadModalVisible(false);
-    setUploading(true);
+  // === SMART SYNC FUNCTIONS ===
+  const fetchLocalMedia = useCallback(async (loadMore = false) => {
+    if (isLoadingLocal || (!localHasNextPage && loadMore)) return;
     
     try {
-      const serverUrl = getBaseUrl();
+      setIsLoadingLocal(true);
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Needed', 'We need access to your camera roll to sync photos.');
+        return;
+      }
+
+      const options = {
+        first: 90,
+        sortBy: [[MediaLibrary.SortBy.creationTime, false]],
+        mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
+      };
+      if (loadMore && localEndCursor) options.after = localEndCursor;
+
+      const result = await MediaLibrary.getAssetsAsync(options);
       
+      setLocalAssets(prev => loadMore ? [...prev, ...result.assets] : result.assets);
+      setLocalHasNextPage(result.hasNextPage);
+      setLocalEndCursor(result.endCursor);
+    } catch (error) {
+      console.error('Failed to load local media:', error);
+    } finally {
+      setIsLoadingLocal(false);
+    }
+  }, [localEndCursor, localHasNextPage, isLoadingLocal]);
+
+  const openLocalSyncGallery = useCallback(() => {
+    setLocalPickerVisible(true);
+    if (localAssets.length === 0) fetchLocalMedia();
+  }, [localAssets.length, fetchLocalMedia]);
+
+  const toggleLocalAssetSelection = useCallback((assetId) => {
+    setSelectedLocalAssets(prev => {
+      const next = new Set(prev);
+      if (next.has(assetId)) next.delete(assetId);
+      else next.add(assetId);
+      return next;
+    });
+  }, []);
+
+  const handleSelectAllLocal = useCallback(() => {
+    if (selectedLocalAssets.size === localAssets.length) {
+      setSelectedLocalAssets(new Set()); 
+    } else {
+      setSelectedLocalAssets(new Set(localAssets.map(a => a.id))); 
+    }
+  }, [localAssets, selectedLocalAssets.size]);
+
+  // Maps MediaLibrary format to match ImagePicker format so executeUpload doesn't break
+  const queueSelectedForUpload = useCallback(() => {
+    const assetsToUpload = localAssets
+      .filter(a => selectedLocalAssets.has(a.id))
+      .map(a => ({
+        ...a,
+        assetId: a.id,
+        uri: a.uri,
+        fileName: a.filename,
+        type: a.mediaType === 'photo' ? 'image' : 'video'
+      }));
+      
+    setPendingAssets(assetsToUpload);
+    setLocalPickerVisible(false);
+    setSelectedLocalAssets(new Set());
+    setUploadModalVisible(true); 
+  }, [localAssets, selectedLocalAssets]);
+
+  // Execute upload after modal confirmation
+  const executeUpload = useCallback(async () => {
+    setUploadModalVisible(false); // Dismiss immediately for background processing
+    setUploading(true);
+    setUploadStats({ current: 0, total: pendingAssets.length, failed: 0, fileProgress: 0 });
+    
+    const serverUrl = getBaseUrl();
+    
+    try {
       const { status: mediaStatus } = await MediaLibrary.requestPermissionsAsync();
       if (mediaStatus !== 'granted') {
         console.log('[MediaGallery] MediaLibrary permission not granted - upload only, no delete');
@@ -411,171 +688,138 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       
       const assetsToUpload = [...pendingAssets];
       setPendingAssets([]);
-    
-    const uploadPromises = assetsToUpload.map(async (asset) => {
-        const formData = new FormData();
-        
-        // Get full asset info including EXIF metadata
-        let assetInfo = null;
-        if (asset.assetId) {
-          try {
-            assetInfo = await MediaLibrary.getAssetInfoAsync(asset.assetId);
-            console.log('[MediaGallery] Asset info retrieved');
-          } catch (infoError) {
-            console.log('[MediaGallery] Could not get asset info:', infoError.message);
-          }
-        }
-        
-        // Extract original creation date
-        const originalDate = assetInfo?.creationTime || null;
-        if (originalDate) {
-          formData.append('originalDate', originalDate.toString());
-        }
-        
-        // Extract and append rich metadata
-        if (assetInfo) {
-          // Dimensions
-          if (assetInfo.width) formData.append('width', assetInfo.width.toString());
-          if (assetInfo.height) formData.append('height', assetInfo.height.toString());
-          
-          // Location (GPS)
-          if (assetInfo.location) {
-            formData.append('location', JSON.stringify(assetInfo.location));
-          }
-          
-          // EXIF camera metadata
-          const exif = assetInfo.exif || {};
-          if (exif.Model) formData.append('cameraModel', exif.Model);
-          if (exif.LensModel) formData.append('lensModel', exif.LensModel);
-          
-          // Send tags array
-          formData.append('tags', JSON.stringify(selectedTags.length > 0 ? selectedTags : ['Phone Uploads']));
-        }
-        
-        const originalFilename = asset.fileName || asset.uri.split('/').pop() || 'file';
-        const isVideo = asset.mediaType === 'video' || /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|3gp)$/i.test(originalFilename);
-        const isHeic = /\.heic$/i.test(originalFilename) || /\.heif$/i.test(originalFilename);
-        
-        let mediaUri = asset.uri;
-        let mediaName = originalFilename;
-        let mediaType = isVideo ? 'video/mp4' : 'image/jpeg';
-        
-        if (isVideo) {
-          // Handle VIDEO upload
-          console.log('[MediaGallery] Processing video:', originalFilename);
-          
-          // Generate thumbnail from video
-          const { uri: thumbnailUri } = await VideoThumbnails.getThumbnailAsync(asset.uri, {
-            time: 1000, // 1 second into the video
-            quality: 0.8,
-          });
-          
-          // Append video as 'media'
-          formData.append('media', {
-            uri: mediaUri,
-            name: mediaName,
-            type: mediaType,
-          });
-          
-          // Append thumbnail as 'thumbnail'
-          formData.append('thumbnail', {
-            uri: thumbnailUri,
-            name: 'thumbnail.jpg',
-            type: 'image/jpeg',
-          });
-          
-          // Append video duration (in seconds) for phone uploads
-          if (asset.duration) {
-            formData.append('duration', Math.round(asset.duration / 1000).toString());
-          }
-          
-        } else {
-          // Handle IMAGE upload (with HEIC conversion)
-          if (isHeic) {
-            console.log('[MediaGallery] Converting HEIC to JPEG:', originalFilename);
-            const manipulated = await ImageManipulator.manipulateAsync(
-              asset.uri,
-              [],
-              { 
-                compress: 0.9, 
-                format: ImageManipulator.SaveFormat.JPEG 
-              }
-            );
-            mediaUri = manipulated.uri;
-            mediaName = originalFilename.replace(/\.heic$/i, '.jpg').replace(/\.heif$/i, '.jpg');
-            console.log('[MediaGallery] Converted to:', mediaName);
-          } else {
-            // For non-HEIC files, detect type from extension
-            const match = /\.(\w+)$/.exec(originalFilename);
-            mediaType = match ? `image/${match[1]}` : 'image/jpeg';
-          }
-          
-          // Append image as 'media' (no separate thumbnail for images)
-          formData.append('media', {
-            uri: mediaUri,
-            name: mediaName,
-            type: mediaType,
-          });
-        }
-        
-        const response = await fetch(`${serverUrl}/media/upload`, {
-          method: 'POST',
-          body: formData,
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(`Upload failed: ${response.status}`);
-        }
-
-        const data = await response.json();
-        
-        // Return both server response and asset ID for deletion
-        return {
-          serverData: data,
-          assetId: asset.assetId,
-        };
-      });
-
-      const results = await Promise.all(uploadPromises);
-      console.log('[MediaGallery] Upload results:', results.length, 'files uploaded');
       
-      // Extract asset IDs for deletion
-      const assetIds = results
-        .map(r => r.assetId)
-        .filter(id => id != null);
-      
-      // Attempt to delete local files after successful upload
-      if (assetIds.length > 0 && mediaStatus === 'granted') {
+      const successfulAssetIds = [];
+      let failureCount = 0;
+
+      // Process STRICTLY sequentially to prevent iOS Memory (OOM) Crashes
+      for (let i = 0; i < assetsToUpload.length; i++) {
+        const asset = assetsToUpload[i];
+        setUploadStats(prev => ({ ...prev, current: i + 1 }));
+        
+        // CRITICAL FIX: Declare tracking variables OUTSIDE the try block so 'finally' can access them
+        let tempThumbnailUri = null; 
+        let tempManipulatedUri = null;
+        
         try {
-          console.log('[MediaGallery] Deleting local assets:', assetIds.length);
-          await MediaLibrary.deleteAssetsAsync(assetIds);
-          console.log('[MediaGallery] Local assets deleted successfully');
-        } catch (deleteError) {
-          // User may have declined the OS deletion prompt
-          console.log('[MediaGallery] User declined local deletion or deletion failed:', deleteError.message);
+          const formData = new FormData();
+          let assetInfo = null;
+          
+          if (asset.assetId) {
+            try { assetInfo = await MediaLibrary.getAssetInfoAsync(asset.assetId); } catch (e) {}
+          }
+          
+          const originalDate = assetInfo?.creationTime || null;
+          if (originalDate) formData.append('originalDate', originalDate.toString());
+          
+          if (assetInfo) {
+            if (assetInfo.width) formData.append('width', assetInfo.width.toString());
+            if (assetInfo.height) formData.append('height', assetInfo.height.toString());
+            if (assetInfo.location) formData.append('location', JSON.stringify(assetInfo.location));
+            
+            const exif = assetInfo.exif || {};
+            if (exif.Model) formData.append('cameraModel', exif.Model);
+            if (exif.LensModel) formData.append('lensModel', exif.LensModel);
+            
+            formData.append('tags', JSON.stringify(selectedTags.length > 0 ? selectedTags : ['Phone Uploads']));
+          }
+          
+          const originalFilename = asset.fileName || asset.uri.split('/').pop() || 'file';
+          const isVideo = asset.mediaType === 'video' || /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|3gp)$/i.test(originalFilename);
+          const isHeic = /\.heic$/i.test(originalFilename) || /\.heif$/i.test(originalFilename);
+          
+          // CRITICAL FIX: Smart Sync returns ph:// URIs. We MUST use localUri (file://) to prevent RCTHTTPRequestHandlerCls crashes.
+          let safeLocalUri = assetInfo?.localUri || asset.uri; 
+          
+          let mediaUri = safeLocalUri;
+          let mediaName = originalFilename;
+          let mediaType = isVideo ? 'video/mp4' : 'image/jpeg';
+          
+          if (isVideo) {
+            // Pass the safeLocalUri instead of asset.uri
+            const { uri } = await VideoThumbnails.getThumbnailAsync(safeLocalUri, { time: 1000, quality: 0.8 });
+            tempThumbnailUri = uri; // Save reference
+            formData.append('media', { uri: mediaUri, name: mediaName, type: mediaType });
+            formData.append('thumbnail', { uri: tempThumbnailUri, name: 'thumbnail.jpg', type: 'image/jpeg' });
+            if (asset.duration) formData.append('duration', Math.round(asset.duration / 1000).toString());
+          } else {
+            if (isHeic) {
+              // Pass the safeLocalUri instead of asset.uri
+              const manipulated = await ImageManipulator.manipulateAsync(
+                safeLocalUri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+              );
+              tempManipulatedUri = manipulated.uri; // Save reference
+              mediaUri = tempManipulatedUri;
+              mediaName = originalFilename.replace(/\.heic$/i, '.jpg').replace(/\.heif$/i, '.jpg');
+            } else {
+              const match = /\.(\w+)$/.exec(originalFilename);
+              mediaType = match ? `image/${match[1]}` : 'image/jpeg';
+            }
+            formData.append('media', { uri: mediaUri, name: mediaName, type: mediaType });
+          }
+          
+          // XHR Wrapper for granular byte-level progress tracking
+          const uploadResponse = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', `${serverUrl}/media/upload`);
+            
+            xhr.upload.onprogress = (event) => {
+              if (event.lengthComputable) {
+                const percentComplete = (event.loaded / event.total) * 100;
+                // CRITICAL FIX: Use the functional updater to prevent stale closures
+                setUploadStats(prevStats => ({ 
+                  ...prevStats, 
+                  fileProgress: percentComplete 
+                }));
+              }
+            };
+
+            xhr.onload = () => {
+              if (xhr.status >= 200 && xhr.status < 300) {
+                try { resolve(JSON.parse(xhr.responseText)); } catch (e) { resolve({ success: true }); }
+              } else {
+                reject(new Error(`Upload failed with status: ${xhr.status}`));
+              }
+            };
+
+            xhr.onerror = () => reject(new Error('Network request failed. Server offline or timeout.'));
+            xhr.send(formData);
+          });
+
+          if (asset.assetId) successfulAssetIds.push(asset.assetId);
+
+        } catch (error) {
+          console.error(`[MediaGallery] Failed to upload asset ${i}:`, error.message);
+          failureCount++;
+        } finally {
+          // Instantly destroy heavy temporary files to keep RAM/Disk flat
+          if (tempThumbnailUri) FileSystem.deleteAsync(tempThumbnailUri, { idempotent: true }).catch(()=>{});
+          if (tempManipulatedUri) FileSystem.deleteAsync(tempManipulatedUri, { idempotent: true }).catch(()=>{});
+          
+          setUploadStats(prev => ({ ...prev, fileProgress: 0, failed: failureCount }));
         }
+      } // End of sequential loop
+      
+      if (successfulAssetIds.length > 0 && mediaStatus === 'granted') {
+        try { await MediaLibrary.deleteAssetsAsync(successfulAssetIds); } catch (e) {}
       }
       
-      // Refresh uploads gallery
       await fetchUploads(true);
-      // Switch to uploads tab
       setActiveTab('uploads');
       
-      // Refresh global albums after upload so dropdown updates instantly
       try {
         const res = await api.get('/media/albums');
         if (res.success) {
           if (res.albums) setGlobalAlbums(res.albums);
           if (res.covers) setAlbumCovers(res.covers);
         }
-      } catch (e) {
-        console.log('[MediaGallery] Could not refresh albums');
-      }
+      } catch (e) {}
       
-      Alert.alert('Success', `${results.length} item(s) uploaded successfully!`);
+      if (failureCount > 0) {
+        Alert.alert('Upload Complete', `Successfully uploaded ${successfulAssetIds.length} items.\nFailed: ${failureCount} items.`);
+      } else {
+        Alert.alert('Success', `All ${successfulAssetIds.length} items uploaded successfully!`);
+      }
     } catch (error) {
       console.error('[MediaGallery] Upload error:', error);
       Alert.alert('Upload Failed', error.message || 'Failed to upload media');
@@ -657,11 +901,78 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     }
   }, [api, editingTags, selectedMedia, setGlobalAlbums, setUploadItems, setServerItems, setSelectedMedia, setEditTagsVisible]);
 
+  // Optimistic UI Toggle for Quick Favourites
+  const toggleFavourite = useCallback(async () => {
+    if (!selectedMedia) return;
+    
+    try {
+      const currentTags = JSON.parse(selectedMedia.tags || '[]');
+      const isFav = currentTags.includes('Favourites');
+      
+      // Toggle logic
+      const newTags = isFav 
+        ? currentTags.filter(t => t !== 'Favourites') 
+        : [...currentTags, 'Favourites'];
+        
+      const newTagsString = JSON.stringify(newTags);
+
+      // 1. Optimistically update the UI instantly
+      setSelectedMedia(prev => ({ ...prev, tags: newTagsString }));
+      
+      const updateItemInList = (prevList) => 
+        prevList.map(item => item.id === selectedMedia.id ? { ...item, tags: newTagsString } : item);
+      
+      setUploadItems(updateItemInList);
+      setServerItems(updateItemInList);
+
+      // 2. Add 'Favourites' to global dropdown immediately if it's the first time
+      if (!isFav) {
+        setGlobalAlbums(prev => Array.from(new Set([...prev, 'Favourites'])).sort());
+      }
+
+      // 3. Send payload to server in the background
+      const tagPayload = {
+        tags: newTags, filename: selectedMedia.filename, type: selectedMedia.type,
+        size: selectedMedia.size, url: selectedMedia.url, thumbnailUrl: selectedMedia.thumbnailUrl,
+        width: selectedMedia.width, height: selectedMedia.height, duration: selectedMedia.duration,
+      };
+      
+      await api.put(`/media/${selectedMedia.id}/tags`, tagPayload);
+      
+    } catch(e) { 
+      console.error('[MediaGallery] Favourites toggle failed:', e); 
+    }
+  }, [selectedMedia, api]);
+
   // Helper to construct full URL
   const getFullUrl = useCallback((path) => {
     const baseUrl = getBaseUrl().replace(/\/api$/, '');
     return `${baseUrl}${path}`;
   }, [getBaseUrl]);
+
+  // Download and trigger native OS Share Sheet
+  const handleShare = useCallback(async () => {
+    if (!selectedMedia) return;
+    try {
+      const url = getFullUrl(selectedMedia.url || selectedMedia.rawUrl);
+      const filename = selectedMedia.filename || `shared_media_${Date.now()}.jpg`;
+      const localUri = `${FileSystem.cacheDirectory}${filename}`;
+      
+      const { uri } = await FileSystem.downloadAsync(url, localUri);
+      
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { 
+          UTI: selectedMedia.type === 'video' ? 'public.movie' : 'public.image',
+          mimeType: selectedMedia.type === 'video' ? 'video/mp4' : 'image/jpeg'
+        });
+      } else {
+        Alert.alert('Error', 'Sharing is not available on this device');
+      }
+    } catch (error) {
+      console.error('[MediaGallery] Share error:', error);
+      Alert.alert('Error', 'Could not share this item.');
+    }
+  }, [selectedMedia, getFullUrl]);
 
   // Format seconds to MM:SS
   const formatDuration = (seconds) => {
@@ -674,15 +985,35 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // Track failed images to show fallback
   const [failedImages, setFailedImages] = useState(new Set());
   
-  // Clear old cache periodically to prevent memory issues
+  // === AGGRESSIVE GARBAGE COLLECTION ===
+  // Clear RAM cache periodically and wipe Disk cache on unmount to prevent GBs of bloat
   useEffect(() => {
-    const clearCache = () => {
-      // Clear failed images set periodically
-      setFailedImages(new Set());
+    const clearRamCache = () => setFailedImages(new Set());
+    const interval = setInterval(clearRamCache, 5 * 60 * 1000); 
+
+    return () => {
+      clearInterval(interval);
+      // Sweep massive hidden temporary files when leaving the gallery
+      const wipeGhostFiles = async () => {
+        try {
+          const cacheDir = FileSystem.cacheDirectory;
+          const pickerCache = `${cacheDir}ImagePicker`;
+          const manipCache = `${cacheDir}ImageManipulator`;
+          const thumbCache = `${cacheDir}VideoThumbnails`;
+          
+          if ((await FileSystem.getInfoAsync(pickerCache)).exists) await FileSystem.deleteAsync(pickerCache, { idempotent: true });
+          if ((await FileSystem.getInfoAsync(manipCache)).exists) await FileSystem.deleteAsync(manipCache, { idempotent: true });
+          if ((await FileSystem.getInfoAsync(thumbCache)).exists) await FileSystem.deleteAsync(thumbCache, { idempotent: true });
+          
+          // Clear expo-image RAM cache
+          Image.clearMemoryCache();
+          console.log('🧹 [Garbage Collection] Wiped GBs of temporary cache files.');
+        } catch (e) {
+          console.log('🧹 [Garbage Collection] Sweep failed:', e.message);
+        }
+      };
+      wipeGhostFiles();
     };
-    
-    const interval = setInterval(clearCache, 5 * 60 * 1000); // Every 5 minutes
-    return () => clearInterval(interval);
   }, []);
 
   // Preload images for smoother scrolling
@@ -707,17 +1038,24 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
   // Render grid item using memoized component
   // === RENDERERS ===
-  const renderItem = useCallback(({ item }) => (
-    <GridItem 
-      item={item} 
-      activeTab={activeTab}
-      openViewer={openViewer}
-      handleDelete={handleDelete}
-      getFullUrl={getFullUrl}
-      getBaseUrl={getBaseUrl}
-      styles={styles}
-    />
-  ), [activeTab, openViewer, handleDelete, getFullUrl, getBaseUrl, styles]);
+  const renderItem = useCallback(({ item }) => {
+    // Phantom skeleton placeholder for seamless infinite scroll
+    if (item.isSkeleton) {
+      return <ShimmerSkeleton styles={styles} theme={theme} />;
+    }
+    return (
+      <GridItem 
+        item={item} 
+        activeTab={activeTab}
+        openViewer={openViewer}
+        handleDelete={handleDelete}
+        getFullUrl={getFullUrl}
+        getBaseUrl={getBaseUrl}
+        styles={styles}
+        theme={theme}
+      />
+    );
+  }, [activeTab, openViewer, handleDelete, getFullUrl, getBaseUrl, styles, theme]);
 
   // Render empty state
   const renderEmpty = () => (
@@ -815,7 +1153,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   }, []);
 
   // Separate component for image viewer with double-tap and parallax (hooks at top level)
-  const ImageViewer = ({ fullResUrl, mediaId, parallaxStyle }) => {
+  const ImageViewer = ({ fullResUrl, mediaId, parallaxStyle, isActive, item }) => {
     const scrollRef = useRef(null);
     const lastTapRef = useRef(0);
     const isZoomedRef = useRef(false);
@@ -875,6 +1213,12 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           showsHorizontalScrollIndicator={false}
           showsVerticalScrollIndicator={false}
           pinchGestureEnabled={true}
+          scrollEventThrottle={16}
+          onScroll={(e) => {
+            // Track zoom scale - available on iOS native ScrollView
+            const scale = e.nativeEvent?.zoomScale || 1;
+            setZoomScale(scale);
+          }}
         >
           <Pressable onPress={handleDoubleTap}>
             <Image
@@ -888,6 +1232,8 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             />
           </Pressable>
         </ScrollView>
+        
+
       </Animated.View>
     );
   };
@@ -930,6 +1276,8 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             fullResUrl={fullResUrl} 
             mediaId={item.id} 
             parallaxStyle={parallaxStyle}
+            isActive={isActive}
+            item={item}
           />
         )}
       </View>
@@ -942,6 +1290,76 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     offset: ITEM_WIDTH * index,
     index,
   }), []);
+
+  // === SMART SYNC GALLERY RENDERER ===
+  const renderLocalSyncGallery = () => (
+    <Modal visible={localPickerVisible} animationType="slide" onRequestClose={() => setLocalPickerVisible(false)}>
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+        <View style={[styles.header, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border, paddingTop: insets.top, paddingBottom: 12 }]}>
+          <TouchableOpacity onPress={() => setLocalPickerVisible(false)} style={styles.closeButton}>
+            <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+          <View style={styles.headerTitleContainer}>
+            <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]}>
+              {selectedLocalAssets.size} Selected
+            </Text>
+          </View>
+          <TouchableOpacity onPress={handleSelectAllLocal}>
+            <Text style={{ color: theme.colors.primary, fontSize: 16, fontWeight: '600' }}>
+              {selectedLocalAssets.size === localAssets.length && localAssets.length > 0 ? 'Deselect All' : 'Select All'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <FlatList
+          data={localAssets}
+          keyExtractor={(item) => item.id}
+          numColumns={3}
+          onEndReached={() => fetchLocalMedia(true)}
+          onEndReachedThreshold={0.5}
+          renderItem={({ item }) => {
+            const isSelected = selectedLocalAssets.has(item.id);
+            return (
+              <TouchableOpacity 
+                style={[styles.thumbnailContainer, { position: 'relative' }]}
+                onPress={() => toggleLocalAssetSelection(item.id)}
+                activeOpacity={0.8}
+              >
+                <Image source={{ uri: item.uri }} style={styles.thumbnail} contentFit="cover" cachePolicy="none" />
+                {isSelected && (
+                  <View style={{
+                    position: 'absolute', bottom: 4, right: 4, width: 24, height: 24, borderRadius: 12,
+                    backgroundColor: '#000',
+                    justifyContent: 'center', alignItems: 'center'
+                  }}>
+                    <Icon name="check" size={16} color="#fff" />
+                  </View>
+                )}
+                {item.mediaType === 'video' && (
+                  <View style={{ position: 'absolute', top: 4, left: 4 }}>
+                    <Icon name="video" size={16} color={theme.colors.background} style={{ textShadowColor: '#000', textShadowRadius: 4 }} />
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          }}
+        />
+
+        <View style={[styles.bottomContainer, { paddingBottom: insets.bottom + 16, paddingTop: 16, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border }]}>
+          <TouchableOpacity
+            style={[styles.uploadButton, { backgroundColor: selectedLocalAssets.size > 0 ? theme.colors.primary : theme.colors.surface }]}
+            disabled={selectedLocalAssets.size === 0}
+            onPress={queueSelectedForUpload}
+          >
+            <Icon name="cloud-upload" size={20} color={selectedLocalAssets.size > 0 ? theme.colors.background : theme.colors.textMuted} />
+            <Text style={[styles.uploadButtonText, { color: selectedLocalAssets.size > 0 ? theme.colors.background : theme.colors.textMuted }]}>
+              Sync {selectedLocalAssets.size} Items to Server
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    </Modal>
+  );
 
   // Full-screen viewer with swipeable paging
   const renderFullScreenViewer = () => {
@@ -971,64 +1389,112 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             ]} 
           />
           
-          {/* Date info - at top of image */}
-          <Animated.View 
-            style={[
-              styles.viewerInfoTop,
-              { 
-                opacity: Animated.multiply(opacityAnim, infoOpacityAnim),
-                top: insets.top + 56,
-              }
-            ]}
-          >
-            <Text style={styles.viewerInfoDate} numberOfLines={1}>
-              {selectedMedia.originalDate 
-                ? new Date(selectedMedia.originalDate).toLocaleDateString('en-US', { 
-                    year: 'numeric', 
-                    month: 'short', 
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })
-                : new Date(selectedMedia.uploadDate).toLocaleDateString('en-US', { 
-                    year: 'numeric', 
-                    month: 'short', 
-                    day: 'numeric' 
-                  })
-              }
-            </Text>
-          </Animated.View>
+          {/* Date/Resolution overlays moved inside ViewerItem for proper positioning */}
 
-          {/* Close & Tag buttons */}
+          {/* Top Right Actions: Edit, Tags, Close */}
           <Animated.View 
             style={[
               styles.viewerCloseButton, 
               { 
                 top: insets.top + 16,
-                opacity: opacityAnim,
+                opacity: zoomScale > 1.05 ? 0 : opacityAnim,
                 flexDirection: 'row',
-                gap: 16,
+                alignItems: 'center',
+                gap: 20, // Clean spacing between action icons
               }
             ]}
+            pointerEvents={zoomScale > 1.05 ? 'none' : 'auto'}
           >
-            <TouchableOpacity onPress={() => {
-              try { setEditingTags(JSON.parse(selectedMedia.tags || '[]')); } catch(e){ setEditingTags([]); }
-              setEditTagsVisible(true);
-            }}>
-              <Icon name="tag-multiple" size={26} color="#fff" />
+            {/* Only show Edit button for Images, not Videos */}
+            {selectedMedia?.type !== 'video' && (
+              <TouchableOpacity 
+                onPress={openImageEditor}
+                hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+              >
+                <Icon name="pencil" size={26} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity 
+              onPress={openTagEditor}
+              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+            >
+              <Icon name="tag-multiple" size={26} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
             </TouchableOpacity>
+            
             <TouchableOpacity 
               onPress={closeViewer}
               activeOpacity={0.6}
+              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
             >
-              <Icon name="close" size={28} color="#fff" />
+              <Icon name="close" size={28} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
             </TouchableOpacity>
+          </Animated.View>
+
+          {/* Global Bottom Action Bar (Immune to FlatList Swipes & Pointer Traps) */}
+          <Animated.View 
+            style={[
+              { 
+                position: 'absolute', 
+                left: 24, 
+                right: 24, 
+                bottom: insets.bottom + 24, 
+                flexDirection: 'row', 
+                justifyContent: 'space-between', 
+                alignItems: 'flex-end',
+                opacity: zoomScale > 1.05 ? 0 : infoOpacityAnim, // Fades out smoothly on single tap
+                zIndex: 10,
+              }
+            ]}
+            pointerEvents={zoomScale > 1.05 || !infoVisible ? 'none' : 'box-none'} // Disable when zoomed or hidden
+          >
+            {/* Left Side: Date & Resolution */}
+            <View style={{ flex: 1 }} pointerEvents="none">
+              <Text style={[styles.viewerInfoDate, { textAlign: 'left', marginBottom: 4 }]} numberOfLines={1}>
+                {selectedMedia.originalDate 
+                  ? new Date(selectedMedia.originalDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                  : selectedMedia.uploadDate 
+                    ? new Date(selectedMedia.uploadDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+                    : ''
+                }
+              </Text>
+              {selectedMedia.width && selectedMedia.height && (
+                <Text style={[styles.viewerInfoResolution, { textAlign: 'left' }]}>
+                  {selectedMedia.width} × {selectedMedia.height}
+                  {selectedMedia.type === 'video' && ' • Video'}
+                </Text>
+              )}
+            </View>
+            
+            {/* Right Side: Share & Favourites */}
+            <View style={{ flexDirection: 'row', gap: 24, alignItems: 'center' }} pointerEvents="auto">
+              <TouchableOpacity 
+                onPress={handleShare}
+                hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                activeOpacity={0.6}
+              >
+                <Icon name="share-variant" size={28} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                onPress={toggleFavourite}
+                hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                activeOpacity={0.6}
+              >
+                <Icon 
+                  name={selectedMedia?.tags?.includes('Favourites') ? "heart" : "heart-outline"} 
+                  size={30} 
+                  color={selectedMedia?.tags?.includes('Favourites') ? "#ef4444" : "#ffffff"} 
+                  style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }}
+                />
+              </TouchableOpacity>
+            </View>
           </Animated.View>
 
           {/* Horizontal swipeable FlatList */}
           <View style={styles.viewerFlatListContainer}>
             <Animated.FlatList
-              data={filteredItems}
+              data={displayItems}
               renderItem={renderViewerItem}
               keyExtractor={(item) => item.id}
               horizontal={true}
@@ -1058,113 +1524,206 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             />
           </View>
 
-          {/* Resolution info - at bottom of image */}
-          <Animated.View 
-            style={[
-              styles.viewerInfoBottom,
-              { 
-                opacity: Animated.multiply(opacityAnim, infoOpacityAnim),
-                bottom: insets.bottom + 24,
-              }
-            ]}
-          >
-            {selectedMedia.width && selectedMedia.height && (
-              <Text style={styles.viewerInfoResolution}>
-                {selectedMedia.width} × {selectedMedia.height}
-                {selectedMedia.type === 'video' && ' • Video'}
-              </Text>
-            )}
-          </Animated.View>
 
-          {/* Inline Tag Editor Overlay */}
+
+          {/* Inline Tag Editor Overlay (Animated & Chip UI) */}
           {editTagsVisible && (
-            <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', zIndex: 100 }]}>
-              <View style={[styles.uploadModalContent, { backgroundColor: theme.colors.surfaceElevated }]}>
-                <Text style={[styles.uploadModalTitle, { color: theme.colors.textPrimary }]}>Edit Tags</Text>
-                
-                <Text style={[styles.uploadModalLabel, { color: theme.colors.textSecondary }]}>Selected Tags:</Text>
-                <TextInput
-                  style={[styles.albumInput, { color: theme.colors.textPrimary, borderColor: theme.colors.border }]}
-                  value={editingTags.join(', ')}
-                  onChangeText={(text) => setEditingTags(text.split(',').map(t => t.trim()).filter(Boolean))}
-                  placeholder="Type tags separated by commas..."
-                  placeholderTextColor={theme.colors.textMuted}
-                />
-
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickSelectScroll}>
-                  {globalAlbums.map(album => (
-                    <TouchableOpacity 
-                      key={album} 
-                      style={[styles.quickSelectChip, editingTags.includes(album) && { backgroundColor: theme.colors.primary }]}
-                      onPress={() => {
-                        if (editingTags.includes(album)) {
-                          setEditingTags(editingTags.filter(t => t !== album));
-                        } else {
-                          setEditingTags([...editingTags, album]);
-                        }
-                      }}
-                    >
-                      <Text style={[styles.quickSelectText, editingTags.includes(album) && { color: '#fff' }]}>{album}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-                
-                <View style={styles.uploadModalButtons}>
-                  <TouchableOpacity 
-                    style={[styles.uploadModalButton, { backgroundColor: theme.colors.surface }]}
-                    onPress={() => setEditTagsVisible(false)}
-                  >
-                    <Text style={{ color: theme.colors.textPrimary }}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary }]}
-                    onPress={async () => {
-                      try {
-                        const res = await api.put(`/media/${selectedMedia.id}/tags`, { tags: editingTags });
-                        
-                        if (res && res.success) {
-                          const newTagsString = JSON.stringify(editingTags);
-                          
-                          // 1. Update the active item in the full-screen viewer instantly
-                          setSelectedMedia(prev => ({ ...prev, tags: newTagsString }));
-                          
-                          // 2. Intelligently update the main background grid
-                          const updateItemInList = (prevList) => {
-                            // If we are currently filtering by a tag, and the user just removed that tag,
-                            // gracefully remove the item from the current view.
-                            if (selectedAlbum !== 'All' && !editingTags.includes(selectedAlbum)) {
-                              return prevList.filter(item => item.id !== selectedMedia.id);
-                            }
-                            // Otherwise, just update the tags on the existing item
-                            return prevList.map(item => 
-                              item.id === selectedMedia.id ? { ...item, tags: newTagsString } : item
-                            );
-                          };
-                          
-                          setUploadItems(updateItemInList);
-                          setServerItems(updateItemInList);
-                          
-                          // 3. Optimistically add any brand-new tags to the dropdown list instantly
-                          setGlobalAlbums(prev => {
-                            const combined = new Set([...prev, ...editingTags]);
-                            return Array.from(combined).sort();
-                          });
-
-                          // 4. Close the modal
-                          setEditTagsVisible(false);
-                        } else {
-                          Alert.alert('Error', 'Server rejected the tag update');
-                        }
-                      } catch(e) { 
-                        Alert.alert('Error', `Failed to update tags: ${e.message}`); 
-                      }
+            <Animated.View style={[StyleSheet.absoluteFillObject, { zIndex: 100, opacity: tagFadeAnim }]}>
+              {/* Background Dismiss Handler - closes modal and dismisses keyboard */}
+              <Pressable 
+                style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.7)' }]}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  closeTagEditor();
+                }}
+              >
+                {/* Scrollable Modal Container - adjusts for keyboard */}
+                <ScrollView 
+                  contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center' }}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="on-drag"
+                >
+                  {/* Inner Modal Container - intercepts touches so background doesn't trigger */}
+                  <Pressable 
+                    style={[styles.uploadModalContent, { backgroundColor: theme.colors.surfaceElevated, width: width * 0.9, maxHeight: height * 0.8 }]}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      Keyboard.dismiss();
                     }}
                   >
-                    <Text style={{ color: '#fff', fontWeight: 'bold' }}>Save Tags</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
+                    {/* Modal Header */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <Text style={[styles.uploadModalTitle, { color: theme.colors.textPrimary, marginBottom: 0 }]}>Edit Tags</Text>
+                      <TouchableOpacity onPress={closeTagEditor} style={{ padding: 4 }}>
+                        <Icon name="close" size={24} color={theme.colors.textSecondary} />
+                      </TouchableOpacity>
+                    </View>
+                    
+                    <Text style={[styles.uploadModalLabel, { color: theme.colors.textSecondary }]}>Assigned Tags:</Text>
+                  
+                    {/* Dynamic Chip Input Box */}
+                    <View style={[styles.chipInputContainer, { borderColor: theme.colors.border }]}>
+                    {editingTags.map((tag, index) => (
+                      <View key={index} style={[styles.chip, { backgroundColor: theme.colors.primary }]}>
+                        <Text style={styles.chipText}>{tag}</Text>
+                        <TouchableOpacity onPress={() => setEditingTags(editingTags.filter((_, i) => i !== index))}>
+                          <Icon name="close-circle" size={16} color={theme.colors.background} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                    <TextInput
+                      style={[styles.chipTextInput, { color: theme.colors.textPrimary }]}
+                      value={tagInputValue}
+                      onChangeText={(text) => {
+                        // Auto-box when a comma is typed
+                        if (text.includes(',')) {
+                          const newTags = text.split(',').map(t => t.trim()).filter(Boolean);
+                          if (newTags.length > 0) {
+                            setEditingTags(prev => Array.from(new Set([...prev, ...newTags])));
+                          }
+                          setTagInputValue('');
+                        } else {
+                          setTagInputValue(text);
+                        }
+                      }}
+                      onKeyPress={({ nativeEvent }) => {
+                        // Backspace deletes the last chip if input is empty
+                        if (nativeEvent.key === 'Backspace' && tagInputValue === '' && editingTags.length > 0) {
+                          setEditingTags(prev => prev.slice(0, -1));
+                        }
+                      }}
+                      onSubmitEditing={() => {
+                        // Submit with return key adds the tag
+                        if (tagInputValue.trim()) {
+                          setEditingTags(prev => Array.from(new Set([...prev, tagInputValue.trim()])));
+                          setTagInputValue('');
+                        }
+                        Keyboard.dismiss();
+                      }}
+                      placeholder={editingTags.length === 0 ? "Type tags, comma or return to add..." : ""}
+                      placeholderTextColor={theme.colors.textMuted}
+                      autoCapitalize="words"
+                      returnKeyType="done"
+                      blurOnSubmit={true}
+                    />
+                  </View>
+
+                  {/* Autocomplete suggestions - show matching tags with active ones pinned to front */}
+                  {tagInputValue.length > 0 && (
+                    <View style={styles.tagAutocompleteContainer}>
+                      <Text style={[styles.tagAutocompleteLabel, { color: theme.colors.textMuted }]}>
+                        Matching tags:
+                      </Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagAutocompleteScroll}>
+                        {pinnedAlbums
+                          .filter(album => album.toLowerCase().includes(tagInputValue.toLowerCase()))
+                          .sort((a, b) => {
+                            // Pin active tags to the front
+                            const aActive = editingTags.includes(a);
+                            const bActive = editingTags.includes(b);
+                            if (aActive && !bActive) return -1;
+                            if (!aActive && bActive) return 1;
+                            return a.localeCompare(b);
+                          })
+                          .map(album => (
+                            <TouchableOpacity 
+                              key={album} 
+                              style={[
+                                styles.tagAutocompleteChip,
+                                editingTags.includes(album) && { backgroundColor: theme.colors.primary }
+                              ]}
+                              onPress={() => {
+                                if (!editingTags.includes(album)) {
+                                  setEditingTags([...editingTags, album]);
+                                }
+                                setTagInputValue('');
+                              }}
+                            >
+                              <Text style={[
+                                styles.tagAutocompleteChipText,
+                                editingTags.includes(album) && { color: theme.colors.background }
+                              ]}>
+                                {album}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                      </ScrollView>
+                    </View>
+                  )}
+
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickSelectScroll}>
+                    {pinnedAlbums.map(album => (
+                      <TouchableOpacity 
+                        key={album} 
+                        style={[styles.quickSelectChip, editingTags.includes(album) && { backgroundColor: theme.colors.primary }]}
+                        onPress={() => {
+                          if (editingTags.includes(album)) {
+                            setEditingTags(editingTags.filter(t => t !== album));
+                          } else {
+                            setEditingTags([...editingTags, album]);
+                          }
+                        }}
+                      >
+                        <Text style={[styles.quickSelectText, editingTags.includes(album) && { color: theme.colors.background }]}>{album}</Text>
+                      </TouchableOpacity>
+                    ))}
+                </ScrollView>
+                
+                  <View style={styles.uploadModalButtons}>
+                    <TouchableOpacity 
+                      style={[styles.uploadModalButton, { backgroundColor: theme.colors.surface }]}
+                      onPress={closeTagEditor}
+                    >
+                      <Text style={{ color: theme.colors.textPrimary }}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary }]}
+                      onPress={async () => {
+                        try {
+                          // Catch any un-comma'd text left in the input before saving
+                          let finalTags = [...editingTags];
+                          if (tagInputValue.trim()) {
+                            finalTags.push(tagInputValue.trim());
+                            finalTags = Array.from(new Set(finalTags));
+                          }
+
+                          const tagPayload = {
+                            tags: finalTags, filename: selectedMedia.filename, type: selectedMedia.type,
+                            size: selectedMedia.size, url: selectedMedia.url, thumbnailUrl: selectedMedia.thumbnailUrl,
+                            width: selectedMedia.width, height: selectedMedia.height, duration: selectedMedia.duration,
+                          };
+                          
+                          const res = await api.put(`/media/${selectedMedia.id}/tags`, tagPayload);
+                          
+                          if (res && res.success) {
+                            const newTagsString = JSON.stringify(finalTags);
+                            setSelectedMedia(prev => ({ ...prev, tags: newTagsString }));
+                            
+                            const updateItemInList = (prevList) => {
+                              if (selectedAlbum !== 'All' && !finalTags.includes(selectedAlbum)) {
+                                return prevList.filter(item => item.id !== selectedMedia.id);
+                              }
+                              return prevList.map(item => item.id === selectedMedia.id ? { ...item, tags: newTagsString } : item);
+                            };
+                            
+                            setUploadItems(updateItemInList);
+                            setServerItems(updateItemInList);
+                            setGlobalAlbums(prev => Array.from(new Set([...prev, ...finalTags])).sort());
+
+                            closeTagEditor(); // Use smooth close animation
+                          } else {
+                            Alert.alert('Error', 'Server rejected the tag update');
+                          }
+                        } catch(e) { Alert.alert('Error', `Failed to update tags: ${e.message}`); }
+                      }}
+                    >
+                      <Text style={{ color: theme.colors.background, fontWeight: 'bold' }}>Save</Text>
+                    </TouchableOpacity>
+                  </View>
+                </Pressable>
+                </ScrollView>
+              </Pressable>
+            </Animated.View>
           )}
         </Pressable>
       </Modal>
@@ -1175,26 +1734,124 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Full-screen viewer modal */}
+    <View style={styles.container}>
+      {/* Full-screen viewer & Modals */}
       {renderFullScreenViewer()}
+      {renderLocalSyncGallery()}
 
-      {/* Pre-Upload Album Selection Modal */}
-      <Modal visible={uploadModalVisible} transparent={true} animationType="slide">
+      {/* Pre-Upload Album Selection Modal (Draggable Bottom-Sheet Style) */}
+      <Modal 
+        visible={uploadModalVisible} 
+        transparent={true} 
+        animationType="none"
+        onShow={() => {
+          // Ensure modal is reset when shown
+          uploadModalY.stopAnimation();
+          uploadModalY.setValue(0);
+        }}
+      >
         <View style={styles.uploadModalOverlay}>
-          <View style={[styles.uploadModalContent, { backgroundColor: theme.colors.surfaceElevated }]}>
-            <Text style={[styles.uploadModalTitle, { color: theme.colors.textPrimary }]}>
+          {/* Background dimmer - tap to dismiss */}
+          <Pressable 
+            style={StyleSheet.absoluteFill} 
+            onPress={dismissUploadModal}
+          />
+          <Animated.View 
+            style={[
+              styles.uploadModalContent, 
+              { 
+                backgroundColor: theme.colors.surfaceElevated,
+                transform: [{ translateY: uploadModalY }] 
+              }
+            ]}
+            {...uploadPanResponder.panHandlers}
+          >
+            <View style={{ width: 40, height: 5, backgroundColor: theme.colors.border, borderRadius: 3, alignSelf: 'center', marginBottom: 16 }} />
+
+            <Text style={[styles.uploadModalTitle, { color: theme.colors.textPrimary, marginTop: 0 }]}>
               Upload {pendingAssets.length} Item{pendingAssets.length > 1 ? 's' : ''}
             </Text>
             
             <Text style={[styles.uploadModalLabel, { color: theme.colors.textSecondary }]}>Save to Album:</Text>
-            <TextInput
-              style={[styles.albumInput, { color: theme.colors.textPrimary, borderColor: theme.colors.border }]}
-              value={selectedTags.join(', ')}
-              onChangeText={(text) => setSelectedTags(text.split(',').map(t => t.trim()).filter(Boolean))}
-              placeholder="Type album name..."
-              placeholderTextColor={theme.colors.textMuted}
-            />
+            
+            <View style={[styles.chipInputContainer, { borderColor: theme.colors.border }]}>
+              {selectedTags.map((tag, index) => (
+                <View key={index} style={[styles.chip, { backgroundColor: theme.colors.primary }]}>
+                  <Text style={styles.chipText}>{tag}</Text>
+                  <TouchableOpacity onPress={() => setSelectedTags(selectedTags.filter((_, i) => i !== index))}>
+                    <Icon name="close-circle" size={16} color={theme.colors.background} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              <TextInput
+                style={[styles.chipTextInput, { color: theme.colors.textPrimary }]}
+                value={tagInputValue}
+                onChangeText={(text) => {
+                  if (text.includes(',')) {
+                    const newTags = text.split(',').map(t => t.trim()).filter(Boolean);
+                    if (newTags.length > 0) {
+                      setSelectedTags(prev => Array.from(new Set([...prev, ...newTags])));
+                    }
+                    setTagInputValue('');
+                  } else {
+                    setTagInputValue(text);
+                  }
+                }}
+                onKeyPress={({ nativeEvent }) => {
+                  if (nativeEvent.key === 'Backspace' && tagInputValue === '' && selectedTags.length > 0) {
+                    setSelectedTags(prev => prev.slice(0, -1));
+                  }
+                }}
+                placeholder={selectedTags.length === 0 ? "Type tags, comma to add..." : ""}
+                placeholderTextColor={theme.colors.textMuted}
+                autoCapitalize="words"
+                blurOnSubmit={true}
+                onSubmitEditing={() => Keyboard.dismiss()}
+                inputAccessoryViewID="uploadTagInputAccessory"
+              />
+            </View>
+
+            {tagInputValue.length > 0 && (
+              <View style={styles.tagAutocompleteContainer}>
+                <Text style={[styles.tagAutocompleteLabel, { color: theme.colors.textMuted }]}>
+                  Matching tags:
+                </Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagAutocompleteScroll}>
+                  {globalAlbums
+                    .filter(album => album.toLowerCase().includes(tagInputValue.toLowerCase()))
+                    .sort((a, b) => {
+                      const aActive = selectedTags.includes(a);
+                      const bActive = selectedTags.includes(b);
+                      if (aActive && !bActive) return -1;
+                      if (!aActive && bActive) return 1;
+                      return a.localeCompare(b);
+                    })
+                    .map(album => (
+                      <TouchableOpacity 
+                        key={album} 
+                        style={[
+                          styles.tagAutocompleteChip,
+                          selectedTags.includes(album) && { backgroundColor: theme.colors.primary }
+                        ]}
+                        onPress={() => {
+                          if (!selectedTags.includes(album)) {
+                            setSelectedTags([...selectedTags, album]);
+                          }
+                          setTagInputValue('');
+                          Keyboard.dismiss();
+                        }}
+                      >
+                        <Text style={[
+                          styles.tagAutocompleteChipText,
+                          selectedTags.includes(album) && { color: theme.colors.background }
+                        ]}>
+                          {album}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                </ScrollView>
+              </View>
+            )}
 
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickSelectScroll}>
               {globalAlbums.map(album => (
@@ -1207,231 +1864,339 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                     } else {
                       setSelectedTags([...selectedTags, album]);
                     }
+                    Keyboard.dismiss();
                   }}
                 >
-                  <Text style={[styles.quickSelectText, selectedTags.includes(album) && { color: '#fff' }]}>{album}</Text>
+                  <Text style={[styles.quickSelectText, selectedTags.includes(album) && { color: theme.colors.background }]}>{album}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
             
-            {uploading ? (
-              <View style={styles.progressContainer}>
-                <Text style={[styles.progressText, { color: theme.colors.textPrimary }]}>
-                  Uploading {uploadStats.current} of {uploadStats.total}...
-                </Text>
-                <View style={[styles.progressBarBackground, { backgroundColor: theme.colors.border }]}>
-                  <View style={[
-                    styles.progressBarFill, 
-                    { 
-                      backgroundColor: theme.colors.primary, 
-                      width: `${(uploadStats.current / Math.max(1, uploadStats.total)) * 100}%` 
-                    }
-                  ]} />
-                </View>
-                {uploadStats.failed > 0 && (
-                  <Text style={styles.progressErrorText}>{uploadStats.failed} failed</Text>
-                )}
-              </View>
-            ) : (
-              <View style={styles.uploadModalButtons}>
-                <TouchableOpacity 
-                  style={[styles.uploadModalButton, { backgroundColor: theme.colors.surface }]}
-                  onPress={() => { setUploadModalVisible(false); setPendingAssets([]); }}
-                >
-                  <Text style={{ color: theme.colors.textPrimary }}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary }]}
-                  onPress={executeUpload}
-                >
-                  <Text style={{ color: '#fff', fontWeight: 'bold' }}>Upload Now</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
+            <View style={styles.uploadModalButtons}>
+              <TouchableOpacity 
+                style={[styles.uploadModalButton, { backgroundColor: theme.colors.surface }]}
+                onPress={dismissUploadModal}
+              >
+                <Text style={{ color: theme.colors.textPrimary }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary }]}
+                onPress={executeUpload}
+              >
+                <Text style={{ color: theme.colors.background, fontWeight: 'bold' }}>Upload Now</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
         </View>
       </Modal>
 
-      {/* Dynamic Header */}
-      <View style={styles.header}>
-        {onClose ? (
-          <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-            <Icon name="arrow-left" size={24} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.closeButton} />
-        )}
-        
-        <View style={styles.headerTitleContainer}>
-          <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]}>
-            {selectedAlbum === 'All' ? 'Photo Vault' : `Album: ${selectedAlbum}`}
-          </Text>
-        </View>
-
-        <View style={styles.headerRightAction}>
-          {selectedAlbum !== 'All' && (
-            <TouchableOpacity 
-              style={styles.clearFilterButton}
-              onPress={() => setSelectedAlbum('All')}
-            >
-              <Text style={{ color: theme.colors.primary, fontWeight: '600' }}>Clear</Text>
+      {/* Keyboard Dismiss Button (iOS only) */}
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID="uploadTagInputAccessory">
+          <View style={[styles.keyboardAccessoryContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+            <TouchableOpacity onPress={() => Keyboard.dismiss()} style={styles.keyboardAccessoryButton}>
+              <Text style={[styles.keyboardAccessoryText, { color: theme.colors.primary }]}>Done</Text>
             </TouchableOpacity>
-          )}
-        </View>
-      </View>
-
-      {/* 3-Way Tab Toggle */}
-      <View style={styles.tabContainer}>
-        <TouchableOpacity
-          style={[styles.tabButton, activeTab === 'uploads' && { backgroundColor: '#fff' }]}
-          onPress={() => setActiveTab('uploads')}
-        >
-          <Icon name="image-multiple" size={16} color={activeTab === 'uploads' ? '#000' : theme.colors.textSecondary} />
-          <Text style={[styles.tabText, activeTab === 'uploads' && { color: '#000' }]}>Photos</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tabButton, activeTab === 'albums' && { backgroundColor: theme.colors.primary }]}
-          onPress={() => setActiveTab('albums')}
-        >
-          <Icon name="folder-multiple" size={16} color={activeTab === 'albums' ? '#fff' : theme.colors.textSecondary} />
-          <Text style={[styles.tabText, activeTab === 'albums' && { color: '#fff' }]}>Albums</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tabButton, activeTab === 'turtle-base' && { backgroundColor: theme.colors.surfaceElevated }]}
-          onPress={() => { setActiveTab('turtle-base'); setSelectedAlbum('All'); }}
-        >
-          <Icon name="desktop-classic" size={16} color={theme.colors.textSecondary} />
-          <Text style={styles.tabText}>PC</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Main Content Area */}
-      {activeTab === 'albums' ? (
-        <FlatList
-          key="albums-grid"
-          data={globalAlbums}
-          keyExtractor={(item) => item}
-          numColumns={2}
-          contentContainerStyle={styles.albumsGridContent}
-          columnWrapperStyle={styles.albumsColumnWrapper}
-          renderItem={({ item }) => {
-            const covers = albumCovers[item] || [];
-            // Create an array of exactly 4 slots (fill missing with null)
-            const gridItems = [...covers, null, null, null, null].slice(0, 4);
-
-            return (
-              <TouchableOpacity 
-                style={styles.albumFolderCard}
-                activeOpacity={0.9}
-                onPress={() => {
-                  setSelectedAlbum(item);
-                  setActiveTab('uploads');
-                }}
-              >
-                <View style={styles.albumGridContainer}>
-                  {gridItems.map((coverUrl, index) => (
-                    <View key={index} style={styles.albumGridCell}>
-                      {coverUrl ? (
-                        <Image 
-                          source={{ uri: getFullUrl(coverUrl) }} 
-                          style={styles.albumGridImage} 
-                          contentFit="cover" 
-                          transition={200}
-                        />
-                      ) : (
-                        <View style={styles.albumGridPlaceholder} />
-                      )}
-                    </View>
-                  ))}
-                </View>
-                
-                <LinearGradient
-                  colors={['transparent', 'rgba(0,0,0,0.1)']}
-                  style={styles.albumGradient}
-                >
-                  <Text style={styles.albumGridName} numberOfLines={1}>{item}</Text>
-                  <Text style={styles.albumItemCount}>
-                     {covers.length > 0 ? 'View Album' : 'Empty'}
-                  </Text>
-                </LinearGradient>
-              </TouchableOpacity>
-            );
-          }}
-          ListEmptyComponent={() => (
-            <View style={styles.emptyContainer}>
-              <Text style={{ color: theme.colors.textSecondary }}>No albums created yet.</Text>
-            </View>
-          )}
-        />
-      ) : (
-        /* Gallery Grid for Photos/PC tabs */
-        loading && currentItems.length === 0 ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={theme.colors.primary} />
           </View>
-        ) : (
-          <FlatList
-            key="photos-grid"
-            ref={gridRef}
-            data={filteredItems}
-            renderItem={renderItem}
-            keyExtractor={(item) => item.id}
-            numColumns={3}
-            contentContainerStyle={styles.gridContent}
-            showsVerticalScrollIndicator={false}
-            onRefresh={handleRefresh}
-            refreshing={refreshing}
-            onEndReached={handleLoadMore}
-            onEndReachedThreshold={3}
-            ListEmptyComponent={renderEmpty}
-            ListFooterComponent={
-              <View style={[styles.bottomContainer, { paddingBottom: insets.bottom + 16, paddingTop: 16 }]}>
-                {/* Photo Count (Always visible at bottom) */}
-                <View style={styles.countContainer}>
-                  <Text style={[styles.countText, { color: theme.colors.textSecondary }]}>
-                    {photoCount > 0 && videoCount > 0 
-                      ? `${photoCount} Photos, ${videoCount} Videos`
-                      : photoCount > 0 
-                        ? `${photoCount} ${photoCount === 1 ? 'Photo' : 'Photos'}`
-                        : `${videoCount} ${videoCount === 1 ? 'Video' : 'Videos'}`
-                    }
-                    {activeTab === 'turtle-base' && ' from PC'}
-                  </Text>
-                </View>
-
-                {/* Upload Button (Only for phone uploads tab) */}
-                {activeTab === 'uploads' && (
-                  <TouchableOpacity
-                    style={[styles.uploadButton, { backgroundColor: '#fff' }]}
-                    onPress={handleUpload}
-                    disabled={uploading}
-                    activeOpacity={0.8}
-                  >
-                    {uploading ? (
-                      <ActivityIndicator color="#000" />
-                    ) : (
-                      <>
-                        <Icon name="cloud-upload" size={20} color="#000" />
-                        <Text style={[styles.uploadButtonText, { color: '#000' }]}>Upload Photos</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                )}
-              </View>
-            }
-          />
-        )
+        </InputAccessoryView>
       )}
 
-    </SafeAreaView>
+      {/* 1. Main Content Area (Rendered underneath floating header) */}
+      <View style={StyleSheet.absoluteFill} {...edgeSwipeResponder.panHandlers}>
+        {activeTab === 'albums' ? (
+          <Animated.FlatList
+            key="albums-grid"
+            data={pinnedAlbums}
+            keyExtractor={(item) => item}
+            numColumns={2}
+            // CRITICAL FIX: Push content safely below the floating header
+            contentContainerStyle={[styles.albumsGridContent, { paddingTop: insets.top + 110 }]}
+            columnWrapperStyle={styles.albumsColumnWrapper}
+            onScroll={handleScroll}
+            scrollEventThrottle={16}
+            renderItem={({ item }) => {
+              const covers = albumCovers[item] || [];
+              const gridItems = [...covers, null, null, null, null].slice(0, 4);
+
+              return (
+                <TouchableOpacity 
+                  style={styles.albumFolderCard}
+                  activeOpacity={0.9}
+                  onPress={() => {
+                    setSelectedAlbum(item);
+                    setActiveTab('uploads');
+                  }}
+                >
+                  <View style={styles.albumGridContainer}>
+                    {gridItems.map((coverUrl, index) => (
+                      <View key={index} style={styles.albumGridCell}>
+                        {coverUrl ? (
+                          <Image 
+                            source={{ uri: getFullUrl(coverUrl) }} 
+                            style={styles.albumGridImage} 
+                            contentFit="cover" 
+                            transition={200}
+                          />
+                        ) : (
+                          <View style={styles.albumGridPlaceholder} />
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                  
+                  <LinearGradient
+                    colors={['transparent', 'rgba(0,0,0,0.85)']}
+                    style={styles.albumGradient}
+                  >
+                    <Text style={styles.albumGridName} numberOfLines={1}>{item}</Text>
+                    <Text style={styles.albumItemCount}>
+                       {covers.length > 0 ? 'View Album' : 'Empty'}
+                    </Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              );
+            }}
+            ListEmptyComponent={() => (
+              <View style={styles.emptyContainer}>
+                <Text style={{ color: theme.colors.textSecondary }}>No albums created yet.</Text>
+              </View>
+            )}
+          />
+        ) : (
+          loading && currentItems.length === 0 ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={theme.colors.primary} />
+            </View>
+          ) : (
+            <Animated.FlatList
+              key="photos-grid"
+              ref={gridRef}
+              data={displayItems}
+              renderItem={renderItem}
+              keyExtractor={(item) => item.id}
+              numColumns={3}
+              inverted={true} // NATIVE IOS PHOTOS BOTTOM-UP BEHAVIOR
+              // Inverted Swaps Padding: Top protects the floating header, Bottom protects the notch
+              contentContainerStyle={[styles.gridContent, { 
+                paddingBottom: insets.top + 110, 
+                paddingTop: insets.bottom + 16 
+              }]}
+              showsVerticalScrollIndicator={false}
+              onScroll={handleScroll}
+              scrollEventThrottle={16}
+              onRefresh={handleRefresh}
+              refreshing={refreshing}
+              onEndReached={handleLoadMore}
+              onEndReachedThreshold={3}
+              ListEmptyComponent={renderEmpty}
+              // Inverted: Header renders at the absolute VISUAL BOTTOM
+              ListHeaderComponent={
+                <View style={[styles.bottomContainer, { paddingBottom: 16 }]}>
+                  <View style={styles.countContainer}>
+                    <Text style={[styles.countText, { color: theme.colors.textSecondary }]}>
+                      {photoCount > 0 && videoCount > 0 
+                        ? `${photoCount} Photos, ${videoCount} Videos`
+                        : photoCount > 0 
+                          ? `${photoCount} ${photoCount === 1 ? 'Photo' : 'Photos'}`
+                          : `${videoCount} ${videoCount === 1 ? 'Video' : 'Videos'}`
+                      }
+                      {activeTab === 'turtle-base' && ' from PC'}
+                    </Text>
+                  </View>
+
+                  {activeTab === 'uploads' && (
+                    <View style={{ alignItems: 'center', width: '100%' }}>
+                      <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+                        <TouchableOpacity
+                          style={[styles.uploadButton, { flex: 1, backgroundColor: 'transparent' }]}
+                          onPress={handleUpload}
+                          disabled={uploading}
+                          activeOpacity={0.8}
+                        >
+                          <Icon name="image-plus" size={20} color={theme.colors.textPrimary} />
+                          <Text style={[styles.uploadButtonText, { color: theme.colors.textPrimary, fontSize: 14 }]}>Upload</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.uploadButton, { flex: 1, backgroundColor: 'transparent' }]}
+                          onPress={openLocalSyncGallery}
+                          disabled={uploading}
+                          activeOpacity={0.8}
+                        >
+                          <Icon name="folder-sync" size={20} color={theme.colors.textPrimary} />
+                          <Text style={[styles.uploadButtonText, { color: theme.colors.textPrimary, fontSize: 14 }]}>Smart Sync</Text>
+                        </TouchableOpacity>
+                      </View>
+                      
+                      {/* Status Text below the buttons */}
+                      {uploading && (
+                        <Text style={{ marginTop: 12, fontSize: 13, fontWeight: '600', color: theme.colors.primary }}>
+                          Uploading {uploadStats.current === 0 ? 1 : uploadStats.current} of {uploadStats.total} • {uploadStats.fileProgress.toFixed(0)}% Complete
+                        </Text>
+                      )}
+                    </View>
+                  )}
+                </View>
+              }
+              // Inverted: Footer renders at the absolute VISUAL TOP (where older photos load)
+              ListFooterComponent={
+                <View style={{ paddingTop: 16 }}>
+                  {isPaginating && currentHasMore && (
+                    <View style={styles.phantomSkeletonContainer}>
+                      {[...Array(6)].map((_, i) => (
+                        <ShimmerSkeleton key={`header-skel-${i}`} styles={styles} theme={theme} />
+                      ))}
+                    </View>
+                  )}
+                </View>
+              }
+            />
+          )
+        )}
+      </View>
+
+      {/* Notch Shield - Prevents photos from showing under the status bar when header hides */}
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: theme.colors.background, zIndex: 30 }} />
+
+      {/* 2. Floating Animated Header */}
+      <Animated.View
+        style={[
+          styles.floatingHeaderContainer, 
+          { 
+            paddingTop: insets.top,
+            backgroundColor: theme.colors.background, // Solid theme color
+            transform: [{ translateY: headerTranslateY }],
+            borderBottomWidth: StyleSheet.hairlineWidth,
+            borderBottomColor: theme.colors.border,
+            zIndex: 20,
+          }
+        ]}
+      >
+        {/* 1.5px Global Progress Bar (Theme-Aware Contrast) */}
+        {uploading && (
+          <View style={{ position: 'absolute', top: insets.top, left: 0, right: 0, height: 1.5, backgroundColor: 'transparent', zIndex: 25 }}>
+            <View 
+              style={{ 
+                height: '100%', 
+                width: `${uploadStats.fileProgress}%`, 
+                backgroundColor: theme.dark ? '#FFFFFF' : '#000000' 
+              }} 
+            />
+          </View>
+        )}
+
+        {/* Dynamic Header */}
+        <View style={styles.header}>
+          {onClose ? (
+            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+              <Icon name="arrow-left" size={24} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.closeButton} />
+          )}
+          
+          <View style={styles.headerTitleContainer}>
+            {selectedAlbum !== 'All' ? (
+              <TouchableOpacity 
+                style={styles.albumBackButton}
+                onPress={() => setSelectedAlbum('All')}
+                activeOpacity={0.7}
+              >
+                <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
+                <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+                  {selectedAlbum}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]}>
+                Photo Vault
+              </Text>
+            )}
+          </View>
+
+          <View style={styles.headerRightAction} />
+        </View>
+
+        {/* 3-Way Tab Toggle */}
+        <View style={styles.tabContainer}>
+          <TouchableOpacity
+            style={[styles.tabButton, activeTab === 'uploads' && styles.tabButtonActive]}
+            onPress={() => setActiveTab('uploads')}
+          >
+            <Icon name="image-multiple" size={16} color={activeTab === 'uploads' ? theme.colors.background : theme.colors.textSecondary} />
+            <Text style={[styles.tabText, activeTab === 'uploads' && styles.tabTextActive]}>Photos</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.tabButton, activeTab === 'albums' && styles.tabButtonActive]}
+            onPress={() => setActiveTab('albums')}
+          >
+            <Icon name="folder-multiple" size={16} color={activeTab === 'albums' ? theme.colors.background : theme.colors.textSecondary} />
+            <Text style={[styles.tabText, activeTab === 'albums' && styles.tabTextActive]}>Albums</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.tabButton, activeTab === 'turtle-base' && styles.tabButtonActive]}
+            onPress={() => { setActiveTab('turtle-base'); setSelectedAlbum('All'); }}
+          >
+            <Icon name="desktop-classic" size={16} color={activeTab === 'turtle-base' ? theme.colors.background : theme.colors.textSecondary} />
+            <Text style={[styles.tabText, activeTab === 'turtle-base' && styles.tabTextActive]}>PC</Text>
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
+
+    </View>
   );
 }
 
 // Memoized grid item component for performance
 // === GRID ITEM COMPONENT (Memoized) ===
-const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBaseUrl, activeTab, styles }) => {
+// === PREMIUM SHIMMER SKELETON COMPONENT ===
+const ShimmerSkeleton = ({ styles, theme }) => {
+  const shimmerAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmerAnim, {
+          toValue: 1,
+          duration: 1000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(shimmerAnim, {
+          toValue: 0,
+          duration: 1000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        })
+      ])
+    ).start();
+  }, [shimmerAnim]);
+
+  const opacity = shimmerAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.3, 0.7] // Pulses gracefully between 30% and 70% opacity
+  });
+
+  return (
+    <Animated.View style={[styles.thumbnailContainer, styles.skeletonThumbnail, { opacity }]}>
+      <LinearGradient
+        colors={['transparent', 'rgba(255,255,255,0.1)', 'transparent']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+    </Animated.View>
+  );
+};
+
+const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBaseUrl, activeTab, styles, theme }) => {
+  // Early return for seamless Phantom Skeletons
+  if (item.isSkeleton) {
+    return <ShimmerSkeleton styles={styles} theme={theme} />;
+  }
+  
   const isVideo = item.type === 'video';
   const [duration, setDuration] = useState(item.duration);
   const [hasFailed, setHasFailed] = useState(false);
@@ -1597,6 +2362,12 @@ const createStyles = (theme) =>
       alignItems: 'center',
       justifyContent: 'center',
     },
+    albumBackButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-start',
+      paddingLeft: 4,
+    },
     dropdownOverlay: {
       flex: 1,
       backgroundColor: 'rgba(0,0,0,0.3)',
@@ -1649,10 +2420,23 @@ const createStyles = (theme) =>
       backgroundColor: theme.colors.surfaceElevated,
       gap: 6,
     },
+    tabButtonActive: {
+      backgroundColor: theme.colors.primary,
+    },
     tabText: {
-      fontSize: 14,
+      fontSize: 13,
       fontWeight: '600',
       color: theme.colors.textSecondary,
+    },
+    tabTextActive: {
+      color: theme.colors.background,
+    },
+    floatingHeaderContainer: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      paddingBottom: 8,
     },
     countContainer: {
       alignItems: 'center',
@@ -1678,6 +2462,9 @@ const createStyles = (theme) =>
       overflow: 'hidden',
       backgroundColor: theme.colors.surfaceElevated,
       borderWidth: 0,
+    },
+    skeletonThumbnail: {
+      backgroundColor: 'rgba(150, 150, 150, 0.15)', // Smooth light gray placeholder
     },
     thumbnail: {
       width: '100%',
@@ -1748,6 +2535,19 @@ const createStyles = (theme) =>
       backgroundColor: 'transparent',
       borderTopWidth: 0,
     },
+    phantomSkeletonContainer: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      paddingHorizontal: 0,
+      marginBottom: 16,
+    },
+    phantomSkeleton: {
+      width: THUMBNAIL_SIZE,
+      height: THUMBNAIL_SIZE,
+      margin: 0.5,
+      borderRadius: 0,
+      opacity: 0.5,
+    },
     uploadButton: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -1807,10 +2607,15 @@ const createStyles = (theme) =>
       justifyContent: 'center',
       alignItems: 'center',
     },
+    viewerInfoOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      pointerEvents: 'none',
+    },
     viewerInfoTop: {
       position: 'absolute',
       left: 24,
       right: 24,
+      top: 56, // Positioned from top for centering
       alignItems: 'center',
     },
     viewerInfoDate: {
@@ -1824,6 +2629,7 @@ const createStyles = (theme) =>
       position: 'absolute',
       left: 24,
       right: 24,
+      bottom: 24, // Positioned from bottom for centering
       alignItems: 'center',
     },
     viewerInfoResolution: {
@@ -1880,7 +2686,39 @@ const createStyles = (theme) =>
     },
     quickSelectScroll: {
       flexGrow: 0,
-      marginBottom: 24,
+      marginBottom: 16,
+    },
+    tagAutocompleteContainer: {
+      marginBottom: 16,
+      paddingVertical: 8,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border,
+    },
+    tagAutocompleteLabel: {
+      fontSize: 11,
+      fontWeight: '500',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: 8,
+    },
+    tagAutocompleteScroll: {
+      flexGrow: 0,
+      maxHeight: 44,
+    },
+    tagAutocompleteChip: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 16,
+      backgroundColor: theme.colors.surfaceElevated,
+      marginRight: 8,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    tagAutocompleteChipText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: theme.colors.textPrimary,
     },
     quickSelectChip: {
       paddingHorizontal: 12,
@@ -1891,6 +2729,7 @@ const createStyles = (theme) =>
     },
     quickSelectText: {
       fontSize: 13,
+      color: theme.colors.textPrimary,
     },
     uploadModalButtons: {
       flexDirection: 'row',
@@ -1902,6 +2741,23 @@ const createStyles = (theme) =>
       paddingVertical: 12,
       borderRadius: 8,
       alignItems: 'center',
+    },
+    // Keyboard Accessory Styles (iOS)
+    keyboardAccessoryContainer: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: 'rgba(0,0,0,0.1)',
+    },
+    keyboardAccessoryButton: {
+      paddingHorizontal: 12,
+      paddingVertical: 4,
+    },
+    keyboardAccessoryText: {
+      fontSize: 16,
+      fontWeight: '600',
     },
     // Progress Bar Styles
     progressContainer: {
@@ -1928,17 +2784,81 @@ const createStyles = (theme) =>
       fontSize: 12,
       marginTop: 8,
     },
+    // Chip Input Styles for Tag Editor
+    chipInputContainer: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      borderWidth: 1,
+      borderRadius: 10,
+      padding: 8,
+      minHeight: 52,
+      marginBottom: 16,
+    },
+    chip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: 16,
+      marginRight: 6,
+      marginBottom: 6,
+      gap: 4,
+    },
+    chipText: {
+      color: theme.colors.background,
+      fontSize: 13,
+      fontWeight: '600',
+    },
+    chipTextInput: {
+      flex: 1,
+      minWidth: 100,
+      fontSize: 15,
+      paddingVertical: 6,
+      marginBottom: 6,
+    },
+    tagAutocompleteContainer: {
+      marginBottom: 12,
+    },
+    tagAutocompleteLabel: {
+      fontSize: 11,
+      fontWeight: '500',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: 6,
+    },
+    tagAutocompleteScroll: {
+      flexGrow: 0,
+      maxHeight: 44,
+    },
+    tagAutocompleteChip: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 16,
+      backgroundColor: theme.colors.surfaceElevated,
+      marginRight: 8,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    tagAutocompleteChipText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: theme.colors.textPrimary,
+    },
     // Header & Album Folder Styles
     headerRightAction: {
-      width: 60,
+      width: 70,
       alignItems: 'flex-end',
-      paddingRight: 8,
+      justifyContent: 'center',
+      paddingRight: 12,
     },
     clearFilterButton: {
-      backgroundColor: 'rgba(0,0,0,0.05)',
-      paddingHorizontal: 10,
-      paddingVertical: 6,
-      borderRadius: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 3,
+      borderRadius: 16,
+      borderWidth: 1,
+      width: 70,
+      borderColor: theme.colors.primary,
     },
     albumsGridContent: {
       padding: 16,
