@@ -5,14 +5,15 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
+  Pressable,
   Alert,
   StyleSheet,
   Platform,
   Keyboard,
+  KeyboardAvoidingView,
+  ScrollView,
   Animated,
 } from 'react-native';
-import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 
@@ -69,18 +70,33 @@ export const ProjectManager = ({
   };
 
   const confirmDelete = (name) => {
-    const count = tasks.filter(t => t.project === name).length;
+    const projectTasks = tasks.filter(t => t.project === name);
+    const taskCount = projectTasks.length;
+    const subtaskCount = projectTasks.reduce(
+      (sum, t) => sum + (t.subtasks ? t.subtasks.length : 0),
+      0
+    );
+
+    let message;
+    if (taskCount === 0) {
+      message = `Delete "${name}"?`;
+    } else {
+      const taskWord = taskCount === 1 ? 'task' : 'tasks';
+      const subtaskFragment = subtaskCount > 0
+        ? ` and ${subtaskCount} subtask${subtaskCount === 1 ? '' : 's'}`
+        : '';
+      message = `"${name}" contains ${taskCount} ${taskWord}${subtaskFragment}. Deleting this project will permanently delete them. This cannot be undone.`;
+    }
+
     Alert.alert(
       'Delete Project',
-      count > 0 
-        ? `"${name}" has ${count} tasks. Are you sure you want to delete this project? The tasks will be moved to "No Project".`
-        : `Delete "${name}"?`,
+      message,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => onDelete(name, { onMoveTasks: count > 0 })
+          onPress: () => onDelete(name, { onDeleteTasks: taskCount > 0 })
         }
       ]
     );
@@ -89,84 +105,98 @@ export const ProjectManager = ({
   const styles = createStyles(theme);
 
   return (
-    <Modal 
-      animationType="none" 
-      transparent 
-      visible={visible} 
+    <Modal
+      animationType="none"
+      transparent
+      visible={visible}
       onRequestClose={handleClose}
     >
-      <TouchableWithoutFeedback onPress={handleClose}>
-        <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
-          <TouchableWithoutFeedback>
-            <View style={styles.content}>
-          <View style={styles.header}>
-            <Text style={styles.title}>Edit Projects</Text>
-          </View>
+      <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
+        {/* Backdrop: sibling of the sheet, so its press handler can't steal
+            touch events from the ScrollView inside the sheet. */}
+        <Pressable style={styles.backdrop} onPress={handleClose} />
 
-          <View style={styles.addRow}>
-            <TextInput
-              ref={inputRef}
-              style={styles.input}
-              placeholder="New project name..."
-              placeholderTextColor={theme.colors.textPlaceholder}
-              value={newName}
-              onChangeText={setNewName}
-              onSubmitEditing={handleAdd}
-              returnKeyType="done"
-              blurOnSubmit={false}
-            />
-            <TouchableOpacity style={styles.addBtn} onPress={handleAdd}>
-              <Icon name="plus" size={22} color={theme.colors.textPrimary} />
+        <KeyboardAvoidingView
+          style={styles.sheetWrap}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          pointerEvents="box-none"
+        >
+          <View style={styles.content}>
+            <View style={styles.header}>
+              <Text style={styles.title}>Edit Projects</Text>
+            </View>
+
+            <View style={styles.addRow}>
+              <TextInput
+                ref={inputRef}
+                style={styles.input}
+                placeholder="New project name..."
+                placeholderTextColor={theme.colors.textPlaceholder}
+                value={newName}
+                onChangeText={setNewName}
+                onSubmitEditing={handleAdd}
+                returnKeyType="done"
+                blurOnSubmit={false}
+              />
+              <TouchableOpacity style={styles.addBtn} onPress={handleAdd}>
+                <Icon name="plus" size={22} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={styles.list}
+              contentContainerStyle={styles.listContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              showsVerticalScrollIndicator={true}
+              nestedScrollEnabled
+            >
+              {projects.map(item => (
+                <View key={item} style={styles.listItem}>
+                  <Icon name="folder" size={20} color={theme.colors.textPrimary} style={styles.folderIcon} />
+                  <Text style={styles.name} numberOfLines={1}>{item}</Text>
+                  <TouchableOpacity
+                    onPress={() => confirmDelete(item)}
+                    style={styles.deleteBtn}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Icon name="close-circle" size={22} color={theme.colors.accentError} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              {projects.length === 0 && (
+                <Text style={styles.empty}>No projects yet. Create one above!</Text>
+              )}
+            </ScrollView>
+
+            <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
+              <Text style={styles.closeBtnText}>Close Edit</Text>
             </TouchableOpacity>
           </View>
-
-          <KeyboardAwareScrollView
-            style={styles.list}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={true}
-          >
-            {projects.map(item => (
-              <View key={item} style={styles.listItem}>
-                <Icon name="folder" size={20} color={theme.colors.textPrimary} style={styles.folderIcon} />
-                <Text style={styles.name}>{item}</Text>
-                <TouchableOpacity 
-                  onPress={() => confirmDelete(item)} 
-                  style={styles.deleteBtn}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <Icon name="close-circle" size={22} color={theme.colors.accentError} />
-                </TouchableOpacity>
-              </View>
-            ))}
-            {projects.length === 0 && (
-              <Text style={styles.empty}>No projects yet. Create one above!</Text>
-            )}
-            <View style={styles.bottomPadding} />
-          </KeyboardAwareScrollView>
-
-          <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
-            <Text style={styles.closeBtnText}>Close Edit</Text>
-          </TouchableOpacity>
-          </View>
-        </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
       </Animated.View>
-    </TouchableWithoutFeedback>
     </Modal>
   );
 };
 
 const createStyles = (theme) => StyleSheet.create({
-  overlay: { 
-    flex: 1, 
-    backgroundColor: 'rgba(0, 0, 0, 0.5)', 
-    justifyContent: 'flex-end' 
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  sheetWrap: {
+    flex: 1,
+    justifyContent: 'flex-end',
   },
   content: {
     backgroundColor: theme.colors.background,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     padding: 16,
-    paddingBottom: Platform.OS === 'ios' ? 34 : 20, // iPhone safe area
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
     maxHeight: '85%',
     minHeight: 400,
   },
@@ -206,7 +236,12 @@ const createStyles = (theme) => StyleSheet.create({
     alignItems: 'center' 
   },
   list: {
+    flexGrow: 0,
+    flexShrink: 1,
     maxHeight: 350,
+  },
+  listContent: {
+    paddingBottom: 12,
   },
   listItem: { 
     flexDirection: 'row', 
@@ -250,8 +285,5 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textSecondary,
     fontSize: theme.typography.body,
     fontWeight: '600',
-  },
-  bottomPadding: {
-    height: 20,
   },
 });

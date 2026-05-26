@@ -11,6 +11,7 @@ import {
   TouchableWithoutFeedback,
   Switch,
   AppState,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -26,8 +27,9 @@ const SALT_STORE = 'vault_salt';
 export default function SettingsScreen() {
   const { theme, isDark, toggleTheme } = useTheme();
   const insets = useSafeAreaInsets();
-  const { serverIP, isConnected, loading, saveIP, checkConnection } = useServer();
-  const { logout } = useAuth();
+  const { serverIP, isConnected, loading, saveIP, checkConnection, api } = useServer();
+  const [isHealing, setIsHealing] = useState(false);
+  const { logout, getAuthHeaders } = useAuth();
   const [ipInput, setIpInput] = useState(serverIP);
   const [hasVault, setHasVault] = useState(false);
   
@@ -125,6 +127,60 @@ export default function SettingsScreen() {
       setIsChanging(false);
     }
   };
+
+  const triggerMediaHeal = useCallback(async () => {
+    Alert.alert(
+      'Heal Media Vault',
+      'This will scan your server database, regenerate missing thumbnails, and purge broken ghost files. Proceed?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Heal Vault',
+          style: 'destructive',
+          onPress: async () => {
+            setIsHealing(true);
+            try {
+              const authHeaders = getAuthHeaders();
+              const res = await api.post('/media/heal', {}, authHeaders);
+              
+              if (res && res.success) {
+                // --- 🧹 DUAL-ACTION: LOCAL CACHE WIPE ---
+                try {
+                  console.log('[Settings] Server healed. Flushing local app cache...');
+                  
+                  // Clear AsyncStorage cache entries related to media
+                  const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+                  const keys = await AsyncStorage.getAllKeys();
+                  const mediaCacheKeys = keys.filter(k => k.includes('media') || k.includes('gallery') || k.includes('image'));
+                  if (mediaCacheKeys.length > 0) {
+                    await AsyncStorage.multiRemove(mediaCacheKeys);
+                    console.log(`[Settings] Cleared ${mediaCacheKeys.length} cache keys`);
+                  }
+                  
+                  console.log('[Settings] Local cache successfully purged.');
+                } catch (cacheErr) {
+                  console.warn('[Settings] Cache wipe encountered an issue:', cacheErr);
+                }
+                // ----------------------------------------
+
+                Alert.alert(
+                  'Vault Healed & Cache Cleared ✅',
+                  `Healthy Files: ${res.stats.healthy}\nRescued: ${res.stats.rescued || 0}\nThumbnails Built: ${res.stats.regenerated}\nGhosts Purged: ${res.stats.deleted}\n\nLocal app memory has been flushed.`
+                );
+              } else {
+                Alert.alert('Error', res?.error || 'Failed to heal the vault.');
+              }
+            } catch (error) {
+              console.error('[Settings] Heal error:', error);
+              Alert.alert('Error', 'Network request failed.');
+            } finally {
+              setIsHealing(false);
+            }
+          }
+        }
+      ]
+    );
+  }, [api]);
 
   const handleResetVault = async () => {
     Alert.alert(
@@ -252,6 +308,43 @@ export default function SettingsScreen() {
                 >
                   <Icon name="connection" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
                   <Text style={styles.secondaryButtonText}>Test Connection</Text>
+                </TouchableOpacity>
+              )}
+
+              {isConnected && (
+                <TouchableOpacity 
+                  style={{
+                    flexDirection: 'row', 
+                    alignItems: 'center', 
+                    justifyContent: 'space-between',
+                    paddingVertical: 16,
+                    paddingHorizontal: 20,
+                    backgroundColor: theme.colors.surfaceElevated,
+                    borderRadius: 12,
+                    marginTop: 12,
+                  }} 
+                  onPress={triggerMediaHeal}
+                  disabled={isHealing}
+                  activeOpacity={0.7}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                    <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(239, 68, 68, 0.1)', justifyContent: 'center', alignItems: 'center' }}>
+                      <Icon name="medkit" size={20} color="#ef4444" />
+                    </View>
+                    <View>
+                      <Text style={{ color: theme.colors.textPrimary, fontSize: 16, fontWeight: '600' }}>
+                        Heal Media Vault
+                      </Text>
+                      <Text style={{ color: theme.colors.textSecondary, fontSize: 13, marginTop: 2 }}>
+                        {isHealing ? 'Scanning Dell R730 database...' : 'Purge ghosts & rebuild thumbnails'}
+                      </Text>
+                    </View>
+                  </View>
+                  {isHealing ? (
+                    <ActivityIndicator size="small" color="#ef4444" />
+                  ) : (
+                    <Icon name="chevron-right" size={24} color={theme.colors.textTertiary} />
+                  )}
                 </TouchableOpacity>
               )}
             </View>

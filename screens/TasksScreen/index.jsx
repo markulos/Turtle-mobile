@@ -54,7 +54,15 @@ export default function TasksScreen() {
   const [inlineAddingProject, setInlineAddingProject] = useState(null);
   const [inlineTaskTitle, setInlineTaskTitle] = useState('');
   const inlineInputRef = useRef(null);
-  
+
+  // Pull-down search state
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchAnim = useRef(new Animated.Value(0)).current;
+  const searchInputRef = useRef(null);
+  const SEARCH_BAR_HEIGHT = 52;
+  const OVERSCROLL_REVEAL_THRESHOLD = -56;
+
   // Ref for scrolling to items when keyboard appears
   const listRef = useRef(null);
   const scrollY = useRef(0);
@@ -138,12 +146,36 @@ export default function TasksScreen() {
   };
   
   // Use collapsible tasks hook - ALL collapsed by default
-  const collapsible = useCollapsibleTasks(tasks, projects, { 
-    showIncompleteOnly, 
+  const collapsible = useCollapsibleTasks(tasks, projects, {
+    showIncompleteOnly,
     selectedProject,
     selectedTags,
-    tagFilterMode
+    tagFilterMode,
+    searchQuery,
   });
+
+  // Animate the search bar in/out on the UI thread (transform + opacity).
+  useEffect(() => {
+    Animated.timing(searchAnim, {
+      toValue: showSearch ? 1 : 0,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  }, [showSearch, searchAnim]);
+
+  // Focus the input the moment the bar finishes opening; if dismissed, drop the query.
+  useEffect(() => {
+    if (showSearch) {
+      const id = setTimeout(() => searchInputRef.current?.focus(), 240);
+      return () => clearTimeout(id);
+    }
+    if (searchQuery) setSearchQuery('');
+    Keyboard.dismiss();
+  }, [showSearch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const dismissSearch = useCallback(() => {
+    setShowSearch(false);
+  }, []);
   
   // Function to scroll to a specific item
   const scrollToItem = useCallback((itemId) => {
@@ -541,12 +573,79 @@ export default function TasksScreen() {
           onDateChange={lazyRefresh}
         />
       ) : (
-        <View style={{ flex: 1 }}>
+        <View style={styles.listClip}>
+          {/* Pull-down search bar — overlays the top of the list. Animated on the
+              UI thread (transform + opacity only) so the gesture stays smooth.
+              The list below shares the same Animated value, so the two move as a unit. */}
+          <Animated.View
+            style={[
+              styles.searchBarWrap,
+              {
+                transform: [{
+                  translateY: searchAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-SEARCH_BAR_HEIGHT, 0],
+                  }),
+                }],
+                opacity: searchAnim,
+              },
+            ]}
+            pointerEvents={showSearch ? 'auto' : 'none'}
+          >
+            <View style={styles.searchInputRow}>
+              <Icon name="magnify" size={18} color={theme.colors.textTertiary} style={styles.searchIcon} />
+              <TextInput
+                ref={searchInputRef}
+                style={styles.searchInput}
+                placeholder="Search tasks and subtasks..."
+                placeholderTextColor={theme.colors.textPlaceholder}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                returnKeyType="search"
+                autoCorrect={false}
+                autoCapitalize="none"
+                clearButtonMode="while-editing"
+              />
+              {searchQuery.length > 0 && Platform.OS !== 'ios' && (
+                <TouchableOpacity
+                  onPress={() => setSearchQuery('')}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  style={styles.searchClearBtn}
+                >
+                  <Icon name="close-circle" size={16} color={theme.colors.textTertiary} />
+                </TouchableOpacity>
+              )}
+            </View>
+            <TouchableOpacity style={styles.searchCancelBtn} onPress={dismissSearch}>
+              <Text style={styles.searchCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </Animated.View>
+
+          <Animated.View
+            style={[
+              styles.listShift,
+              {
+                transform: [{
+                  translateY: searchAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, SEARCH_BAR_HEIGHT],
+                  }),
+                }],
+              },
+            ]}
+          >
           <SectionList
             ref={listRef}
             sections={collapsible.groupedData}
             keyExtractor={(item, index) => item?.id || `section-${index}`}
-            onScroll={(e) => { scrollY.current = e.nativeEvent.contentOffset.y; }}
+            onScroll={(e) => {
+              const y = e.nativeEvent.contentOffset.y;
+              scrollY.current = y;
+              // Reveal the search bar when the user overscrolls past the threshold.
+              if (!showSearch && y <= OVERSCROLL_REVEAL_THRESHOLD) {
+                setShowSearch(true);
+              }
+            }}
             scrollEventThrottle={16}
             renderItem={({ item, section }) => {
               if (!item) return null;
@@ -669,7 +768,7 @@ export default function TasksScreen() {
             }}
             contentContainerStyle={[
               styles.list,
-              { paddingBottom: Math.max(100, keyboardHeight + 20) }
+              { paddingBottom: Math.max(100, keyboardHeight + 20) },
             ]}
             stickySectionHeadersEnabled={false}
             refreshControl={
@@ -682,25 +781,34 @@ export default function TasksScreen() {
             }
             ListEmptyComponent={(
               <View style={styles.emptyState}>
-                <Icon name="folder-open" size={64} color={theme.colors.textMuted} />
+                <Icon
+                  name={searchQuery ? 'magnify-close' : 'folder-open'}
+                  size={64}
+                  color={theme.colors.textMuted}
+                />
                 <Text style={styles.emptyText}>
-                  {showIncompleteOnly && tasks.some(t => t.completed)
-                    ? 'No incomplete tasks'
-                    : 'No tasks yet'}
+                  {searchQuery
+                    ? `No matches for "${searchQuery}"`
+                    : (showIncompleteOnly && tasks.some(t => t.completed)
+                      ? 'No incomplete tasks'
+                      : 'No tasks yet')}
                 </Text>
-                <TouchableOpacity
-                  onPress={() => {
-                    setEditingTask(null);
-                    setShowTaskForm(true);
-                  }}
-                  style={styles.addNewTaskBtn}
-                >
-                  <Icon name="plus" size={20} color={theme.colors.textPrimary} />
-                  <Text style={styles.addNewTaskText}>Add new task</Text>
-                </TouchableOpacity>
+                {!searchQuery && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setEditingTask(null);
+                      setShowTaskForm(true);
+                    }}
+                    style={styles.addNewTaskBtn}
+                  >
+                    <Icon name="plus" size={20} color={theme.colors.textPrimary} />
+                    <Text style={styles.addNewTaskText}>Add new task</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
           />
+          </Animated.View>
         </View>
       )}
 
@@ -891,7 +999,60 @@ const createStyles = (theme) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  
+
+  listClip: {
+    flex: 1,
+    overflow: 'hidden',
+  },
+  listShift: {
+    flex: 1,
+  },
+  searchBarWrap: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 52,
+    zIndex: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    backgroundColor: theme.colors.background,
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
+  },
+  searchInputRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.inputBackground,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    height: 36,
+  },
+  searchIcon: {
+    marginRight: 6,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: theme.typography.body,
+    color: theme.colors.inputText,
+    padding: 0,
+  },
+  searchClearBtn: {
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+  },
+  searchCancelBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  searchCancelText: {
+    color: theme.colors.accentPrimary || theme.colors.textPrimary,
+    fontSize: theme.typography.body,
+    fontWeight: '600',
+  },
+
   activeFiltersBar: {
     backgroundColor: theme.colors.background,
     paddingVertical: 8,

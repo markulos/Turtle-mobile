@@ -20,12 +20,15 @@ export const ServerProvider = ({ children }) => {
     return response.json();
   };
 
-  const apiPost = async (endpoint, data) => {
+  const apiPost = async (endpoint, data, customHeaders = {}) => {
     const url = `${getBaseUrl()}${endpoint}`;
     console.log(`[API POST] ${url}`, data);
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        ...customHeaders 
+      },
       body: JSON.stringify(data),
     });
     if (!response.ok) {

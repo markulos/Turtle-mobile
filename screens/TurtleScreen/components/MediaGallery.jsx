@@ -19,6 +19,8 @@ import {
   TextInput,
   Keyboard,
   InputAccessoryView,
+  KeyboardAvoidingView,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -31,13 +33,339 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { FlashList } from '@shopify/flash-list';
 import { useTheme } from '../../../context/ThemeContext';
+
+// Create an animated version of FlashList to match our existing architecture
+const AnimatedFlashList = Animated.createAnimatedComponent(FlashList);
 import { useServer } from '../../../context/ServerContext';
 
+// Constants for hitSlop to prevent re-renders
+const HIT_SLOP_10 = { top: 10, bottom: 10, left: 10, right: 10 };
+const HIT_SLOP_15 = { top: 15, bottom: 15, left: 15, right: 15 };
+const HIT_SLOP_20 = { top: 20, bottom: 20, left: 20, right: 20 };
+
+// Sophisticated breathing pulse skeleton for image loading
+const ImageSkeleton = ({ style }) => {
+  const pulseAnim = useRef(new Animated.Value(0.4)).current;
+  const { theme } = useTheme();
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 0.85,
+          duration: 1000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0.4,
+          duration: 1000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [pulseAnim]);
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        {
+          backgroundColor: 'transparent',
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: theme.colors.border,
+          opacity: pulseAnim,
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 1,
+        },
+      ]}
+    />
+  );
+};
+
+// Grid-level skeleton for initial loading state
+const GridSkeleton = () => {
+  const pulseAnim = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 0.7,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0.3,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [pulseAnim]);
+
+  // Generate 9 skeleton items (3x3 grid)
+  const skeletonItems = Array.from({ length: 9 }, (_, i) => i);
+
+  return (
+    <View style={{ flex: 1, paddingHorizontal: 0, paddingTop: 8 }}>
+      <View style={styles.flexRowWrap}>
+        {skeletonItems.map((index) => (
+          <Animated.View
+            key={index}
+            style={{
+              width: width / 3 - 0.5,
+              height: width / 3 - 0.5,
+              margin: 0.25,
+              backgroundColor: '#E1E9EE',
+              opacity: pulseAnim,
+            }}
+          />
+        ))}
+      </View>
+    </View>
+  );
+};
+
+import { useAuth } from '../../../context/AuthContext';
+
 const { width, height } = Dimensions.get('window');
-const THUMBNAIL_SIZE = width / 3 - 0.5; // 3 columns with ultra-thin hairline gap
-const GAP = 4;
+const THUMBNAIL_SIZE = width / 3 - 0.5; 
+const GAP = 15; // 💎 WIDENED TO 15px FOR PREMIUM SEPARATION
 const ITEM_WIDTH = width + GAP;
+
+// Full-screen video player component (extracted from main component)
+const FullScreenVideoPlayer = ({ sourceUrl, isActive, styles, insets }) => {
+  const player = useVideoPlayer(sourceUrl, player => {
+    player.loop = true;
+    player.muted = true;
+  });
+  const [isPlaying, setIsPlaying] = useState(isActive);
+  const [isMuted, setIsMuted] = useState(true);
+
+  useEffect(() => {
+    if (isActive) { player.play(); setIsPlaying(true); } 
+    else { player.pause(); player.currentTime = 0; player.muted = true; setIsMuted(true); setIsPlaying(false); }
+  }, [isActive, player]);
+
+  const togglePlay = () => { isPlaying ? player.pause() : player.play(); setIsPlaying(!isPlaying); };
+  const toggleMute = () => { player.muted = !isMuted; setIsMuted(!isMuted); };
+
+  return (
+    <Pressable onPress={togglePlay} style={styles.viewerVideoContainer}>
+      <VideoView style={styles.viewerVideo} player={player} contentFit="contain" nativeControls={false} />
+      <TouchableOpacity 
+        style={[styles.muteButton, { top: insets.top + 16, left: 16, position: 'absolute' }]} 
+        onPress={toggleMute} 
+        activeOpacity={0.7}
+      >
+        <Icon name={isMuted ? 'volume-off' : 'volume-high'} size={24} color="#fff" />
+      </TouchableOpacity>
+    </Pressable>
+  );
+};
+
+// Progressive image component with blurhash → compressed → RAW layers
+const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLoad, getFullUrl, api }) => {
+  const [shouldLoadRaw, setShouldLoadRaw] = useState(false);
+  const [highResLoaded, setHighResLoaded] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  // 1. STRICT SWIPE GUARD & 1-SECOND DELAY
+  useEffect(() => {
+    if (!isActive) {
+      setShouldLoadRaw(false);
+      setHighResLoaded(false);
+      fadeAnim.setValue(0);
+      return;
+    }
+
+    if (!media.compressedUrl && api) {
+      api.post(`/media/${media.id}/compress`).catch(() => {});
+    }
+
+    const timer = setTimeout(() => {
+      setShouldLoadRaw(true);
+    }, 1000);
+    
+    return () => clearTimeout(timer);
+  }, [isActive, media, fadeAnim, api]);
+
+  // 2. SMOOTH CROSSFADE ON LOAD
+  useEffect(() => {
+    if (shouldLoadRaw && highResLoaded) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 300,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }).start();
+    }
+    
+    if (!isActive) {
+      fadeAnim.setValue(0);
+    }
+  }, [shouldLoadRaw, highResLoaded, isActive, fadeAnim]);
+
+  const compressedUri = media.compressedUrl 
+    ? getFullUrl(media.compressedUrl)
+    : getFullUrl(media.rawUrl || media.url);
+  const rawUri = getFullUrl(media.rawUrl || media.url);
+
+  return (
+    <View style={[style, { backgroundColor: '#000', overflow: 'hidden' }]}>
+      {/* LAYER 1: Fast compressed image (Base Layer - ALWAYS MOUNTED) */}
+      <Image
+        source={{ uri: compressedUri }}
+        style={StyleSheet.absoluteFillObject}
+        contentFit={contentFit}
+        transition={0}
+        cachePolicy="memory-disk"
+        placeholder={media.blurhash ? { blurhash: media.blurhash } : null}
+        placeholderContentFit="cover"
+      />
+
+      {/* LAYER 2: High-res RAW (Overlays compressed when ready) */}
+      {shouldLoadRaw && isActive && (
+        <Animated.View style={[StyleSheet.absoluteFillObject, { opacity: fadeAnim, zIndex: 2 }]} pointerEvents="none">
+          <Image
+            source={{ uri: rawUri }}
+            style={StyleSheet.absoluteFillObject}
+            contentFit={contentFit}
+            transition={0}
+            cachePolicy="disk"
+            priority="high"
+            onLoad={() => {
+              setHighResLoaded(true);
+              if (onRawLoad) onRawLoad();
+            }}
+            onError={onError}
+          />
+        </Animated.View>
+      )}
+    </View>
+  );
+};
+
+// Image viewer component with pinch-to-zoom (extracted from main component)
+const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, api }) => {
+  const scrollRef = useRef(null);
+  const lastTapRef = useRef(0);
+  const isZoomedRef = useRef(false);
+
+  // 1. Track HD State
+  const [rawLoaded, setRawLoaded] = useState(false);
+
+  // Reset HD state when user swipes away
+  useEffect(() => {
+    if (!isActive) setRawLoaded(false);
+  }, [isActive]);
+  
+  // Reset zoom when mediaId changes (swipe to different image)
+  useEffect(() => {
+    if (scrollRef.current && isZoomedRef.current) {
+      scrollRef.current.scrollResponderZoomTo({
+        x: 0,
+        y: 0,
+        width: width,
+        height: height,
+        animated: false,
+      });
+      isZoomedRef.current = false;
+    }
+  }, [mediaId]);
+  
+  const handleDoubleTap = useCallback(() => {
+    const now = Date.now();
+    if (now - lastTapRef.current < 300) { // 300ms double-tap window
+      // Toggle zoom
+      if (scrollRef.current) {
+        if (!isZoomedRef.current) {
+          // Zoom in to center
+          scrollRef.current.scrollResponderZoomTo({
+            x: width * 0.25,
+            y: height * 0.25,
+            width: width * 0.5,
+            height: height * 0.5,
+            animated: true,
+          });
+        } else {
+          // Zoom out
+          scrollRef.current.scrollResponderZoomTo({
+            x: 0,
+            y: 0,
+            width: width,
+            height: height,
+            animated: true,
+          });
+        }
+        isZoomedRef.current = !isZoomedRef.current;
+      }
+    }
+    lastTapRef.current = now;
+  }, []);
+  
+  return (
+    <View style={{ flex: 1, width: width, justifyContent: 'center', alignItems: 'center' }}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.viewerScrollContent}
+        maximumZoomScale={4}
+        minimumZoomScale={1}
+        bouncesZoom={true}
+        showsHorizontalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}
+        pinchGestureEnabled={true}
+        scrollEventThrottle={16}
+        onScroll={(e) => {
+          const scale = e.nativeEvent?.zoomScale || 1;
+        }}
+      >
+        <Pressable onPress={handleDoubleTap}>
+          <ProgressiveImage
+            media={item}
+            style={styles.viewerImage}
+            contentFit="contain"
+            isActive={isActive}
+            onRawLoad={() => setRawLoaded(true)}
+            onError={(error) => console.error('[MediaGallery] Full-res load error:', error)}
+            getFullUrl={getFullUrl}
+            api={api}
+          />
+        </Pressable>
+      </ScrollView>
+      
+      {/* STATIC HD HUD */}
+      {rawLoaded && isActive && (
+        <View style={{
+          position: 'absolute',
+          bottom: 24,
+          right: 24,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          paddingHorizontal: 6,
+          paddingVertical: 3,
+          borderRadius: 4,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: 'rgba(255,255,255,0.2)',
+        }} pointerEvents="none">
+          <Text style={{
+            color: 'rgba(255,255,255,0.7)',
+            fontSize: 9,
+            fontWeight: '800',
+            letterSpacing: 1,
+          }}>HD</Text>
+        </View>
+      )}
+    </View>
+  );
+};
 
 /**
  * MediaGallery - Photo/Video vault gallery grid with Phone Uploads / Turtle Base toggle
@@ -49,6 +377,7 @@ const ITEM_WIDTH = width + GAP;
 export default function MediaGallery({ onClose, autoUpload = false }) {
   const { theme } = useTheme();
   const { api, getBaseUrl } = useServer();
+  const { token } = useAuth();
   const insets = useSafeAreaInsets();
   
   // === TAB & DATA STATE ===
@@ -76,22 +405,220 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const [hasMoreServer, setHasMoreServer] = useState(true);
   const [uploadOffset, setUploadOffset] = useState(0);
   const [serverOffset, setServerOffset] = useState(0);
-  const LIMIT = 150;
+  const [globalUploadsTotal, setGlobalUploadsTotal] = useState(0);
+  const LIMIT = 60; // Micro-batching for zero-stutter appends
 
   // === VIEWER STATE ===
   const [selectedMedia, setSelectedMedia] = useState(null);
+  const [isClosing, setIsClosing] = useState(false); // Hardware-accelerated close state
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const [infoVisible, setInfoVisible] = useState(true);
   const infoOpacityAnim = useRef(new Animated.Value(1)).current;
   const [zoomScale, setZoomScale] = useState(1); // Track zoom level for close prevention
   
+  // === DRAWER STATE & PHYSICS ===
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const drawerY = useRef(new Animated.Value(height)).current;
+
+  const openMetadataDrawer = useCallback(() => {
+    setIsDrawerOpen(true);
+    Animated.spring(drawerY, { toValue: height * 0.45, useNativeDriver: true, tension: 65, friction: 10 }).start();
+  }, [drawerY]);
+
+  const closeMetadataDrawer = useCallback(() => {
+    Animated.timing(drawerY, { toValue: height, duration: 250, easing: Easing.out(Easing.ease), useNativeDriver: true }).start(() => setIsDrawerOpen(false));
+  }, [drawerY]);
+  
   // === ALBUM & TAG STATE ===
   const [globalAlbums, setGlobalAlbums] = useState(['Phone Uploads']);
   const [albumCovers, setAlbumCovers] = useState({}); // Cover thumbnails for 2x2 grids
+  const [albumSearchQuery, setAlbumSearchQuery] = useState(''); // Album search filter
+  const [uploadsSearchQuery, setUploadsSearchQuery] = useState(''); // Uploads/All Photos search filter
+  const [isUploadsSearchVisible, setIsUploadsSearchVisible] = useState(false);
+  const uploadsSearchAnim = useRef(new Animated.Value(0)).current;
+  
+  // Animate unified search bar for both uploads and albums
+  useEffect(() => {
+    const isVisible = isUploadsSearchVisible || (activeTab === 'albums' && albumSearchQuery !== '');
+    Animated.timing(uploadsSearchAnim, {
+      toValue: isVisible ? 1 : 0,
+      duration: 200,
+      easing: Easing.bezier(0.4, 0.0, 0.2, 1),
+      useNativeDriver: true,
+    }).start();
+  }, [isUploadsSearchVisible, activeTab, albumSearchQuery, uploadsSearchAnim]);
+  
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [pendingAssets, setPendingAssets] = useState([]);
   const [selectedTags, setSelectedTags] = useState([]);
+  
+  // === BULK SELECTION STATE ===
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedGridItems, setSelectedGridItems] = useState(new Set());
+
+  const toggleGridSelection = useCallback((id) => {
+    setSelectedGridItems(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const [isBulkTagging, setIsBulkTagging] = useState(false);
+
+  const executeBulkTagSave = useCallback(async () => {
+    try {
+      // 1. What tags are CURRENTLY sitting in the UI input box?
+      let currentUiTags = [...editingTags];
+      if (tagInputValue.trim()) {
+        currentUiTags.push(tagInputValue.trim());
+      }
+      currentUiTags = Array.from(new Set(currentUiTags));
+
+      // 2. What were the ORIGINAL common tags before the user started typing?
+      let originalCommonTags = null;
+      Array.from(selectedGridItems).forEach(id => {
+        const item = uploadItems.find(i => i.id === id) || serverItems.find(i => i.id === id);
+        if (item) {
+          try {
+            const itemTags = JSON.parse(item.tags || '[]');
+            if (originalCommonTags === null) {
+              originalCommonTags = [...itemTags];
+            } else {
+              originalCommonTags = originalCommonTags.filter(t => itemTags.includes(t));
+            }
+          } catch(e) {}
+        }
+      });
+      originalCommonTags = originalCommonTags || [];
+
+      // 3. Determine exact user intent
+      // Tags they typed in that weren't there originally
+      const explicitAdditions = currentUiTags.filter(t => !originalCommonTags.includes(t));
+      // Original tags they clicked the 'X' on to delete
+      const explicitRemovals = originalCommonTags.filter(t => !currentUiTags.includes(t));
+
+      // 4. Process each item non-destructively
+      const promises = Array.from(selectedGridItems).map(id => {
+        const targetItem = uploadItems.find(i => i.id === id) || serverItems.find(i => i.id === id);
+        if (!targetItem) return Promise.resolve(null);
+        
+        let targetTags = [];
+        try { targetTags = JSON.parse(targetItem.tags || '[]'); } catch(e){}
+        
+        // ONLY add what's new. ONLY remove what was explicitly X'd out. Leave everything else alone.
+        let safeTags = [...targetTags];
+        
+        // Add new
+        explicitAdditions.forEach(t => { if (!safeTags.includes(t)) safeTags.push(t); });
+        
+        // Strip removed
+        safeTags = safeTags.filter(t => !explicitRemovals.includes(t));
+        
+        return api.put(`/media/${id}/tags`, {
+          tags: safeTags, 
+          filename: targetItem.filename, 
+          type: targetItem.type,
+          size: targetItem.size, 
+          url: targetItem.url || targetItem.rawUrl, 
+          thumbnailUrl: targetItem.thumbnailUrl,
+          width: targetItem.width, 
+          height: targetItem.height, 
+          duration: targetItem.duration,
+        }).then(() => ({ id, safeTags })); 
+      });
+      
+      const results = await Promise.all(promises);
+      
+      // 5. Update UI Safely
+      const updatesMap = {};
+      results.forEach(res => { if (res) updatesMap[res.id] = JSON.stringify(res.safeTags); });
+
+      const updateList = (prevList) => prevList.map(item => 
+        updatesMap[item.id] ? { ...item, tags: updatesMap[item.id] } : item
+      );
+      
+      setUploadItems(updateList);
+      setServerItems(updateList);
+      
+      // Only add to global albums if they actually typed something new
+      if (explicitAdditions.length > 0) {
+        setGlobalAlbums(prev => Array.from(new Set([...prev, ...explicitAdditions])).sort());
+      }
+      
+      setIsSelectMode(false);
+      setIsBulkTagging(false);
+      setSelectedGridItems(new Set());
+    } catch(e) { 
+      Alert.alert('Error', `Failed to update tags: ${e.message}`); 
+    }
+  }, [editingTags, tagInputValue, selectedGridItems, uploadItems, serverItems, api]);
+
+  const openBulkTagEditor = useCallback(() => {
+    // 1. Calculate common tags across all selected items
+    let commonTags = null;
+    Array.from(selectedGridItems).forEach(id => {
+      const item = uploadItems.find(i => i.id === id) || serverItems.find(i => i.id === id);
+      if (item) {
+        try {
+          const itemTags = JSON.parse(item.tags || '[]');
+          if (commonTags === null) {
+            commonTags = [...itemTags];
+          } else {
+            // Keep only tags that exist in all selected items
+            commonTags = commonTags.filter(t => itemTags.includes(t));
+          }
+        } catch(e) {}
+      }
+    });
+    
+    setEditingTags(commonTags || []);
+    setTagInputValue('');
+    setEditTagsVisible(true);
+    Animated.timing(tagFadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+  }, [selectedGridItems, uploadItems, serverItems, tagFadeAnim]);
+  
+  // Upload progress tracking.
+  //   `uploadPercentage` is the rounded integer shown in the "65%" label.
+  //   `progressAnim` is an Animated.Value (0–100) that smoothly drives the bar's width.
+  //   The refs are the source of truth, updated synchronously inside the XHR callbacks.
+  //   Overall = ((completed_items + current_item_fraction) / total_items) * 100.
+  const [uploadPercentage, setUploadPercentage] = useState(0);
+  const [uploadingItemIndex, setUploadingItemIndex] = useState(0);
+  const totalItemsRef = useRef(0);
+  const completedItemsRef = useRef(0);
+  const currentItemPctRef = useRef(0);
+  const progressAnim = useRef(new Animated.Value(0)).current;
+
+  const recomputeOverall = useCallback(({ snap = false } = {}) => {
+    const total = totalItemsRef.current;
+    if (!total) return;
+    const overall = Math.min(
+      100,
+      ((completedItemsRef.current + currentItemPctRef.current / 100) / total) * 100
+    );
+    setUploadPercentage(Math.round(overall));
+    if (snap) {
+      progressAnim.setValue(overall);
+    } else {
+      Animated.timing(progressAnim, {
+        toValue: overall,
+        duration: 180,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: false, // width is a layout prop; native driver can't drive it
+      }).start();
+    }
+  }, [progressAnim]);
+
+  const resetUploadProgress = useCallback(() => {
+    totalItemsRef.current = 0;
+    completedItemsRef.current = 0;
+    currentItemPctRef.current = 0;
+    setUploadPercentage(0);
+    progressAnim.setValue(0);
+  }, [progressAnim]);
   
   // Tag editor state
   // === TAG EDITOR STATE & ANIMATION ===
@@ -175,48 +702,13 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           Animated.spring(uploadModalY, {
             toValue: 0,
             useNativeDriver: true,
-            bounciness: 8,
+            friction: 8,
+            tension: 40,
           }).start();
         }
       },
     })
   ).current;
-
-  // === HEADER VISIBILITY STATE ===
-  // Simple state-based header that always starts visible on tab change
-  const [headerVisible, setHeaderVisible] = useState(true);
-  const headerTranslateY = useRef(new Animated.Value(0)).current;
-  const lastScrollY = useRef(0);
-  
-  // Animate header when visibility changes
-  useEffect(() => {
-    Animated.timing(headerTranslateY, {
-      toValue: headerVisible ? 0 : -110,
-      duration: 200,
-      useNativeDriver: true,
-    }).start();
-  }, [headerVisible]);
-  
-  // Always show header when switching tabs
-  useEffect(() => {
-    setHeaderVisible(true);
-    lastScrollY.current = 0;
-  }, [activeTab]);
-  
-  // Handle scroll to show/hide header
-  const handleScroll = useCallback((event) => {
-    const currentY = event.nativeEvent.contentOffset.y;
-    const diff = currentY - lastScrollY.current;
-    
-    // Hide header when scrolling down past threshold, show when scrolling up
-    if (diff > 10 && currentY > 50) {
-      setHeaderVisible(false);
-    } else if (diff < -10) {
-      setHeaderVisible(true);
-    }
-    
-    lastScrollY.current = currentY;
-  }, []);
 
   // === DERIVED DATA ===
   // Get current items based on active tab
@@ -226,39 +718,8 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // Filter state
   const [selectedAlbum, setSelectedAlbum] = useState('All');
 
-  // Intercept global albums to forcefully pin "Favourites" to the beginning of the list
-  const pinnedAlbums = useMemo(() => {
-    const albums = [...globalAlbums];
-    const favIndex = albums.indexOf('Favourites');
-    
-    if (favIndex > -1) {
-      albums.splice(favIndex, 1);
-      albums.unshift('Favourites');
-    }
-    return albums;
-  }, [globalAlbums]);
-
-  // Instagram-style edge swipe to go back from album filter
-  const edgeSwipeResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gestureState) => {
-        // Only respond to horizontal swipes from left edge when album is filtered
-        return selectedAlbum !== 'All' && 
-               gestureState.moveX < 50 && // Left edge area
-               Math.abs(gestureState.dx) > 20 && // Significant horizontal movement
-               Math.abs(gestureState.dy) < 50; // Not too much vertical movement
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        // If swiped right more than 50px, go back
-        if (gestureState.dx > 50) {
-          setSelectedAlbum('All');
-        }
-      },
-    })
-  ).current;
-
   // === O(1) HASH MAP FILTERING ===
-  // 1. Build the O(1) Dictionary ONCE when data loads
+  // 1. Build the O(1) Dictionary ONCE when data loads (MUST be before pinnedAlbums)
   const tagDictionary = useMemo(() => {
     const dict = { 'All': currentItems };
     currentItems.forEach(item => {
@@ -276,6 +737,78 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     return dict;
   }, [currentItems]);
 
+  // Intercept global albums to forcefully pin "Favourites" to the beginning of the list
+  // Also filter by search query for albums tab
+  // Intercept global albums and merge with locally discovered tags for instant UI updates
+  const pinnedAlbums = useMemo(() => {
+    // 1. Get locally discovered tags from the current grid view
+    const localTags = Object.keys(tagDictionary).filter(k => k !== 'All' && k !== 'image' && k !== 'video');
+    
+    // 2. Merge backend albums and local tags into a strict unique Set
+    const allUnique = new Set([...globalAlbums, ...localTags]);
+    let albums = Array.from(allUnique);
+    
+    // 3. 🔍 LOOSE FUZZY SEARCH (Ignores dashes, underscores, and spaces)
+    if (activeTab === 'albums' && albumSearchQuery.trim()) {
+      const query = albumSearchQuery.toLowerCase().replace(/[-_\s]/g, '');
+      albums = albums.filter(a => {
+        const cleanAlbumName = a.toLowerCase().replace(/[-_\s]/g, '');
+        return cleanAlbumName.includes(query);
+      });
+    }
+    
+    // 4. Force 'Favourites' to the front
+    const favIndex = albums.indexOf('Favourites');
+    if (favIndex > -1) {
+      albums.splice(favIndex, 1);
+      albums.unshift('Favourites');
+    }
+    
+    return albums.sort((a, b) => {
+       if (a === 'Favourites') return -1;
+       if (b === 'Favourites') return 1;
+       return a.localeCompare(b);
+    });
+  }, [globalAlbums, tagDictionary, albumSearchQuery, activeTab]);
+
+  // === INSTAGRAM-STYLE EDGE SWIPE PHYSICS ===
+  const albumSlideAnim = useRef(new Animated.Value(0)).current;
+
+  const edgeSwipeResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        // Only respond to horizontal right-swipes from strict left edge when inside an album
+        return selectedAlbum !== 'All' && 
+               gestureState.moveX < 40 && 
+               Math.abs(gestureState.dx) > Math.abs(gestureState.dy) && 
+               gestureState.dx > 10;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dx > 0) albumSlideAnim.setValue(gestureState.dx);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx > width * 0.3 || gestureState.vx > 1) {
+          Animated.timing(albumSlideAnim, {
+            toValue: width, 
+            duration: 150, // 🚀 Reduced from 200ms
+            easing: Easing.bezier(0.05, 0.7, 0.1, 1), // 💎 Google Snappy Curve
+            useNativeDriver: true,
+          }).start(() => {
+            setSelectedAlbum('All');
+            albumSlideAnim.setValue(0); 
+          });
+        } else {
+          Animated.spring(albumSlideAnim, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 120, // 🚀 Doubled for instant snap-back
+            friction: 12,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
   // 2. Derive dropdown list instantly from the dictionary + global DB
   const availableAlbums = useMemo(() => {
     const loadedTags = Object.keys(tagDictionary).filter(k => k !== 'All');
@@ -289,29 +822,65 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     return currentItems || [];
   }, [currentItems]);
 
-  // 4. Phantom Skeleton Padding for seamless infinite scroll
+  // 4. Phantom Skeleton Padding REMOVED for FlashList compatibility
+  // We now pass the pure data arrays directly to FlashList to prevent fake-item rendering traps
   const displayItems = useMemo(() => {
-    const items = [...filteredItems];
-    // If there is more data to fetch, pad with skeletons
-    if (currentHasMore && !loading && items.length > 0) {
-      for (let i = 0; i < 21; i++) {
-        items.push({ id: `phantom_skel_${i}`, isSkeleton: true });
-      }
+    return filteredItems || [];
+  }, [filteredItems]);
+
+  // Independent lists for simultaneous rendering
+  const uploadDisplayItems = useMemo(() => {
+    if (loading && uploadItems.length === 0) {
+      return Array.from({ length: 18 }).map((_, i) => ({ id: `skel-${i}`, isSkeleton: true }));
     }
-    return items;
-  }, [filteredItems, currentHasMore, loading]);
+    
+    // Filter by tag search query
+    let filtered = uploadItems || [];
+    if (uploadsSearchQuery.trim()) {
+      const query = uploadsSearchQuery.toLowerCase().replace(/[-_\s]/g, '');
+      filtered = filtered.filter(item => {
+        try {
+          const tags = JSON.parse(item.tags || '[]');
+          return tags.some(tag => 
+            tag.toLowerCase().replace(/[-_\s]/g, '').includes(query)
+          );
+        } catch (e) {
+          return false;
+        }
+      });
+    }
+    
+    return filtered;
+  }, [uploadItems, loading, uploadsSearchQuery]);
+
+  const pcDisplayItems = useMemo(() => {
+    if (loading && serverItems.length === 0) {
+      return Array.from({ length: 18 }).map((_, i) => ({ id: `skel-${i}`, isSkeleton: true }));
+    }
+    return serverItems || [];
+  }, [serverItems, loading]);
+  
+  const pcVideoCount = serverItems.filter(item => item.type === 'video').length;
+  const pcPhotoCount = serverItems.length - pcVideoCount;
   
   // Calculate photo/video breakdown based ONLY on what is currently visible in the filter
   const videoCount = filteredItems.filter(item => item.type === 'video').length;
   const photoCount = filteredItems.length - videoCount;
 
-  // Trigger a full server fetch when the selected tag changes
+  // Trigger a full server fetch when the selected album filter changes
   useEffect(() => {
-    if (activeTab === 'uploads') {
-      setUploadItems([]); // Clear grid to show loading state
-      fetchUploads(true);
-    }
-  }, [selectedAlbum, activeTab, fetchUploads]);
+    // 1. Immediately trigger the premium loading skeleton
+    setLoading(true);
+    // 2. Clear the old grid
+    setUploadItems([]); 
+    
+    // 3. Fetch the new album and drop the loading flag when done
+    fetchUploads(true).finally(() => {
+      setLoading(false);
+    });
+    
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAlbum]);
 
   // === API CALLS ===
   // Fetch uploads from database with strict deduplication
@@ -327,6 +896,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}&order=desc${tagParam}`);
       
       if (response.success) {
+        // Safely capture the true total count from the server response
+        setGlobalUploadsTotal(response.pagination?.total || response.total || response.items?.length || 0);
+        
         if (isRefresh) {
           // Pure refresh - just set the items
           setUploadItems(response.items || []);
@@ -385,45 +957,39 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     setLoading(false);
   }, [activeTab, fetchUploads, fetchServerFiles, isPaginating]);
 
-  // Initial load
+  // Initial load - Fetch EVERYTHING simultaneously to prepare the off-screen slider pages
   useEffect(() => {
-    loadData(true);
+    setLoading(true);
+    Promise.all([
+      fetchUploads(true),
+      fetchAlbums(),
+      fetchServerFiles(true)
+    ]).finally(() => setLoading(false));
     
-    // Auto-trigger upload if prop is set (for /photos upload command)
     if (autoUpload) {
-      // Small delay to let the gallery render first
-      const timer = setTimeout(() => {
-        handleUpload();
-      }, 500);
+      const timer = setTimeout(() => { handleUpload(); }, 500);
       return () => clearTimeout(timer);
     }
-  }, [autoUpload]);
-
-  // Reload when tab changes
-  useEffect(() => {
-    // Only reload if we don't have data for this tab
-    if (activeTab === 'uploads' && uploadItems.length === 0) {
-      loadData(true);
-    } else if (activeTab === 'turtle-base' && serverItems.length === 0) {
-      loadData(true);
-    }
-  }, [activeTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoUpload]); // <-- STRIPPED DEPS TO PREVENT RESET LOOPS
   
-  // Fetch global albums on mount
-  useEffect(() => {
-    const fetchAlbums = async () => {
-      try {
-        const res = await api.get('/media/albums');
-        if (res.success) {
-          if (res.albums) setGlobalAlbums(res.albums);
-          if (res.covers) setAlbumCovers(res.covers);
-        }
-      } catch (e) { 
-        console.log('[MediaGallery] Failed to fetch albums'); 
+  // Fetch global albums
+  const fetchAlbums = useCallback(async () => {
+    try {
+      const res = await api.get('/media/albums');
+      if (res.success) {
+        if (res.albums) setGlobalAlbums(res.albums);
+        if (res.covers) setAlbumCovers(res.covers);
       }
-    };
+    } catch (e) { 
+      // Album fetch failed silently 
+    }
+  }, [api]);
+
+  // Fetch albums on mount and when tab changes
+  useEffect(() => {
     fetchAlbums();
-  }, [activeTab, api]);
+  }, [activeTab, fetchAlbums]);
 
   // Handle pull-to-refresh
   const handleRefresh = useCallback(() => {
@@ -448,19 +1014,20 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       
       setSelectedMedia(item);
       // Reset and start animations
-      scaleAnim.setValue(0.8);
+      scaleAnim.setValue(0.85);
       opacityAnim.setValue(0);
       
       Animated.parallel([
-        Animated.spring(scaleAnim, {
+        Animated.timing(scaleAnim, {
           toValue: 1,
-          friction: 8,
-          tension: 40,
+          duration: 200, // 🚀 Faster pop
+          easing: Easing.bezier(0.05, 0.7, 0.1, 1), // 💎 Instant pop, smooth settle
           useNativeDriver: true,
         }),
         Animated.timing(opacityAnim, {
           toValue: 1,
-          duration: 200,
+          duration: 120, // 🚀 Near-instant background blackout
+          easing: Easing.linear,
           useNativeDriver: true,
         }),
       ]).start();
@@ -493,19 +1060,26 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       }
       return;
     }
+    
+    // Signal to ProgressiveImage components to abort RAW downloads
+    setIsClosing(true);
+    
     Animated.parallel([
       Animated.timing(scaleAnim, {
-        toValue: 0.8,
-        duration: 150,
+        toValue: 0.85,
+        duration: 150, // 🚀 Rapid exit
+        easing: Easing.bezier(0.3, 0.0, 0.8, 0.15), // 💎 Accelerating exit curve
         useNativeDriver: true,
       }),
       Animated.timing(opacityAnim, {
         toValue: 0,
-        duration: 150,
+        duration: 100, // 🚀 Instant background reveal
+        easing: Easing.linear,
         useNativeDriver: true,
       }),
     ]).start(() => {
       setSelectedMedia(null);
+      setIsClosing(false);
       setInfoVisible(true);
       infoOpacityAnim.setValue(1);
     });
@@ -528,36 +1102,139 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       // Fade out smoothly
       Animated.timing(infoOpacityAnim, {
         toValue: 0,
-        duration: 400,
+        duration: 200,
         easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
         useNativeDriver: true,
       }).start();
     }
   }, [infoVisible, infoOpacityAnim]);
 
-  // Swipe-down to dismiss or show info responder (disabled when zoomed)
-  const swipeDownResponder = useRef(
+  // Unified swipe responder for dismiss (down) and metadata drawer (up)
+  const swipeResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (evt, gestureState) => {
-        // Disable swipe-to-dismiss when zoomed in
         if (zoomScale > 1.05) return false;
-        // More permissive swipe detection
-        return gestureState.dy > 10 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 0.5;
+        return Math.abs(gestureState.dy) > 10 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 0.5;
       },
       onPanResponderMove: (evt, gestureState) => {
-        // Show info when pulling down (like iOS Photos)
-        if (gestureState.dy > 20 && !infoVisible) {
-          toggleInfoVisibility();
-        }
+        if (gestureState.dy > 20 && !infoVisible && !isDrawerOpen) toggleInfoVisibility();
+        if (isDrawerOpen && gestureState.dy > 0) drawerY.setValue((height * 0.45) + gestureState.dy);
       },
       onPanResponderRelease: (evt, gestureState) => {
-        // Close viewer only if pulled far enough
-        if (gestureState.dy > 120) {
-          closeViewer();
+        if (isDrawerOpen) {
+          if (gestureState.dy > 50 || gestureState.vy > 1) closeMetadataDrawer();
+          else openMetadataDrawer(); 
+        } else {
+          if (gestureState.dy > 120) closeViewer();
+          else if (gestureState.dy < -50) openMetadataDrawer(); // Swipe up triggers drawer
         }
       },
     })
   ).current;
+
+  // Rename album (updates all photos with the old tag)
+  const renameAlbum = useCallback(async (oldName) => {
+    if (oldName === 'All' || oldName === 'Favourites') {
+      Alert.alert('Cannot Rename', 'System albums cannot be renamed.');
+      return;
+    }
+
+    Alert.prompt(
+      'Rename Album',
+      `Rename "${oldName}" to:`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Rename',
+          onPress: async (newName) => {
+            if (!newName || newName.trim() === '' || newName.trim() === oldName) return;
+            
+            const trimmedName = newName.trim();
+            try {
+              const res = await api.put('/media/album/rename', {
+                oldTag: oldName,
+                newTag: trimmedName
+              });
+              
+              if (res.success) {
+                // Update local state (pinnedAlbums is derived from globalAlbums)
+                setGlobalAlbums(prev => prev.map(a => a === oldName ? trimmedName : a));
+                // Refresh
+                fetchAlbums();
+                
+                // If we're currently viewing this album, update the selection
+                if (selectedAlbum === oldName) {
+                  setSelectedAlbum(trimmedName);
+                }
+              }
+            } catch (error) {
+              console.error('[MediaGallery] Failed to rename album:', error);
+              Alert.alert('Error', 'Failed to rename album');
+            }
+          }
+        }
+      ],
+      'plain-text',
+      oldName
+    );
+  }, [api, fetchAlbums, selectedAlbum, setGlobalAlbums]);
+
+  // Delete album (removes tag from all photos)
+  const deleteAlbum = useCallback(async (albumName) => {
+    if (albumName === 'All' || albumName === 'Favourites') {
+      Alert.alert('Cannot Delete', 'System albums cannot be deleted.');
+      return;
+    }
+    
+    Alert.alert(
+      'Delete Album',
+      `Delete "${albumName}"?\n\nPhotos will remain in "All" but this album tag will be removed.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Delete', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const res = await api.delete(`/media/album/${encodeURIComponent(albumName)}`);
+              if (res.success) {
+                setGlobalAlbums(prev => prev.filter(a => a !== albumName));
+                fetchAlbums();
+                
+                // If we were viewing this album, switch to 'All'
+                if (selectedAlbum === albumName) {
+                  setSelectedAlbum('All');
+                  setActiveTab('uploads');
+                }
+              }
+            } catch (error) {
+              console.error('[MediaGallery] Failed to delete album:', error);
+              Alert.alert('Error', 'Failed to delete album');
+            }
+          }
+        }
+      ]
+    );
+  }, [api, fetchAlbums, selectedAlbum, setGlobalAlbums, setSelectedAlbum, setActiveTab]);
+
+  // Album context menu (long-press) - declared after renameAlbum and deleteAlbum
+  const showAlbumOptions = useCallback((albumName) => {
+    if (albumName === 'All' || albumName === 'Favourites') {
+      Alert.alert(albumName, 'System albums cannot be modified.');
+      return;
+    }
+
+    Alert.alert(
+      albumName,
+      'Choose an action:',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Rename', onPress: () => renameAlbum(albumName) },
+        { text: 'Delete', style: 'destructive', onPress: () => deleteAlbum(albumName) }
+      ]
+    );
+  }, [renameAlbum, deleteAlbum]);
 
   // Placeholder for expo-image-manipulator UI integration
   const openImageEditor = useCallback(() => {
@@ -594,12 +1271,14 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
       // Show pre-upload modal with album selection
       setPendingAssets(result.assets);
+      // Preset the current album as a tag if inside a specific album
+      setSelectedTags(selectedAlbum !== 'All' ? [selectedAlbum] : []);
       setUploadModalVisible(true);
     } catch (error) {
       console.error('[MediaGallery] Upload error:', error);
       Alert.alert('Error', 'Failed to open image picker.');
     }
-  }, []);
+  }, [selectedAlbum]);
 
   // === SMART SYNC FUNCTIONS ===
   const fetchLocalMedia = useCallback(async (loadMore = false) => {
@@ -669,36 +1348,34 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     setPendingAssets(assetsToUpload);
     setLocalPickerVisible(false);
     setSelectedLocalAssets(new Set());
+    // Preset the current album as a tag if inside a specific album
+    setSelectedTags(selectedAlbum !== 'All' ? [selectedAlbum] : []);
     setUploadModalVisible(true); 
-  }, [localAssets, selectedLocalAssets]);
+  }, [localAssets, selectedLocalAssets, selectedAlbum]);
 
   // Execute upload after modal confirmation
+  // Execute upload after modal confirmation
   const executeUpload = useCallback(async () => {
-    setUploadModalVisible(false); // Dismiss immediately for background processing
+    if (pendingAssets.length === 0) return;
+
     setUploading(true);
-    setUploadStats({ current: 0, total: pendingAssets.length, failed: 0, fileProgress: 0 });
-    
+    setUploadingItemIndex(1);
+    resetUploadProgress();
+    totalItemsRef.current = pendingAssets.length;
+    recomputeOverall({ snap: true }); // start cleanly at 0%
+
     const serverUrl = getBaseUrl();
-    
+    const successfulAssetIds = [];
+    let failureCount = 0;
+
     try {
       const { status: mediaStatus } = await MediaLibrary.requestPermissionsAsync();
-      if (mediaStatus !== 'granted') {
-        console.log('[MediaGallery] MediaLibrary permission not granted - upload only, no delete');
-      }
       
-      const assetsToUpload = [...pendingAssets];
-      setPendingAssets([]);
-      
-      const successfulAssetIds = [];
-      let failureCount = 0;
-
-      // Process STRICTLY sequentially to prevent iOS Memory (OOM) Crashes
-      for (let i = 0; i < assetsToUpload.length; i++) {
-        const asset = assetsToUpload[i];
-        setUploadStats(prev => ({ ...prev, current: i + 1 }));
+      for (let i = 0; i < pendingAssets.length; i++) {
+        setUploadingItemIndex(i + 1);
+        const asset = pendingAssets[i];
         
-        // CRITICAL FIX: Declare tracking variables OUTSIDE the try block so 'finally' can access them
-        let tempThumbnailUri = null; 
+        let tempThumbnailUri = null;
         let tempManipulatedUri = null;
         
         try {
@@ -715,12 +1392,6 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           if (assetInfo) {
             if (assetInfo.width) formData.append('width', assetInfo.width.toString());
             if (assetInfo.height) formData.append('height', assetInfo.height.toString());
-            if (assetInfo.location) formData.append('location', JSON.stringify(assetInfo.location));
-            
-            const exif = assetInfo.exif || {};
-            if (exif.Model) formData.append('cameraModel', exif.Model);
-            if (exif.LensModel) formData.append('lensModel', exif.LensModel);
-            
             formData.append('tags', JSON.stringify(selectedTags.length > 0 ? selectedTags : ['Phone Uploads']));
           }
           
@@ -728,105 +1399,156 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           const isVideo = asset.mediaType === 'video' || /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|3gp)$/i.test(originalFilename);
           const isHeic = /\.heic$/i.test(originalFilename) || /\.heif$/i.test(originalFilename);
           
-          // CRITICAL FIX: Smart Sync returns ph:// URIs. We MUST use localUri (file://) to prevent RCTHTTPRequestHandlerCls crashes.
-          let safeLocalUri = assetInfo?.localUri || asset.uri; 
-          
+          let safeLocalUri = assetInfo?.localUri || asset.uri;
           let mediaUri = safeLocalUri;
           let mediaName = originalFilename;
           let mediaType = isVideo ? 'video/mp4' : 'image/jpeg';
           
           if (isVideo) {
-            // Pass the safeLocalUri instead of asset.uri
             const { uri } = await VideoThumbnails.getThumbnailAsync(safeLocalUri, { time: 1000, quality: 0.8 });
-            tempThumbnailUri = uri; // Save reference
+            tempThumbnailUri = uri;
             formData.append('media', { uri: mediaUri, name: mediaName, type: mediaType });
             formData.append('thumbnail', { uri: tempThumbnailUri, name: 'thumbnail.jpg', type: 'image/jpeg' });
             if (asset.duration) formData.append('duration', Math.round(asset.duration / 1000).toString());
           } else {
             if (isHeic) {
-              // Pass the safeLocalUri instead of asset.uri
               const manipulated = await ImageManipulator.manipulateAsync(
                 safeLocalUri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
               );
-              tempManipulatedUri = manipulated.uri; // Save reference
+              tempManipulatedUri = manipulated.uri;
               mediaUri = tempManipulatedUri;
               mediaName = originalFilename.replace(/\.heic$/i, '.jpg').replace(/\.heif$/i, '.jpg');
-            } else {
-              const match = /\.(\w+)$/.exec(originalFilename);
-              mediaType = match ? `image/${match[1]}` : 'image/jpeg';
             }
             formData.append('media', { uri: mediaUri, name: mediaName, type: mediaType });
           }
           
-          // XHR Wrapper for granular byte-level progress tracking
-          const uploadResponse = await new Promise((resolve, reject) => {
+          // XHR with byte-level progress tracking.
+          // RN's XHR is finicky about upload progress:
+          //   * property assignment (xhr.upload.onprogress = ...) is unreliable on iOS — use addEventListener.
+          //   * lengthComputable is often false for multipart file uploads, so don't gate on it; just check total.
+          //   * Some platforms don't stream progress at all — we run a smooth fallback ramp in that case.
+          await new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-            xhr.open('POST', `${serverUrl}/media/upload`);
-            
-            xhr.upload.onprogress = (event) => {
-              if (event.lengthComputable) {
-                const percentComplete = (event.loaded / event.total) * 100;
-                // CRITICAL FIX: Use the functional updater to prevent stale closures
-                setUploadStats(prevStats => ({ 
-                  ...prevStats, 
-                  fileProgress: percentComplete 
-                }));
+
+            // Ensure we don't accidentally create an /api/api/ route.
+            const uploadEndpoint = serverUrl.endsWith('/api')
+              ? `${serverUrl}/media/upload`
+              : `${serverUrl}/api/media/upload`;
+
+            // open() before addEventListener for maximum RN/iOS compatibility.
+            xhr.open('POST', uploadEndpoint);
+            if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+            let gotRealProgress = false;
+            let fallbackInterval = null;
+            let itemPct = 0; // monotonic per-item byte progress, 0-100
+
+            const advanceItem = (next) => {
+              if (next <= itemPct) return;
+              itemPct = next;
+              currentItemPctRef.current = next;
+              recomputeOverall();
+            };
+            const stopFallback = () => {
+              if (fallbackInterval) {
+                clearInterval(fallbackInterval);
+                fallbackInterval = null;
               }
             };
 
-            xhr.onload = () => {
+            xhr.upload.addEventListener('progress', (event) => {
+              const total = event.total || 0;
+              if (total > 0) {
+                gotRealProgress = true;
+                stopFallback();
+                // Cap at 99 so the bar doesn't visually "complete" before onload fires.
+                advanceItem(Math.min(99, Math.round((event.loaded / total) * 100)));
+              }
+            });
+
+            xhr.addEventListener('load', () => {
+              stopFallback();
+              advanceItem(100);
               if (xhr.status >= 200 && xhr.status < 300) {
-                try { resolve(JSON.parse(xhr.responseText)); } catch (e) { resolve({ success: true }); }
+                resolve(xhr.responseText);
               } else {
-                reject(new Error(`Upload failed with status: ${xhr.status}`));
+                reject(new Error(`Upload failed with status ${xhr.status}`));
               }
-            };
+            });
 
-            xhr.onerror = () => reject(new Error('Network request failed. Server offline or timeout.'));
+            xhr.addEventListener('error', () => {
+              stopFallback();
+              reject(new Error('Network request failed'));
+            });
+            xhr.addEventListener('abort', () => {
+              stopFallback();
+              reject(new Error('Upload aborted'));
+            });
+
             xhr.send(formData);
+
+            // Fallback ramp: if no real progress event arrives within 400ms,
+            // ease toward 92% so the bar still moves while bytes are in flight.
+            setTimeout(() => {
+              if (gotRealProgress) return;
+              fallbackInterval = setInterval(() => {
+                if (gotRealProgress) {
+                  stopFallback();
+                  return;
+                }
+                // Logarithmic-ish ramp: fast at first, slow near the cap.
+                const step = Math.max(1, Math.round((92 - itemPct) / 12));
+                advanceItem(Math.min(92, itemPct + step));
+              }, 250);
+            }, 400);
           });
 
           if (asset.assetId) successfulAssetIds.push(asset.assetId);
 
         } catch (error) {
-          console.error(`[MediaGallery] Failed to upload asset ${i}:`, error.message);
+          console.error(`[Upload] Failed asset ${i}:`, error.message);
           failureCount++;
         } finally {
-          // Instantly destroy heavy temporary files to keep RAM/Disk flat
           if (tempThumbnailUri) FileSystem.deleteAsync(tempThumbnailUri, { idempotent: true }).catch(()=>{});
           if (tempManipulatedUri) FileSystem.deleteAsync(tempManipulatedUri, { idempotent: true }).catch(()=>{});
-          
-          setUploadStats(prev => ({ ...prev, fileProgress: 0, failed: failureCount }));
+          // Batch advances per-item regardless of success — user cares about "x of y done".
+          completedItemsRef.current += 1;
+          currentItemPctRef.current = 0;
+          recomputeOverall();
         }
-      } // End of sequential loop
+      }
       
+      // Make sure the bar reaches a clean 100% (the loop's recompute may have landed
+      // a hair under from rounding). Then hold so the user actually sees "100%" — the
+      // pattern every polished upload UI uses.
+      completedItemsRef.current = totalItemsRef.current;
+      currentItemPctRef.current = 0;
+      recomputeOverall();
+      await new Promise((r) => setTimeout(r, 600));
+
+      // Delete uploaded assets from camera roll if permission granted
       if (successfulAssetIds.length > 0 && mediaStatus === 'granted') {
         try { await MediaLibrary.deleteAssetsAsync(successfulAssetIds); } catch (e) {}
       }
-      
+
+      setPendingAssets([]);
+      setUploadModalVisible(false);
       await fetchUploads(true);
-      setActiveTab('uploads');
-      
-      try {
-        const res = await api.get('/media/albums');
-        if (res.success) {
-          if (res.albums) setGlobalAlbums(res.albums);
-          if (res.covers) setAlbumCovers(res.covers);
-        }
-      } catch (e) {}
       
       if (failureCount > 0) {
-        Alert.alert('Upload Complete', `Successfully uploaded ${successfulAssetIds.length} items.\nFailed: ${failureCount} items.`);
+        Alert.alert('Upload Complete', `${successfulAssetIds.length} uploaded, ${failureCount} failed.`);
       } else {
-        Alert.alert('Success', `All ${successfulAssetIds.length} items uploaded successfully!`);
+        Alert.alert('Success', `All ${successfulAssetIds.length} items uploaded!`);
       }
+
     } catch (error) {
-      console.error('[MediaGallery] Upload error:', error);
-      Alert.alert('Upload Failed', error.message || 'Failed to upload media');
+      console.error('[Upload] Error:', error);
+      Alert.alert('Upload Failed', error.message);
     } finally {
       setUploading(false);
+      resetUploadProgress();
     }
-  }, [pendingAssets, selectedTags, getBaseUrl, fetchUploads, api]);
+  }, [pendingAssets, selectedTags, token, getBaseUrl, fetchUploads, setUploadModalVisible, recomputeOverall, resetUploadProgress]);
 
   // Delete photo/video (only for uploads)
   const handleDelete = useCallback((id) => {
@@ -863,7 +1585,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         filename: selectedMedia.filename,
         type: selectedMedia.type,
         size: selectedMedia.size,
-        url: selectedMedia.url,
+        url: selectedMedia.url || selectedMedia.rawUrl, // <-- ADDED FALLBACK
         thumbnailUrl: selectedMedia.thumbnailUrl,
         width: selectedMedia.width,
         height: selectedMedia.height,
@@ -933,16 +1655,22 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       // 3. Send payload to server in the background
       const tagPayload = {
         tags: newTags, filename: selectedMedia.filename, type: selectedMedia.type,
-        size: selectedMedia.size, url: selectedMedia.url, thumbnailUrl: selectedMedia.thumbnailUrl,
+        size: selectedMedia.size, url: selectedMedia.url || selectedMedia.rawUrl, thumbnailUrl: selectedMedia.thumbnailUrl,
         width: selectedMedia.width, height: selectedMedia.height, duration: selectedMedia.duration,
       };
       
       await api.put(`/media/${selectedMedia.id}/tags`, tagPayload);
       
+      // 4. Refresh gallery to reflect changes (especially important when viewing Favourites album)
+      // Small delay to let the server process the update
+      setTimeout(() => {
+        fetchUploads(true);
+      }, 300);
+      
     } catch(e) { 
       console.error('[MediaGallery] Favourites toggle failed:', e); 
     }
-  }, [selectedMedia, api]);
+  }, [selectedMedia, api, fetchUploads]);
 
   // Helper to construct full URL
   const getFullUrl = useCallback((path) => {
@@ -1007,9 +1735,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           
           // Clear expo-image RAM cache
           Image.clearMemoryCache();
-          console.log('🧹 [Garbage Collection] Wiped GBs of temporary cache files.');
+          // Cache cleanup completed
         } catch (e) {
-          console.log('🧹 [Garbage Collection] Sweep failed:', e.message);
+          // Cache cleanup failed silently
         }
       };
       wipeGhostFiles();
@@ -1041,25 +1769,35 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const renderItem = useCallback(({ item }) => {
     // Phantom skeleton placeholder for seamless infinite scroll
     if (item.isSkeleton) {
-      return <ShimmerSkeleton styles={styles} theme={theme} />;
+      return (
+        <View style={{ transform: [{ scaleY: -1 }] }}>
+          <ShimmerSkeleton styles={styles} theme={theme} />
+        </View>
+      );
     }
     return (
-      <GridItem 
-        item={item} 
-        activeTab={activeTab}
-        openViewer={openViewer}
-        handleDelete={handleDelete}
-        getFullUrl={getFullUrl}
-        getBaseUrl={getBaseUrl}
-        styles={styles}
-        theme={theme}
-      />
+      <View style={{ transform: [{ scaleY: -1 }] }}>
+        <GridItem 
+          item={item} 
+          activeTab={activeTab}
+          openViewer={openViewer}
+          handleDelete={handleDelete}
+          getFullUrl={getFullUrl}
+          getBaseUrl={getBaseUrl}
+          styles={styles}
+          theme={theme}
+          isSelectMode={isSelectMode}
+          isSelected={selectedGridItems.has(item.id)}
+          onToggleSelect={() => toggleGridSelection(item.id)}
+        />
+      </View>
     );
-  }, [activeTab, openViewer, handleDelete, getFullUrl, getBaseUrl, styles, theme]);
+  }, [activeTab, openViewer, handleDelete, getFullUrl, getBaseUrl, styles, theme, isSelectMode, selectedGridItems, toggleGridSelection]);
 
   // Render empty state
+  // Render empty state (Inverted grids need scaleY: -1 to render right-side up)
   const renderEmpty = () => (
-    <View style={styles.emptyContainer}>
+    <View style={[styles.emptyContainer, { transform: [{ scaleY: -1 }] }]}>
       <Icon name="image-off" size={64} color={theme.colors.textMuted} />
       <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
         No {activeTab === 'uploads' ? 'uploads' : 'files'} yet
@@ -1078,211 +1816,67 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   );
 
   // Handle scroll end - update selectedMedia when swipe completes (better performance)
+  // Handle scroll end - mathematically bulletproof index calculation using ITEM_WIDTH
+  // Handle scroll end - Update instantly without artificial InteractionManager lag
   const handleMomentumScrollEnd = useCallback((event) => {
-    const slideSize = event.nativeEvent.layoutMeasurement.width;
-    const index = Math.round(event.nativeEvent.contentOffset.x / slideSize);
+    const index = Math.round(event.nativeEvent.contentOffset.x / ITEM_WIDTH);
+    const newlySelectedItem = displayItems[index];
     
-    if (currentItems[index] && currentItems[index].id !== selectedMedia?.id) {
-      // Queue the heavy re-render until AFTER the swipe animation is 100% complete
-      InteractionManager.runAfterInteractions(() => {
-        setSelectedMedia(currentItems[index]);
-      });
+    if (newlySelectedItem && !newlySelectedItem.isSkeleton && newlySelectedItem.id !== selectedMedia?.id) {
+      // 🚀 SNAP INSTANTLY: Removed runAfterInteractions wrap
+      setSelectedMedia(newlySelectedItem);
     }
-  }, [currentItems, selectedMedia]);
+  }, [displayItems, selectedMedia]);
 
   // Render individual viewer item with pinch-to-zoom
-  // Full-screen video player sub-component using new expo-video API
-  const FullScreenVideoPlayer = useCallback(({ sourceUrl, isActive }) => {
-    const player = useVideoPlayer(sourceUrl, player => {
-      player.loop = true;
-      player.muted = true;
-    });
-    const [isPlaying, setIsPlaying] = useState(isActive);
-    const [isMuted, setIsMuted] = useState(true);
-    
-    // Play/pause based on visibility
-    useEffect(() => {
-      if (isActive) {
-        player.play();
-        setIsPlaying(true);
-      } else {
-        player.pause();
-        player.currentTime = 0; // Reset video to beginning
-        player.muted = true; // Reset to muted state for next time
-        setIsMuted(true);
-        setIsPlaying(false);
-      }
-    }, [isActive, player]);
-    
-    const togglePlay = () => {
-      if (isPlaying) {
-        player.pause();
-      } else {
-        player.play();
-      }
-      setIsPlaying(!isPlaying);
-    };
-    
-    const toggleMute = () => {
-      player.muted = !isMuted;
-      setIsMuted(!isMuted);
-    };
-    
-    return (
-      <Pressable onPress={togglePlay} style={styles.viewerVideoContainer}>
-        <VideoView 
-          style={styles.viewerVideo} 
-          player={player} 
-          contentFit="contain" 
-          nativeControls={false}
-        />
-        {/* Mute toggle button */}
-        <TouchableOpacity 
-          style={styles.muteButton}
-          onPress={toggleMute}
-          activeOpacity={0.7}
-        >
-          <Icon 
-            name={isMuted ? 'volume-off' : 'volume-high'} 
-            size={24} 
-            color="#fff" 
-          />
-        </TouchableOpacity>
-      </Pressable>
-    );
-  }, []);
-
-  // Separate component for image viewer with double-tap and parallax (hooks at top level)
-  const ImageViewer = ({ fullResUrl, mediaId, parallaxStyle, isActive, item }) => {
-    const scrollRef = useRef(null);
-    const lastTapRef = useRef(0);
-    const isZoomedRef = useRef(false);
-    
-    // Reset zoom when mediaId changes (swipe to different image)
-    useEffect(() => {
-      if (scrollRef.current && isZoomedRef.current) {
-        scrollRef.current.scrollResponderZoomTo({
-          x: 0,
-          y: 0,
-          width: width,
-          height: height,
-          animated: false,
-        });
-        isZoomedRef.current = false;
-      }
-    }, [mediaId]);
-    
-    const handleDoubleTap = useCallback(() => {
-      const now = Date.now();
-      if (now - lastTapRef.current < 300) { // 300ms double-tap window
-        // Toggle zoom
-        if (scrollRef.current) {
-          if (!isZoomedRef.current) {
-            // Zoom in to center
-            scrollRef.current.scrollResponderZoomTo({
-              x: width * 0.25,
-              y: height * 0.25,
-              width: width * 0.5,
-              height: height * 0.5,
-              animated: true,
-            });
-          } else {
-            // Zoom out
-            scrollRef.current.scrollResponderZoomTo({
-              x: 0,
-              y: 0,
-              width: width,
-              height: height,
-              animated: true,
-            });
-          }
-          isZoomedRef.current = !isZoomedRef.current;
-        }
-      }
-      lastTapRef.current = now;
-    }, []);
-    
-    return (
-      <Animated.View style={[styles.viewerItemContainer, parallaxStyle]}>
-        <ScrollView
-          ref={scrollRef}
-          contentContainerStyle={styles.viewerScrollContent}
-          maximumZoomScale={4}
-          minimumZoomScale={1}
-          bouncesZoom={true}
-          showsHorizontalScrollIndicator={false}
-          showsVerticalScrollIndicator={false}
-          pinchGestureEnabled={true}
-          scrollEventThrottle={16}
-          onScroll={(e) => {
-            // Track zoom scale - available on iOS native ScrollView
-            const scale = e.nativeEvent?.zoomScale || 1;
-            setZoomScale(scale);
-          }}
-        >
-          <Pressable onPress={handleDoubleTap}>
-            <Image
-              source={{ uri: fullResUrl }}
-              style={styles.viewerImage}
-              contentFit="contain"
-              transition={0}
-              cachePolicy="memory-disk"
-              priority="high"
-              onError={(error) => console.error('[MediaGallery] Full-res load error:', error)}
-            />
-          </Pressable>
-        </ScrollView>
-        
-
-      </Animated.View>
-    );
-  };
 
   const renderViewerItem = useCallback(({ item, index }) => {
     const isVideo = item.type === 'video';
-    const fullResPath = item.rawUrl || item.url || '';
-    const fullResUrl = getFullUrl(fullResPath);
+    const fullResUrl = getFullUrl(item.rawUrl || item.url || '');
     const isActive = item.id === selectedMedia?.id;
 
-    // Parallax effect: calculate offset based on scroll position
-    // The adjacent images move at 15% of the scroll speed for depth effect
+    // 💎 SUBTLE IOS 17 PARALLAX (15% Shift) 💎
+    // Image moves slightly slower than the scroll, creating a subtle window effect.
     const parallaxTranslate = scrollX.interpolate({
       inputRange: [
         (index - 1) * ITEM_WIDTH,
         index * ITEM_WIDTH,
         (index + 1) * ITEM_WIDTH,
       ],
-      outputRange: [width * 0.15, 0, -width * 0.15],
+      outputRange: [width * 0.15, 0, -width * 0.15], 
       extrapolate: 'clamp',
     });
 
-    const parallaxStyle = {
-      transform: [{ translateX: parallaxTranslate }],
-    };
-
     return (
+      // 1. THE OUTER BOUNDARY: Provides the screen width + 15px gap
       <View style={styles.viewerItemContainer}>
-        {isVideo ? (
-          // Video player using new expo-video API
-          <Animated.View style={[styles.viewerVideoContainer, parallaxStyle]}>
-            <FullScreenVideoPlayer 
-              sourceUrl={fullResUrl} 
-              isActive={isActive}
-            />
+        
+        {/* 2. 🛑 THE CLIPPING MASK 🛑 
+            Strictly bounds the visible area to exactly the screen width. 
+            This physically prevents the image from bleeding into the void gap. */}
+        <View style={{ width: width, height: '100%', overflow: 'hidden' }}>
+          
+          {/* 3. THE PARALLAX LAYER: Translates safely inside the mask */}
+          <Animated.View style={[{ width: width, height: '100%' }, { transform: [{ translateX: parallaxTranslate }] }]}>
+            {isVideo ? (
+              <FullScreenVideoPlayer sourceUrl={fullResUrl} isActive={isActive} styles={styles} insets={insets} />
+            ) : (
+              <ImageViewer 
+                fullResUrl={fullResUrl} 
+                mediaId={item.id} 
+                isActive={isActive}
+                item={item}
+                styles={styles}
+                getFullUrl={getFullUrl}
+                api={api}
+              />
+            )}
           </Animated.View>
-        ) : (
-          // Image viewer with pinch-to-zoom, double-tap, and parallax
-          <ImageViewer 
-            fullResUrl={fullResUrl} 
-            mediaId={item.id} 
-            parallaxStyle={parallaxStyle}
-            isActive={isActive}
-            item={item}
-          />
-        )}
+
+        </View>
       </View>
     );
-  }, [getFullUrl, FullScreenVideoPlayer, selectedMedia, scrollX]);
+  }, [getFullUrl, selectedMedia, scrollX, styles, insets]);
 
   // Get layout for initialScrollIndex
   const getItemLayout = useCallback((data, index) => ({
@@ -1362,24 +1956,97 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   );
 
   // Full-screen viewer with swipeable paging
+  // Full-screen viewer with swipeable paging
   const renderFullScreenViewer = () => {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const [displayMeta, setDisplayMeta] = useState(selectedMedia);
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const metaFadeAnim = useRef(new Animated.Value(1)).current;
+
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useEffect(() => {
+      if (selectedMedia && selectedMedia.id !== displayMeta?.id) {
+        // Fast fade out -> Swap data -> Smooth Bezier fade in
+        Animated.timing(metaFadeAnim, { toValue: 0, duration: 100, useNativeDriver: true }).start(() => {
+          setDisplayMeta(selectedMedia);
+          Animated.timing(metaFadeAnim, { 
+            toValue: 1, duration: 300, easing: Easing.bezier(0.4, 0.0, 0.2, 1), useNativeDriver: true 
+          }).start();
+        });
+      } else if (!selectedMedia) {
+        setDisplayMeta(null);
+      }
+    }, [selectedMedia, displayMeta?.id, metaFadeAnim]);
+
     if (!selectedMedia) return null;
+    
+    // Fallback while crossfading
+    const activeMeta = displayMeta || selectedMedia;
 
     // Find initial index
     // CRITICAL FIX: Find initial index in the filtered array
     const initialIndex = filteredItems.findIndex(item => item.id === selectedMedia.id);
 
+    // Render metadata drawer for swipe-up gesture
+    const renderMetadataDrawer = () => {
+      if (!selectedMedia) return null;
+      const activeTags = [];
+      try {
+        const parsed = JSON.parse(selectedMedia.tags || '[]');
+        if (Array.isArray(parsed)) parsed.forEach(t => activeTags.push(t));
+      } catch(e) {}
+
+      const sizeMB = selectedMedia.size ? (selectedMedia.size / (1024 * 1024)).toFixed(2) : 'Unknown';
+
+      return (
+        <Animated.View style={[styles.metadataDrawer, { transform: [{ translateY: drawerY }] }]}>
+          <View style={styles.drawerHandle} />
+          <Text style={[styles.drawerTitle, { color: theme.colors.textPrimary }]}>File Information</Text>
+          <ScrollView style={{ flex: 1, width: '100%' }} showsVerticalScrollIndicator={false}>
+            
+            <View style={styles.infoRow}>
+              <Icon name="file-outline" size={20} color={theme.colors.textSecondary} />
+              <View style={{ marginLeft: 12, flex: 1 }}>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>Filename</Text>
+                <Text style={{ color: theme.colors.textPrimary, fontSize: 14, fontWeight: '500' }}>{selectedMedia.filename}</Text>
+              </View>
+            </View>
+
+            <View style={styles.infoRow}>
+              <Icon name="harddisk" size={20} color={theme.colors.textSecondary} />
+              <View style={{ marginLeft: 12, flex: 1 }}>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>Size & Resolution</Text>
+                <Text style={{ color: theme.colors.textPrimary, fontSize: 14, fontWeight: '500' }}>
+                  {sizeMB} MB {selectedMedia.width && `• ${selectedMedia.width}x${selectedMedia.height}`}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={[styles.drawerTitle, { color: theme.colors.textPrimary, marginTop: 24, fontSize: 15 }]}>Tags & Albums</Text>
+            <View style={styles.chipInputContainer}>
+              {activeTags.length > 0 ? activeTags.map((tag, i) => (
+                <View key={i} style={[styles.chip, { backgroundColor: theme.colors.primary }]}>
+                  <Text style={styles.chipText}>{tag}</Text>
+                </View>
+              )) : <Text style={{ color: theme.colors.textMuted }}>No tags assigned</Text>}
+            </View>
+
+          </ScrollView>
+        </Animated.View>
+      );
+    };
+
     return (
       <Modal
         visible={selectedMedia !== null}
         transparent={true}
-        animationType="fade"
+        animationType="none"
         onRequestClose={closeViewer}
       >
         <Pressable 
           style={styles.viewerContainer}
           onPress={toggleInfoVisibility}
-          {...swipeDownResponder.panHandlers}
+          {...swipeResponder.panHandlers}
         >
           {/* Black background */}
           <Animated.View 
@@ -1394,6 +2061,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           {/* Top Right Actions: Edit, Tags, Close */}
           <Animated.View 
             style={[
+              styles.premiumBezel,
               styles.viewerCloseButton, 
               { 
                 top: insets.top + 16,
@@ -1401,6 +2069,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 20, // Clean spacing between action icons
+                borderRadius: 30,
+                paddingHorizontal: 16,
+                paddingVertical: 8,
               }
             ]}
             pointerEvents={zoomScale > 1.05 ? 'none' : 'auto'}
@@ -1409,7 +2080,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             {selectedMedia?.type !== 'video' && (
               <TouchableOpacity 
                 onPress={openImageEditor}
-                hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+                hitSlop={HIT_SLOP_15}
               >
                 <Icon name="pencil" size={26} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
               </TouchableOpacity>
@@ -1417,7 +2088,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
             <TouchableOpacity 
               onPress={openTagEditor}
-              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+              hitSlop={HIT_SLOP_15}
             >
               <Icon name="tag-multiple" size={26} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
             </TouchableOpacity>
@@ -1425,7 +2096,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             <TouchableOpacity 
               onPress={closeViewer}
               activeOpacity={0.6}
-              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+              hitSlop={HIT_SLOP_15}
             >
               <Icon name="close" size={28} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
             </TouchableOpacity>
@@ -1448,29 +2119,29 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             ]}
             pointerEvents={zoomScale > 1.05 || !infoVisible ? 'none' : 'box-none'} // Disable when zoomed or hidden
           >
-            {/* Left Side: Date & Resolution */}
-            <View style={{ flex: 1 }} pointerEvents="none">
+            {/* Left Side: Date & Resolution (Animated Crossfade) */}
+            <Animated.View style={{ flex: 1, opacity: metaFadeAnim }} pointerEvents="none">
               <Text style={[styles.viewerInfoDate, { textAlign: 'left', marginBottom: 4 }]} numberOfLines={1}>
-                {selectedMedia.originalDate 
-                  ? new Date(selectedMedia.originalDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                  : selectedMedia.uploadDate 
-                    ? new Date(selectedMedia.uploadDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+                {activeMeta.originalDate 
+                  ? new Date(activeMeta.originalDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                  : activeMeta.uploadDate 
+                    ? new Date(activeMeta.uploadDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
                     : ''
                 }
               </Text>
-              {selectedMedia.width && selectedMedia.height && (
+              {activeMeta.width && activeMeta.height && (
                 <Text style={[styles.viewerInfoResolution, { textAlign: 'left' }]}>
-                  {selectedMedia.width} × {selectedMedia.height}
-                  {selectedMedia.type === 'video' && ' • Video'}
+                  {activeMeta.width} × {activeMeta.height}
+                  {activeMeta.type === 'video' && ' • Video'}
                 </Text>
               )}
-            </View>
+            </Animated.View>
             
-            {/* Right Side: Share & Favourites */}
-            <View style={{ flexDirection: 'row', gap: 24, alignItems: 'center' }} pointerEvents="auto">
+            {/* Right Side: Share & Favourites inside a Premium Pill */}
+            <View style={[styles.premiumBezel, { flexDirection: 'row', gap: 20, alignItems: 'center', borderRadius: 30, paddingHorizontal: 20, paddingVertical: 10 }]} pointerEvents="auto">
               <TouchableOpacity 
                 onPress={handleShare}
-                hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                hitSlop={HIT_SLOP_20}
                 activeOpacity={0.6}
               >
                 <Icon name="share-variant" size={28} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
@@ -1478,7 +2149,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
               <TouchableOpacity 
                 onPress={toggleFavourite}
-                hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                hitSlop={HIT_SLOP_20}
                 activeOpacity={0.6}
               >
                 <Icon 
@@ -1491,38 +2162,43 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             </View>
           </Animated.View>
 
-          {/* Horizontal swipeable FlatList */}
-          <View style={styles.viewerFlatListContainer}>
+          {/* Horizontal swipeable FlatList wrapped in GPU-bound Animated.View */}
+          <Animated.View 
+            style={[
+              styles.viewerFlatListContainer,
+              { transform: [{ scale: scaleAnim }], opacity: opacityAnim }
+            ]}
+          >
             <Animated.FlatList
               data={displayItems}
               renderItem={renderViewerItem}
               keyExtractor={(item) => item.id}
               horizontal={true}
-              pagingEnabled={true}
               showsHorizontalScrollIndicator={false}
-              // Aggressive preloading for smooth swiping
+              
+              // --- 🛑 STRICT 1-ITEM SWIPE PHYSICS 🛑 ---
+              pagingEnabled={false} // CRITICAL: Turn off native paging because we have a 4px gap
+              snapToInterval={ITEM_WIDTH} // Snap exactly to our custom width + gap
+              snapToAlignment="center"
+              disableIntervalMomentum={true} // MAGIC BULLET: Prevents momentum from skipping past the next adjacent item
+              decelerationRate="fast" // Snaps instantly instead of drifting slowly
+              // ----------------------------------------
+              
               initialNumToRender={3}
               windowSize={5}
               maxToRenderPerBatch={5}
-              // Keep adjacent items mounted for smooth parallax
               removeClippedSubviews={false}
-              // Use getItemLayout for instant scroll positioning
               getItemLayout={getItemLayout}
               initialScrollIndex={initialIndex >= 0 ? initialIndex : 0}
-              // Animated scroll for parallax
               onScroll={Animated.event(
                 [{ nativeEvent: { contentOffset: { x: scrollX } } }],
                 { useNativeDriver: true }
               )}
               scrollEventThrottle={16}
               onMomentumScrollEnd={handleMomentumScrollEnd}
-              // Smooth deceleration for natural feel
-              decelerationRate={0.9}
-              // Disable snap for smooth parallax, re-enable with custom physics
-              snapToInterval={ITEM_WIDTH}
               snapToAlignment="center"
             />
-          </View>
+          </Animated.View>
 
 
 
@@ -1680,39 +2356,45 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                       style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary }]}
                       onPress={async () => {
                         try {
-                          // Catch any un-comma'd text left in the input before saving
                           let finalTags = [...editingTags];
                           if (tagInputValue.trim()) {
                             finalTags.push(tagInputValue.trim());
-                            finalTags = Array.from(new Set(finalTags));
                           }
+                          finalTags = Array.from(new Set(finalTags));
 
-                          const tagPayload = {
-                            tags: finalTags, filename: selectedMedia.filename, type: selectedMedia.type,
-                            size: selectedMedia.size, url: selectedMedia.url, thumbnailUrl: selectedMedia.thumbnailUrl,
-                            width: selectedMedia.width, height: selectedMedia.height, duration: selectedMedia.duration,
-                          };
-                          
-                          const res = await api.put(`/media/${selectedMedia.id}/tags`, tagPayload);
-                          
-                          if (res && res.success) {
-                            const newTagsString = JSON.stringify(finalTags);
-                            setSelectedMedia(prev => ({ ...prev, tags: newTagsString }));
+                          if (isSelectMode) {
+                            // === BULK TAGGING LOGIC (Smart Diffing) ===
+                            await executeBulkTagSave();
+                            closeTagEditor();
                             
-                            const updateItemInList = (prevList) => {
-                              if (selectedAlbum !== 'All' && !finalTags.includes(selectedAlbum)) {
-                                return prevList.filter(item => item.id !== selectedMedia.id);
-                              }
-                              return prevList.map(item => item.id === selectedMedia.id ? { ...item, tags: newTagsString } : item);
+                          } else {
+                            // === SINGLE TAGGING LOGIC ===
+                            const tagPayload = {
+                              tags: finalTags, filename: selectedMedia.filename, type: selectedMedia.type,
+                              size: selectedMedia.size, url: selectedMedia.url || selectedMedia.rawUrl, thumbnailUrl: selectedMedia.thumbnailUrl,
+                              width: selectedMedia.width, height: selectedMedia.height, duration: selectedMedia.duration,
                             };
                             
-                            setUploadItems(updateItemInList);
-                            setServerItems(updateItemInList);
-                            setGlobalAlbums(prev => Array.from(new Set([...prev, ...finalTags])).sort());
-
-                            closeTagEditor(); // Use smooth close animation
-                          } else {
-                            Alert.alert('Error', 'Server rejected the tag update');
+                            const res = await api.put(`/media/${selectedMedia.id}/tags`, tagPayload);
+                            
+                            if (res && res.success) {
+                              const newTagsString = JSON.stringify(finalTags);
+                              setSelectedMedia(prev => ({ ...prev, tags: newTagsString }));
+                              
+                              const updateItemInList = (prevList) => {
+                                if (selectedAlbum !== 'All' && !finalTags.includes(selectedAlbum)) {
+                                  return prevList.filter(item => item.id !== selectedMedia.id);
+                                }
+                                return prevList.map(item => item.id === selectedMedia.id ? { ...item, tags: newTagsString } : item);
+                              };
+                              
+                              setUploadItems(updateItemInList);
+                              setServerItems(updateItemInList);
+                              setGlobalAlbums(prev => Array.from(new Set([...prev, ...finalTags])).sort());
+                              closeTagEditor();
+                            } else {
+                              Alert.alert('Error', 'Server rejected the tag update');
+                            }
                           }
                         } catch(e) { Alert.alert('Error', `Failed to update tags: ${e.message}`); }
                       }}
@@ -1725,10 +2407,56 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               </Pressable>
             </Animated.View>
           )}
+
+          {/* iOS-style Metadata Drawer */}
+          {renderMetadataDrawer()}
         </Pressable>
       </Modal>
     );
   };
+
+  // === NATIVE 1:1 SWIPE PAGINATION & BEZIER INDICATOR ===
+  const tabWidth = (width - 32) / 3;
+  const pagesScrollRef = useRef(null);
+  const pageScrollX = useRef(new Animated.Value(0)).current;
+  const TABS = useMemo(() => ['uploads', 'albums', 'turtle-base'], []);
+
+  // The background pill perfectly tracks the ScrollView 1:1
+  const tabIndicatorX = pageScrollX.interpolate({
+    inputRange: [0, width, width * 2],
+    outputRange: [0, tabWidth, tabWidth * 2],
+    extrapolate: 'clamp'
+  });
+
+  // IMPERATIVE TAB PRESS: We tell the ScrollView to move. 
+  // Because tabIndicatorX is bound to pageScrollX, the indicator will slide automatically!
+  const handleTabPress = useCallback((tab) => {
+    const index = TABS.indexOf(tab);
+    if (index >= 0 && pagesScrollRef.current) {
+      pagesScrollRef.current.scrollTo({ x: index * width, animated: true });
+    }
+    
+    // Tap active "Photos" tab to smoothly scroll to most recent (offset 0)
+    if (tab === 'uploads' && activeTab === 'uploads' && gridRef.current) {
+      gridRef.current.scrollToOffset({ offset: 0, animated: true });
+    }
+
+    setActiveTab(tab);
+    // Reset back to root Photo Vault when leaving the main Photos tab
+    if (tab === 'turtle-base' || tab === 'albums') setSelectedAlbum('All');
+  }, [TABS, width, activeTab]);
+
+  // SWIPE END: The ScrollView tells React it finished moving.
+  const handlePageSwipeEnd = useCallback((event) => {
+    const offsetX = event.nativeEvent.contentOffset.x;
+    const index = Math.round(offsetX / width);
+    const newTab = TABS[index];
+    if (newTab && newTab !== activeTab) {
+      setActiveTab(newTab);
+      // Reset back to root Photo Vault when leaving the main Photos tab
+      if (newTab === 'turtle-base' || newTab === 'albums') setSelectedAlbum('All');
+    }
+  }, [activeTab, width, TABS]);
 
   // === MEMOIZED STYLES ===
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -1738,6 +2466,213 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       {/* Full-screen viewer & Modals */}
       {renderFullScreenViewer()}
       {renderLocalSyncGallery()}
+
+      {/* Expanding Inline Bulk Console */}
+      {isSelectMode && (
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'position' : undefined}
+          style={{ position: 'absolute', bottom: insets.bottom + 24, left: 16, right: 16, zIndex: 50 }}
+          pointerEvents="box-none"
+        >
+          {!isBulkTagging ? (
+            <Animated.View style={[styles.premiumBezel, {
+              alignSelf: 'center', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 30, gap: 8
+            }]}>
+              <TouchableOpacity 
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
+                disabled={selectedGridItems.size === 0}
+                onPress={async () => {
+                  // Share multiple selected items
+                  const items = Array.from(selectedGridItems).map(id => 
+                    uploadItems.find(i => i.id === id) || serverItems.find(i => i.id === id)
+                  ).filter(Boolean);
+                  
+                  if (items.length === 0) return;
+                  
+                  try {
+                    const urls = items.map(item => getFullUrl(item.rawUrl || item.url));
+                    
+                    if (urls.length === 1) {
+                      // Single item share
+                      await Sharing.shareAsync(urls[0], { dialogTitle: 'Share photo' });
+                    } else {
+                      // Multiple items - open share sheet for first one for now
+                      // Note: expo-sharing doesn't support multiple URLs natively
+                      Alert.alert(
+                        'Share Multiple',
+                        `${items.length} items selected. Share the first one?`,
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          { 
+                            text: 'Share First', 
+                            onPress: async () => {
+                              await Sharing.shareAsync(urls[0], { dialogTitle: 'Share photo' });
+                            }
+                          }
+                        ]
+                      );
+                    }
+                  } catch (error) {
+                    console.error('[MediaGallery] Bulk share error:', error);
+                    Alert.alert('Error', 'Could not share selected items');
+                  }
+                }}
+              >
+                <Icon name="share-variant" size={20} color={theme.colors.primary} />
+                <Text style={{ color: theme.colors.textPrimary, fontWeight: 'bold', fontSize: 15 }}>
+                  Share
+                </Text>
+              </TouchableOpacity>
+              
+              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.border, marginHorizontal: 8 }} />
+              
+              <TouchableOpacity 
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
+                disabled={selectedGridItems.size === 0}
+                onPress={() => {
+                  // Calculate exact tag intersection across selected items
+                  let commonTags = null;
+                  Array.from(selectedGridItems).forEach(id => {
+                    const item = uploadItems.find(i => i.id === id) || serverItems.find(i => i.id === id);
+                    if (item) {
+                      try {
+                        const itemTags = JSON.parse(item.tags || '[]');
+                        if (commonTags === null) commonTags = [...itemTags];
+                        else commonTags = commonTags.filter(t => itemTags.includes(t));
+                      } catch(e) {}
+                    }
+                  });
+                  setEditingTags(commonTags || []);
+                  setTagInputValue('');
+                  setIsBulkTagging(true);
+                }}
+              >
+                <Icon name="tag-multiple" size={20} color={theme.colors.primary} />
+                <Text style={{ color: theme.colors.textPrimary, fontWeight: 'bold', fontSize: 15 }}>
+                  Tag
+                </Text>
+              </TouchableOpacity>
+              
+              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.border, marginHorizontal: 8 }} />
+              
+              <TouchableOpacity 
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
+                disabled={selectedGridItems.size === 0}
+                onPress={() => {
+                  Alert.alert(
+                    'Delete Selected',
+                    `Delete ${selectedGridItems.size} selected items?`,
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { 
+                        text: 'Delete', 
+                        style: 'destructive',
+                        onPress: async () => {
+                          const ids = Array.from(selectedGridItems);
+                          for (const id of ids) {
+                            try { await api.delete(`/media/${id}`); } catch (e) {}
+                          }
+                          setUploadItems(prev => prev.filter(item => !selectedGridItems.has(item.id)));
+                          setServerItems(prev => prev.filter(item => !selectedGridItems.has(item.id)));
+                          setIsSelectMode(false);
+                          setSelectedGridItems(new Set());
+                        }
+                      }
+                    ]
+                  );
+                }}
+              >
+                <Icon name="trash-can-outline" size={20} color="#DC2626" />
+                <Text style={{ color: '#DC2626', fontWeight: 'bold', fontSize: 15 }}>
+                  Delete
+                </Text>
+              </TouchableOpacity>
+            </Animated.View>
+          ) : (
+            <Animated.View style={[styles.premiumBezel, {
+              borderRadius: 20, padding: 16, width: '100%',
+              backgroundColor: theme.mode === 'dark' ? 'rgba(30, 30, 32, 0.95)' : 'rgba(252, 252, 255, 0.98)'
+            }]}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <TouchableOpacity onPress={() => setIsBulkTagging(false)}>
+                  <Icon name="close" size={24} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+                <Text style={{ color: theme.colors.textPrimary, fontWeight: '600' }}>Tagging {selectedGridItems.size} Items</Text>
+                <TouchableOpacity onPress={executeBulkTagSave}>
+                  <Text style={{ color: theme.colors.primary, fontWeight: 'bold', fontSize: 16 }}>Save</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={[styles.chipInputContainer, { borderColor: theme.colors.border, minHeight: 44, marginBottom: 8 }]}>
+                {editingTags.map((tag, index) => (
+                  <View key={index} style={[styles.chip, { backgroundColor: theme.colors.primary, paddingVertical: 4 }]}>
+                    <Text style={styles.chipText}>{tag}</Text>
+                    <TouchableOpacity onPress={() => setEditingTags(editingTags.filter((_, i) => i !== index))}>
+                      <Icon name="close-circle" size={16} color={theme.colors.background} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                <TextInput
+                  style={[styles.chipTextInput, { color: theme.colors.textPrimary, paddingVertical: 0, margin: 0, height: 28 }]}
+                  value={tagInputValue}
+                  onChangeText={(text) => {
+                    if (text.includes(',')) {
+                      const newTags = text.split(',').map(t => t.trim()).filter(Boolean);
+                      if (newTags.length > 0) setEditingTags(prev => Array.from(new Set([...prev, ...newTags])));
+                      setTagInputValue('');
+                    } else { setTagInputValue(text); }
+                  }}
+                  onKeyPress={({ nativeEvent }) => {
+                    if (nativeEvent.key === 'Backspace' && tagInputValue === '' && editingTags.length > 0) {
+                      setEditingTags(prev => prev.slice(0, -1));
+                    }
+                  }}
+                  onSubmitEditing={() => {
+                    if (tagInputValue.trim()) {
+                      setEditingTags(prev => Array.from(new Set([...prev, tagInputValue.trim()])));
+                      setTagInputValue('');
+                    }
+                  }}
+                  placeholder={editingTags.length === 0 ? "Type tag..." : ""}
+                  placeholderTextColor={theme.colors.textMuted}
+                  returnKeyType="done"
+                  autoCapitalize="words"
+                />
+              </View>
+
+              {tagInputValue.length > 0 ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.scrollHorizontal}>
+                  {globalAlbums.filter(a => a.toLowerCase().includes(tagInputValue.toLowerCase())).map(album => (
+                    <TouchableOpacity 
+                      key={album} style={[styles.quickSelectChip, { borderWidth: 1, borderColor: theme.colors.border }]}
+                      onPress={() => {
+                        if (!editingTags.includes(album)) setEditingTags([...editingTags, album]);
+                        setTagInputValue('');
+                      }}
+                    >
+                      <Text style={{ color: theme.colors.textPrimary }}>{album}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              ) : (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.scrollHorizontal}>
+                  {pinnedAlbums.map(album => (
+                    <TouchableOpacity 
+                      key={album} style={[styles.quickSelectChip, editingTags.includes(album) && { backgroundColor: theme.colors.primary }]}
+                      onPress={() => {
+                        if (editingTags.includes(album)) setEditingTags(editingTags.filter(t => t !== album));
+                        else setEditingTags([...editingTags, album]);
+                      }}
+                    >
+                      <Text style={[styles.quickSelectText, editingTags.includes(album) && { color: theme.colors.background }]}>{album}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+            </Animated.View>
+          )}
+        </KeyboardAvoidingView>
+      )}
 
       {/* Pre-Upload Album Selection Modal (Draggable Bottom-Sheet Style) */}
       <Modal 
@@ -1876,16 +2811,56 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               <TouchableOpacity 
                 style={[styles.uploadModalButton, { backgroundColor: theme.colors.surface }]}
                 onPress={dismissUploadModal}
+                disabled={uploading}
               >
                 <Text style={{ color: theme.colors.textPrimary }}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary }]}
+                style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary, opacity: uploading ? 0.6 : 1 }]}
                 onPress={executeUpload}
+                disabled={uploading}
               >
-                <Text style={{ color: theme.colors.background, fontWeight: 'bold' }}>Upload Now</Text>
+                <Text style={{ color: theme.colors.background, fontWeight: 'bold' }}>
+                  {uploading ? 'Uploading...' : 'Upload Now'}
+                </Text>
               </TouchableOpacity>
             </View>
+
+            {uploading && (
+              <View style={{ marginTop: 16, alignItems: 'center', width: '100%' }}>
+                {uploadPercentage < 100 ? (
+                  <ActivityIndicator size="large" color={theme.colors.primary} />
+                ) : (
+                  <View style={{ height: 36, justifyContent: 'center' }}>
+                    <Text style={{ color: theme.colors.primary, fontSize: 28, fontWeight: '700' }}>✓</Text>
+                  </View>
+                )}
+                <Text style={{ color: theme.colors.textPrimary, marginTop: 12, fontWeight: 'bold' }}>
+                  {uploadPercentage < 100
+                    ? `Uploading Item ${Math.min(uploadingItemIndex, pendingAssets.length)} of ${pendingAssets.length}`
+                    : 'Upload Complete'}
+                </Text>
+                <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>
+                  {uploadPercentage}% Complete
+                </Text>
+
+                {/* Visual Progress Bar — animated width driven by progressAnim. */}
+                <View style={{ width: '100%', height: 6, backgroundColor: theme.colors.border, borderRadius: 3, marginTop: 8, overflow: 'hidden' }}>
+                  <Animated.View
+                    style={{
+                      height: '100%',
+                      backgroundColor: theme.colors.primary,
+                      borderRadius: 3,
+                      width: progressAnim.interpolate({
+                        inputRange: [0, 100],
+                        outputRange: ['0%', '100%'],
+                        extrapolate: 'clamp',
+                      }),
+                    }}
+                  />
+                </View>
+              </View>
+            )}
           </Animated.View>
         </View>
       </Modal>
@@ -1901,249 +2876,344 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         </InputAccessoryView>
       )}
 
-      {/* 1. Main Content Area (Rendered underneath floating header) */}
-      <View style={StyleSheet.absoluteFill} {...edgeSwipeResponder.panHandlers}>
-        {activeTab === 'albums' ? (
-          <Animated.FlatList
-            key="albums-grid"
-            data={pinnedAlbums}
-            keyExtractor={(item) => item}
-            numColumns={2}
-            // CRITICAL FIX: Push content safely below the floating header
-            contentContainerStyle={[styles.albumsGridContent, { paddingTop: insets.top + 110 }]}
-            columnWrapperStyle={styles.albumsColumnWrapper}
-            onScroll={handleScroll}
-            scrollEventThrottle={16}
-            renderItem={({ item }) => {
-              const covers = albumCovers[item] || [];
-              const gridItems = [...covers, null, null, null, null].slice(0, 4);
-
-              return (
-                <TouchableOpacity 
-                  style={styles.albumFolderCard}
-                  activeOpacity={0.9}
-                  onPress={() => {
-                    setSelectedAlbum(item);
-                    setActiveTab('uploads');
-                  }}
-                >
-                  <View style={styles.albumGridContainer}>
-                    {gridItems.map((coverUrl, index) => (
-                      <View key={index} style={styles.albumGridCell}>
-                        {coverUrl ? (
-                          <Image 
-                            source={{ uri: getFullUrl(coverUrl) }} 
-                            style={styles.albumGridImage} 
-                            contentFit="cover" 
-                            transition={200}
-                          />
-                        ) : (
-                          <View style={styles.albumGridPlaceholder} />
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                  
-                  <LinearGradient
-                    colors={['transparent', 'rgba(0,0,0,0.85)']}
-                    style={styles.albumGradient}
-                  >
-                    <Text style={styles.albumGridName} numberOfLines={1}>{item}</Text>
-                    <Text style={styles.albumItemCount}>
-                       {covers.length > 0 ? 'View Album' : 'Empty'}
-                    </Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-              );
-            }}
-            ListEmptyComponent={() => (
-              <View style={styles.emptyContainer}>
-                <Text style={{ color: theme.colors.textSecondary }}>No albums created yet.</Text>
-              </View>
-            )}
-          />
-        ) : (
-          loading && currentItems.length === 0 ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color={theme.colors.primary} />
-            </View>
-          ) : (
-            <Animated.FlatList
-              key="photos-grid"
+      {/* 1. Main Content Area - Native Swipeable Pages */}
+      <View style={StyleSheet.absoluteFill}>
+        <Animated.ScrollView
+          ref={pagesScrollRef}
+          horizontal
+          pagingEnabled
+          bounces={false}
+          showsHorizontalScrollIndicator={false}
+          scrollEnabled={selectedAlbum === 'All'} // Apple UX: Lock page swiping when viewing a specific album!
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { x: pageScrollX } } }],
+            { useNativeDriver: true }
+          )}
+          scrollEventThrottle={16}
+          onMomentumScrollEnd={handlePageSwipeEnd}
+          style={{ flex: 1, flexDirection: 'row' }}
+        >
+          
+          {/* PAGE 1: UPLOADS */}
+          <Animated.View 
+            style={{ width, height: '100%', transform: [{ translateX: albumSlideAnim }] }}
+            {...edgeSwipeResponder.panHandlers}
+          >
+            <AnimatedFlashList
               ref={gridRef}
-              data={displayItems}
-              renderItem={renderItem}
+              data={uploadDisplayItems}
+              renderItem={(props) => renderItem({...props, activeTab: 'uploads'})}
               keyExtractor={(item) => item.id}
               numColumns={3}
-              inverted={true} // NATIVE IOS PHOTOS BOTTOM-UP BEHAVIOR
-              // Inverted Swaps Padding: Top protects the floating header, Bottom protects the notch
-              contentContainerStyle={[styles.gridContent, { 
-                paddingBottom: insets.top + 110, 
-                paddingTop: insets.bottom + 16 
-              }]}
+              // --- DOUBLE-FLIP WORKAROUND ---
+              style={{ flex: 1, transform: [{ scaleY: -1 }] }} 
+              // ------------------------------
+              contentContainerStyle={[styles.gridContent, { paddingBottom: insets.top + 90, paddingTop: insets.bottom + 16 }]}
               showsVerticalScrollIndicator={false}
-              onScroll={handleScroll}
-              scrollEventThrottle={16}
               onRefresh={handleRefresh}
               refreshing={refreshing}
               onEndReached={handleLoadMore}
-              onEndReachedThreshold={3}
-              ListEmptyComponent={renderEmpty}
-              // Inverted: Header renders at the absolute VISUAL BOTTOM
+              onEndReachedThreshold={2.5}
+              estimatedItemSize={width / 3} 
+              ListEmptyComponent={(!loading && !isPaginating && !refreshing) ? renderEmpty : null}
               ListHeaderComponent={
-                <View style={[styles.bottomContainer, { paddingBottom: 16 }]}>
+                <View style={{ transform: [{ scaleY: -1 }] }}>
+                  <View style={[styles.bottomContainer, { paddingBottom: 16 }]}>
                   <View style={styles.countContainer}>
                     <Text style={[styles.countText, { color: theme.colors.textSecondary }]}>
-                      {photoCount > 0 && videoCount > 0 
-                        ? `${photoCount} Photos, ${videoCount} Videos`
-                        : photoCount > 0 
-                          ? `${photoCount} ${photoCount === 1 ? 'Photo' : 'Photos'}`
+                      {activeTab === 'uploads' && globalUploadsTotal > 0 
+                        ? `${globalUploadsTotal.toLocaleString()} Items` 
+                        : photoCount > 0 && videoCount > 0 
+                          ? `${photoCount} Photos, ${videoCount} Videos` 
+                          : photoCount > 0 ? `${photoCount} ${photoCount === 1 ? 'Photo' : 'Photos'}` 
                           : `${videoCount} ${videoCount === 1 ? 'Video' : 'Videos'}`
                       }
-                      {activeTab === 'turtle-base' && ' from PC'}
                     </Text>
                   </View>
-
-                  {activeTab === 'uploads' && (
-                    <View style={{ alignItems: 'center', width: '100%' }}>
-                      <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-                        <TouchableOpacity
-                          style={[styles.uploadButton, { flex: 1, backgroundColor: 'transparent' }]}
-                          onPress={handleUpload}
-                          disabled={uploading}
-                          activeOpacity={0.8}
-                        >
-                          <Icon name="image-plus" size={20} color={theme.colors.textPrimary} />
-                          <Text style={[styles.uploadButtonText, { color: theme.colors.textPrimary, fontSize: 14 }]}>Upload</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[styles.uploadButton, { flex: 1, backgroundColor: 'transparent' }]}
-                          onPress={openLocalSyncGallery}
-                          disabled={uploading}
-                          activeOpacity={0.8}
-                        >
-                          <Icon name="folder-sync" size={20} color={theme.colors.textPrimary} />
-                          <Text style={[styles.uploadButtonText, { color: theme.colors.textPrimary, fontSize: 14 }]}>Smart Sync</Text>
-                        </TouchableOpacity>
-                      </View>
-                      
-                      {/* Status Text below the buttons */}
-                      {uploading && (
-                        <Text style={{ marginTop: 12, fontSize: 13, fontWeight: '600', color: theme.colors.primary }}>
-                          Uploading {uploadStats.current === 0 ? 1 : uploadStats.current} of {uploadStats.total} • {uploadStats.fileProgress.toFixed(0)}% Complete
-                        </Text>
-                      )}
+                  <View style={{ alignItems: 'center', width: '100%', marginTop: 8 }}>
+                    <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+                      <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPress={handleUpload} disabled={uploading} activeOpacity={0.7}>
+                        <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="image-plus" size={18} color={theme.colors.primary} /></View>
+                        <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Upload</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPress={openLocalSyncGallery} disabled={uploading} activeOpacity={0.7}>
+                        <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="folder-sync" size={18} color={theme.colors.primary} /></View>
+                        <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Smart Sync</Text>
+                      </TouchableOpacity>
                     </View>
-                  )}
+                    {uploading && <Text style={{ marginTop: 12, fontSize: 13, fontWeight: '600', color: theme.colors.primary }}>Uploading {uploadStats.current === 0 ? 1 : uploadStats.current} of {uploadStats.total} • {uploadStats.fileProgress.toFixed(0)}% Complete</Text>}
+                  </View>
+                </View>
                 </View>
               }
-              // Inverted: Footer renders at the absolute VISUAL TOP (where older photos load)
               ListFooterComponent={
-                <View style={{ paddingTop: 16 }}>
-                  {isPaginating && currentHasMore && (
-                    <View style={styles.phantomSkeletonContainer}>
-                      {[...Array(6)].map((_, i) => (
-                        <ShimmerSkeleton key={`header-skel-${i}`} styles={styles} theme={theme} />
-                      ))}
-                    </View>
-                  )}
+                <View style={{ transform: [{ scaleY: -1 }] }}>
+                  <View style={{ paddingTop: 16 }}>
+                    {isPaginating && hasMoreUploads && (
+                      <View style={styles.phantomSkeletonContainer}>
+                        {[...Array(6)].map((_, i) => <ShimmerSkeleton key={`header-skel-${i}`} styles={styles} theme={theme} />)}
+                      </View>
+                    )}
+                  </View>
                 </View>
               }
             />
-          )
-        )}
+          </Animated.View>
+
+          {/* PAGE 2: ALBUMS */}
+          <View style={{ width, height: '100%' }}>
+            <Animated.FlatList
+              data={pinnedAlbums}
+              keyExtractor={(item) => item}
+              numColumns={2}
+              contentContainerStyle={[styles.albumsGridContent, { paddingTop: insets.top + 90 }]}
+              columnWrapperStyle={styles.albumsColumnWrapper}
+              ListEmptyComponent={() => <View style={styles.emptyContainer}><Text style={{ color: theme.colors.textSecondary }}>No albums created yet.</Text></View>}
+              
+              // 🔄 PULL TO REFRESH ADDED HERE
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={handleRefresh}
+                  tintColor={theme.colors.primary}
+                  colors={[theme.colors.primary]}
+                  progressViewOffset={insets.top + 90}
+                />
+              }
+
+              renderItem={({ item }) => {
+                const covers = albumCovers[item] || [];
+                const gridItems = [...covers, null, null, null, null].slice(0, 4);
+                return (
+                  <TouchableOpacity 
+                    style={styles.albumFolderCard} 
+                    activeOpacity={0.9} 
+                    onPress={() => { setSelectedAlbum(item); handleTabPress('uploads'); }} 
+                    onLongPress={() => showAlbumOptions(item)} 
+                    delayLongPress={500}
+                  >
+                    <View style={styles.albumGridContainer}>
+                      {gridItems.map((coverUrl, index) => (
+                        <View key={index} style={styles.albumGridCell}>
+                          {coverUrl ? <Image source={{ uri: getFullUrl(coverUrl) }} style={styles.albumGridImage} contentFit="cover" transition={200} /> : <View style={styles.albumGridPlaceholder} />}
+                        </View>
+                      ))}
+                    </View>
+                    <LinearGradient colors={['transparent', 'rgba(0,0,0,0.85)']} style={styles.albumGradient}>
+                      <Text style={styles.albumGridName} numberOfLines={1}>{item}</Text>
+                      <Text style={styles.albumItemCount}>{covers.length > 0 ? 'View Album' : 'Empty'}</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </View>
+
+          {/* PAGE 3: PC / TURTLE-BASE */}
+          <View style={{ width, height: '100%' }}>
+            <AnimatedFlashList
+              data={pcDisplayItems}
+              renderItem={(props) => renderItem({...props, activeTab: 'turtle-base'})}
+              keyExtractor={(item) => item.id}
+              numColumns={3}
+              // --- DOUBLE-FLIP WORKAROUND ---
+              style={{ flex: 1, transform: [{ scaleY: -1 }] }}
+              // ------------------------------
+              contentContainerStyle={[styles.gridContent, { paddingBottom: insets.top + 90, paddingTop: insets.bottom + 16 }]}
+              showsVerticalScrollIndicator={false}
+              estimatedItemSize={width / 3} 
+              ListEmptyComponent={(!loading && !isPaginating && !refreshing) ? renderEmpty : null}
+              ListHeaderComponent={
+                  <View style={{ transform: [{ scaleY: -1 }] }}>
+                    <View style={[styles.bottomContainer, { paddingBottom: 16 }]}>
+                      <View style={styles.countContainer}>
+                        <Text style={[styles.countText, { color: theme.colors.textSecondary }]}>
+                          {pcPhotoCount > 0 && pcVideoCount > 0 ? `${pcPhotoCount} Photos, ${pcVideoCount} Videos from PC` : pcPhotoCount > 0 ? `${pcPhotoCount} ${pcPhotoCount === 1 ? 'Photo' : 'Photos'} from PC` : `${pcVideoCount} ${pcVideoCount === 1 ? 'Video' : 'Videos'} from PC`}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                }
+              />
+          </View>
+
+        </Animated.ScrollView>
       </View>
 
-      {/* Notch Shield - Prevents photos from showing under the status bar when header hides */}
+      {/* Notch Shield */}
       <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: theme.colors.background, zIndex: 30 }} />
 
-      {/* 2. Floating Animated Header */}
-      <Animated.View
+      {/* 2. Compact Static Header */}
+      <View
         style={[
           styles.floatingHeaderContainer, 
           { 
             paddingTop: insets.top,
-            backgroundColor: theme.colors.background, // Solid theme color
-            transform: [{ translateY: headerTranslateY }],
+            backgroundColor: theme.colors.background,
             borderBottomWidth: StyleSheet.hairlineWidth,
             borderBottomColor: theme.colors.border,
             zIndex: 20,
           }
         ]}
       >
-        {/* 1.5px Global Progress Bar (Theme-Aware Contrast) */}
+        {/* Progress Bar */}
         {uploading && (
           <View style={{ position: 'absolute', top: insets.top, left: 0, right: 0, height: 1.5, backgroundColor: 'transparent', zIndex: 25 }}>
-            <View 
-              style={{ 
-                height: '100%', 
-                width: `${uploadStats.fileProgress}%`, 
-                backgroundColor: theme.dark ? '#FFFFFF' : '#000000' 
-              }} 
-            />
+            <View style={{ height: '100%', width: `${uploadStats.fileProgress}%`, backgroundColor: theme.mode === 'dark' ? '#FFFFFF' : '#000000' }} />
           </View>
         )}
 
-        {/* Dynamic Header */}
-        <View style={styles.header}>
-          {onClose ? (
-            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-              <Icon name="arrow-left" size={24} color={theme.colors.textPrimary} />
-            </TouchableOpacity>
-          ) : (
-            <View style={styles.closeButton} />
-          )}
-          
-          <View style={styles.headerTitleContainer}>
-            {selectedAlbum !== 'All' ? (
-              <TouchableOpacity 
-                style={styles.albumBackButton}
-                onPress={() => setSelectedAlbum('All')}
-                activeOpacity={0.7}
-              >
-                <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
-                <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
-                  {selectedAlbum}
-                </Text>
+        {/* Top Row: Title & Actions (Compact) */}
+        <View style={[styles.header, { height: 44, paddingHorizontal: 16 }]}>
+          <View style={styles.headerLeft}>
+            {onClose ? (
+              <TouchableOpacity onPress={onClose} style={styles.iconButton}>
+                <Icon name="arrow-left" size={24} color={theme.colors.textPrimary} />
               </TouchableOpacity>
-            ) : (
-              <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]}>
-                Photo Vault
-              </Text>
-            )}
+            ) : selectedAlbum !== 'All' ? (
+              <TouchableOpacity onPress={() => setSelectedAlbum('All')} style={styles.iconButton}>
+                <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} style={{ marginLeft: -4 }} />
+              </TouchableOpacity>
+            ) : <View style={styles.iconButtonPlaceholder} />}
+          </View>
+          
+          <View style={styles.headerCenter}>
+            <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+              {selectedAlbum !== 'All' ? selectedAlbum : 'Photo Vault'}
+            </Text>
           </View>
 
-          <View style={styles.headerRightAction} />
+          <View style={[styles.headerRight, { justifyContent: 'center' }]}>
+            {/* Uploads Action: Search & Select Buttons */}
+            <Animated.View style={{ 
+              position: 'absolute', right: 0, 
+              flexDirection: 'row', alignItems: 'center', gap: 16,
+              opacity: pageScrollX.interpolate({ inputRange: [0, width], outputRange: [1, 0], extrapolate: 'clamp' }),
+              pointerEvents: activeTab === 'uploads' ? 'auto' : 'none'
+            }}>
+              <TouchableOpacity 
+                onPress={() => setIsUploadsSearchVisible(!isUploadsSearchVisible)}
+                hitSlop={HIT_SLOP_10}
+              >
+                <Icon name="magnify" size={24} color={isUploadsSearchVisible || uploadsSearchQuery ? theme.colors.primary : theme.colors.textPrimary} />
+              </TouchableOpacity>
+              <TouchableOpacity 
+                onPress={() => {
+                  if (isSelectMode) { setIsSelectMode(false); setIsBulkTagging(false); setSelectedGridItems(new Set()); } 
+                  else { setIsSelectMode(true); }
+                }}
+                hitSlop={HIT_SLOP_10}
+              >
+                <Text style={{ color: theme.colors.primary, fontWeight: '600', fontSize: 15, letterSpacing: -0.3 }}>
+                  {isSelectMode ? 'Cancel' : 'Select'}
+                </Text>
+              </TouchableOpacity>
+            </Animated.View>
+
+            {/* Albums Action: Magnify Icon */}
+            <Animated.View style={{ 
+              position: 'absolute', right: 0, 
+              opacity: pageScrollX.interpolate({ inputRange: [0, width, width * 2], outputRange: [0, 1, 0], extrapolate: 'clamp' }),
+              pointerEvents: activeTab === 'albums' ? 'auto' : 'none' 
+            }}>
+              <TouchableOpacity onPress={() => {
+                if (albumSearchQuery) {
+                  setAlbumSearchQuery('');
+                } else {
+                  setAlbumSearchQuery(' ');
+                }
+              }} hitSlop={HIT_SLOP_10}>
+                <Icon name="magnify" size={24} color={albumSearchQuery ? theme.colors.primary : theme.colors.textPrimary} />
+              </TouchableOpacity>
+            </Animated.View>
+          </View>
         </View>
 
-        {/* 3-Way Tab Toggle */}
-        <View style={styles.tabContainer}>
-          <TouchableOpacity
-            style={[styles.tabButton, activeTab === 'uploads' && styles.tabButtonActive]}
-            onPress={() => setActiveTab('uploads')}
-          >
-            <Icon name="image-multiple" size={16} color={activeTab === 'uploads' ? theme.colors.background : theme.colors.textSecondary} />
-            <Text style={[styles.tabText, activeTab === 'uploads' && styles.tabTextActive]}>Photos</Text>
-          </TouchableOpacity>
+        {/* Unified Search Bar - switches function based on active tab */}
+        <Animated.View style={{
+          height: (isUploadsSearchVisible || (activeTab === 'albums' && albumSearchQuery !== '')) ? 'auto' : 0,
+          opacity: uploadsSearchAnim,
+          overflow: 'hidden',
+          marginHorizontal: 16,
+          marginBottom: (isUploadsSearchVisible || (activeTab === 'albums' && albumSearchQuery !== '')) ? 8 : 0,
+          transform: [{
+            translateY: uploadsSearchAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [-20, 0]
+            })
+          }]
+        }}>
+          <View style={[styles.searchContainer, { 
+            backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+            borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, flexDirection: 'row', alignItems: 'center' 
+          }]}>
+            <Icon name="magnify" size={18} color={theme.colors.textMuted} />
+            <TextInput
+              style={{ flex: 1, marginLeft: 6, color: theme.colors.textPrimary, fontSize: 15, padding: 0 }}
+              value={activeTab === 'albums' ? albumSearchQuery : uploadsSearchQuery}
+              onChangeText={activeTab === 'albums' ? setAlbumSearchQuery : setUploadsSearchQuery}
+              placeholder={activeTab === 'albums' ? "Search albums..." : "Search by tag..."}
+              placeholderTextColor={theme.colors.textMuted}
+              autoFocus={isUploadsSearchVisible || (activeTab === 'albums' && albumSearchQuery !== '')}
+            />
+            <TouchableOpacity onPress={() => { 
+              if (activeTab === 'albums') {
+                setAlbumSearchQuery(''); 
+              } else {
+                setUploadsSearchQuery(''); 
+                setIsUploadsSearchVisible(false);
+              }
+            }}>
+              <Icon name="close-circle" size={18} color={theme.colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
 
-          <TouchableOpacity
-            style={[styles.tabButton, activeTab === 'albums' && styles.tabButtonActive]}
-            onPress={() => setActiveTab('albums')}
-          >
-            <Icon name="folder-multiple" size={16} color={activeTab === 'albums' ? theme.colors.background : theme.colors.textSecondary} />
-            <Text style={[styles.tabText, activeTab === 'albums' && styles.tabTextActive]}>Albums</Text>
-          </TouchableOpacity>
+        {/* Bottom Row: Bezier Segmented Control */}
+        <View style={{ marginHorizontal: 16, marginBottom: 8, height: 32, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)', borderRadius: 8, flexDirection: 'row', position: 'relative' }}>
+          {/* Animated Slider Background */}
+          <Animated.View style={{
+            position: 'absolute', top: 2, bottom: 2, left: 2, width: tabWidth - 4,
+            backgroundColor: theme.mode === 'dark' ? '#333' : '#FFF',
+            borderRadius: 6,
+            shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2,
+            transform: [{ translateX: tabIndicatorX }]
+          }} />
 
-          <TouchableOpacity
-            style={[styles.tabButton, activeTab === 'turtle-base' && styles.tabButtonActive]}
-            onPress={() => { setActiveTab('turtle-base'); setSelectedAlbum('All'); }}
-          >
-            <Icon name="desktop-classic" size={16} color={activeTab === 'turtle-base' ? theme.colors.background : theme.colors.textSecondary} />
-            <Text style={[styles.tabText, activeTab === 'turtle-base' && styles.tabTextActive]}>PC</Text>
-          </TouchableOpacity>
+          {TABS.map((tab, index) => {
+            // Calculate exact opacity based on 1:1 scroll physics
+            const inputRange = [(index - 1) * width, index * width, (index + 1) * width];
+            const activeOp = pageScrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
+            const inactiveOp = pageScrollX.interpolate({ inputRange, outputRange: [1, 0, 1], extrapolate: 'clamp' });
+            
+            const label = tab === 'uploads' ? 'Photos' : tab === 'albums' ? 'Albums' : 'PC';
+
+            return (
+              <TouchableOpacity
+                key={tab}
+                style={{ flex: 1, justifyContent: 'center', alignItems: 'center', zIndex: 1 }}
+                onPress={() => handleTabPress(tab)}
+              >
+                {/* Active Bold Text */}
+                <Animated.Text style={{ 
+                  position: 'absolute', fontSize: 13, fontWeight: '600', 
+                  color: theme.colors.textPrimary, opacity: activeOp 
+                }}>
+                  {label}
+                </Animated.Text>
+                
+                {/* Inactive Regular Text */}
+                <Animated.Text style={{ 
+                  fontSize: 13, fontWeight: '500', 
+                  color: theme.colors.textSecondary, opacity: inactiveOp 
+                }}>
+                  {label}
+                </Animated.Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
-      </Animated.View>
+      </View>
 
     </View>
   );
@@ -2151,47 +3221,62 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
 // Memoized grid item component for performance
 // === GRID ITEM COMPONENT (Memoized) ===
-// === PREMIUM SHIMMER SKELETON COMPONENT ===
-const ShimmerSkeleton = ({ styles, theme }) => {
+// === PREMIUM SEAMLESS SWEEPING SHIMMER SKELETON ===
+const ShimmerSkeleton = React.memo(({ theme }) => {
   const shimmerAnim = useRef(new Animated.Value(0)).current;
+
+  // Calculate dynamic size: Exact width divided by columns, no internal margins
+  // Ensure numColumns matches what is used in your FlatList (defaulting to 3 here)
+  const numColumns = 3; 
+  const tileSize = width / numColumns; 
 
   useEffect(() => {
     Animated.loop(
-      Animated.sequence([
-        Animated.timing(shimmerAnim, {
-          toValue: 1,
-          duration: 1000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(shimmerAnim, {
-          toValue: 0,
-          duration: 1000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        })
-      ])
+      Animated.timing(shimmerAnim, {
+        toValue: 1,
+        duration: 1200, 
+        useNativeDriver: true, 
+      })
     ).start();
   }, [shimmerAnim]);
 
-  const opacity = shimmerAnim.interpolate({
+  // Translate beam width needs to match the tileSize for full sweep coverage
+  const translateX = shimmerAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0.3, 0.7] // Pulses gracefully between 30% and 70% opacity
+    outputRange: [-tileSize, tileSize]
   });
 
-  return (
-    <Animated.View style={[styles.thumbnailContainer, styles.skeletonThumbnail, { opacity }]}>
-      <LinearGradient
-        colors={['transparent', 'rgba(255,255,255,0.1)', 'transparent']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFillObject}
-      />
-    </Animated.View>
-  );
-};
+  // Frosted glass base and light beam colors based on theme
+  const baseColor = theme.mode === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.03)';
+  const shineColor = theme.mode === 'dark' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)';
 
-const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBaseUrl, activeTab, styles, theme }) => {
+  return (
+    <View style={{ 
+      width: tileSize, 
+      aspectRatio: 1, // Keep squares perfectly symmetrical
+      backgroundColor: baseColor, 
+      overflow: 'hidden',
+      margin: 0, // RIGIDLY enforce zero margin for seamless tiling
+      padding: 0, // Ensure no internal padding shifts the image
+    }}>
+      <Animated.View
+        style={[
+          StyleSheet.absoluteFillObject,
+          { transform: [{ translateX }] }
+        ]}
+      >
+        <LinearGradient
+          colors={['transparent', shineColor, 'transparent']}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={StyleSheet.absoluteFillObject}
+        />
+      </Animated.View>
+    </View>
+  );
+});
+
+const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBaseUrl, activeTab, styles, theme, isSelectMode, isSelected, onToggleSelect }) => {
   // Early return for seamless Phantom Skeletons
   if (item.isSkeleton) {
     return <ShimmerSkeleton styles={styles} theme={theme} />;
@@ -2201,6 +3286,7 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
   const [duration, setDuration] = useState(item.duration);
   const [hasFailed, setHasFailed] = useState(false);
   const [localTags, setLocalTags] = useState(item.tags || []);
+  const [isLoaded, setIsLoaded] = useState(false);
   
   // Format seconds to MM:SS
   const formatDuration = (seconds) => {
@@ -2230,7 +3316,7 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
             setDuration(data.duration);
           }
         } catch (err) {
-          console.log('[GridItem] Failed to fetch missing duration', err.message);
+          // Duration fetch failed silently
         }
       };
       fetchMissingInfo();
@@ -2258,7 +3344,7 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
           }
         } catch (err) {
           // Silent fail - this is a lazy background check
-          console.log('[GridItem] Tag sync failed:', err.message);
+          // Tag sync failed silently
         }
       };
       
@@ -2276,11 +3362,26 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
   
   return (
     <TouchableOpacity
-      style={styles.thumbnailContainer}
-      onPress={() => openViewer(item)}
-      onLongPress={() => handleDelete(item.id)}
+      style={[styles.thumbnailContainer, isSelectMode && isSelected && { opacity: 0.8 }]}
+      onPress={() => isSelectMode ? onToggleSelect() : openViewer(item)}
+      onLongPress={() => !isSelectMode && handleDelete(item.id)}
       activeOpacity={0.8}
     >
+      {/* Selection Checkmark Overlay */}
+      {isSelectMode && (
+        <View style={{
+          position: 'absolute', bottom: 6, right: 6, width: 22, height: 22, borderRadius: 11,
+          backgroundColor: isSelected ? theme.colors.primary : 'rgba(0,0,0,0.3)',
+          borderWidth: 1.5, borderColor: isSelected ? theme.colors.primary : '#fff',
+          justifyContent: 'center', alignItems: 'center', zIndex: 10
+        }}>
+          {isSelected && <Icon name="check" size={14} color={theme.colors.background} />}
+        </View>
+      )}
+      
+      {/* Sophisticated pulse skeleton while image loads */}
+      {!isLoaded && !hasFailed && <ImageSkeleton style={styles.thumbnail} />}
+      
       {hasFailed ? (
         // Fallback for failed images
         <View style={[styles.thumbnail, styles.failedThumbnail]}>
@@ -2296,14 +3397,15 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
       ) : (
         <Image
           source={{ uri: imageUrl }}
-          style={styles.thumbnail}
+          style={[styles.thumbnail, { opacity: isLoaded ? 1 : 0 }]}
           contentFit="cover"
           transition={200}
           cachePolicy="memory-disk"
-          placeholder={{ blurhash: 'LKO2?U%2Tw=w]~RBVZRi};RPxuwH' }}
+          placeholder={item.blurhash ? { blurhash: item.blurhash } : null}
           placeholderContentFit="cover"
+          onLoad={() => setIsLoaded(true)}
           onError={() => {
-            console.log('[GridItem] Image failed to load:', item.id, item.filename);
+            // Image load failed silently
             setHasFailed(true);
           }}
         />
@@ -2334,6 +3436,16 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
 
 const createStyles = (theme) =>
   StyleSheet.create({
+    premiumBezel: {
+      backgroundColor: 'rgba(30, 30, 32, 0.85)',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: 'rgba(255, 255, 255, 0.15)',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 5,
+    },
     container: {
       flex: 1,
       backgroundColor: theme.colors.background,
@@ -2348,14 +3460,46 @@ const createStyles = (theme) =>
       borderBottomWidth: 0,
       backgroundColor: 'transparent',
     },
+    headerLeft: {
+      width: 70,
+      alignItems: 'flex-start',
+      justifyContent: 'center',
+    },
+    headerCenter: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    headerRight: {
+      width: 70, // Equal width to headerLeft for true centering
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+    },
+    iconButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    iconButtonPlaceholder: {
+      width: 36,
+      height: 36,
+    },
+    pillButton: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 12,
+    },
     closeButton: {
       padding: 8,
       marginLeft: -8,
       width: 40,
     },
     headerTitle: {
-      fontSize: 18,
-      fontWeight: '600',
+      fontSize: 17,
+      fontWeight: '700',
+      letterSpacing: -0.3,
     },
     headerTitleContainer: {
       flexDirection: 'row',
@@ -2403,10 +3547,9 @@ const createStyles = (theme) =>
     },
     tabContainer: {
       flexDirection: 'row',
-      paddingHorizontal: 16,
-      paddingTop: 0,
-      paddingBottom: 8,
-      gap: 12,
+      paddingHorizontal: 4,
+      paddingVertical: 4,
+      gap: 4,
       backgroundColor: 'transparent',
     },
     tabButton: {
@@ -2414,18 +3557,17 @@ const createStyles = (theme) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      paddingVertical: 10,
-      paddingHorizontal: 12,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
       borderRadius: 10,
-      backgroundColor: theme.colors.surfaceElevated,
       gap: 6,
     },
     tabButtonActive: {
-      backgroundColor: theme.colors.primary,
+      // Active styles applied inline for theme-aware shadows
     },
     tabText: {
       fontSize: 13,
-      fontWeight: '600',
+      fontWeight: '500',
       color: theme.colors.textSecondary,
     },
     tabTextActive: {
@@ -2560,6 +3702,30 @@ const createStyles = (theme) =>
       color: '#fff',
       fontSize: 16,
       fontWeight: '600',
+    },
+    // New Action Button Styles (Premium)
+    actionButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-start',
+      paddingVertical: 12,
+      paddingHorizontal: 16,
+      borderRadius: 14,
+      gap: 12,
+    },
+    actionButtonIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    actionButtonText: {
+      fontSize: 15,
+      fontWeight: '600',
+    },
+    searchContainer: {
+      // Search container styles applied inline
     },
     // Full-screen viewer styles
     viewerContainer: {
@@ -2945,5 +4111,60 @@ const createStyles = (theme) =>
       fontSize: 9,
       fontWeight: 'bold',
       letterSpacing: 0.5,
+    },
+    // Reusable layout patterns (extracted from inline JSX)
+    pageContainer: {
+      width: width,
+      height: '100%',
+    },
+    flexRowWrap: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+    },
+    scrollHorizontal: {
+      flexGrow: 0,
+      maxHeight: 40,
+    },
+    absoluteOverlay: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    centeredContent: {
+      alignItems: 'center',
+      width: '100%',
+    },
+    // Metadata Drawer Styles
+    metadataDrawer: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      height: height * 0.55,
+      backgroundColor: theme.mode === 'dark' ? 'rgba(30, 30, 32, 0.95)' : 'rgba(252, 252, 255, 0.98)',
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      paddingBottom: 34,
+      zIndex: 100,
+    },
+    drawerHandle: {
+      width: 40,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: theme.colors.border,
+      alignSelf: 'center',
+      marginBottom: 16,
+    },
+    drawerTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 16,
+    },
+    infoRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.colors.border,
     },
   });

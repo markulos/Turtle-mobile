@@ -6,7 +6,15 @@ import { normalizeTags, sortTasks } from '../utils/taskHelpers';
  * Both projects and tag groups are collapsible
  */
 export const useCollapsibleTasks = (tasks, projects = [], options = {}) => {
-  const { showIncompleteOnly = true, selectedProject = 'All', selectedTags = [], tagFilterMode = 'any' } = options;
+  const {
+    showIncompleteOnly = true,
+    selectedProject = 'All',
+    selectedTags = [],
+    tagFilterMode = 'any',
+    searchQuery = '',
+  } = options;
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+  const isSearching = trimmedQuery.length > 0;
   
   // Expansion state - both projects and tag groups
   const [expandedProjects, setExpandedProjects] = useState({});
@@ -46,13 +54,21 @@ export const useCollapsibleTasks = (tasks, projects = [], options = {}) => {
       result = result.filter(task => {
         const taskTags = normalizeTags(task.tags).map(t => t.toLowerCase());
         const selected = selectedTags.map(t => t.toLowerCase());
-        return tagFilterMode === 'all' 
+        return tagFilterMode === 'all'
           ? selected.every(tag => taskTags.includes(tag))
           : selected.some(tag => taskTags.includes(tag));
       });
     }
+    if (isSearching) {
+      result = result.filter(task => {
+        const titleMatches = (task.title || '').toLowerCase().includes(trimmedQuery);
+        if (titleMatches) return true;
+        const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+        return subtasks.some(st => (st?.title || '').toLowerCase().includes(trimmedQuery));
+      });
+    }
     return result;
-  }, [tasks, showIncompleteOnly, selectedProject, selectedTags, tagFilterMode]);
+  }, [tasks, showIncompleteOnly, selectedProject, selectedTags, tagFilterMode, isSearching, trimmedQuery]);
 
   // Group tasks by project and tags
   const groupedData = useMemo(() => {
@@ -93,8 +109,11 @@ export const useCollapsibleTasks = (tasks, projects = [], options = {}) => {
     Object.entries(byProject).forEach(([project, tags]) => {
       const visibleTasks = Object.values(tags).flat();
       const totalTaskCount = projectTaskCounts[project] || 0;
-      const isProjectExpanded = expandedProjects[project] ?? false;
-      
+
+      // While searching, hide projects with no matching tasks and force expansion.
+      if (isSearching && visibleTasks.length === 0) return;
+      const isProjectExpanded = isSearching ? true : (expandedProjects[project] ?? false);
+
       // Project header section
       sections.push({
         title: project,
@@ -107,23 +126,24 @@ export const useCollapsibleTasks = (tasks, projects = [], options = {}) => {
         isExpanded: isProjectExpanded,
         tagGroups: Object.keys(tags)
       });
-      
+
       // Only add tag groups if project is expanded
       if (isProjectExpanded) {
-        // Ensure 'Untagged' section exists even if empty
-        if (!tags['Untagged']) {
+        // Ensure 'Untagged' section exists even if empty (skip when searching to avoid noise)
+        if (!tags['Untagged'] && !isSearching) {
           tags['Untagged'] = [];
         }
-        
+
         Object.entries(tags).forEach(([tagKey, tagTasks]) => {
+          if (isSearching && tagTasks.length === 0) return;
           const tagGroupKey = `${project}::${tagKey}`;
-          const isTagGroupExpanded = expandedTagGroups[tagGroupKey] ?? false;
-          
+          const isTagGroupExpanded = isSearching ? true : (expandedTagGroups[tagGroupKey] ?? false);
+
           sections.push({
             title: tagKey,
             type: 'tag',
             project,
-            data: isTagGroupExpanded ? tagTasks.sort(sortTasks) : [], // Only include data if expanded
+            data: isTagGroupExpanded ? tagTasks.sort(sortTasks) : [],
             completedCount: tagTasks.filter(t => t.completed).length,
             totalCount: tagTasks.length,
             tags: tagKey === 'Untagged' ? [] : tagKey.split(',').map(t => t.trim()).filter(Boolean),
@@ -132,9 +152,9 @@ export const useCollapsibleTasks = (tasks, projects = [], options = {}) => {
         });
       }
     });
-    
+
     return sections;
-  }, [filteredTasks, tasks, projects, expandedProjects, expandedTagGroups, selectedProject]);
+  }, [filteredTasks, tasks, projects, expandedProjects, expandedTagGroups, selectedProject, isSearching]);
 
   // Initialize all collapsed on first load
   useEffect(() => {
