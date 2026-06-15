@@ -24,7 +24,6 @@ import Reanimated, {
   runOnJS,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../../context/ThemeContext';
@@ -487,8 +486,13 @@ export const TaskForm = ({
           <Reanimated.View style={[styles.backdrop, backdropStyle]} />
         </TouchableWithoutFeedback>
 
+        {/* Single keyboard handler. The KeyboardAvoidingView lifts the WHOLE
+            sheet (incl. the pinned Save/Cancel footer) on the OS keyboard curve
+            — 'padding' on iOS, 'height' on Android. A plain ScrollView holds the
+            fields; we deliberately do NOT also use KeyboardAwareScrollView,
+            because stacking the two made them fight (double-shift/overshoot). */}
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.kav}
           pointerEvents="box-none"
         >
@@ -546,13 +550,11 @@ export const TaskForm = ({
             </View>
             </GestureDetector>
 
-            <KeyboardAwareScrollView
+            <ScrollView
               style={styles.fieldsScroll}
               contentContainerStyle={styles.fieldsContent}
               keyboardShouldPersistTaps="handled"
-              enableOnAndroid={true}
-              extraScrollHeight={Platform.OS === 'ios' ? 40 : 80}
-              enableResetScrollToCoords={false}
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               showsVerticalScrollIndicator={true}
             >
             {/* Project — tasks only. */}
@@ -968,7 +970,7 @@ export const TaskForm = ({
               </FormField>
             )}
 
-            </KeyboardAwareScrollView>
+            </ScrollView>
 
             {/* Footer — pinned below the scroll so Save/Cancel (and Delete when
                 editing) are always reachable however tall the form gets. */}

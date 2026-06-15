@@ -8,12 +8,19 @@ import {
   Pressable,
   StyleSheet,
   ScrollView,
+  Animated,
+  Easing,
   Keyboard,
   Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useCommandBus } from '../context/CommandBusContext';
+
+// The iOS keyboard ease — Animated has no built-in "keyboard" curve, so this
+// bezier matches it closely; the OS-reported duration is what really syncs the
+// speed. Mirrors the constant in TerminalConsole.
+const KB_EASING = Easing.bezier(0.17, 0.59, 0.4, 0.77);
 
 // Exact palette of the web app's GlobalCommandConsole (Ctrl+/). The console
 // is intentionally ALWAYS dark — theme-independent floating chrome — so these
@@ -53,7 +60,11 @@ export default function CommandConsole({ visible, onClose }) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const [value, setValue] = useState('');
-  const [kbHeight, setKbHeight] = useState(0);
+  // Lift driven off the keyboard's own show/hide events: the bar rises in
+  // lockstep with the keyboard (same duration + curve) instead of snapping to
+  // its final spot via a one-frame paddingBottom change. Native driver → the
+  // transform runs off the JS thread with no relayout.
+  const kbY = useRef(new Animated.Value(0)).current;
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -63,23 +74,39 @@ export default function CommandConsole({ visible, onClose }) {
     return () => clearTimeout(t);
   }, [visible]);
 
-  // Pin the bar at its FINAL resting spot just above the keyboard the instant
-  // it begins to show (iOS willShow already carries the final height), so the
-  // bar appears fixed in place rather than sliding/jittering up with it.
   useEffect(() => {
     if (!visible) {
-      setKbHeight(0);
+      kbY.setValue(0);
       return;
     }
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const s = Keyboard.addListener(showEvt, (e) => setKbHeight(e.endCoordinates?.height ?? 0));
-    const h = Keyboard.addListener(hideEvt, () => setKbHeight(0));
+    const onShow = (e) => {
+      // The bar already rests at insets.bottom; only lift it by the part of the
+      // keyboard that sits above that, so it lands just above the keyboard.
+      const h = e?.endCoordinates?.height ?? 0;
+      Animated.timing(kbY, {
+        toValue: -Math.max(h - insets.bottom, 0),
+        duration: e?.duration || 250,
+        easing: KB_EASING,
+        useNativeDriver: true,
+      }).start();
+    };
+    const onHide = (e) => {
+      Animated.timing(kbY, {
+        toValue: 0,
+        duration: e?.duration || 220,
+        easing: KB_EASING,
+        useNativeDriver: true,
+      }).start();
+    };
+    const s = Keyboard.addListener(showEvt, onShow);
+    const h = Keyboard.addListener(hideEvt, onHide);
     return () => {
       s.remove();
       h.remove();
     };
-  }, [visible]);
+  }, [visible, insets.bottom, kbY]);
 
   // Suggestions: empty input → the full list; typed → prefix-match (the "/" is
   // implied by the chip, so "pomo" matches "/pomodoro …"). Capped at 8.
@@ -116,8 +143,11 @@ export default function CommandConsole({ visible, onClose }) {
       <View style={styles.fill}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
 
-        <View
-          style={[styles.column, { paddingBottom: (kbHeight > 0 ? kbHeight : insets.bottom) + 10 }]}
+        <Animated.View
+          style={[
+            styles.column,
+            { paddingBottom: insets.bottom + 10, transform: [{ translateY: kbY }] },
+          ]}
           pointerEvents="box-none"
         >
           <View style={styles.cluster}>
@@ -169,7 +199,7 @@ export default function CommandConsole({ visible, onClose }) {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );

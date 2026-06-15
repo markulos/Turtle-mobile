@@ -209,12 +209,21 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
   useEffect(() => {
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    // Shrink the panel on the keyboard's OWN curve/duration (LayoutAnimation's
+    // built-in `keyboard` type), not the generic easeInEaseOut preset, so the
+    // resize tracks the keyboard rise instead of drifting at its own pace.
+    const syncToKeyboard = (e) => {
+      LayoutAnimation.configureNext({
+        duration: e?.duration || 250,
+        update: { type: LayoutAnimation.Types.keyboard },
+      });
+    };
     const onShow = (e) => {
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      syncToKeyboard(e);
       setKbHeight(e?.endCoordinates?.height || 0);
     };
-    const onHide = () => {
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    const onHide = (e) => {
+      syncToKeyboard(e);
       setKbHeight(0);
     };
     const s = Keyboard.addListener(showEvt, onShow);

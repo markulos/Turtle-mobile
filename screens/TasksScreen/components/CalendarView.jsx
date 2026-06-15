@@ -1136,13 +1136,22 @@ export const CalendarView = ({
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   
   useEffect(() => {
+    // Ride the keyboard's own curve/duration so the day-pane's bottom padding
+    // tracks the keyboard instead of snapping. `Types.keyboard` is the OS
+    // keyboard curve; `e.duration` matches its speed.
+    const syncToKeyboard = (e) => {
+      LayoutAnimation.configureNext({
+        duration: e?.duration || 250,
+        update: { type: LayoutAnimation.Types.keyboard },
+      });
+    };
     const showListener = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      (e) => setKeyboardHeight(e.endCoordinates.height)
+      (e) => { syncToKeyboard(e); setKeyboardHeight(e.endCoordinates.height); }
     );
     const hideListener = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setKeyboardHeight(0)
+      (e) => { syncToKeyboard(e); setKeyboardHeight(0); }
     );
     return () => {
       showListener.remove();
