@@ -11,13 +11,23 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 
-export const FilterMenu = ({ 
-  visible, 
-  onClose, 
+// Same stable per-owner colour as the calendar badges (hash userId → hue) so
+// the filter swatch matches the badge a task carries on the grid.
+const ownerColor = (userId) => {
+  if (!userId) return '#888888';
+  let h = 0;
+  for (let i = 0; i < userId.length; i++) h = (h * 31 + userId.charCodeAt(i)) % 360;
+  return `hsl(${h}, 60%, 52%)`;
+};
+
+export const FilterMenu = ({
+  visible,
+  onClose,
   tasks,
   selectedProject,
+  owners = [],
   filters,
-  animation 
+  animation
 }) => {
   const { theme } = useTheme();
   const translateY = animation.interpolate({ inputRange: [0, 1], outputRange: [100, 0] });
@@ -76,6 +86,43 @@ export const FilterMenu = ({
                 : 'Showing all tasks including completed'}
             </Text>
           </View>
+
+          {/* Whose tasks — shared-calendar person filter. Only meaningful when
+              more than one pond member has tasks on the calendar; with a single
+              owner there's nothing to disambiguate, so the section hides. */}
+          {owners.length > 1 && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Whose tasks</Text>
+                {filters.selectedOwners.length > 0 && (
+                  <TouchableOpacity onPress={() => filters.setSelectedOwners([])}>
+                    <Text style={styles.clear}>Everyone</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              <Text style={styles.hint}>
+                {filters.selectedOwners.length === 0
+                  ? 'Showing everyone on the calendar'
+                  : 'Showing only the selected people'}
+              </Text>
+              <View style={styles.tagsGrid}>
+                {owners.map((o) => {
+                  const isSelected = filters.selectedOwners.includes(o.userId);
+                  return (
+                    <TouchableOpacity
+                      key={o.userId}
+                      style={[styles.tagChip, isSelected && styles.tagChipActive]}
+                      onPress={() => filters.toggleOwnerFilter(o.userId)}
+                    >
+                      <View style={[styles.ownerDot, { backgroundColor: ownerColor(o.userId) }]} />
+                      <Text style={[styles.tagText, isSelected && styles.tagTextActive]}>{o.ownerName}</Text>
+                      {isSelected && <Icon name="check" size={14} color={theme.colors.textPrimary} style={styles.check} />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          )}
 
           {/* Tags */}
           <View style={styles.section}>
@@ -244,8 +291,14 @@ const createStyles = (theme) => StyleSheet.create({
     fontWeight: '600',
     fontSize: theme.typography.body,
   },
-  check: { 
-    marginLeft: 4 
+  check: {
+    marginLeft: 4
+  },
+  ownerDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 6,
   },
   clearAll: {
     flexDirection: 'row',

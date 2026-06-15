@@ -33,7 +33,7 @@ const getTagColor = (tag, index) => {
  * SectionHeader for Tag Groups (nested under collapsible projects)
  * Projects are handled directly in TasksScreen
  */
-export const SectionHeader = ({ section, expanded, onToggleExpand, onAddTask, onRenameTag, onAddTagToSection, projectColor }) => {
+export const SectionHeader = ({ section, expanded, editMode = false, onToggleExpand, onAddTask, onRenameTag, onAddTagToSection, projectColor }) => {
   const { theme } = useTheme();
   const [isAdding, setIsAdding] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
@@ -166,9 +166,17 @@ export const SectionHeader = ({ section, expanded, onToggleExpand, onAddTask, on
                 );
               }
               
+              // View mode: a plain, non-tappable chip (no pencil affordance).
+              if (!editMode) {
+                return (
+                  <View key={tag} style={[styles.tagChip, { backgroundColor: colors.bg }]}>
+                    <Text style={[styles.tagChipText, { color: colors.text }]}>{tag}</Text>
+                  </View>
+                );
+              }
               return (
-                <TouchableOpacity 
-                  key={tag} 
+                <TouchableOpacity
+                  key={tag}
                   style={[styles.tagChip, { backgroundColor: colors.bg }]}
                   onPress={() => handleStartEditTag(tag)}
                   activeOpacity={0.7}
@@ -181,7 +189,10 @@ export const SectionHeader = ({ section, expanded, onToggleExpand, onAddTask, on
               );
             })
           ) : section.title === 'Untagged' ? (
-            isAddingTag ? (
+            !editMode ? (
+              // View mode: just the plain "Untagged" label, no add-tag control.
+              <Text style={styles.untaggedText}>Untagged</Text>
+            ) : isAddingTag ? (
               <View style={styles.untaggedEditContainer}>
                 <TextInput
                   ref={newTagInputRef}
@@ -234,8 +245,9 @@ export const SectionHeader = ({ section, expanded, onToggleExpand, onAddTask, on
         )}
       </TouchableOpacity>
       
-      {/* Add task input - shown when tag group is expanded */}
-      {expanded && (
+      {/* Add task input — shown when the tag group is expanded AND in edit
+          mode, so View mode stays clean. */}
+      {expanded && editMode && (
         isAdding ? (
           // Inline input mode
           <View style={styles.addTaskContainer}>

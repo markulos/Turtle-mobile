@@ -1,2 +1,7 @@
 node_modules/
 .expo/
+
+# CNG / Prebuild: native projects are generated in the cloud from app.json —
+# never commit local prebuild artifacts (they'd override app.json config).
+/android
+/ios

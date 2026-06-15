@@ -15,8 +15,11 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
  *   onStop: () => void   (active only)
  *   onDismiss: () => void  (ended only)
  *   theme: object
+ *   minimized: bool       (active only) — collapse to a thin "working" header
+ *   onToggleMinimize: () => void  — flips minimized; tap the mini bar or the
+ *                                   chevron on the full card to switch
  */
-export default function TimerMessage({ state, onStop, onDismiss, theme }) {
+export default function TimerMessage({ state, onStop, onDismiss, theme, minimized, onToggleMinimize }) {
   const [now, setNow] = useState(() => Date.now());
 
   // Tick every second when active. We compute remaining from the absolute
@@ -53,6 +56,30 @@ export default function TimerMessage({ state, onStop, onDismiss, theme }) {
       minute: '2-digit',
     });
 
+    // Minimized: a thin always-visible header (mirrors the Claude queue
+    // banner) so the running session stays in view without taking the
+    // full card's height. Tap anywhere to expand back to the full timer.
+    if (minimized) {
+      return (
+        <TouchableOpacity
+          onPress={onToggleMinimize}
+          activeOpacity={0.8}
+          style={styles.miniContainer}
+          accessibilityLabel={`Pomodoro ${modeLabel} running, ${display} remaining — tap to expand`}
+        >
+          <Icon name={iconName} size={14} color={accentColor} />
+          <Text style={[styles.miniLabel, { color: accentColor }]}>{modeLabel}</Text>
+          <Text style={styles.miniTime}>{display}</Text>
+          <View style={styles.miniProgressTrack}>
+            <View
+              style={[styles.miniProgressFill, { width: `${progress * 100}%`, backgroundColor: accentColor }]}
+            />
+          </View>
+          <Icon name="chevron-up" size={18} color={theme.colors.textMuted} />
+        </TouchableOpacity>
+      );
+    }
+
     return (
       <View style={styles.container}>
         <View style={styles.header}>
@@ -60,7 +87,19 @@ export default function TimerMessage({ state, onStop, onDismiss, theme }) {
             <Icon name={iconName} size={12} color={accentColor} />
             <Text style={styles.badgeText}>{modeLabel}</Text>
           </View>
-          <Text style={styles.metaText}>{totalMins} min</Text>
+          <View style={styles.headerRight}>
+            <Text style={styles.metaText}>{totalMins} min</Text>
+            {onToggleMinimize && (
+              <TouchableOpacity
+                onPress={onToggleMinimize}
+                style={styles.minimizeButton}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Minimize timer"
+              >
+                <Icon name="chevron-down" size={18} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         <View style={styles.timerRow}>
@@ -145,6 +184,52 @@ const createStyles = (theme, accentColor) =>
       justifyContent: 'space-between',
       alignItems: 'center',
       marginBottom: 8,
+    },
+    headerRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    minimizeButton: {
+      padding: 2,
+    },
+    // Minimized "working" header — a thin pill that mirrors the Claude
+    // queue banner so the two collapsed indicators read as a family.
+    miniContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'stretch',
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 12,
+      backgroundColor: theme.colors.surfaceElevated,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border,
+      borderLeftWidth: 3,
+      borderLeftColor: accentColor,
+      gap: 8,
+    },
+    miniLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      letterSpacing: 0.5,
+    },
+    miniTime: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: theme.colors.textPrimary,
+      fontVariant: ['tabular-nums'],
+    },
+    miniProgressTrack: {
+      flex: 1,
+      height: 4,
+      borderRadius: 2,
+      overflow: 'hidden',
+      backgroundColor: theme.colors.border,
+    },
+    miniProgressFill: {
+      height: '100%',
+      borderRadius: 2,
     },
     badge: {
       flexDirection: 'row',

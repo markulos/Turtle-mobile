@@ -10,11 +10,21 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
-import { getPriorityColor, areAllSubtasksCompleted } from '../utils/taskHelpers';
-import { TimePicker } from './TimePicker';
+import { getPriorityColor, areAllSubtasksCompleted, formatDueDate, isOverdue, formatTime12h } from '../utils/taskHelpers';
+import { WheelTimePicker } from './WheelTimePicker';
+import TaskCountdownBadge from './TaskCountdownBadge';
 
-export const TaskItem = ({ 
-  item, 
+// Instant tactile confirmation on tap — fires immediately so the action feels
+// done the moment you touch it (the actual save is optimistic + background).
+// Defensive require: a silent no-op if expo-haptics isn't in the dev build.
+let _Haptics = null;
+try { _Haptics = require('expo-haptics'); } catch (e) { _Haptics = null; }
+const tapHaptic = () => {
+  try { _Haptics?.selectionAsync?.(); } catch (e) { /* haptics are garnish */ }
+};
+
+const TaskItemImpl = ({
+  item,
   onPress, 
   onToggleComplete, 
   onLongPress,
@@ -36,16 +46,10 @@ export const TaskItem = ({
   const [editSubtaskTitle, setEditSubtaskTitle] = useState('');
   const [editSubtaskTime, setEditSubtaskTime] = useState('');
   const [showSubtaskTimePicker, setShowSubtaskTimePicker] = useState(false);
-  
-  // Inline editing for main task
-  const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [editTitle, setEditTitle] = useState(item.title);
-  
-  // Refs for scrolling into view
+  // Ref for scrolling a subtask edit row into view above the keyboard.
   const editSubtaskRef = useRef(null);
-  const editTaskRef = useRef(null);
 
-  const animation = useState(new Animated.Value(0))[0];
+  const animation = useRef(new Animated.Value(0)).current;
 
   const toggleExpand = () => {
     const toValue = expanded ? 0 : 1;
@@ -74,7 +78,7 @@ export const TaskItem = ({
 
   const saveEditSubtask = () => {
     if (!editSubtaskTitle.trim()) return;
-    onUpdateSubtask(item.id, editingSubtaskId, { 
+    onUpdateSubtask(item.id, editingSubtaskId, {
       title: editSubtaskTitle.trim(),
       time: editSubtaskTime || null
     });
@@ -82,115 +86,35 @@ export const TaskItem = ({
     setEditSubtaskTitle('');
     setEditSubtaskTime('');
   };
-  
-  // Main task inline editing
-  const handleStartEditingTitle = () => {
-    setEditTitle(item.title);
-    setIsEditingTitle(true);
-    // Scroll item into view after keyboard appears
-    setTimeout(() => {
-      scrollToItem?.();
-    }, 150);
-  };
-  
-  const handleSaveTitle = () => {
-    if (!editTitle.trim()) {
-      setIsEditingTitle(false);
-      setEditTitle(item.title);
-      return;
-    }
-    onUpdateTask?.(item.id, { title: editTitle.trim() });
-    setIsEditingTitle(false);
-  };
-  
-  const handleCancelEditTitle = () => {
-    setIsEditingTitle(false);
-    setEditTitle(item.title);
-  };
-  
-  // Open task detail modal (for edit button)
-  const handleOpenEditModal = () => {
-    setIsEditingTitle(false);
-    onLongPress?.(item);
-  };
-  
-  // Handle blur with delay to allow button presses first
-  const handleBlur = () => {
-    // Small delay to let button onPress fire first
-    setTimeout(() => {
-      setEditTitle(item.title);
-      setIsEditingTitle(false);
-    }, 150);
-  };
-  
-  // Effect to scroll into view when keyboard becomes visible and we're editing
-  useEffect(() => {
-    if (isEditingTitle && keyboardVisible) {
-      scrollToItem?.();
-    }
-  }, [isEditingTitle, keyboardVisible]);
 
   const subtasks = item.subtasks || [];
   const completedSubtasks = subtasks.filter(st => st.completed).length;
   const allSubtasksDone = areAllSubtasksCompleted(subtasks);
   const progress = subtasks.length > 0 ? completedSubtasks / subtasks.length : 0;
 
+  // Overdue = a due date in the past on an incomplete task. Drives the
+  // red tint on the due-date badge below.
+  const dueOverdue = !item.completed && isOverdue(item.dueDate);
+
   const styles = createStyles(theme);
 
   return (
     <View style={[styles.container, item.completed && styles.completed]}>
-      {/* Main task row */}
-      {isEditingTitle ? (
-        <View style={styles.mainRow} ref={editTaskRef}>
-          {/* Delete button on left margin */}
-          <TouchableOpacity 
-            style={styles.deleteBtn}
-            onPress={() => {
-              setIsEditingTitle(false);
-              onDeleteTask?.(item.id);
-            }}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Icon name="minus-circle" size={24} color={theme.colors.accentError} />
-          </TouchableOpacity>
-          
-          <View style={styles.editTitleRow}>
-            <TextInput
-              style={styles.editTitleInput}
-              value={editTitle}
-              onChangeText={setEditTitle}
-              onSubmitEditing={handleSaveTitle}
-              autoFocus
-              placeholderTextColor={theme.colors.textPlaceholder}
-            />
-            <TouchableOpacity 
-              onPress={handleSaveTitle} 
-              style={styles.editActionBtn}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Icon name="check" size={20} color={theme.colors.accentSuccess} />
-            </TouchableOpacity>
-            <TouchableOpacity 
-              onPress={handleOpenEditModal} 
-              style={styles.editActionBtn}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Icon name="pencil" size={18} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : (
-        <TouchableOpacity 
+      {/* Main task row — tap opens the detail; long-press opens the edit form */}
+      <TouchableOpacity
           style={styles.mainRow}
-          onPress={handleStartEditingTitle}
+          onPress={() => onPress?.(item)}
           onLongPress={() => onLongPress?.(item)}
           delayLongPress={500}
         >
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.checkbox}
-            onPress={(e) => { 
-              e.stopPropagation(); 
-              onToggleComplete(item.id); 
+            activeOpacity={0.6}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            onPress={(e) => {
+              e.stopPropagation();
+              tapHaptic();
+              onToggleComplete(item.id);
             }}
           >
             <Icon 
@@ -201,42 +125,55 @@ export const TaskItem = ({
           </TouchableOpacity>
           
           <View style={styles.content}>
-            <View style={styles.titleRow}>
-              <Text style={[styles.title, item.completed && styles.completedText]}>
-                {item.title}
-              </Text>
-              {item.time && (
-                <View style={styles.timeBadge}>
-                  <Icon name="clock" size={12} color={theme.colors.background} />
-                  <Text style={styles.timeText}>
-                    {(() => {
-                      const [h, m] = item.time.split(':').map(Number);
-                      const isPM = h >= 12;
-                      const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
-                      return `${displayH}:${m.toString().padStart(2, '0')} ${isPM ? 'PM' : 'AM'}`;
-                    })()}
-                  </Text>
-                </View>
-              )}
-              {item.recurring && item.recurring !== 'none' && (
-                <View style={styles.recurringBadge}>
-                  <Icon 
-                    name={
-                      item.recurring === 'daily' ? 'calendar-today' : 
-                      item.recurring === 'weekly' ? 'calendar-week' : 
-                      'calendar-range'
-                    } 
-                    size={10} 
-                    color={theme.colors.accentSuccess} 
-                  />
-                  <Text style={styles.recurringText}>
-                    {item.recurring === 'daily' ? 'Daily' : 
-                     item.recurring === 'weekly' ? 'Weekly' : 
-                     'Biweekly'}
-                  </Text>
-                </View>
-              )}
-            </View>
+            {/* Title on its own line for a consistent card layout. */}
+            <Text style={[styles.title, item.completed && styles.completedText]}>
+              {item.title}
+            </Text>
+
+            {/* Meta line: time → due → countdown → recurring, always on the
+                row beneath the title so every card reads the same way. */}
+            {(item.time || item.dueDate || !item.completed || (item.recurring && item.recurring !== 'none')) && (
+              <View style={styles.metaRow}>
+                {item.time && (
+                  <View style={styles.timeBadge}>
+                    <Icon name="clock" size={12} color={theme.colors.background} />
+                    <Text style={styles.timeText}>
+                      {formatTime12h(item.time)}
+                    </Text>
+                  </View>
+                )}
+                {item.dueDate && (
+                  <View style={[styles.dueBadge, dueOverdue && styles.dueBadgeOverdue]}>
+                    <Icon name="calendar" size={11} color={dueOverdue ? theme.colors.accentError : theme.colors.accentInfo} />
+                    <Text
+                      style={[styles.dueText, dueOverdue && { color: theme.colors.accentError }]}
+                      numberOfLines={1}
+                    >
+                      {formatDueDate(item.dueDate)}
+                    </Text>
+                  </View>
+                )}
+                <TaskCountdownBadge task={item} />
+                {item.recurring && item.recurring !== 'none' && (
+                  <View style={styles.recurringBadge}>
+                    <Icon
+                      name={
+                        item.recurring === 'daily' ? 'calendar-today' :
+                        item.recurring === 'weekly' ? 'calendar-week' :
+                        'calendar-range'
+                      }
+                      size={10}
+                      color={theme.colors.accentSuccess}
+                    />
+                    <Text style={styles.recurringText}>
+                      {item.recurring === 'daily' ? 'Daily' :
+                       item.recurring === 'weekly' ? 'Weekly' :
+                       'Biweekly'}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
             {item.description && !expanded && (
               <Text style={styles.description} numberOfLines={1}>
                 {item.description.split('\n')[0]}
@@ -271,7 +208,6 @@ export const TaskItem = ({
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
-      )}
 
       {/* Expanded subtasks section */}
       {expanded && (
@@ -320,12 +256,7 @@ export const TaskItem = ({
                     <View style={styles.editSubtaskTimeBadge}>
                       <Icon name="clock" size={12} color={theme.colors.background} />
                       <Text style={styles.editSubtaskTimeText}>
-                        {(() => {
-                          const [h, m] = editSubtaskTime.split(':').map(Number);
-                          const isPM = h >= 12;
-                          const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
-                          return `${displayH}:${m.toString().padStart(2, '0')} ${isPM ? 'PM' : 'AM'}`;
-                        })()}
+                        {formatTime12h(editSubtaskTime)}
                       </Text>
                     </View>
                   )}
@@ -344,12 +275,7 @@ export const TaskItem = ({
                         <View style={styles.subtaskTimeBadge}>
                           <Icon name="clock" size={8} color={theme.colors.accentPrimary} />
                           <Text style={styles.subtaskTimeText}>
-                            {(() => {
-                              const [h, m] = subtask.time.split(':').map(Number);
-                              const isPM = h >= 12;
-                              const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
-                              return `${displayH}:${m.toString().padStart(2, '0')}`;
-                            })()}
+                            {formatTime12h(subtask.time, { meridiem: false })}
                           </Text>
                         </View>
                       )}
@@ -380,7 +306,7 @@ export const TaskItem = ({
           ))}
 
           {/* Time Picker for subtask */}
-          <TimePicker
+          <WheelTimePicker
             visible={showSubtaskTimePicker}
             onClose={() => setShowSubtaskTimePicker(false)}
             onSelect={(time) => {
@@ -445,6 +371,18 @@ export const TaskItem = ({
   );
 };
 
+// Memoized so a row only re-renders when its own data (`item`), the keyboard
+// state, or the list refs change — NOT on every parent re-render (search typing,
+// section toggles, etc.). Callback props are intentionally NOT compared: they're
+// recreated each render but behaviorally identical, and the data-mutation
+// handlers read the latest tasks via a ref (so an "old" handler is still correct).
+export const TaskItem = React.memo(TaskItemImpl, (prev, next) =>
+  prev.item === next.item &&
+  prev.keyboardVisible === next.keyboardVisible &&
+  prev.listRef === next.listRef &&
+  prev.scrollY === next.scrollY,
+);
+
 const createStyles = (theme) => StyleSheet.create({
   container: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -470,11 +408,12 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textPrimary,
     fontWeight: '500',
   },
-  titleRow: {
+  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
     gap: 8,
+    marginTop: 5,
   },
   timeBadge: {
     flexDirection: 'row',
@@ -498,12 +437,28 @@ const createStyles = (theme) => StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 4,
     gap: 3,
-    marginLeft: 6,
   },
   recurringText: {
     fontSize: 11,
     color: theme.colors.accentSuccess,
     fontWeight: '600',
+  },
+  dueBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${theme.colors.accentInfo}1A`, // ~10% info tint
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    gap: 4,
+  },
+  dueBadgeOverdue: {
+    backgroundColor: `${theme.colors.accentError}1A`,
+  },
+  dueText: {
+    fontSize: 11,
+    color: theme.colors.accentInfo,
+    fontWeight: '700',
   },
   subtaskTitleRow: {
     flexDirection: 'row',
@@ -615,39 +570,7 @@ const createStyles = (theme) => StyleSheet.create({
     padding: theme.spacing.xs,
     marginLeft: theme.spacing.xs,
   },
-  
-  // Edit main task title
-  deleteBtn: {
-    width: 32,
-    height: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 4,
-  },
-  editTitleRow: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingRight: theme.spacing.sm,
-  },
-  editTitleInput: {
-    flex: 1,
-    borderWidth: 0,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-    padding: 4,
-    fontSize: theme.typography.body,
-    color: theme.colors.textPrimary,
-    marginRight: 8,
-  },
-  editActionBtn: {
-    width: 32,
-    height: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 4,
-  },
-  
+
   // Edit subtask
   editSubtaskContainer: {
     flex: 1,

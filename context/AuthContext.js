@@ -7,7 +7,8 @@
 
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import { useServer } from './ServerContext';
+import { useServer, setApiAuthToken } from './ServerContext';
+import { clearAllCaches } from '../utils/cacheManager';
 
 const AuthContext = createContext();
 
@@ -21,12 +22,32 @@ export const AuthProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [loginError, setLoginError] = useState(null);
   
-  const { getBaseUrl } = useServer();
+  const { getBaseUrl, serverIP } = useServer();
+
+  // Pre-flight guard shared by login/requestOtp/verifyOtp: with no server
+  // address saved, getBaseUrl() is `http://:3000/api` and every fetch dies
+  // with the unhelpful "Network request failed". Catch it before fetching
+  // and point the user at the login screen's server editor instead.
+  const noServerError = () => {
+    const msg = "No server address set — tap 'Set server address' on the login screen.";
+    setLoginError(msg);
+    return { success: false, error: msg };
+  };
+  // Friendlier message for an actual failed fetch (wrong IP / different
+  // network / server down) — names the address so it's debuggable.
+  const unreachableMsg = () =>
+    `Couldn't reach the Turtle server${serverIP ? ` at ${serverIP}` : ''} — check the Server address on the login screen and that you're on the same Wi-Fi.`;
 
   // Load saved token on mount
   useEffect(() => {
     loadSavedToken();
   }, []);
+
+  // Keep the ServerContext api wrapper's Bearer token in sync with auth state,
+  // so every api.get/post/put/patch/delete carries Authorization once logged in.
+  useEffect(() => {
+    setApiAuthToken(token);
+  }, [token]);
 
   /**
    * Load saved token from SecureStore
@@ -41,8 +62,9 @@ export const AuthProvider = ({ children }) => {
         // Check if token is expired
         const expiryDate = new Date(expiry);
         const now = new Date();
-        
-        if (expiryDate > now) {
+
+        // Malformed expiry → don't spuriously log out; let a real 401 handle it
+        if (isNaN(expiryDate.getTime()) || expiryDate > now) {
           setToken(savedToken);
           setIsAuthenticated(true);
           console.log('[Auth] Token loaded from secure storage');
@@ -103,6 +125,10 @@ export const AuthProvider = ({ children }) => {
       setLoginError(null);
       setIsLoading(true);
       
+      if (!serverIP) {
+        setIsLoading(false);
+        return noServerError();
+      }
       const baseUrl = getBaseUrl();
       const loginUrl = `${baseUrl.replace('/api', '')}/api/auth/login`;
       
@@ -143,11 +169,83 @@ export const AuthProvider = ({ children }) => {
   };
 
   /**
+   * Request an SMS verification code for a phone number (Telnyx OTP).
+   * Returns { success, phone?, dev?, devCode?, error? }. `devCode` is only
+   * present when the server is in dev mode (no real SMS) — used to prefill the
+   * code field for local testing.
+   */
+  const requestOtp = async (phone, invite) => {
+    try {
+      setLoginError(null);
+      if (!serverIP) return noServerError();
+      const baseUrl = getBaseUrl();
+      const url = `${baseUrl.replace('/api', '')}/api/auth/otp/request`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // `invite` = optional invite code or open-pond name (Discord-style join)
+        body: JSON.stringify({ phone, invite: invite || undefined }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        const msg = data.message || 'Could not send the code';
+        setLoginError(msg);
+        return { success: false, error: msg };
+      }
+      return { success: true, phone: data.phone, dev: !!data.dev, devCode: data.devCode };
+    } catch (error) {
+      console.error('[Auth] requestOtp error:', error.message);
+      const msg = unreachableMsg();
+      setLoginError(msg);
+      return { success: false, error: msg };
+    }
+  };
+
+  /**
+   * Verify an SMS code and, on success, store the issued JWT (which flips
+   * isAuthenticated → the app un-gates). Returns { success, error? }.
+   */
+  const verifyOtp = async (phone, code, invite) => {
+    try {
+      setLoginError(null);
+      if (!serverIP) return noServerError();
+      setIsLoading(true);
+      const baseUrl = getBaseUrl();
+      const url = `${baseUrl.replace('/api', '')}/api/auth/otp/verify`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // invite rides along so the server can consume the code's use on join
+        body: JSON.stringify({ phone, code, invite: invite || undefined }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.token) {
+        const msg = data.message || 'Invalid or expired code';
+        setLoginError(msg);
+        return { success: false, error: msg };
+      }
+      await saveToken(data.token, data.expiresAt);
+      console.log('[Auth] phone OTP login successful');
+      return { success: true };
+    } catch (error) {
+      console.error('[Auth] verifyOtp error:', error.message);
+      const msg = unreachableMsg();
+      setLoginError(msg);
+      return { success: false, error: msg };
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
    * Logout - clear token and auth state
    */
   const logout = async () => {
     await clearToken();
     setLoginError(null);
+    // Wipe cached photos/temp files on sign-out — they shouldn't outlive the
+    // session (privacy on a shared device + reclaims space). Best-effort.
+    clearAllCaches().catch(() => {});
     console.log('[Auth] Logged out');
   };
 
@@ -191,6 +289,8 @@ export const AuthProvider = ({ children }) => {
     isLoading,
     loginError,
     login,
+    requestOtp,
+    verifyOtp,
     logout,
     getAuthHeaders,
     authFetch,

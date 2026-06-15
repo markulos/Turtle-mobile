@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  ScrollView,
   AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,6 +19,7 @@ import {
   PasswordItem,
   NewEntryForm,
   SearchBar,
+  ChangeMasterPasswordModal,
 } from './components';
 
 export default function PasswordsScreen() {
@@ -39,11 +39,13 @@ export default function PasswordsScreen() {
     saveEntry,
     deleteEntry,
     clearAll,
+    changeMasterPassword,
     checkSetup,
   } = useVault(getBaseUrl, isConnected);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewForm, setShowNewForm] = useState(false);
+  const [showChangePw, setShowChangePw] = useState(false);
 
   // Reset local state when vault is locked or reset
   useEffect(() => {
@@ -74,13 +76,14 @@ export default function PasswordsScreen() {
     );
   }, [entries, searchQuery]);
 
-  const handleSave = async (entry) => {
+  // Stable so the memoized PasswordItem rows aren't invalidated every render.
+  const handleSave = useCallback(async (entry) => {
     const success = await saveEntry(entry);
     if (success && !entry.id) {
       setShowNewForm(false);
     }
     return success;
-  };
+  }, [saveEntry]);
 
   const styles = createStyles(theme);
 
@@ -104,9 +107,18 @@ export default function PasswordsScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Passwords</Text>
-        <TouchableOpacity onPress={clearAll}>
-          <Text style={styles.resetText}>Reset</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            onPress={() => setShowChangePw(true)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel="Change master password"
+          >
+            <Icon name="key-change" size={20} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={clearAll}>
+            <Text style={styles.resetText}>Reset</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <SearchBar
@@ -116,39 +128,43 @@ export default function PasswordsScreen() {
         onLock={lock}
       />
 
-      <ScrollView style={styles.scrollView}>
-        {showNewForm && (
-          <NewEntryForm
+      {/* Single FlatList — the form is the list header and the bottom
+          spacer is the footer, so the list is the only scroller. This was
+          previously a FlatList nested inside a ScrollView, which RN warns
+          about ("VirtualizedLists should never be nested…") and disables
+          windowing for. */}
+      <FlatList
+        style={styles.list}
+        contentContainerStyle={styles.listContent}
+        data={filteredEntries}
+        keyExtractor={(item) => item.id}
+        ListHeaderComponent={
+          showNewForm ? (
+            <NewEntryForm
+              onSave={handleSave}
+              onCancel={() => setShowNewForm(false)}
+              allEntries={entries}
+            />
+          ) : null
+        }
+        renderItem={({ item }) => (
+          <PasswordItem
+            item={item}
             onSave={handleSave}
-            onCancel={() => setShowNewForm(false)}
+            onDelete={deleteEntry}
             allEntries={entries}
           />
         )}
-        
-        <FlatList
-          data={filteredEntries}
-          keyExtractor={(item) => item.id}
-          scrollEnabled={false}
-          renderItem={({ item }) => (
-            <PasswordItem
-              item={item}
-              onSave={handleSave}
-              onDelete={deleteEntry}
-              allEntries={entries}
-            />
-          )}
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Icon name="shield-key" size={48} color={theme.colors.textMuted} />
-              <Text style={styles.emptyText}>
-                {searchQuery ? 'No matches found' : 'No entries saved'}
-              </Text>
-            </View>
-          }
-        />
-        
-        <View style={{ height: 100 }} />
-      </ScrollView>
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Icon name="shield-key" size={48} color={theme.colors.textMuted} />
+            <Text style={styles.emptyText}>
+              {searchQuery ? 'No matches found' : 'No entries saved'}
+            </Text>
+          </View>
+        }
+        ListFooterComponent={<View style={{ height: 100 }} />}
+      />
 
       {!showNewForm && (
         <TouchableOpacity
@@ -158,6 +174,13 @@ export default function PasswordsScreen() {
           <Icon name="plus" size={28} color={theme.colors.textPrimary} />
         </TouchableOpacity>
       )}
+
+      <ChangeMasterPasswordModal
+        visible={showChangePw}
+        onClose={() => setShowChangePw(false)}
+        onChangePassword={changeMasterPassword}
+        isProcessing={isProcessing}
+      />
     </View>
   );
 }
@@ -186,12 +209,20 @@ const createStyles = (theme) =>
       fontWeight: '700',
       color: theme.colors.textPrimary,
     },
+    headerActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 18,
+    },
     resetText: {
       fontSize: 13,
       color: theme.colors.accentError,
     },
-    scrollView: {
+    list: {
       flex: 1,
+    },
+    listContent: {
+      flexGrow: 1,
       padding: 16,
     },
     empty: {

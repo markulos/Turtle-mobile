@@ -10,6 +10,12 @@ import {
 
 export const useTaskData = (api, isConnected) => {
   const [tasks, setTasks] = useState([]);
+  // Always-current snapshot of `tasks` so the mutation handlers below read the
+  // LATEST array even when an old handler instance is held by a memoized
+  // TaskItem row — otherwise toggling a second task with a stale closure would
+  // silently revert the first. Updated synchronously every render.
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
   const [projects, setProjects] = useState([]);
   const [allTags, setAllTags] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -26,7 +32,6 @@ export const useTaskData = (api, isConnected) => {
     // Lazy loading: prevent rapid successive refreshes unless forced
     const now = Date.now();
     if (!force && !silent && now - lastRefreshRef.current < MIN_REFRESH_INTERVAL) {
-      console.log('[useTaskData] Skipping refresh - too soon');
       return;
     }
     
@@ -38,9 +43,11 @@ export const useTaskData = (api, isConnected) => {
         api.get('/tags')
       ]);
       // Ensure subtasks array exists on each task
-      setTasks(tasksData.map(t => ({ ...t, subtasks: t.subtasks || [] })));
-      setProjects(projectsData);
-      setAllTags(tagsData || []);
+      // Guard against a non-array server payload — otherwise projects.forEach/.map
+      // elsewhere throws "undefined is not a function" outside any try/catch.
+      setTasks(Array.isArray(tasksData) ? tasksData.map(t => ({ ...t, subtasks: t.subtasks || [] })) : []);
+      setProjects(Array.isArray(projectsData) ? projectsData : []);
+      setAllTags(Array.isArray(tagsData) ? tagsData : []);
       lastRefreshRef.current = now;
     } catch (error) {
       console.error('Load data error:', error);
@@ -62,13 +69,21 @@ export const useTaskData = (api, isConnected) => {
     await loadData({ silent: true });
   }, [loadData]);
 
+  // Optimistic-first: paint the new state immediately so the UI feels instant,
+  // then persist in the background. If the server rejects, roll back to the
+  // exact pre-mutation snapshot and tell the user. Every task mutation (toggle,
+  // recurring-advance, edit, subtask add/toggle/delete, delete task) funnels
+  // through here, so this single change makes the whole task screen snappy.
+  // Mirrors the photo-vault commitTags pattern.
   const saveTasks = async (newTasks) => {
+    const prevTasks = tasksRef.current; // snapshot for rollback
+    setTasks(newTasks);                 // 1. instant UI update
     try {
-      await api.post('/tasks', newTasks);
-      setTasks(newTasks);
+      await api.post('/tasks', newTasks); // 2. confirm with backend
     } catch (error) {
       console.error('Save tasks error:', error);
-      Alert.alert('Error', 'Failed to save tasks');
+      setTasks(prevTasks);             // 3. revert on failure
+      Alert.alert('Error', 'Failed to save — that change was undone');
       throw error; // Re-throw so caller knows it failed
     }
   };
@@ -76,7 +91,7 @@ export const useTaskData = (api, isConnected) => {
   // Subtask handlers
   const handleAddSubtask = async (taskId, title) => {
     try {
-      const newTasks = tasks.map(t => {
+      const newTasks = tasksRef.current.map(t => {
         if (t.id !== taskId) return t;
         return {
           ...t,
@@ -91,7 +106,7 @@ export const useTaskData = (api, isConnected) => {
 
   const handleToggleSubtask = async (taskId, subtaskId) => {
     try {
-      const newTasks = tasks.map(t => {
+      const newTasks = tasksRef.current.map(t => {
         if (t.id !== taskId) return t;
         
         const updatedSubtasks = toggleSubtaskComplete(t.subtasks, subtaskId);
@@ -113,7 +128,7 @@ export const useTaskData = (api, isConnected) => {
 
   const handleDeleteSubtask = async (taskId, subtaskId) => {
     try {
-      const newTasks = tasks.map(t => {
+      const newTasks = tasksRef.current.map(t => {
         if (t.id !== taskId) return t;
         return {
           ...t,
@@ -128,7 +143,7 @@ export const useTaskData = (api, isConnected) => {
 
   const handleUpdateSubtask = async (taskId, subtaskId, updates) => {
     try {
-      const newTasks = tasks.map(t => {
+      const newTasks = tasksRef.current.map(t => {
         if (t.id !== taskId) return t;
         return {
           ...t,
@@ -152,14 +167,25 @@ export const useTaskData = (api, isConnected) => {
     }
   };
 
+  // Optimistic-first (like saveTasks): show the project immediately, persist in
+  // the background, sync to the server's authoritative list on success, revert
+  // on failure.
   const addProject = async (name) => {
-    if (!name.trim()) return false;
+    const trimmed = name.trim();
+    if (!trimmed) return false;
+    const alreadyExists = projects.includes(trimmed);
+    if (!alreadyExists) {
+      setProjects(prev =>
+        prev.includes(trimmed) ? prev : [...prev, trimmed].sort((a, b) => a.localeCompare(b)),
+      );
+    }
     try {
-      await api.post('/projects/add', { name: name.trim() });
-      await loadData();
+      const res = await api.post('/projects/add', { name: trimmed });
+      if (res && Array.isArray(res.projects)) setProjects(res.projects); // server truth
       return true;
     } catch (error) {
       console.error('Add project error:', error);
+      if (!alreadyExists) setProjects(prev => prev.filter(p => p !== trimmed)); // rollback
       Alert.alert('Error', 'Failed to add project');
       return false;
     }
@@ -167,7 +193,7 @@ export const useTaskData = (api, isConnected) => {
 
   const deleteTask = async (taskId) => {
     try {
-      const newTasks = tasks.filter(t => t.id !== taskId);
+      const newTasks = tasksRef.current.filter(t => t.id !== taskId);
       await saveTasks(newTasks);
       return true;
     } catch (error) {
@@ -177,20 +203,29 @@ export const useTaskData = (api, isConnected) => {
     }
   };
 
+  // Optimistic-first. Preserves existing semantics: when onDeleteTasks is set
+  // (the project has tasks), those tasks are DELETED along with the project, not
+  // just un-assigned. Snapshot both lists for rollback.
   const deleteProject = async (name, options = {}) => {
     const { onDeleteTasks } = options;
+    const prevProjects = projects;
+    const prevTasks = tasksRef.current;
+    const newTasks = onDeleteTasks ? prevTasks.filter(t => t.project !== name) : prevTasks;
+
+    // 1. Instant UI: drop the project (and its tasks, if any) now.
+    setProjects(prev => prev.filter(p => p !== name));
+    if (onDeleteTasks) setTasks(newTasks);
+
     try {
-      // First update tasks if needed
-      if (onDeleteTasks) {
-        const newTasks = tasks.filter(t => t.project !== name);
-        await api.post('/tasks', newTasks);
-      }
-      // Then delete project - FIXED: use correct endpoint format
+      // 2. Persist in the background — tasks first (so the deletes land), then
+      //    remove the project itself.
+      if (onDeleteTasks) await api.post('/tasks', newTasks);
       await api.delete(`/projects/${encodeURIComponent(name)}`);
-      await loadData();
       return true;
     } catch (error) {
       console.error('Delete project error:', error);
+      setProjects(prevProjects);            // 3. revert both on failure
+      if (onDeleteTasks) setTasks(prevTasks);
       Alert.alert('Error', 'Failed to delete project');
       return false;
     }

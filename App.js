@@ -1,50 +1,98 @@
-import React from 'react';
+// react-native-gesture-handler must be imported at the very top of the
+// app entry — before anything else — so its native side is initialised
+// before any gesture is registered. App.js is the registered root
+// (expo/AppEntry.js → App), so this is the correct place.
+import 'react-native-gesture-handler';
+import React, { useState, useEffect } from 'react';
+import { AppState } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Image } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
+// Same turtle artwork the web app uses for its Chat nav icon
+// (web-app/public/turtle-logo.png). Bringing the asset across so the
+// mobile tab bar carries the same brand mark as the web app — top-down
+// shell silhouette with the shell-line gaps as transparency.
+const TURTLE_TAB_ICON = require('./assets/turtle-logo.png');
+import { ShareIntentProvider, useShareIntent } from 'expo-share-intent';
+
 // Screens
-import SettingsScreen from './screens/SettingsScreen';
+// (SettingsScreen lives inside TurtleScreen now — accessed via the
+// gear icon in the top-right corner of the Turtle page — so it no
+// longer ships as a tab.)
 import TasksScreen from './screens/TasksScreen';
 import TurtleScreen from './screens/TurtleScreen';
 import LoginScreen from './screens/LoginScreen';
 import PhotosScreen from './screens/PhotosScreen';
+import NotesScreen from './screens/NotesScreen';
+import ShareTargetScreen from './screens/ShareTargetScreen';
 import { ServerProvider } from './context/ServerContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { VaultProvider } from './context/VaultContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ClaudeQueueProvider } from './context/ClaudeQueueContext';
+import { CommandBusProvider } from './context/CommandBusContext';
+import CommandConsole from './components/CommandConsole';
+import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
 
 const Tab = createBottomTabNavigator();
 
 function TabNavigator() {
   const { theme, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  const [consoleOpen, setConsoleOpen] = useState(false);
 
   return (
+    <>
     <Tab.Navigator
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
+          // Turtle tab uses the web app's custom PNG mark so the
+          // brand visual matches across platforms. We recolor the
+          // dark turtle pixels to whatever `color` is (active/inactive
+          // tab tint) via tintColor — alpha pixels pass through
+          // untouched, so the shell-line gaps stay transparent.
+          //
+          // Sized larger than the rest of the tab icons (36 vs 24) to
+          // act as the visual anchor of the tab bar — the turtle is
+          // the brand, pinned to the trailing/right slot like a
+          // primary-action button. The other tabs read as cooler
+          // utility surfaces leading up to it.
+          if (route.name === 'Turtle') {
+            return (
+              <Image
+                source={TURTLE_TAB_ICON}
+                style={{
+                  width: 36,
+                  height: 36,
+                  tintColor: color,
+                  resizeMode: 'contain',
+                }}
+              />
+            );
+          }
           let iconName;
           if (route.name === 'Tasks') iconName = focused ? 'checkbox-marked-circle' : 'checkbox-marked-circle-outline';
-          else if (route.name === 'Turtle') iconName = 'turtle';
+          else if (route.name === 'Notes') iconName = focused ? 'note-text' : 'note-text-outline';
           else if (route.name === 'Photos') iconName = focused ? 'image' : 'image-outline';
-          else if (route.name === 'Settings') iconName = focused ? 'cog' : 'cog-outline';
           return <Icon name={iconName} size={24} color={color} />;
         },
         tabBarActiveTintColor: theme.colors.textPrimary,
         tabBarInactiveTintColor: theme.colors.textMuted,
-        tabBarShowLabel: true,
-        tabBarLabelStyle: {
-          fontSize: 11,
-          marginBottom: 4,
-        },
+        // Icons only — no text labels. Cleaner look and lets the
+        // larger turtle icon breathe without crowding from a label
+        // sitting under it.
+        tabBarShowLabel: false,
         tabBarStyle: {
           backgroundColor: theme.colors.background,
-          borderTopWidth: 0.5,
-          borderTopColor: theme.colors.border,
+          // No top border: the navbar shares the screen background colour, so
+          // it flows seamlessly out of the Turtle chat's solid input bar above
+          // it (and reads as a clean edgeless bar on the other tabs too).
+          borderTopWidth: 0,
           height: 49 + insets.bottom, // Standard iOS tab bar 49pt + safe area
           paddingBottom: insets.bottom,
           paddingTop: 6,
@@ -52,27 +100,36 @@ function TabNavigator() {
         headerShown: false, // Hide default header
       })}
     >
-      <Tab.Screen 
-        name="Tasks" 
+      {/* Tab order: Tasks → Notes → Photos → Turtle. Settings has
+          moved off the tab bar — it lives behind the gear icon in
+          the top-right corner of the Turtle page. With Turtle now
+          on the RIGHT, the brand glyph anchors the trailing edge of
+          the nav and reads as the user's "home" the way Twitter /
+          Threads pin their compose button to the right. */}
+      <Tab.Screen
+        name="Tasks"
         component={TasksScreen}
         options={{ title: 'TO-DO' }}
       />
-      <Tab.Screen 
-        name="Turtle" 
-        component={TurtleScreen}
-        options={{ title: 'Turtle' }}
+      <Tab.Screen
+        name="Notes"
+        component={NotesScreen}
+        options={{ title: 'Notes' }}
       />
-      <Tab.Screen 
-        name="Photos" 
+      <Tab.Screen
+        name="Photos"
         component={PhotosScreen}
         options={{ title: 'Photos' }}
       />
-      <Tab.Screen 
-        name="Settings" 
-        component={SettingsScreen}
-        options={{ title: 'Settings' }}
+      <Tab.Screen
+        name="Turtle"
+        component={TurtleScreen}
+        options={{ title: 'Turtle' }}
+        listeners={{ tabLongPress: () => setConsoleOpen(true) }}
       />
     </Tab.Navigator>
+    <CommandConsole visible={consoleOpen} onClose={() => setConsoleOpen(false)} />
+    </>
   );
 }
 
@@ -80,26 +137,70 @@ function AppContent() {
   const { isDark, theme } = useTheme();
   const { isAuthenticated, isLoading } = useAuth();
 
+  // Share-intent hook from expo-share-intent. When the OS launches us
+  // via the share sheet, `hasShareIntent` is true and `shareIntent`
+  // carries { text?, webUrl?, files?: [{ path, mimeType, fileName }] }.
+  // resetShareIntent() returns control to the normal app flow.
+  //
+  // Note: this hook ALSO fires when the app is already running and the
+  // user shares into it (iOS "open with..." flow) — not just on cold
+  // launch. The render below short-circuits the tab nav for the
+  // duration of the share, so it works in either case.
+  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent();
+
+  // Bound the on-disk cache: when the app is backgrounded/closed, sweep the
+  // throwaway temp + leaked share files and (throttled) wipe expo-image's
+  // persistent disk cache. Keeps the multi-GB bloat from ever building up while
+  // staying warm enough for snappy in-session browsing. See utils/cacheManager.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'background') runCacheMaintenanceOnBackground();
+    });
+    return () => sub.remove();
+  }, []);
+
   // Show loading spinner while checking for saved token
   if (isLoading) {
     return (
-      <View style={{ 
-        flex: 1, 
-        justifyContent: 'center', 
+      <View style={{
+        flex: 1,
+        justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: theme.colors.background 
+        backgroundColor: theme.colors.background
       }}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
       </View>
     );
   }
 
-  // Show login screen if not authenticated
+  // Show login screen if not authenticated. We intentionally do NOT
+  // short-circuit to ShareTargetScreen when unauthenticated — the
+  // share screen needs a configured server URL, which the user gets
+  // from the login flow. ShareTargetScreen itself also gracefully
+  // shows a "not connected" state when serverIP is missing, but in
+  // practice we want them to log in first.
   if (!isAuthenticated) {
     return (
       <>
         <StatusBar style={isDark ? 'light' : 'dark'} />
         <LoginScreen />
+      </>
+    );
+  }
+
+  // Share intent takes precedence over the normal tab nav. Rendering
+  // ShareTargetScreen at the top level (NOT inside the NavigationContainer)
+  // keeps the share UX focused — no tab bar, no swipe-to-back, just the
+  // picker. When the user finishes or cancels, resetShareIntent() flips
+  // hasShareIntent → false and we fall through to TabNavigator.
+  if (hasShareIntent && shareIntent) {
+    return (
+      <>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+        <ShareTargetScreen
+          shareIntent={shareIntent}
+          onDismiss={resetShareIntent}
+        />
       </>
     );
   }
@@ -115,18 +216,34 @@ function AppContent() {
   );
 }
 
+// expo-share-intent requires its provider to wrap the tree so the
+// hook can read the OS-delivered payload. It sits OUTSIDE our app's
+// providers so the share-intent state survives a re-render of the
+// auth/theme/server providers. Order chosen to match the package's
+// own docs.
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <ThemeProvider>
-        <ServerProvider>
-          <AuthProvider>
-            <VaultProvider>
-              <AppContent />
-            </VaultProvider>
-          </AuthProvider>
-        </ServerProvider>
-      </ThemeProvider>
-    </SafeAreaProvider>
+    // GestureHandlerRootView must wrap the whole tree (flex:1) so
+    // react-native-gesture-handler gestures — e.g. the draggable
+    // day-tasks bottom sheet on the Tasks screen — receive touches.
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ShareIntentProvider>
+        <SafeAreaProvider>
+          <ThemeProvider>
+            <ServerProvider>
+              <AuthProvider>
+                <VaultProvider>
+                  <ClaudeQueueProvider>
+                    <CommandBusProvider>
+                      <AppContent />
+                    </CommandBusProvider>
+                  </ClaudeQueueProvider>
+                </VaultProvider>
+              </AuthProvider>
+            </ServerProvider>
+          </ThemeProvider>
+        </SafeAreaProvider>
+      </ShareIntentProvider>
+    </GestureHandlerRootView>
   );
 }

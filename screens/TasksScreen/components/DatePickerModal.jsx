@@ -130,7 +130,8 @@ export const DatePickerModal = ({
   const goToToday = () => {
     const today = new Date();
     setCurrentMonth(today);
-    onSelect(today.toISOString().split('T')[0]);
+    // Local YYYY-MM-DD (toISOString is UTC → picks tomorrow late in the day west of UTC)
+    onSelect(toDateString(today));
   };
   
   const handleDateSelect = (dateStr) => {

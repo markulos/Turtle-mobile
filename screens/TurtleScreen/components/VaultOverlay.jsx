@@ -168,39 +168,41 @@ export default function VaultOverlay({ initialPassword, onClose }) {
         onLock={handleLock}
       />
 
-      <ScrollView style={styles.scrollView}>
-        {showNewForm && (
+      {/* The FlatList IS the scroller. It used to sit (scrollEnabled=false)
+          inside a ScrollView — the exact nesting RN warns about with
+          "VirtualizedLists should never be nested inside plain ScrollViews",
+          and it defeated virtualization: every password row rendered at
+          once. The new-entry form rides along as the list header. */}
+      <FlatList
+        data={filteredEntries}
+        keyExtractor={(item) => item.id}
+        style={styles.scrollView}
+        contentContainerStyle={styles.listContent}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={showNewForm ? (
           <NewEntryForm
             onSave={handleSave}
             onCancel={() => setShowNewForm(false)}
             allEntries={entries}
           />
+        ) : null}
+        renderItem={({ item }) => (
+          <PasswordItem
+            item={item}
+            onSave={handleSave}
+            onDelete={deleteEntry}
+            allEntries={entries}
+          />
         )}
-        
-        <FlatList
-          data={filteredEntries}
-          keyExtractor={(item) => item.id}
-          scrollEnabled={false}
-          renderItem={({ item }) => (
-            <PasswordItem
-              item={item}
-              onSave={handleSave}
-              onDelete={deleteEntry}
-              allEntries={entries}
-            />
-          )}
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Icon name="shield-key" size={48} color={theme.colors.textMuted} />
-              <Text style={styles.emptyText}>
-                {searchQuery ? 'No matches found' : 'No entries saved'}
-              </Text>
-            </View>
-          }
-        />
-        
-        <View style={{ height: 100 }} />
-      </ScrollView>
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Icon name="shield-key" size={48} color={theme.colors.textMuted} />
+            <Text style={styles.emptyText}>
+              {searchQuery ? 'No matches found' : 'No entries saved'}
+            </Text>
+          </View>
+        }
+      />
 
       {!showNewForm && (
         <TouchableOpacity
@@ -219,7 +221,13 @@ const createStyles = (theme) =>
     overlayContainer: {
       ...StyleSheet.absoluteFillObject,
       backgroundColor: theme.colors.background,
-      zIndex: 100,
+      // Sit above the TurtleScreen's floating top-bar icons (the settings
+      // gear and friends button, both zIndex 101) and the safe-area tint
+      // strip (zIndex 100) — otherwise those bleed through and overlap the
+      // vault's own top header. elevation mirrors zIndex for Android, where
+      // sibling stacking is driven by elevation rather than zIndex.
+      zIndex: 200,
+      elevation: 200,
     },
     centered: {
       justifyContent: 'center',
@@ -253,7 +261,12 @@ const createStyles = (theme) =>
     },
     scrollView: {
       flex: 1,
+    },
+    // Padding lives on the CONTENT (not the list container) so the scrollbar
+    // hugs the edge and the last row clears the FAB.
+    listContent: {
       padding: 16,
+      paddingBottom: 100,
     },
     empty: {
       alignItems: 'center',

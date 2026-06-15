@@ -66,11 +66,13 @@ export function usePomodoroTimer(timerState, onComplete) {
     setProgress(1 - (remaining / totalDurationRef.current));
     setIsActive(remaining > 0);
     
-    console.log('[usePomodoroTimer] Initialized:', {
-      endTime: new Date(timerState.endTime).toLocaleTimeString(),
-      remaining,
-      mode: timerState.mode,
-    });
+    if (__DEV__) {
+      console.log('[usePomodoroTimer] Initialized:', {
+        endTime: new Date(timerState.endTime).toLocaleTimeString(),
+        remaining,
+        mode: timerState.mode,
+      });
+    }
   }, [timerState, calculateRemaining, formatTime]);
   
   // Countdown interval

@@ -10,7 +10,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { FieldInput } from './FieldInput';
 
-export const PasswordItem = ({ item, onSave, onDelete, allEntries }) => {
+const PasswordItemImpl = ({ item, onSave, onDelete, allEntries }) => {
   const { theme } = useTheme();
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(item.title || '');
@@ -124,6 +124,16 @@ export const PasswordItem = ({ item, onSave, onDelete, allEntries }) => {
   );
 };
 
+// Memoized: the vault FlatList renders one of these per entry, and the parent
+// re-renders on every search keystroke / theme change. We only need to re-render
+// a row when its own data (item) or the full entries set (allEntries, used for
+// duplicate detection) changes — the onSave/onDelete handlers are stable
+// (useCallback'd / hook-provided in the parent), so they're not compared.
+export const PasswordItem = React.memo(
+  PasswordItemImpl,
+  (prev, next) => prev.item === next.item && prev.allEntries === next.allEntries,
+);
+
 export const NewEntryForm = ({ onSave, onCancel, allEntries }) => {
   const { theme } = useTheme();
   const [title, setTitle] = useState('');
@@ -144,7 +154,9 @@ export const NewEntryForm = ({ onSave, onCancel, allEntries }) => {
   const handleSave = async () => {
     if (!title.trim()) return;
     const success = await onSave({
-      id: Date.now().toString(),
+      // Random suffix so two entries created in the same millisecond can't
+      // collide (a bare Date.now() id would make saveEntry overwrite the first).
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       title: title.trim(),
       lines,
       createdAt: Date.now(),

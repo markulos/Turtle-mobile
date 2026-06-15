@@ -1,6 +1,7 @@
 export { FormField } from './FormField';
-export { ProjectDropdown } from './ProjectDropdown';
+export { ProjectDropdown, configureProjectDropdownAnimation } from './ProjectDropdown';
 export { FilterMenu } from './FilterMenu';
+export { TaskStatsModal } from './TaskStatsModal';
 export { ProjectManager } from './ProjectManager';
 export { TaskForm } from './TaskForm';
 export { TaskDetail } from './TaskDetail';
@@ -8,4 +9,6 @@ export { TaskItem } from './TaskItem';
 export { SectionHeader } from './SectionHeader';
 export { CalendarView } from './CalendarView';
 export { DatePickerModal } from './DatePickerModal';
-export { TimePicker } from './TimePicker';
+export { WheelTimePicker } from './WheelTimePicker';
+export { AddItemFab } from './AddItemFab';
+export { TaskQuickInspector } from './TaskQuickInspector';

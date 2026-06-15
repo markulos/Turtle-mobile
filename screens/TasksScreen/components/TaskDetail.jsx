@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   View,
@@ -7,10 +7,20 @@ import {
   ScrollView,
   StyleSheet,
   Animated,
+  PanResponder,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
-import { normalizeTags, getPriorityColor, areAllSubtasksCompleted } from '../utils/taskHelpers';
+import { normalizeTags, getPriorityColor, areAllSubtasksCompleted, itemTypeOf, itemColorOf } from '../utils/taskHelpers';
+import { REMINDER_OPTIONS } from '../utils/constants';
+
+// iPhone-style edge-swipe-to-back. Touch must start within the first
+// ~24px of the screen's left edge and drag rightward fast enough or
+// far enough to commit. Matches the system gesture every other iOS app
+// responds to when you swipe in from the bezel.
+const EDGE_BACK_ZONE_PX = 24;
+const EDGE_BACK_COMMIT_DX = 80;
+const EDGE_BACK_COMMIT_VX = 0.5;
 
 export const TaskDetail = ({ 
   task, 
@@ -20,7 +30,8 @@ export const TaskDetail = ({
   onToggleComplete, 
   onDelete,
   onTagPress,
-  onToggleSubtask
+  onToggleSubtask,
+  onQueueForClaude,
 }) => {
   const { theme } = useTheme();
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -55,7 +66,40 @@ export const TaskDetail = ({
       onClose();
     });
   };
-  
+
+  // Ref-mirror of handleClose. The PanResponder below is created ONCE
+  // (useMemo with empty deps), so it would otherwise close over the
+  // first-render handleClose forever. We point this ref at the latest
+  // handleClose every render — the responder dereferences it on
+  // release, so a stale `onClose` prop can never leak through.
+  const handleCloseRef = useRef(handleClose);
+  handleCloseRef.current = handleClose;
+
+  // Edge-swipe-back gesture. Only claims gestures that BEGAN within
+  // the left bezel and drag dominantly right; everything else passes
+  // through to the ScrollView so taps and vertical scrolls keep
+  // working. PanResponder identity is stable for the component's
+  // lifetime — see the ref above for why.
+  const edgeBackResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (evt, g) => {
+          const startX = evt.nativeEvent.pageX - g.dx;
+          return (
+            startX < EDGE_BACK_ZONE_PX &&
+            g.dx > 8 &&
+            Math.abs(g.dx) > Math.abs(g.dy) * 1.5
+          );
+        },
+        onPanResponderRelease: (_, g) => {
+          if (g.dx > EDGE_BACK_COMMIT_DX || g.vx > EDGE_BACK_COMMIT_VX) {
+            handleCloseRef.current?.();
+          }
+        },
+      }),
+    [],
+  );
+
   if (!task) return null;
 
   // Ensure subtasks exists
@@ -64,23 +108,69 @@ export const TaskDetail = ({
   const allSubtasksDone = areAllSubtasksCompleted(subtasks);
   const completedSubtasks = subtasks.filter(st => st.completed).length;
 
+  // Occasion (event / birthday) extras.
+  const kind = itemTypeOf(task);
+  const isOccasion = kind !== 'task';
+  const occasionColor = itemColorOf(task);
+  const guests = Array.isArray(task.meta?.guests) ? task.meta.guests : [];
+  const reminderLabels = (Array.isArray(task.meta?.reminders) ? task.meta.reminders : [])
+    .map(v => (REMINDER_OPTIONS.find(o => o.value === v)?.label) || v);
+  const yearly = kind === 'birthday' && task.meta?.yearly !== false;
+
   const styles = createStyles(theme);
 
   return (
     <Modal animationType="none" transparent visible={visible} onRequestClose={handleClose}>
-      <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
+      <Animated.View
+        style={[styles.overlay, { opacity: fadeAnim }]}
+        {...edgeBackResponder.panHandlers}
+      >
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
           <View style={styles.content}>
             <View style={styles.header}>
-              <View style={[styles.badge, { backgroundColor: getPriorityColor(task.priority, theme) }]}>
-                <Text style={styles.badgeText}>{task.priority}</Text>
-              </View>
+              {isOccasion ? (
+                <View style={[styles.badge, { backgroundColor: occasionColor || theme.colors.accentInfo }]}>
+                  <Text style={styles.badgeText}>{kind}</Text>
+                </View>
+              ) : (
+                <View style={[styles.badge, { backgroundColor: getPriorityColor(task.priority, theme) }]}>
+                  <Text style={styles.badgeText}>{task.priority}</Text>
+                </View>
+              )}
               <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
                 <Icon name="close" size={24} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.title}>{task.title}</Text>
+            {/* Title row — web-style: a tappable complete circle on the left
+                (fills green w/ a check when done), and the title itself is
+                tappable to expand into the editor. */}
+            <View style={styles.titleRow}>
+              <TouchableOpacity
+                onPress={onToggleComplete}
+                activeOpacity={0.7}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                style={[styles.completeCircle, task.completed && styles.completeCircleDone]}
+                accessibilityLabel={task.completed ? 'Mark incomplete' : 'Mark complete'}
+              >
+                {task.completed && (
+                  <Icon name="check" size={16} color={theme.colors.background} />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.titleTextWrap}
+                onPress={onEdit}
+                activeOpacity={0.6}
+              >
+                <Text style={[styles.title, task.completed && styles.titleCompleted]}>
+                  {task.title}
+                </Text>
+                <View style={styles.editHintRow}>
+                  <Icon name="pencil-outline" size={12} color={theme.colors.textTertiary} />
+                  <Text style={styles.editHint}>Tap to edit</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
 
             {/* Subtasks progress */}
             {subtasks.length > 0 && (
@@ -131,7 +221,21 @@ export const TaskDetail = ({
               {task.dueDate && (
                 <View style={styles.metaItem}>
                   <Icon name="calendar" size={16} color={theme.colors.textSecondary} />
-                  <Text style={styles.metaText}>Due: {task.dueDate}</Text>
+                  <Text style={styles.metaText}>{isOccasion ? 'Date' : 'Due'}: {task.dueDate}</Text>
+                </View>
+              )}
+
+              {task.time && isOccasion && (
+                <View style={styles.metaItem}>
+                  <Icon name="clock-outline" size={16} color={theme.colors.textSecondary} />
+                  <Text style={styles.metaText}>{task.time}</Text>
+                </View>
+              )}
+
+              {yearly && (
+                <View style={styles.metaItem}>
+                  <Icon name="calendar-refresh" size={16} color={theme.colors.accentSuccess} />
+                  <Text style={styles.metaText}>Every year</Text>
                 </View>
               )}
 
@@ -156,6 +260,36 @@ export const TaskDetail = ({
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Description</Text>
                 <Text style={styles.description}>{task.description}</Text>
+              </View>
+            )}
+
+            {/* Guests — events. */}
+            {guests.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Guests ({guests.length})</Text>
+                <View style={styles.tagsRow}>
+                  {guests.map((g, idx) => (
+                    <View key={idx} style={styles.tagChip}>
+                      <Icon name="account" size={12} color={theme.colors.textPrimary} />
+                      <Text style={styles.tagText}>{g}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {/* Reminders — birthdays. */}
+            {reminderLabels.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Reminders</Text>
+                <View style={styles.tagsRow}>
+                  {reminderLabels.map((label, idx) => (
+                    <View key={idx} style={styles.tagChip}>
+                      <Icon name="bell-ring" size={12} color={theme.colors.textPrimary} />
+                      <Text style={styles.tagText}>{label}</Text>
+                    </View>
+                  ))}
+                </View>
               </View>
             )}
 
@@ -186,24 +320,23 @@ export const TaskDetail = ({
               </View>
             )}
 
+            {/* Hand this task off to the Claude session (Turtle tab). It's
+                added to a queue that Claude works through one at a time. */}
+            {onQueueForClaude && (
+              <TouchableOpacity
+                style={styles.claudeQueueBtn}
+                onPress={onQueueForClaude}
+                activeOpacity={0.85}
+              >
+                <Icon name="robot-outline" size={20} color={theme.colors.textPrimary} />
+                <Text style={styles.claudeQueueText}>Send to Claude</Text>
+              </TouchableOpacity>
+            )}
+
             <View style={styles.actions}>
               <TouchableOpacity style={[styles.actionBtn, styles.editBtn]} onPress={onEdit}>
                 <Icon name="pencil" size={20} color={theme.colors.textPrimary} />
                 <Text style={styles.actionText}>Edit</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={[styles.actionBtn, styles.completeBtn, task.completed && styles.uncompleteBtn]}
-                onPress={onToggleComplete}
-              >
-                <Icon 
-                  name={task.completed ? "checkbox-blank-outline" : "checkbox-marked"} 
-                  size={20} 
-                  color={theme.colors.textPrimary} 
-                />
-                <Text style={styles.actionText}>
-                  {task.completed ? 'Mark Incomplete' : 'Complete'}
-                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={onDelete}>
@@ -246,13 +379,52 @@ const createStyles = (theme) => StyleSheet.create({
   closeBtn: { 
     padding: 5 
   },
-  title: { 
-    fontSize: theme.typography.body, 
-    fontWeight: 'bold', 
-    color: theme.colors.textPrimary, 
-    marginBottom: 15 
+  // Title row — complete circle + tappable title (expands to editor)
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 15,
   },
-  
+  completeCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderColor: theme.colors.borderStrong,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    marginTop: 1,
+  },
+  completeCircleDone: {
+    borderColor: theme.colors.accentSuccess,
+    backgroundColor: theme.colors.accentSuccess,
+  },
+  titleTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  title: {
+    fontSize: theme.typography.body,
+    fontWeight: 'bold',
+    color: theme.colors.textPrimary,
+  },
+  titleCompleted: {
+    textDecorationLine: 'line-through',
+    color: theme.colors.textMuted,
+  },
+  editHintRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    gap: 4,
+  },
+  editHint: {
+    fontSize: 11,
+    color: theme.colors.textTertiary,
+  },
+
   // Subtask section
   subtaskSection: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -384,12 +556,28 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textMuted,
   },
   
-  actions: { 
-    flexDirection: 'row', 
-    marginTop: 20, 
-    paddingTop: 20, 
-    borderTopWidth: 1, 
-    borderTopColor: theme.colors.border 
+  claudeQueueBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 20,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: theme.colors.accentPrimary || theme.colors.border,
+  },
+  claudeQueueText: {
+    color: theme.colors.textPrimary,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  actions: {
+    flexDirection: 'row',
+    marginTop: 20,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border
   },
   actionBtn: { 
     flex: 1, 

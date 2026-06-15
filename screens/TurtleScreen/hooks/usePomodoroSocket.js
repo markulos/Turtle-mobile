@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
+import { serverOrigin } from '../../../context/ServerContext';
 
 // Shared default sessionId so web and mobile clients land in the same server
 // room out of the box. Single-user app — power users can override this in
@@ -39,10 +40,18 @@ export function usePomodoroSocket(serverIP) {
   useEffect(() => {
     if (!serverIP) return undefined;
 
-    const socket = io(`http://${serverIP}:3000`, {
+    const socket = io(serverOrigin(serverIP), {
       query: { sessionId: sessionIdRef.current },
       transports: ['websocket'],
       reconnection: true,
+      // BATTERY: socket.io defaults retry every 1–5 s FOREVER when the server
+      // is unreachable — and each attempt is a TLS handshake over the funnel,
+      // which is CPU-expensive. Back off to a 30 s ceiling so an unreachable
+      // server costs ~one handshake/30 s instead of ~one/2–5 s (still
+      // reconnects promptly once the server returns). Same on all 3 sockets.
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 30000,
+      randomizationFactor: 0.5,
     });
     socketRef.current = socket;
 

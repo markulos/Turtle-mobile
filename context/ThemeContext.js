@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const THEME_STORAGE_KEY = '@connected_pass_theme';
+const TIME_FORMAT_STORAGE_KEY = '@connected_pass_time_format';
 
 // Golden Ratio - 1.618
 const PHI = 1.618;
@@ -187,10 +188,13 @@ const ThemeContext = createContext({
   theme: DARK_THEME,
   isDark: true,
   toggleTheme: () => {},
+  timeFormat: '12h', // '12h' (AM/PM, default) | '24h'
+  setTimeFormat: () => {},
 });
 
 export const ThemeProvider = ({ children }) => {
   const [isDark, setIsDark] = useState(true);
+  const [timeFormat, setTimeFormatState] = useState('12h');
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -203,10 +207,24 @@ export const ThemeProvider = ({ children }) => {
       if (savedTheme !== null) {
         setIsDark(savedTheme === 'dark');
       }
+      const savedFmt = await AsyncStorage.getItem(TIME_FORMAT_STORAGE_KEY);
+      if (savedFmt === '24h' || savedFmt === '12h') {
+        setTimeFormatState(savedFmt);
+      }
     } catch (error) {
       console.error('Error loading theme:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const setTimeFormat = async (fmt) => {
+    const next = fmt === '24h' ? '24h' : '12h';
+    setTimeFormatState(next);
+    try {
+      await AsyncStorage.setItem(TIME_FORMAT_STORAGE_KEY, next);
+    } catch (error) {
+      console.error('Error saving time format:', error);
     }
   };
 
@@ -222,12 +240,22 @@ export const ThemeProvider = ({ children }) => {
 
   const theme = isDark ? DARK_THEME : LIGHT_THEME;
 
+  // Memoize the context value so consumers only re-render when something they
+  // actually read changes. Without this, a fresh object literal every render
+  // would re-render every screen on any provider re-render. toggleTheme /
+  // setTimeFormat are stable-enough closures; the meaningful deps are the
+  // values they expose.
+  const value = useMemo(
+    () => ({ theme, isDark, toggleTheme, timeFormat, setTimeFormat }),
+    [theme, isDark, timeFormat],
+  );
+
   if (isLoading) {
     return null;
   }
 
   return (
-    <ThemeContext.Provider value={{ theme, isDark, toggleTheme }}>
+    <ThemeContext.Provider value={value}>
       {children}
     </ThemeContext.Provider>
   );

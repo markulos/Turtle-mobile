@@ -7,6 +7,7 @@ import {
   lockVault,
   resetVault,
   encryptEntry,
+  decryptEntry,
   decryptEntries,
 } from '../utils/crypto';
 
@@ -242,6 +243,93 @@ export const useVault = (getBaseUrl, isConnected) => {
     }
   }, [getBaseUrl, isConnected]);
 
+  // Change the master password. Each entry is encrypted directly with the
+  // master password (per-entry PBKDF2 salt), so this must decrypt every entry
+  // with the CURRENT in-memory password and re-encrypt with the new one. Order
+  // is chosen so the vault is never left half-migrated:
+  //   1. snapshot the old server array (rollback)   2. strictly decrypt all
+  //   (abort on ANY failure → never clobber a corrupt entry)   3. re-encrypt
+  //   4. verify round-trip BEFORE committing   5. POST new array   6. update the
+  //   local verification hash (retry; roll the server back if it can't finalize).
+  const changeMasterPassword = useCallback(async (newPassword) => {
+    if (!masterPassword) return { success: false, error: 'Vault is locked' };
+    if (!isConnected) return { success: false, error: 'Not connected to server' };
+    if (!newPassword || newPassword.length < 8) {
+      return { success: false, error: 'New password must be at least 8 characters' };
+    }
+    if (newPassword === masterPassword) {
+      return { success: false, error: 'New password must be different from the current one' };
+    }
+
+    setIsProcessing(true);
+    try {
+      // 1. Fetch the current (old-password) encrypted array — also our rollback snapshot.
+      const resp = await fetch(`${getBaseUrl()}/passwords`);
+      if (!resp.ok) throw new Error('Could not load the vault from the server');
+      const oldServer = await resp.json();
+      if (!Array.isArray(oldServer)) throw new Error('Unexpected vault data from the server');
+
+      // 2. Strictly decrypt every entry with the OLD password. Abort on ANY
+      //    failure so a corrupt/placeholder entry is never re-encrypted (data loss).
+      const plain = [];
+      for (const enc of oldServer) {
+        plain.push(decryptEntry(enc, masterPassword)); // throws on failure
+      }
+
+      // 3. Re-encrypt everything with the NEW password (fresh per-entry salt/IV).
+      const newServer = plain.map((e) => encryptEntry(e, newPassword));
+
+      // 4. Verify the re-encrypted set round-trips BEFORE committing anything.
+      for (let i = 0; i < newServer.length; i++) {
+        const back = decryptEntry(newServer[i], newPassword);
+        if (JSON.stringify(back.lines) !== JSON.stringify(plain[i].lines)) {
+          throw new Error('Verification failed — nothing was changed');
+        }
+      }
+
+      // 5. Commit the re-encrypted array to the server (replaces all entries).
+      const saveResp = await fetch(`${getBaseUrl()}/passwords`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newServer),
+      });
+      if (!saveResp.ok) throw new Error('Failed to save the re-encrypted vault');
+
+      // 6. Update the local verification hash. Retry; if it can't be written,
+      //    roll the server back to the old array so the OLD password still works.
+      let hashOk = false;
+      for (let attempt = 0; attempt < 3 && !hashOk; attempt++) {
+        try {
+          await setupVault(newPassword);
+          hashOk = true;
+        } catch (e) {
+          console.warn('setupVault attempt failed:', e.message);
+        }
+      }
+      if (!hashOk) {
+        try {
+          await fetch(`${getBaseUrl()}/passwords`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(oldServer),
+          });
+        } catch (e) {
+          console.error('Rollback failed:', e.message);
+        }
+        throw new Error('Could not finalize — rolled back; your old password still works');
+      }
+
+      // 7. Adopt the new password in memory (decrypted entries are unchanged).
+      setMasterPassword(newPassword);
+      return { success: true };
+    } catch (error) {
+      console.error('Change master password error:', error.message);
+      return { success: false, error: error.message || 'Could not change the master password' };
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [masterPassword, getBaseUrl, isConnected]);
+
   const clearAll = useCallback(() => {
     Alert.alert(
       'Reset Vault',
@@ -305,6 +393,7 @@ export const useVault = (getBaseUrl, isConnected) => {
     saveEntry,
     deleteEntry,
     clearAll,
+    changeMasterPassword,
     checkSetup, // Expose this so component can force recheck
   };
 };

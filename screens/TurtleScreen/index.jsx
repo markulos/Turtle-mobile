@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,17 +6,34 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
-  FlatList,
   Platform,
-  KeyboardAvoidingView,
   Keyboard,
   Switch,
+  Modal,
+  LayoutAnimation,
+  UIManager,
+  Share,
+  Alert,
+  Vibration,
 } from 'react-native';
+import Reanimated, {
+  useAnimatedKeyboard,
+  useAnimatedStyle,
+} from 'react-native-reanimated';
 import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import * as Contacts from 'expo-contacts';
+import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FlashList } from '@shopify/flash-list';
+import { frostBorderColor, FROST_OVERLAP } from '../../utils/frostedChat';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
+import { useCommandBus } from '../../context/CommandBusContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { interceptAndSend } from '../../services/AICommandInterceptor';
 import VaultOverlay from './components/VaultOverlay';
@@ -24,8 +41,42 @@ import TimerMessage from './components/TimerMessage';
 import PomodoroSettings from './components/PomodoroSettings';
 import MediaGallery from './components/MediaGallery';
 import { usePomodoroSocket } from './hooks/usePomodoroSocket';
+import { useClaudeSession } from './hooks/useClaudeSession';
+import { useTerminalSession } from './hooks/useTerminalSession';
+import ClaudeConsole from './components/ClaudeConsole';
+import TerminalConsole from './components/TerminalConsole';
+import FriendCard from './components/FriendCard';
+// SettingsScreen used to be its own tab. We surface it from inside
+// the Turtle page now via the top-right gear icon — the tab bar
+// shed a slot, and Settings reads more like a "preferences sheet"
+// of the Turtle home than a peer destination.
+import SettingsScreen from '../SettingsScreen';
 
-const turtleIcon = require('../../assets/turtle-icon.svg');
+const turtleIcon = require('../../assets/turtle-icon.png');
+// The startup/brand turtle logo, reused as an extremely faint watermark behind
+// the chat (WhatsApp-style background). Tinted to the theme's text colour so it
+// reads as a subtle silhouette on both light and dark backgrounds.
+const turtleLogo = require('../../assets/turtle-logo.png');
+
+// A short confirm-buzz. Prefers an expo-haptics impact (a crisp tap); falls back
+// to the always-available RN Vibration so it still buzzes on any build/device.
+// Never throws — a missing haptics module or vibrator must not break the gesture.
+function confirmBuzz() {
+  try {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {
+      try { Vibration.vibrate(20); } catch (e) { /* no vibrator */ }
+    });
+  } catch (e) {
+    try { Vibration.vibrate(20); } catch (e2) { /* no vibrator */ }
+  }
+}
+
+// Enable LayoutAnimation on Android so the chat's bottom inset eases smoothly
+// when the bottom dock resizes (e.g. the Claude console expanding/collapsing)
+// instead of snapping. (ClaudeConsole enables this too; the call is idempotent.)
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // Regex to match /vault command (with optional quoted password)
 const VAULT_COMMAND_REGEX = /^\/vault(?:\s+"([^"]*)")?$/;
@@ -36,16 +87,92 @@ const DEFAULT_BREAK_MINUTES = 5;
 
 const HEADER_HEIGHT = 60;
 const DEBUG_TOGGLE_HEIGHT = 44;
+// Height of the chat header bar's content row (below the safe-area inset). Used
+// both for the bar itself and as the inverted message list's visual-top inset
+// so the oldest visible message clears the bar instead of hiding behind it.
+const CHAT_HEADER_BAR_HEIGHT = 44;
+
+// Format a completion epoch (ms) for the "finished" banner. Same-day shows just
+// the clock time ("3:45 PM"); an older completion (e.g. finished while the app
+// was closed) also shows the date so the timestamp isn't misleading.
+function formatFinishedAt(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const sameDay = d.toDateString() === now.toDateString();
+  return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
+// Claude models offered by the composer's long-press picker. `value` is the
+// CLI `--model` alias (or null for the server/CLI default); aliases resolve to
+// the latest of each tier server-side, so nothing here needs version bumps.
+const CLAUDE_MODELS = [
+  { value: null, label: 'Default', sub: "Server's configured model" },
+  { value: 'opus', label: 'Opus', sub: 'Most capable' },
+  { value: 'sonnet', label: 'Sonnet', sub: 'Balanced' },
+  { value: 'haiku', label: 'Haiku', sub: 'Fastest' },
+];
 
 export default function TurtleScreen() {
   const { theme } = useTheme();
   const { api, isConnected, getBaseUrl, serverIP } = useServer();
   const { token } = useAuth();
   const insets = useSafeAreaInsets();
-  
+  // Measured height of the floating bottom dock (cards + frosted composer).
+  // It's an absolute overlay over the full-height message list, so we inset
+  // the list by this height — the newest message rests just clear of the dock
+  // while older messages scroll UNDER the composer's blur (Telegram frosted
+  // bar). Seeded so there's no first-frame overlap before onLayout measures.
+  const [dockHeight, setDockHeight] = useState(72);
+  // This screen sits inside the bottom tab navigator, so its container bottom
+  // is ABOVE the tab bar. useAnimatedKeyboard reports height from the SCREEN
+  // bottom, so the keyboard padding must subtract the tab-bar height — else
+  // the composer floats a tab-bar's worth of empty space above the keyboard.
+  const tabBarHeight = useBottomTabBarHeight();
+
   // Chat state
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
+  // "Scroll to latest" pill for the chat. The list is inverted, so offset 0 is
+  // the newest message (visual bottom); we show the pill once the user has
+  // scrolled a screenful up into history.
+  const [showChatJump, setShowChatJump] = useState(false);
+
+  // The chat list's data. Filtered live while the user is typing a `/search`
+  // command, otherwise the full message set. Memoized so we don't rebuild the
+  // array (and re-render the whole list) on every unrelated render — only when
+  // messages or the search query actually change.
+  const visibleMessages = useMemo(() => {
+    const query = inputText.toLowerCase();
+    if (!query.startsWith('/search ')) return messages;
+    const searchStr = query.replace('/search ', '').trim();
+    if (!searchStr) return messages;
+    const searchTerms = searchStr.split(/\s+/);
+    return messages.filter((msg) => {
+      const messageText = (msg.text || '').toLowerCase();
+      return searchTerms.every((term) => messageText.includes(term));
+    });
+  }, [messages, inputText]);
+
+  // Toggle the "scroll to latest" pill. Inverted list → contentOffset.y grows
+  // as you scroll UP into older messages; show the pill past ~half a screen.
+  // Functional updater keeps this a no-op render except on the threshold cross.
+  const handleChatScroll = useCallback((e) => {
+    const y = e?.nativeEvent?.contentOffset?.y ?? 0;
+    const want = y > 280;
+    setShowChatJump((prev) => (prev === want ? prev : want));
+  }, []);
+
+  const scrollChatToLatest = useCallback(() => {
+    try { scrollViewRef.current?.scrollToOffset?.({ offset: 0, animated: true }); } catch (e) { /* mid-layout */ }
+    setShowChatJump(false);
+  }, []);
+  // Commands pushed from the global CommandConsole (long-press the Turtle tab).
+  const { pending: pendingCommand, clear: clearPendingCommand } = useCommandBus();
+  // Image queued for the NEXT Claude message (sent into the session as a
+  // base64 block). { base64, mediaType, uri } | null.
+  const [claudeImage, setClaudeImage] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [debugLogs, setDebugLogs] = useState([]);
@@ -68,7 +195,342 @@ export default function TurtleScreen() {
   // returns the active/ended state and exposes start/stop helpers — the
   // synthetic timer card below the chat list reads directly from `pomodoro.state`.
   const pomodoro = usePomodoroSocket(serverIP);
+
+  // Collapse the running timer card to a thin "working" header (like the
+  // Claude queue tab). Only meaningful while a session is active; a brand
+  // new session (new startedAt) auto-expands so the user sees it start.
+  const [timerMinimized, setTimerMinimized] = useState(false);
+  const activeTimerStartedAt =
+    pomodoro.state && pomodoro.state.status === 'active' ? pomodoro.state.startedAt : null;
+  useEffect(() => {
+    if (activeTimerStartedAt) setTimerMinimized(false);
+  }, [activeTimerStartedAt]);
+
+  // ── Claude Code CLI session ──────────────────────────────────────────
+  // `/claude` opens a persistent Claude session (Max/Pro subscription) on
+  // the server, running in the turtle-app dir. While claudeUiMode is set,
+  // plain messages route to Claude instead of the chat AI.
+  // The hook owns the streamed transcript; the dedicated ClaudeConsole
+  // panel (rendered above the input) shows it directly, so live output
+  // always appears instead of relying on the chat message list.
+  const claude = useClaudeSession(serverIP, token);
+
+  // Leaving the Turtle chat (tab blur / unmount) auto-suspends the Claude live
+  // log: it pauses the per-chunk stream AND unloads the transcript from the
+  // frontend, so a running session stops draining CPU/memory while you're on
+  // another tab. The session keeps running + buffering server-side; returning
+  // shows it paused, and tapping Live retrieves it from the buffer. suspend()
+  // self-guards (no-op unless a session is live).
+  const claudeSuspendRef = useRef(claude.suspend);
+  claudeSuspendRef.current = claude.suspend;
+  useFocusEffect(
+    useCallback(() => () => { claudeSuspendRef.current?.(); }, []),
+  );
+
+  const {
+    mode: claudeUiMode,        // null | 'session' | 'login'
+    active: claudeActive,
+    busy: claudeBusy,          // a turn is in flight
+    model: claudeModel,        // selected model alias (null = CLI default)
+    setModel: setClaudeModel,  // set by the long-press model picker
+    send: claudeSend,
+    start: claudeStart,
+    startAdmin: claudeStartAdmin,
+    stop: claudeStop,
+    login: claudeLogin,
+    loginInput: claudeLoginInput,
+    loginStop: claudeLoginStop,
+    close: claudeClose,
+    queue: claudeQueue,         // server-side task queue (mirrored from sockets)
+    completedQueue: claudeCompletedQueue, // finished queued tasks (+ finish time)
+    clearQueue: clearClaudeQueue,
+  } = claude;
+
+  // Most-recently finished queued task, shown as a dismissable "✓ finished at …"
+  // banner. Cleared when the user dismisses it or a new task starts working
+  // (tracked by id so a fresh completion re-shows). null = nothing to show.
+  const [dismissedDoneId, setDismissedDoneId] = useState(null);
+  const lastCompleted = (claudeCompletedQueue && claudeCompletedQueue.length > 0)
+    ? claudeCompletedQueue[claudeCompletedQueue.length - 1]
+    : null;
+  const showDoneBanner = !!lastCompleted
+    && lastCompleted.id !== dismissedDoneId
+    && !claudeBusy; // hide while a newer task is actively working
+
+  // Long-press the robot icon to reveal this Claude model picker. Aliases map
+  // to the latest of each tier server-side (the CLI resolves 'opus'/'sonnet'/
+  // 'haiku'), so we never hardcode a version that could be retired.
+  const [showModelPicker, setShowModelPicker] = useState(false);
+
+  // ── To-do → Claude queue ─────────────────────────────────────────────
+  // The queue now lives SERVER-SIDE: the server feeds the next task to the
+  // session itself whenever a turn finishes, so pending tasks keep getting
+  // worked even with the app closed. This screen just displays the queue
+  // (mirrored via `claude.queue`) and offers Start/Clear — no client draining.
+
+  // Remote shell on the server (PowerShell/bash). Same bridge pattern as
+  // Claude; renders in the TerminalConsole panel.
+  const terminal = useTerminalSession(serverIP, token);
+  const {
+    open: terminalOpen,
+    send: terminalSend,
+    start: terminalStart,
+    stop: terminalStop,
+    close: terminalClose,
+  } = terminal;
+  // The terminal opens full-screen (vintage CRT) by default; the expand/
+  // collapse control toggles to a compact card.
+  const [terminalFullscreen, setTerminalFullscreen] = useState(true);
+
+  // Keyboard mode for the composer during a Claude / terminal session.
+  // 'code'   → no auto-capitalize / auto-correct / spellcheck, so commands,
+  //            code, and paths type exactly as written.
+  // 'normal' → sentence-case + autocorrect (the everyday chat keyboard).
+  // Defaults to 'code' because a coding session is the common case; the
+  // user picks via the keyboard toggle next to the input.
+  const [keyboardMode, setKeyboardMode] = useState('code');
+
+  // ── Sticky-above-keyboard composer ───────────────────────────────────
+  // We want the input pinned EXACTLY on the keyboard's top edge with no gap,
+  // tracking it frame-by-frame — including the interactive swipe-down drag,
+  // which the old keyboardWillShow/Hide timer couldn't follow. Reanimated's
+  // useAnimatedKeyboard exposes the live keyboard height as a shared value,
+  // so we drive the container's bottom padding straight from it on the UI
+  // thread. When the keyboard is dismissed the padding eases back to rest on
+  // the safe-area line — max() so the pill never dips under the home
+  // indicator / gesture bar.
+  //
+  // Applied on BOTH platforms: under Expo SDK 54's mandatory edge-to-edge,
+  // the window no longer auto-resizes for the keyboard (decorFitsSystemWindows
+  // is false), and useAnimatedKeyboard consumes the IME inset itself — so
+  // Android must move the composer via this padding too, not rely on
+  // adjustResize. The inputArea below therefore contributes no bottom inset.
+  const keyboard = useAnimatedKeyboard();
+  // The resting gap under the composer — applied as the frosted BlurView's
+  // own paddingBottom (see the inputArea render below), so the bar's blur+tint
+  // fills the margin instead of leaving bare chat showing through. Static, so
+  // it never animates and stays identical whether the keyboard is open or closed.
+  const COMPOSER_MARGIN = 12;
+  const keyboardSpacerStyle = useAnimatedStyle(() => {
+    'worklet';
+    // Lift the whole column with a TRANSFORM, not by animating
+    // paddingBottom/height. Animating a layout prop here would re-run Yoga
+    // layout on the entire inverted FlatList every keyboard frame — that's
+    // the stutter on open. translateY is compositor-only: the column slides
+    // up rigidly with ZERO relayout, so it tracks the keyboard smoothly.
+    //
+    // Offset = how far the keyboard rises ABOVE the tab bar (the column
+    // already sits above the tab bar; floor at 0 so a closed keyboard doesn't
+    // shove it down). The static COMPOSER_MARGIN preserves the resting gap, so
+    // the pill ends up exactly COMPOSER_MARGIN above the keyboard's top edge.
+    return {
+      transform: [{ translateY: -Math.max(keyboard.height.value - tabBarHeight, 0) }],
+    };
+  });
+
   const [showSettings, setShowSettings] = useState(false);
+  // Distinct from `showSettings` above (which gates PomodoroSettings).
+  // `showAppSettings` controls the full Settings page that used to
+  // live on its own tab — now reached via the gear icon top-right.
+  const [showAppSettings, setShowAppSettings] = useState(false);
+  // Friends (org members) overlay — list + lookup, reached from the chat's
+  // top-left people icon. Loaded once on open; the search box filters locally.
+  const [showFriends, setShowFriends] = useState(false);
+  const [friends, setFriends] = useState([]);
+  // Tapped member → their profile card (avatar, name, number, stats). Stacks
+  // over the Friends sheet; null = closed.
+  const [selectedFriend, setSelectedFriend] = useState(null);
+  const [pendingInvites, setPendingInvites] = useState([]);
+  const [friendsLoading, setFriendsLoading] = useState(false);
+  const [friendQuery, setFriendQuery] = useState('');
+  // Reusable fetch so both the initial open AND a post-invite refresh
+  // pull the same friends + pending lists without duplicating logic.
+  const loadFriends = useCallback(async () => {
+    setFriendsLoading(true);
+    try {
+      const r = await api.get('/friends');
+      setFriends(Array.isArray(r?.friends) ? r.friends : []);
+      setPendingInvites(Array.isArray(r?.pending) ? r.pending : []);
+    } catch {
+      setFriends([]);
+      setPendingInvites([]);
+    } finally {
+      setFriendsLoading(false);
+    }
+  }, [api]);
+  const openFriends = useCallback(async () => {
+    setShowFriends(true);
+    await loadFriends();
+  }, [loadFriends]);
+
+  // Mint a Discord-style invite link (7-day default, unlimited uses) and hand
+  // it to the OS share sheet. The deep link carries the SERVER ADDRESS too, so
+  // a fresh install that taps it is fully configured — server + code in one
+  // tap. Owner-only server-side; non-owners get the friendly note.
+  const [inviteLinkBusy, setInviteLinkBusy] = useState(false);
+  const shareInviteLink = useCallback(async () => {
+    if (inviteLinkBusy) return;
+    setInviteLinkBusy(true);
+    try {
+      const [link, orgResp] = await Promise.all([
+        api.post('/auth/invite-links', {}),
+        api.get('/org').catch(() => null),
+      ]);
+      const pondName = orgResp?.org?.name || 'my pond';
+      // Prefer the server's http landing URL — tappable in every messenger,
+      // and it fires the turtle:// deep link (server + code) itself.
+      const joinUrl = link.joinUrl || `turtle://join/${link.code}?server=${serverIP}`;
+      await Share.share({
+        message:
+          `Come join "${pondName}" on Turtle 🐢\n\n` +
+          `Tap on your phone: ${joinUrl}\n\n` +
+          `Invite code ${link.codePretty} · expires in 7 days.`,
+      });
+    } catch (e) {
+      const msg = /403|owner only/i.test(String(e?.message))
+        ? 'Only the pond owner can create invite links.'
+        : (e?.message || 'Could not create the invite link.');
+      Alert.alert('Invite link', msg);
+    } finally {
+      setInviteLinkBusy(false);
+    }
+  }, [api, serverIP, inviteLinkBusy]);
+
+  // ── Invite a friend ──────────────────────────────────────────────
+  // Two entry points feed the same POST /api/auth/invites: a manual
+  // phone field and the device contact picker. Inviting is owner-only
+  // server-side; a non-owner gets a friendly note rather than a crash.
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [invitePhone, setInvitePhone] = useState('+1 '); // NA-only for now → prefill +1
+  const [inviteBusy, setInviteBusy] = useState(false);
+  // { type: 'ok' | 'err', text } — small inline banner under the field.
+  const [inviteNote, setInviteNote] = useState(null);
+
+  // Strip a contact/manual number down to the digits (and a single
+  // leading +) the server stores. Keeps matching with invited_phones
+  // / users.phone consistent regardless of how the contact app
+  // formatted it ("(415) 555-0100" → "+4155550100" / "4155550100").
+  const normalizePhone = useCallback((raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    const plus = s.startsWith('+') ? '+' : '';
+    return plus + s.replace(/[^\d]/g, '');
+  }, []);
+
+  const inviteByPhone = useCallback(async (rawPhone) => {
+    const phone = normalizePhone(rawPhone);
+    if (!phone || phone.replace(/\D/g, '').length < 5) {
+      setInviteNote({ type: 'err', text: 'Enter a valid phone number.' });
+      return;
+    }
+    setInviteBusy(true);
+    setInviteNote(null);
+    try {
+      await api.post('/auth/invites', { phone });
+      setInvitePhone('');
+      setInviteNote({ type: 'ok', text: `Invited ${phone} — they'll hop in with a texted code.` });
+      // Surface them immediately in the pending list, then reconcile.
+      setPendingInvites((prev) =>
+        prev.some((p) => p.phone === phone) ? prev : [{ phone }, ...prev],
+      );
+      await loadFriends();
+    } catch (e) {
+      // requireOwner → 403 for non-owners. The api client folds the status
+      // into the Error message ("API Error 403: …"), so match on that.
+      const m = e?.message || '';
+      const isForbidden = /\b403\b/.test(m) || /owner only/i.test(m);
+      setInviteNote({
+        type: 'err',
+        text: isForbidden
+          ? 'Only the pond owner can invite new turtles.'
+          : 'Could not send that invite. Check the number and try again.',
+      });
+    } finally {
+      setInviteBusy(false);
+    }
+  }, [api, normalizePhone, loadFriends]);
+
+  // Open the native contact picker, pull the first phone number off
+  // the chosen contact, and pre-fill it into the invite field (the
+  // user confirms with the Invite button). presentContactPickerAsync
+  // uses the OS picker, so we don't need full READ_CONTACTS up front;
+  // we still request permission as a fallback for older platforms.
+  const pickContactToInvite = useCallback(async () => {
+    setInviteNote(null);
+    try {
+      // Native OS contact picker — iOS & Android. It manages its own
+      // limited-access permission, so we don't need full READ_CONTACTS up
+      // front. If the build somehow lacks it, tell the user rather than
+      // guessing a contact for them.
+      if (typeof Contacts.presentContactPickerAsync !== 'function') {
+        setInviteNote({ type: 'err', text: 'Contact picker isn\'t available on this device — type the number instead.' });
+        setInviteOpen(true);
+        return;
+      }
+      const contact = await Contacts.presentContactPickerAsync();
+      if (!contact) return; // user cancelled the picker
+      const numbers = contact.phoneNumbers || [];
+      const first = numbers.find((n) => n?.number || n?.digits);
+      const number = first?.number || first?.digits;
+      if (!number) {
+        setInviteNote({ type: 'err', text: `${contact.name || 'That contact'} has no phone number.` });
+        return;
+      }
+      setInviteOpen(true);
+      setInvitePhone(normalizePhone(number));
+    } catch (e) {
+      setInviteNote({ type: 'err', text: 'Could not open contacts.' });
+    }
+  }, [normalizePhone]);
+  // Resolve a member's avatar into a full URL. A server-relative path
+  // ('/api/avatars/…') gets the server origin prepended; absolute URLs pass
+  // through; null → caller falls back to the role glyph. Shared by the friend
+  // rows and the profile card.
+  const serverBase = (getBaseUrl() || '').replace(/\/api$/, '');
+  const friendAvatarUri = (f) =>
+    f?.avatarUrl ? (f.avatarUrl.startsWith('/') ? `${serverBase}${f.avatarUrl}` : f.avatarUrl) : null;
+
+  const _fq = friendQuery.trim().toLowerCase();
+  const filteredFriends = _fq
+    ? friends.filter((f) => (f.displayName && f.displayName.toLowerCase().includes(_fq)) || (f.phone && f.phone.toLowerCase().includes(_fq)))
+    : friends;
+  const filteredPending = _fq
+    ? pendingInvites.filter((p) => p.phone && p.phone.toLowerCase().includes(_fq))
+    : pendingInvites;
+  // Project sharing: tap a friend to open a picker of YOUR projects; sharing is
+  // view-only (POST /api/shares). sharesOut tracks what you've already shared.
+  const [shareTarget, setShareTarget] = useState(null);
+  const [myProjects, setMyProjects] = useState([]);
+  const [sharesOut, setSharesOut] = useState([]);
+  const [shareBusy, setShareBusy] = useState(false);
+  const refreshShares = useCallback(async () => {
+    try { const sh = await api.get('/shares'); setSharesOut(Array.isArray(sh?.out) ? sh.out : []); } catch { /* keep last */ }
+  }, [api]);
+  const openShare = useCallback(async (friend) => {
+    setShareTarget(friend);
+    setShareBusy(true);
+    try {
+      const [pj, sh] = await Promise.all([api.get('/projects'), api.get('/shares')]);
+      setMyProjects(Array.isArray(pj) ? pj.filter(Boolean) : []);
+      setSharesOut(Array.isArray(sh?.out) ? sh.out : []);
+    } catch {
+      setMyProjects([]); setSharesOut([]);
+    } finally {
+      setShareBusy(false);
+    }
+  }, [api]);
+  const doShare = useCallback(async (project) => {
+    if (!shareTarget) return;
+    setShareBusy(true);
+    try { await api.post('/shares', { itemType: 'project', itemId: project, withUserId: shareTarget.id }); await refreshShares(); }
+    catch { /* surfaced by no state change */ } finally { setShareBusy(false); }
+  }, [api, shareTarget, refreshShares]);
+  const unShare = useCallback(async (shareId) => {
+    setShareBusy(true);
+    try { await api.delete(`/shares/${shareId}`); await refreshShares(); }
+    catch { /* keep */ } finally { setShareBusy(false); }
+  }, [api, refreshShares]);
+  const sharedWithTarget = shareTarget ? sharesOut.filter((s) => s.withUserId === shareTarget.id) : [];
   const durations = pomodoro.durations || { focus: DEFAULT_FOCUS_MINUTES, break: DEFAULT_BREAK_MINUTES };
   
   // Slash command autocomplete state
@@ -91,6 +553,8 @@ export default function TurtleScreen() {
         console.log('[Turtle] Failed to fetch slash commands:', error);
         // Fallback commands if server fails
         setSlashCommands([
+          { command: '/note ', description: 'Save a quick note (#tag for project)' },
+          { command: '/todo ', description: 'Add a todo (#tag for project)' },
           { command: '/pomodoro focus', description: 'Start 25m focus timer' },
           { command: '/pomodoro break', description: 'Start 5m break timer' },
           { command: '/pomodoro stop', description: 'Stop active timer' },
@@ -138,12 +602,6 @@ export default function TurtleScreen() {
       setIsLoadingHistory(false);
     }
   }, [historyOffset, hasMoreHistory, isLoadingHistory, api]);
-
-  // Initial load on component mount
-  useEffect(() => {
-    fetchChatHistory(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty array PREVENTS infinite pagination loops and scroll resets
 
   // Pomodoro start/stop are emitted to the server; the synthetic timer card
   // (rendered below) reflects whatever the server reports for this session.
@@ -214,14 +672,18 @@ export default function TurtleScreen() {
     inputRef.current?.focus();
   };
 
-  // Initialize encryption key and fetch history
+  // Initialize encryption key, then fetch history once on mount. Runs a SINGLE
+  // time (empty deps): fetchChatHistory's identity changes after the first page
+  // loads (its deps include historyOffset/hasMoreHistory), so depending on it
+  // here previously re-fired a redundant page-0 refetch on every offset change.
   useEffect(() => {
     const DEV_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     setEncryptionKey(DEV_KEY);
-    
+
     // Fetch real history from DB instead of a hardcoded welcome message
     fetchChatHistory(false);
-  }, [fetchChatHistory]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const addDebugLog = useCallback((stage, data) => {
     if (!debugMode) return;
@@ -251,16 +713,47 @@ export default function TurtleScreen() {
     setVaultPassword(null);
   }, []);
 
+  // Pick + attach an image to the next Claude message. Resizes to Claude's
+  // recommended long-edge max (1568px) and JPEG-compresses so the base64
+  // payload that rides the socket into the session stays small.
+  const pickClaudeImage = useCallback(async () => {
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 1,
+      });
+      if (res.canceled || !res.assets || !res.assets[0]) return;
+      const asset = res.assets[0];
+      const actions = asset.width && asset.width > 1568 ? [{ resize: { width: 1568 } }] : [];
+      const out = await ImageManipulator.manipulateAsync(asset.uri, actions, {
+        compress: 0.7,
+        format: ImageManipulator.SaveFormat.JPEG,
+        base64: true,
+      });
+      if (out.base64) setClaudeImage({ base64: out.base64, mediaType: 'image/jpeg', uri: out.uri });
+    } catch (e) {
+      addDebugLog('Error', `Image pick failed: ${e.message}`);
+    }
+  }, [addDebugLog]);
+
   // Send message handler
-  const sendMessage = useCallback(async () => {
+  const sendMessage = useCallback(async (overrideText) => {
     const generateId = () => (Date.now() + Math.random()).toString();
 
-    if (!inputText.trim() || !isConnected || !encryptionKey) {
+    // overrideText (a string) lets the global CommandConsole inject a command
+    // through this exact pipeline. The send button passes a press event (not a
+    // string), so only honour a real string override; otherwise use the input.
+    const injected = typeof overrideText === 'string' ? overrideText : null;
+    const baseText = injected != null ? injected : inputText;
+
+    // A Claude image with no caption is still sendable (image-only turn).
+    const claudeImageReady = claudeUiMode === 'session' && !!claudeImage;
+    if ((!baseText.trim() && !claudeImageReady) || !isConnected || !encryptionKey) {
       addDebugLog('Error', 'Missing Input, Connection, or Encryption Key');
       return;
     }
 
-    const currentInput = inputText.trim();
+    const currentInput = baseText.trim();
 
     // Best-practice mobile chat UX: dismiss the keyboard the moment the user
     // sends so the response (or pomodoro card) is visible without manual tap.
@@ -269,7 +762,81 @@ export default function TurtleScreen() {
     setShowAutocomplete(false);
     
     // ===== COMMAND INTERCEPTION (BEFORE AI) =====
-    
+
+    // /terminal — open a remote shell on the server (PowerShell/bash) and
+    // run commands. Output + the working dir stream into the TerminalConsole.
+    //   /terminal stop  → close the shell
+    const terminalCmd = currentInput.match(/^\/terminal\b\s*(.*)$/is);
+    if (terminalCmd) {
+      const rest = (terminalCmd[1] || '').trim();
+      setInputText('');
+      if (/^(stop|exit|quit|close|end)$/i.test(rest)) {
+        terminalStop();
+        return;
+      }
+      claudeClose(); // mutually exclusive panels — hide Claude if it's open
+      setTerminalFullscreen(true); // open full-screen
+      if (rest) terminalSend(rest); // lazily opens the shell server-side
+      else terminalStart();
+      return; // STOP HERE — handled by the Terminal console
+    }
+
+    // While the terminal is open, a plain message is a shell command.
+    if (terminalOpen && !currentInput.startsWith('/')) {
+      setInputText('');
+      terminalSend(currentInput);
+      return; // STOP HERE — run as a command, not the chat AI
+    }
+
+    // /claude — open or talk to a persistent Claude Code session running in
+    // the turtle-app dir on your Max/Pro subscription. Subcommands:
+    //   /claude login  → sign in from the chat
+    //   /claude stop   → end the session (or cancel a sign-in)
+    // While a session is open, plain messages route to Claude until stop.
+    const claudeCmd = currentInput.match(/^\/claude\b\s*(.*)$/is);
+    if (claudeCmd) {
+      const rest = (claudeCmd[1] || '').trim();
+      setInputText('');
+      if (/^(stop|exit|quit|end)$/i.test(rest)) {
+        if (claudeUiMode === 'login') claudeLoginStop();
+        else claudeStop();
+        return;
+      }
+      if (/^login$/i.test(rest)) {
+        terminalClose();
+        claudeLogin();          // streams the sign-in URL into the console
+        return;
+      }
+      // /claude admin <password> — full-access session (password gate + JWT).
+      const adminMatch = rest.match(/^admin\b\s*(.*)$/is);
+      if (adminMatch) {
+        terminalClose();
+        claudeStartAdmin((adminMatch[1] || '').trim()); // password sent, not echoed
+        return;
+      }
+      terminalClose();          // mutually exclusive panels — hide the terminal
+      if (rest) { const img = claudeImage; setClaudeImage(null); claudeSend(rest, img); } // lazily opens the session
+      else claudeStart();
+      return; // STOP HERE — handled by the Claude console
+    }
+
+    // While signing in, a plain message is the pasted OAuth code.
+    if (claudeUiMode === 'login' && !currentInput.startsWith('/')) {
+      setInputText('');
+      claudeLoginInput(currentInput);
+      return; // STOP HERE — routed to the sign-in flow
+    }
+
+    // While a Claude session is open, plain messages go to it — with an
+    // optional attached image, sent as a base64 block into the session.
+    if (claudeUiMode === 'session' && !currentInput.startsWith('/')) {
+      setInputText('');
+      const img = claudeImage;
+      setClaudeImage(null);
+      claudeSend(currentInput, img);
+      return; // STOP HERE — routed to Claude, not the chat AI
+    }
+
     // Check for /vault command
     const vaultMatch = currentInput.match(VAULT_COMMAND_REGEX);
     if (vaultMatch) {
@@ -389,7 +956,7 @@ export default function TurtleScreen() {
 
       try {
         const stats = await api.get(
-          `/pomodoro/stats?sessionId=${encodeURIComponent(pomodoro.sessionId)}&limit=8`
+          `/pomodoro/stats?sessionId=${encodeURIComponent(pomodoro.sessionId)}&limit=200`
         );
         setMessages(prev => [{
           id: generateId(),
@@ -463,6 +1030,113 @@ export default function TurtleScreen() {
       return; // STOP HERE - don't send to AI
     }
     
+    // /note <text> — create a plain note via /api/turtle/note. The
+    // server-side handler is shared with the web app's /note slash
+    // command and the share extension (when text is shared without an
+    // image). We support an optional project-tag suffix with `#tag`
+    // patterns, matching the web command's syntax.
+    // Examples:
+    //   /note Buy more filament #3D PRINT
+    //   /note Remember to email Sarah
+    {
+      const m = currentInput.match(/^\/note\s+(.+)$/i);
+      if (m) {
+        const raw = m[1].trim();
+        // Pull out any #tag tokens. Stop at the first non-tag word so a
+        // hashtag in the middle of a sentence isn't accidentally consumed.
+        const tags = [];
+        const content = raw.replace(/(^|\s)#([\w\-][\w\- ]*?)(?=$|\s#)/g, (full, lead, tag) => {
+          tags.push(tag.trim());
+          return '';
+        }).trim();
+
+        setMessages(prev => [{
+          id: generateId(),
+          text: currentInput,
+          sender: 'user',
+          timestamp: new Date().toISOString(),
+        }, ...prev]);
+        setInputText('');
+        setIsLoading(false);
+
+        try {
+          const res = await api.post('/turtle/note', {
+            content: content || raw,
+            description: '',
+            type: 'note',
+            tags,
+            done: false,
+          });
+          setMessages(prev => [{
+            id: generateId(),
+            text: res?.success === false
+              ? `⚠️ Could not save: ${res?.error || 'unknown error'}`
+              : `📝 Note saved${tags.length ? ` · tags: ${tags.join(', ')}` : ''}`,
+            sender: 'system',
+            timestamp: new Date().toISOString(),
+          }, ...prev]);
+        } catch (e) {
+          setMessages(prev => [{
+            id: generateId(),
+            text: `⚠️ Could not save note: ${e.message || e}`,
+            sender: 'system',
+            timestamp: new Date().toISOString(),
+          }, ...prev]);
+        }
+        return;
+      }
+    }
+
+    // /todo <text> — same as /note but creates a todo (type='todo'),
+    // surfaced separately in the NotesScreen filter. Same #tag suffix
+    // support.
+    {
+      const m = currentInput.match(/^\/todo\s+(.+)$/i);
+      if (m) {
+        const raw = m[1].trim();
+        const tags = [];
+        const content = raw.replace(/(^|\s)#([\w\-][\w\- ]*?)(?=$|\s#)/g, (full, lead, tag) => {
+          tags.push(tag.trim());
+          return '';
+        }).trim();
+
+        setMessages(prev => [{
+          id: generateId(),
+          text: currentInput,
+          sender: 'user',
+          timestamp: new Date().toISOString(),
+        }, ...prev]);
+        setInputText('');
+        setIsLoading(false);
+
+        try {
+          const res = await api.post('/turtle/note', {
+            content: content || raw,
+            description: '',
+            type: 'todo',
+            tags,
+            done: false,
+          });
+          setMessages(prev => [{
+            id: generateId(),
+            text: res?.success === false
+              ? `⚠️ Could not save: ${res?.error || 'unknown error'}`
+              : `✅ Todo added${tags.length ? ` · tags: ${tags.join(', ')}` : ''}`,
+            sender: 'system',
+            timestamp: new Date().toISOString(),
+          }, ...prev]);
+        } catch (e) {
+          setMessages(prev => [{
+            id: generateId(),
+            text: `⚠️ Could not save todo: ${e.message || e}`,
+            sender: 'system',
+            timestamp: new Date().toISOString(),
+          }, ...prev]);
+        }
+        return;
+      }
+    }
+
     // ===== END COMMAND INTERCEPTION =====
 
     // Add user message to chat
@@ -543,7 +1217,18 @@ export default function TurtleScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [inputText, isConnected, encryptionKey, getBaseUrl, api, messages, token, debugMode, addDebugLog, handleOpenVault, handleStartTimer, handleStopTimer, durations]);
+  }, [inputText, claudeImage, isConnected, encryptionKey, getBaseUrl, api, messages, token, debugMode, addDebugLog, handleOpenVault, handleStartTimer, handleStopTimer, durations, claudeUiMode, claudeSend, claudeStart, claudeStartAdmin, claudeStop, claudeLogin, claudeLoginInput, claudeLoginStop, claudeClose, terminalOpen, terminalSend, terminalStart, terminalStop, terminalClose]);
+
+  // Consume a command pushed from the global CommandConsole. Fires once per
+  // dispatch through the same send pipeline as typing it; waits for the
+  // connection + encryption key so an early dispatch isn't dropped.
+  useEffect(() => {
+    if (pendingCommand && isConnected && encryptionKey) {
+      sendMessage(pendingCommand);
+      clearPendingCommand();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingCommand, isConnected, encryptionKey]);
 
   const styles = createStyles(theme, insets);
 
@@ -563,24 +1248,365 @@ export default function TurtleScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.container, { flex: 1 }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={0}
+    <Reanimated.View
+      style={[styles.container, { flex: 1 }, keyboardSpacerStyle]}
     >
-      {/* Static Safe Area Overlay */}
-      <View 
-        style={[
-          styles.safeAreaOverlay, 
-          { height: insets.top }
-        ]} 
+      {/* Faint turtle watermark — a WhatsApp-style chat backdrop. First child
+          so it sits behind everything; the inverted message list above is
+          transparent, so it shows through softly between bubbles. Tinted +
+          extremely low opacity so it never competes with the messages. */}
+      <View pointerEvents="none" style={styles.chatWatermarkWrap}>
+        <Image
+          source={turtleLogo}
+          style={styles.chatWatermark}
+          contentFit="contain"
+          tintColor={theme.colors.textPrimary}
+        />
+      </View>
+
+      {/* Chat header bar — Friends (left), the Turtle brand (centre) and
+          Settings (right) on one solid bar pinned to the top. Replaces the
+          old free-floating corner icons + bare safe-area tint strip: the two
+          actions now read as a proper header. It overlays the inverted
+          message list (WhatsApp-style — messages scroll beneath it); the list
+          gets a matching top inset (CHAT_HEADER_BAR_HEIGHT) so the oldest
+          visible message clears the bar. zIndex stays 101 (below the vault
+          overlay at 200, so the vault still covers the header). */}
+      <View style={[styles.chatHeader, { paddingTop: insets.top }]}>
+        <TouchableOpacity
+          onPress={openFriends}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          style={styles.headerIconButton}
+          accessibilityLabel="Open friends"
+          accessibilityRole="button"
+        >
+          <Icon name="account-multiple-outline" size={22} color={theme.colors.textSecondary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.headerTitleWrap}
+          activeOpacity={1}
+          delayLongPress={400}
+          onLongPress={() => {
+            // Hidden power gesture: long-press the turtle to drop into the server
+            // terminal. Buzz so the open is confirmed by feel.
+            confirmBuzz();
+            claudeClose();                 // mutually exclusive with the Claude panel
+            setTerminalFullscreen(true);   // open full-screen
+            terminalStart();               // lazily opens the shell server-side
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Turtle"
+          accessibilityHint="Long-press to open the server terminal"
+        >
+          <Image
+            source={turtleLogo}
+            style={styles.headerLogo}
+            contentFit="contain"
+            tintColor={theme.colors.textPrimary}
+          />
+          <Text style={styles.headerTitle}>Turtle</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={() => setShowAppSettings(true)}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          style={styles.headerIconButton}
+          accessibilityLabel="Open settings"
+          accessibilityRole="button"
+        >
+          <Icon name="cog-outline" size={22} color={theme.colors.textSecondary} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Friends sheet — org members + a search box to look someone up. */}
+      <Modal
+        visible={showFriends}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowFriends(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+          <View style={[styles.settingsSheetHeader, { paddingTop: Platform.OS === 'android' ? insets.top + 6 : 12, justifyContent: 'space-between', alignItems: 'center' }]}>
+            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.textPrimary, paddingLeft: 4 }}>Friends</Text>
+            <TouchableOpacity
+              onPress={() => setShowFriends(false)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.settingsCloseButton}
+              accessibilityLabel="Close friends"
+            >
+              <Icon name="close" size={22} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ paddingHorizontal: 16, paddingBottom: 10, gap: 10 }}>
+            {/* Prominent search — bigger, accent-ringed, with a clearer
+                placeholder so looking someone up is the obvious first action. */}
+            <View style={styles.friendSearchBox}>
+              <Icon name="magnify" size={20} color={theme.colors.accentInfo} />
+              <TextInput
+                style={styles.friendSearchInput}
+                placeholder="Search friends by name or number"
+                placeholderTextColor={theme.colors.textTertiary}
+                value={friendQuery}
+                onChangeText={setFriendQuery}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {friendQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setFriendQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Icon name="close-circle" size={18} color={theme.colors.textTertiary} />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Invite row — pick from the phone's contacts, or punch in a
+                number by hand. Both feed POST /api/auth/invites (owner-only;
+                non-owners get a friendly note). */}
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity
+                style={styles.inviteContactsBtn}
+                onPress={pickContactToInvite}
+                activeOpacity={0.85}
+                accessibilityLabel="Invite a friend from your contacts"
+              >
+                <Icon name="account-box-multiple-outline" size={18} color="#fff" />
+                <Text style={styles.inviteContactsText}>Invite from contacts</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.inviteManualBtn, inviteOpen && { borderColor: theme.colors.accentInfo }]}
+                onPress={() => { setInviteOpen((v) => !v); setInviteNote(null); }}
+                activeOpacity={0.7}
+                accessibilityLabel="Invite by typing a phone number"
+              >
+                <Icon name="dialpad" size={18} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.inviteManualBtn, inviteLinkBusy && { opacity: 0.5 }]}
+                onPress={shareInviteLink}
+                disabled={inviteLinkBusy}
+                activeOpacity={0.7}
+                accessibilityLabel="Share an invite link"
+              >
+                <Icon name="link-variant" size={18} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Manual phone entry — revealed by the dialpad button. */}
+            {inviteOpen && (
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                <View style={[styles.friendSearchBox, { flex: 1, height: 44 }]}>
+                  <Icon name="phone-plus-outline" size={18} color={theme.colors.textTertiary} />
+                  <TextInput
+                    style={styles.friendSearchInput}
+                    placeholder="Phone, e.g. +1 415 555 0100"
+                    placeholderTextColor={theme.colors.textTertiary}
+                    value={invitePhone}
+                    onChangeText={setInvitePhone}
+                    keyboardType="phone-pad"
+                    autoCorrect={false}
+                    onSubmitEditing={() => inviteByPhone(invitePhone)}
+                  />
+                </View>
+                <TouchableOpacity
+                  style={[styles.inviteSendBtn, inviteBusy && { opacity: 0.6 }]}
+                  disabled={inviteBusy}
+                  onPress={() => inviteByPhone(invitePhone)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.inviteSendText}>{inviteBusy ? '…' : 'Invite'}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Inline result banner — ok (green) or error (red). */}
+            {inviteNote && (
+              <View
+                style={[
+                  styles.inviteNote,
+                  inviteNote.type === 'ok'
+                    ? { backgroundColor: 'rgba(52,199,89,0.12)' }
+                    : { backgroundColor: 'rgba(255,69,58,0.12)' },
+                ]}
+              >
+                <Icon
+                  name={inviteNote.type === 'ok' ? 'check-circle' : 'alert-circle'}
+                  size={15}
+                  color={inviteNote.type === 'ok' ? '#34c759' : '#ff453a'}
+                />
+                <Text style={[styles.inviteNoteText, { color: theme.colors.textSecondary }]}>{inviteNote.text}</Text>
+              </View>
+            )}
+          </View>
+
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
+            {friendsLoading ? (
+              <Text style={styles.friendEmpty}>Loading…</Text>
+            ) : filteredFriends.length === 0 && filteredPending.length === 0 ? (
+              <Text style={styles.friendEmpty}>
+                {friendQuery
+                  ? 'No matches.'
+                  : 'No turtles in your pond yet. The owner can invite people by phone in Settings → your Pond.'}
+              </Text>
+            ) : (
+              <>
+                {filteredFriends.map((f) => {
+                  const uri = friendAvatarUri(f);
+                  return (
+                  <TouchableOpacity key={f.id} style={styles.friendRow} activeOpacity={0.6} onPress={() => setSelectedFriend(f)} accessibilityLabel={`Open ${f.displayName || f.phone || 'member'}'s profile`}>
+                    <View style={styles.friendAvatar}>
+                      {uri ? (
+                        <Image source={{ uri }} style={styles.friendAvatarImg} contentFit="cover" transition={120} />
+                      ) : (
+                        <Icon
+                          name={f.role === 'owner' ? 'crown-outline' : 'account'}
+                          size={18}
+                          color={f.role === 'owner' ? '#f5a623' : theme.colors.textSecondary}
+                        />
+                      )}
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.friendName} numberOfLines={1}>{f.displayName || f.phone || 'Member'}</Text>
+                      <Text style={styles.friendSub} numberOfLines={1}>
+                        {f.role === 'owner' ? 'Owner' : 'Member'}
+                        {f.joined ? '' : ' · not signed in yet'}
+                        {f.displayName && f.phone ? ` · ${f.phone}` : ''}
+                      </Text>
+                    </View>
+                    <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
+                  </TouchableOpacity>
+                  );
+                })}
+                {filteredPending.length > 0 && <Text style={styles.friendSectionLabel}>Invited (pending)</Text>}
+                {filteredPending.map((p) => (
+                  <View key={`pending-${p.phone}`} style={styles.friendRow}>
+                    <View style={styles.friendAvatar}>
+                      <Icon name="clock-outline" size={18} color={theme.colors.textTertiary} />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.friendName} numberOfLines={1}>{p.phone}</Text>
+                      <Text style={styles.friendSub}>Invited — hasn't joined yet</Text>
+                    </View>
+                  </View>
+                ))}
+              </>
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Member profile card — opens when you tap a friend in the list and
+          stacks over the Friends sheet. Leads with "who they are" (avatar,
+          name, number, role, stats) and offers project-sharing from there. */}
+      <FriendCard
+        friend={selectedFriend}
+        serverBase={serverBase}
+        onClose={() => setSelectedFriend(null)}
+        onShare={(f) => openShare(f)}
       />
 
-      {/* Messages (Inverted Physics) */}
-      <FlatList
+      {/* Share-a-project sheet — opened from a member's card (or directly).
+          Lists your projects; tap to share view-only (or un-share). Stacks
+          over the card / Friends. */}
+      <Modal
+        visible={!!shareTarget}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShareTarget(null)}
+      >
+        <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+          <View style={[styles.settingsSheetHeader, { paddingTop: Platform.OS === 'android' ? insets.top + 6 : 12, justifyContent: 'space-between', alignItems: 'center' }]}>
+            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.textPrimary, paddingLeft: 4, flex: 1 }} numberOfLines={1}>
+              Share with {shareTarget?.displayName || shareTarget?.phone || 'friend'}
+            </Text>
+            <TouchableOpacity onPress={() => setShareTarget(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={styles.settingsCloseButton} accessibilityLabel="Close">
+              <Icon name="close" size={22} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+          <Text style={[styles.friendSub, { paddingHorizontal: 20, marginBottom: 8 }]}>
+            Pick a project to share, view-only. They'll see its tasks in their planner.
+          </Text>
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
+            {myProjects.length === 0 ? (
+              <Text style={styles.friendEmpty}>{shareBusy ? 'Loading…' : 'You have no projects to share yet.'}</Text>
+            ) : (
+              myProjects.map((proj) => {
+                const shared = sharedWithTarget.find((s) => s.project === proj);
+                return (
+                  <View key={proj} style={styles.friendRow}>
+                    <View style={styles.friendAvatar}>
+                      <Icon name="folder-outline" size={18} color={theme.colors.textSecondary} />
+                    </View>
+                    <Text style={[styles.friendName, { flex: 1 }]} numberOfLines={1}>{proj}</Text>
+                    {shared ? (
+                      <TouchableOpacity disabled={shareBusy} onPress={() => unShare(shared.id)} style={[styles.shareChip, { backgroundColor: theme.colors.surfaceElevated }]}>
+                        <Icon name="check" size={15} color="#34c759" />
+                        <Text style={[styles.shareChipText, { color: theme.colors.textSecondary }]}>Shared</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity disabled={shareBusy} onPress={() => doShare(proj)} style={[styles.shareChip, { backgroundColor: theme.colors.primary || '#0a84ff' }]}>
+                        <Icon name="account-plus-outline" size={15} color="#fff" />
+                        <Text style={[styles.shareChipText, { color: '#fff' }]}>Share</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Full-screen Settings sheet — slides up from the bottom on
+          tap of the gear above. Wrapping the screen in a Modal keeps
+          its own scroll / safe-area handling intact and ensures the
+          Turtle page underneath stays mounted (chat history, pomodoro
+          socket, etc. aren't torn down when you dip into Settings). */}
+      <Modal
+        visible={showAppSettings}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowAppSettings(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+          {/* iOS pageSheet already sits below the status bar, so the full
+              safe-area inset here just bloated the top. Use a small fixed
+              pad on iOS; Android renders the Modal full-screen so it still
+              needs the real status-bar inset. */}
+          <View style={[styles.settingsSheetHeader, { paddingTop: Platform.OS === 'android' ? insets.top + 6 : 12 }]}>
+            <TouchableOpacity
+              onPress={() => setShowAppSettings(false)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.settingsCloseButton}
+              accessibilityLabel="Close settings"
+            >
+              <Icon name="close" size={22} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+          {/* `active` gates the Settings screen's live polling (e.g. the
+              AI Sidecar status card) to only while this sheet is open, so
+              we don't poll the server every 10 s for the app's whole life. */}
+          <SettingsScreen active={showAppSettings} />
+        </View>
+      </Modal>
+
+      {/* Messages (Inverted Physics) — FlashList for windowed, recycled rows.
+          FlashList ignores a `style` prop, so the flex:1 sizing that used to
+          live on the list now lives on this wrapper View. */}
+      <View style={styles.messagesContainer}>
+      <FlashList
         ref={scrollViewRef}
-        style={styles.messagesContainer}
-        contentContainerStyle={styles.messagesContent}
+        contentContainerStyle={{
+          // Inverted list: paddingTop is the VISUAL BOTTOM (clearance under the
+          // composer dock); paddingBottom is the VISUAL TOP, so it reserves room
+          // for the chat header bar above. Without it the oldest message hides
+          // behind the bar when scrolled to the top.
+          // (FlashList's contentContainerStyle only supports padding — the rest
+          // of styles.messagesContent was just flexGrow + horizontal padding.)
+          paddingHorizontal: theme.spacing.sm,
+          paddingTop: dockHeight,
+          paddingBottom: insets.top + CHAT_HEADER_BAR_HEIGHT,
+        }}
         showsVerticalScrollIndicator={false}
         inverted={true} // Flips rendering physics upside down
         // Instagram / iMessage-style keyboard handling:
@@ -593,17 +1619,9 @@ export default function TurtleScreen() {
         //     on plain message background dismiss the keyboard.
         keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         keyboardShouldPersistTaps="handled"
-        data={messages.filter(msg => {
-          const query = inputText.toLowerCase();
-          if (query.startsWith('/search ')) {
-            const searchStr = query.replace('/search ', '').trim();
-            if (!searchStr) return true;
-            const searchTerms = searchStr.split(/\s+/);
-            const messageText = msg.text.toLowerCase();
-            return searchTerms.every(term => messageText.includes(term));
-          }
-          return true;
-        })}
+        onScroll={handleChatScroll}
+        scrollEventThrottle={16}
+        data={visibleMessages}
         keyExtractor={(item) => item.id}
         onEndReached={() => {
           if (hasMoreHistory && !isLoadingHistory) fetchChatHistory(true);
@@ -617,10 +1635,24 @@ export default function TurtleScreen() {
           ) : null
         }
         ListEmptyComponent={
-          <View style={[styles.emptyState, { transform: [{ scaleY: -1 }] }]}>
+          <View style={styles.emptyState}>
             <Image source={turtleIcon} style={styles.watermarkImage} contentFit="contain" />
             <Text style={styles.emptyTitle}>Chat with Turtle</Text>
             <Text style={styles.emptyText}>Ask me anything about your tasks, passwords, or just chat!</Text>
+            <Text style={styles.emptyHintLabel}>TRY A COMMAND</Text>
+            <View style={styles.emptyHints}>
+              {[
+                { cmd: '/note', desc: 'Save a quick note' },
+                { cmd: '/pomodoro focus', desc: 'Start a 25m focus timer' },
+                { cmd: '/pomodoro stats', desc: 'See your focus stats' },
+                { cmd: '/photos', desc: 'Open the photo vault' },
+              ].map((h) => (
+                <View style={styles.emptyHintRow} key={h.cmd}>
+                  <Text style={styles.commandHint}>{h.cmd}</Text>
+                  <Text style={styles.emptyHintDesc}>{h.desc}</Text>
+                </View>
+              ))}
+            </View>
           </View>
         }
         renderItem={({ item: message }) => {
@@ -639,7 +1671,10 @@ export default function TurtleScreen() {
               </View>
             );
           }
-          
+
+          // (Claude session output is no longer interleaved here — it
+          // renders in the dedicated ClaudeConsole panel above the input.)
+
           // Fix: Robust URL generation that handles trailing slashes and prevents double '/api'
           const buildImageUrl = (filename) => {
             const base = getBaseUrl().replace(/\/+$/, '').replace(/\/api$/, '');
@@ -697,6 +1732,58 @@ export default function TurtleScreen() {
           );
         }}
       />
+      </View>
+
+      {/* Scroll-to-latest pill — floats just above the composer dock, bottom
+          right, only while scrolled up into history. Tapping animates back to
+          the newest message (offset 0 on the inverted list). */}
+      {showChatJump && (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={scrollChatToLatest}
+          style={{
+            position: 'absolute',
+            bottom: dockHeight + 12,
+            right: 16,
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: theme.colors.surfaceElevated,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: theme.colors.border,
+            shadowColor: '#000',
+            shadowOpacity: 0.25,
+            shadowRadius: 6,
+            shadowOffset: { width: 0, height: 2 },
+            elevation: 6,
+            zIndex: 40,
+          }}
+        >
+          <Icon name="chevron-double-down" size={22} color={theme.colors.textPrimary} />
+        </TouchableOpacity>
+      )}
+
+      {/* Bottom dock — the cards + the frosted composer, floated as ONE
+          absolute overlay pinned to the bottom edge. The message list runs
+          FULL height behind it, so chat reads through the composer's blur
+          (true Telegram frosted bar). Its measured height insets the list. */}
+      <View
+        style={styles.bottomDock}
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          if (h === dockHeight) return;
+          // The dock height feeds the inverted chat list's bottom inset
+          // (contentContainerStyle paddingTop). When the dock resizes — most
+          // notably the Claude console expanding/collapsing — animate that
+          // inset so the messages slide in step with the panel instead of
+          // snapping/"refreshing". Matches the console's own easeInEaseOut so
+          // the two move as one, including while the keyboard is up.
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          setDockHeight(h);
+        }}
+      >
 
       {/* Synthetic pomodoro timer card — driven by server state, sits above
           the input so it stays in view regardless of chat scroll. */}
@@ -707,12 +1794,133 @@ export default function TurtleScreen() {
             onStop={handleStopTimer}
             onDismiss={pomodoro.dismiss}
             theme={theme}
+            minimized={timerMinimized}
+            onToggleMinimize={() => setTimerMinimized((m) => !m)}
           />
         </View>
       )}
 
-      {/* Input Area - moves with keyboard */}
-      <View style={styles.inputArea}>
+      {/* Live Claude session console — renders the streamed transcript
+          directly from hook state (reliable, unlike interleaving into the
+          chat list). Sits above the input like the pomodoro card. */}
+      {claudeUiMode && (
+        <ClaudeConsole
+          transcript={claude.transcript}
+          active={claudeActive}
+          busy={claude.busy}
+          live={claude.live}
+          onToggleLive={claude.toggleLive}
+          mode={claudeUiMode}
+          admin={claude.admin}
+          permissions={claude.permissions}
+          onRespondPermission={claude.respondPermission}
+          questions={claude.questions}
+          onRespondQuestion={claude.respondQuestion}
+          onStop={() => { if (claudeUiMode === 'login') claudeLoginStop(); else claudeStop(); }}
+          onClose={claudeClose}
+        />
+      )}
+
+      {/* Live remote-shell console — shows the working dir + streamed output. */}
+      {terminalOpen && (
+        <TerminalConsole
+          transcript={terminal.transcript}
+          active={terminal.active}
+          busy={terminal.busy}
+          cwd={terminal.cwd}
+          fullscreen={terminalFullscreen}
+          onToggleFullscreen={() => setTerminalFullscreen((f) => !f)}
+          onStop={terminalStop}
+          onClose={terminalClose}
+          onSend={terminalSend}
+          insets={insets}
+        />
+      )}
+
+      {/* Claude task queue banner — tasks pushed from the to-do list waiting
+          to run. Drains automatically (one per turn) once a session is live
+          and idle. Shows a Start button when no session is running yet, and
+          a clear-all. */}
+      {claudeQueue.length > 0 && (
+        <View style={styles.claudeQueueBanner}>
+          <Icon name="robot-outline" size={16} color={theme.colors.textPrimary} />
+          <Text style={styles.claudeQueueBannerText} numberOfLines={1}>
+            {claudeQueue.length} task{claudeQueue.length > 1 ? 's' : ''} queued
+            {claudeBusy
+              ? ' · Claude is working…'
+              : claudeActive
+                ? ' · sending…'
+                : ' · Start (read/plan) or ⚡ Admin (run)'}
+          </Text>
+          {!claudeActive && (
+            <>
+              <TouchableOpacity
+                onPress={() => claudeStart()}
+                style={styles.claudeQueueStartBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={styles.claudeQueueStartText}>Start</Text>
+              </TouchableOpacity>
+              {/* Admin = --dangerously-skip-permissions, so queued tasks can
+                  actually edit/run with no approval gates (the gates aren't
+                  approvable on mobile). Needs the admin password, so we just
+                  prefill the existing /claude admin command and focus the
+                  composer — the user finishes it and sends. Nothing stored. */}
+              <TouchableOpacity
+                onPress={() => {
+                  setInputText('/claude admin ');
+                  setTimeout(() => inputRef.current?.focus(), 0);
+                }}
+                style={styles.claudeQueueAdminBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={styles.claudeQueueAdminText}>⚡ Admin</Text>
+              </TouchableOpacity>
+            </>
+          )}
+          <TouchableOpacity
+            onPress={clearClaudeQueue}
+            style={styles.claudeQueueClearBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel="Clear Claude queue"
+          >
+            <Icon name="close" size={16} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* "Finished" banner — when Claude completes a queued task, show what it
+          was and WHEN it finished (the timestamp the server stamps on each
+          completion). Persists after the queue empties so you can see the last
+          result; dismiss with the ✕. */}
+      {showDoneBanner && (
+        <View style={styles.claudeDoneBanner}>
+          <Icon name="check-circle-outline" size={16} color="#4ADE80" />
+          <Text style={styles.claudeDoneBannerText} numberOfLines={1}>
+            Finished “{lastCompleted.label}” · {formatFinishedAt(lastCompleted.finishedAt)}
+          </Text>
+          <TouchableOpacity
+            onPress={() => setDismissedDoneId(lastCompleted.id)}
+            style={styles.claudeQueueClearBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel="Dismiss finished-task notice"
+          >
+            <Icon name="close" size={16} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Input Area - moves with keyboard. A Telegram-style frosted bar:
+          the chat messages slide UNDER it (FROST_OVERLAP) and read through
+          the blur. Shares its look with the Claude console via
+          ../../utils/frostedChat so the two boxes match exactly. */}
+      {/* The message input box — a SOLID bar in the theme background colour
+          (pure white on light, pure black on dark) rather than the old
+          translucent frosted blur (which read as grey). The tab navbar below
+          uses the same background colour and has no top border, so the two
+          surfaces flow together seamlessly. The resting gap below the input
+          (COMPOSER_MARGIN) is part of this same solid bar. */}
+      <View style={[styles.inputArea, { paddingBottom: COMPOSER_MARGIN }]}>
         {/* Autocomplete Dropdown */}
         {showAutocomplete && (
           <View style={styles.autocompleteContainer}>
@@ -734,39 +1942,143 @@ export default function TurtleScreen() {
           </View>
         )}
 
-        {/* Input Row */}
+        {/* Attached-image preview — the picture queued for the next Claude
+            message, with a tap-to-remove. */}
+        {claudeImage && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingBottom: 8 }}>
+            <View style={{ position: 'relative' }}>
+              <Image
+                source={{ uri: claudeImage.uri }}
+                style={{ width: 52, height: 52, borderRadius: 8, backgroundColor: theme.colors.surfaceElevated }}
+                contentFit="cover"
+              />
+              <TouchableOpacity
+                onPress={() => setClaudeImage(null)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{ position: 'absolute', top: -7, right: -7, backgroundColor: theme.colors.background, borderRadius: 11 }}
+                accessibilityLabel="Remove attached image"
+              >
+                <Icon name="close-circle" size={22} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ marginLeft: 10, fontSize: 12, color: theme.colors.textMuted, flex: 1 }}>
+              Image attached — it'll go to Claude with your next message.
+            </Text>
+          </View>
+        )}
+
+        {/* Input Row — sits directly on the solid input bar. */}
         <View style={styles.inputContainer}>
+          {/* Claude button — opens (or hides) the Claude session. While it's
+              open, the composer types straight to Claude (no need to type
+              /claude). Highlights when a session is active. */}
+          <TouchableOpacity
+            style={styles.claudeButton}
+            onPress={() => {
+              if (claudeUiMode === 'session') {
+                claudeClose();              // toggle off (keeps the session alive)
+              } else {
+                terminalClose();            // mutually exclusive with the terminal
+                claudeStart();              // open the session → input routes to Claude
+                setTimeout(() => inputRef.current?.focus(), 60);
+              }
+            }}
+            // Long-press → reveal the Claude model picker (Opus / Sonnet /
+            // Haiku / Default), applied to the next session start.
+            onLongPress={() => setShowModelPicker(true)}
+            delayLongPress={350}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={claudeUiMode === 'session' ? 'Hide Claude session' : 'Open Claude session'}
+            accessibilityHint="Long-press to choose the Claude model"
+          >
+            <Icon
+              name="robot-outline"
+              size={24}
+              color={claudeUiMode === 'session' ? theme.colors.accentInfo : theme.colors.textMuted}
+            />
+          </TouchableOpacity>
+          {/* Keyboard chooser — only while messaging Claude or the terminal,
+              where typing commands/code benefits from a "Code" keyboard
+              (no autocorrect/autocapitalize). Tap to switch between Code and
+              the everyday Normal keyboard. */}
+          {(claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && (
+            <TouchableOpacity
+              style={styles.keyboardToggle}
+              onPress={() => setKeyboardMode((m) => (m === 'code' ? 'normal' : 'code'))}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={`Keyboard: ${keyboardMode === 'code' ? 'Code' : 'Normal'}. Tap to switch.`}
+            >
+              <Icon
+                name={keyboardMode === 'code' ? 'code-tags' : 'keyboard-outline'}
+                size={18}
+                color={keyboardMode === 'code' ? '#4ADE80' : theme.colors.textMuted}
+              />
+              <Text style={[styles.keyboardToggleText, keyboardMode === 'code' && { color: '#4ADE80' }]}>
+                {keyboardMode === 'code' ? 'Code' : 'ABC'}
+              </Text>
+            </TouchableOpacity>
+          )}
+          {/* Attach image — only while a Claude session is open. Picks +
+              compresses an image to send into the session. */}
+          {claudeUiMode === 'session' && (
+            <TouchableOpacity
+              onPress={pickClaudeImage}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Attach an image to send to Claude"
+              style={{ paddingHorizontal: 4, justifyContent: 'center' }}
+            >
+              <Icon name="image-plus" size={24} color={claudeImage ? '#4ADE80' : theme.colors.textMuted} />
+            </TouchableOpacity>
+          )}
 <View style={styles.inputWrapper}>
             <TextInput
               ref={inputRef}
               style={styles.input}
               value={inputText}
               onChangeText={handleInputChange}
-              placeholder="Message..."
+              placeholder={terminalOpen ? 'Run a command…' : claudeUiMode === 'login' ? 'Paste sign-in code…' : claudeUiMode === 'session' ? 'Message Claude…' : 'Message...'}
               placeholderTextColor={theme.colors.textMuted}
               multiline
               maxLength={500}
               editable={isConnected}
               autoComplete="off"
               textContentType="none"
+              // Keyboard mode — only the coding contexts opt into the "Code"
+              // keyboard; everyday chat keeps the OS defaults. Changing these
+              // takes effect on the input's next focus.
+              autoCapitalize={
+                (claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && keyboardMode === 'code'
+                  ? 'none'
+                  : 'sentences'
+              }
+              // Predictive/QuickType bar OFF: it slid in as a second keyboard
+              // frame and made the composer jump up at the END of the open
+              // animation. Disabling it gives a single-height keyboard that
+              // opens in one smooth motion. (Code mode already had it off.)
+              autoCorrect={false}
+              spellCheck={false}
             />
           </View>
           <TouchableOpacity
             style={styles.sendButton}
             onPress={sendMessage}
-            disabled={!inputText.trim() || !isConnected}
+            disabled={(!inputText.trim() && !(claudeUiMode === 'session' && claudeImage)) || !isConnected}
           >
             <Icon
               name="send-circle"
               size={32}
               color={
-                inputText.trim() && isConnected
+                (inputText.trim() || (claudeUiMode === 'session' && claudeImage)) && isConnected
                   ? '#4ADE80'
                   : theme.colors.textMuted
               }
             />
           </TouchableOpacity>
         </View>
+      </View>
       </View>
 
       {/* Vault Overlay */}
@@ -785,7 +2097,59 @@ export default function TurtleScreen() {
         initialFocusMinutes={durations.focus}
         initialBreakMinutes={durations.break}
       />
-    </KeyboardAvoidingView>
+
+      {/* Claude model picker — revealed by long-pressing the robot icon. */}
+      <Modal
+        visible={showModelPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowModelPicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.modelPickerBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowModelPicker(false)}
+        >
+          {/* onStartShouldSetResponder absorbs taps on the card so they don't
+              bubble to the backdrop and close it. */}
+          <View style={styles.modelPickerCard} onStartShouldSetResponder={() => true}>
+            <View style={styles.modelPickerHandle} />
+            <Text style={styles.modelPickerTitle}>Claude model</Text>
+            {CLAUDE_MODELS.map((m) => {
+              const selected = (claudeModel || null) === m.value;
+              return (
+                <TouchableOpacity
+                  key={m.label}
+                  style={styles.modelRow}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setClaudeModel(m.value);
+                    setShowModelPicker(false);
+                    // Apply now if a non-admin session is live (restart with the
+                    // new model). Admin needs the password, so it just takes
+                    // effect the next time an admin session is opened.
+                    if (claudeUiMode === 'session' && !claude.admin) {
+                      claudeStop();
+                      setTimeout(() => claudeStart(m.value), 200);
+                    }
+                  }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modelRowLabel}>{m.label}</Text>
+                    <Text style={styles.modelRowSub}>{m.sub}</Text>
+                  </View>
+                  {selected && <Icon name="check" size={18} color={theme.colors.accentInfo} />}
+                </TouchableOpacity>
+              );
+            })}
+            <Text style={styles.modelPickerHint}>
+              Applies when a session starts. A running session restarts on the new
+              model; admin sessions pick it up next time you open one.
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </Reanimated.View>
   );
 }
 
@@ -825,15 +2189,273 @@ const createStyles = (theme, insets) =>
     },
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
+      // Chat surface: pure white on light, pure black on dark (rather than the
+      // theme's off-white/near-black background). The faint turtle watermark +
+      // transparent message list render on top, so this is the base colour the
+      // whole chat reads against.
+      backgroundColor: theme.mode === 'dark' ? '#000000' : '#FFFFFF',
     },
-    safeAreaOverlay: {
+    // ── Claude model picker (long-press the robot icon) ──────────────────
+    modelPickerBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      justifyContent: 'flex-end',
+    },
+    modelPickerCard: {
+      backgroundColor: theme.colors.surface,
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      paddingHorizontal: 16,
+      paddingTop: 10,
+      paddingBottom: 32,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border,
+    },
+    modelPickerHandle: {
+      alignSelf: 'center',
+      width: 38,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: theme.colors.borderStrong,
+      marginBottom: 12,
+    },
+    modelPickerTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: theme.colors.textPrimary,
+      marginBottom: 4,
+      paddingHorizontal: 4,
+    },
+    modelRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 12,
+      paddingHorizontal: 4,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.colors.border,
+    },
+    modelRowLabel: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: theme.colors.textPrimary,
+    },
+    modelRowSub: {
+      fontSize: 12,
+      color: theme.colors.textTertiary,
+      marginTop: 2,
+    },
+    modelPickerHint: {
+      fontSize: 11,
+      color: theme.colors.textMuted,
+      marginTop: 12,
+      paddingHorizontal: 4,
+      lineHeight: 16,
+    },
+    // Faint chat backdrop — centers the turtle logo over the whole screen.
+    chatWatermarkWrap: {
+      ...StyleSheet.absoluteFillObject,
+      zIndex: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    chatWatermark: {
+      width: '66%',
+      aspectRatio: 1,
+      // Extremely faint — barely perceptible, like WhatsApp's chat pattern.
+      opacity: 0.05,
+    },
+    // Top chat header bar — Friends · Turtle brand · Settings, on one solid
+    // surface pinned to the top. Overlays the inverted message list (the list
+    // reserves a matching top inset). zIndex 101 keeps it above the chat but
+    // below the vault overlay (200).
+    chatHeader: {
       position: 'absolute',
       top: 0,
       left: 0,
       right: 0,
+      zIndex: 101,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 12,
+      paddingBottom: 6,
       backgroundColor: theme.colors.surface,
-      zIndex: 100,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.colors.border,
+    },
+    // Soft translucent disc behind each header icon so it reads against either
+    // theme — same treatment the old floating corner buttons used.
+    headerIconButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: 'rgba(127,127,127,0.12)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    // Centred brand lockup (logo + wordmark). flex:1 between the two equal-width
+    // (36px) side buttons, so it sits dead-centre without absolute positioning.
+    headerTitleWrap: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+    },
+    headerLogo: {
+      width: 22,
+      height: 22,
+    },
+    headerTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: theme.colors.textPrimary,
+    },
+    friendSearchBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 14,
+      height: 50,
+      borderRadius: 14,
+      backgroundColor: theme.colors.surfaceElevated,
+      borderWidth: 1.5,
+      borderColor: theme.colors.accentInfo + '55',
+    },
+    friendSearchInput: {
+      flex: 1,
+      fontSize: 16,
+      color: theme.colors.textPrimary,
+      paddingVertical: 0,
+    },
+    inviteContactsBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 7,
+      height: 44,
+      borderRadius: 12,
+      backgroundColor: theme.colors.accentInfo,
+    },
+    inviteContactsText: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: '#fff',
+    },
+    inviteManualBtn: {
+      width: 44,
+      height: 44,
+      borderRadius: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.colors.surfaceElevated,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    inviteSendBtn: {
+      paddingHorizontal: 18,
+      height: 44,
+      borderRadius: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.colors.accentInfo,
+    },
+    inviteSendText: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: '#fff',
+    },
+    inviteNote: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 7,
+      paddingHorizontal: 12,
+      paddingVertical: 9,
+      borderRadius: 10,
+    },
+    inviteNoteText: {
+      flex: 1,
+      fontSize: 12.5,
+      lineHeight: 17,
+    },
+    friendEmpty: {
+      fontSize: 14,
+      color: theme.colors.textTertiary,
+      textAlign: 'center',
+      marginTop: 32,
+      lineHeight: 20,
+      paddingHorizontal: 24,
+    },
+    friendSectionLabel: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: theme.colors.textSecondary,
+      marginTop: 18,
+      marginBottom: 6,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    friendRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 10,
+      borderBottomWidth: 0.5,
+      borderBottomColor: theme.colors.border,
+    },
+    friendAvatar: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.colors.surfaceElevated,
+      overflow: 'hidden',
+    },
+    friendAvatarImg: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+    },
+    friendName: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: theme.colors.textPrimary,
+    },
+    friendSub: {
+      fontSize: 12,
+      color: theme.colors.textTertiary,
+      marginTop: 1,
+    },
+    shareChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingHorizontal: 12,
+      paddingVertical: 7,
+      borderRadius: 16,
+    },
+    shareChipText: {
+      fontSize: 13,
+      fontWeight: '600',
+    },
+    // Header strip inside the Settings modal — just holds the close
+    // affordance. Keeps the page-sheet feeling like a sheet rather
+    // than a hard-edged screen takeover.
+    settingsSheetHeader: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      paddingHorizontal: 12,
+      paddingBottom: 6,
+      backgroundColor: theme.colors.background,
+    },
+    settingsCloseButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     watermarkImage: {
       width: 200,
@@ -882,17 +2504,34 @@ const createStyles = (theme, insets) =>
     messagesContainer: {
       flex: 1,
     },
+    // The floating bottom dock: cards + frosted composer, pinned full-width to
+    // the bottom edge so the message list runs behind it (chat shows through
+    // the composer blur). Owns the below-composer gap that used to live on the
+    // root's paddingBottom.
+    bottomDock: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+    },
     messagesContent: {
       flexGrow: 1,
       paddingHorizontal: theme.spacing.sm,
+      // Inverted list: paddingTop renders at the VISUAL BOTTOM (nearest the
+      // composer). FROST_OVERLAP is the clearance that keeps the newest message
+      // resting just clear of the full-width frosted composer bar (so it slides
+      // under and reads through the blur, Telegram-style, without being cut off).
+      paddingTop: FROST_OVERLAP,
     },
     emptyState: {
       flex: 1,
       justifyContent: 'center',
       alignItems: 'center',
       paddingVertical: 100,
-      // scaleY: -1 perfectly counteracts the inverted FlatList, keeping text readable
-      transform: [{ scaleY: -1 }],
+      // No scaleY:-1 here — FlashList already orients ListEmptyComponent upright
+      // (its inverted cells render upright without a manual flip too). A counter-
+      // flip double-inverted this template, showing it upside down when the chat
+      // was empty (e.g. while offline).
     },
     emptyTitle: {
       fontSize: 20,
@@ -913,6 +2552,27 @@ const createStyles = (theme, insets) =>
       paddingVertical: 2,
       borderRadius: 4,
       color: theme.colors.textPrimary,
+    },
+    emptyHintLabel: {
+      fontSize: 10,
+      fontWeight: '600',
+      letterSpacing: 1,
+      color: theme.colors.textMuted,
+      marginTop: theme.spacing.lg,
+      marginBottom: theme.spacing.sm,
+    },
+    emptyHints: {
+      alignSelf: 'center',
+    },
+    emptyHintRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 8,
+    },
+    emptyHintDesc: {
+      fontSize: 12,
+      color: theme.colors.textTertiary,
     },
     messageBubble: {
       maxWidth: '80%',
@@ -985,27 +2645,132 @@ const createStyles = (theme, insets) =>
       color: theme.colors.textMuted,
       fontStyle: 'italic',
     },
+    claudeQueueBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginHorizontal: 12,
+      marginBottom: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 12,
+      backgroundColor: theme.colors.surfaceElevated,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border,
+    },
+    claudeQueueBannerText: {
+      flex: 1,
+      marginLeft: 8,
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+    },
+    claudeQueueStartBtn: {
+      paddingHorizontal: 12,
+      paddingVertical: 5,
+      borderRadius: 14,
+      backgroundColor: '#4ADE80',
+      marginLeft: 8,
+    },
+    claudeQueueStartText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: '#0b3d1e',
+    },
+    claudeQueueAdminBtn: {
+      paddingHorizontal: 12,
+      paddingVertical: 5,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: '#facc15',
+      marginLeft: 6,
+    },
+    claudeQueueAdminText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: '#facc15',
+    },
+    claudeQueueClearBtn: {
+      marginLeft: 8,
+      padding: 2,
+    },
+    // "Finished" banner — mirrors the queue banner but with a green success
+    // accent edge, so a completed task reads distinctly from pending ones.
+    claudeDoneBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginHorizontal: 12,
+      marginBottom: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 12,
+      backgroundColor: theme.colors.surfaceElevated,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border,
+      borderLeftWidth: 3,
+      borderLeftColor: '#4ADE80',
+    },
+    claudeDoneBannerText: {
+      flex: 1,
+      marginLeft: 8,
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+    },
     inputArea: {
-      backgroundColor: 'transparent',
-      paddingBottom: insets.bottom > 0 ? insets.bottom / 2 : 8,
+      // SOLID bar in the theme background colour (pure white on light, pure
+      // black on dark) so the composer blends seamlessly into the tab navbar
+      // below it — they share this colour and the navbar's top border is
+      // removed. (Was a translucent frosted blur, which looked grey.)
+      backgroundColor: theme.colors.background,
+      // Hairline only at the TOP — separates the input box from the chat
+      // messages above. No bottom border, so it flows straight into the navbar.
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: frostBorderColor(theme),
+      paddingTop: 4,
+      overflow: 'hidden',
+      // paddingBottom is applied inline as COMPOSER_MARGIN at the render site;
+      // it's part of this same solid bar, bridging down to the navbar.
     },
     inputContainer: {
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: theme.spacing.sm,
       paddingTop: 4,
+      // No bottom padding here — the below-chatbox gap is owned entirely by
+      // the container's animated COMPOSER_MARGIN, so it stays identical
+      // whether the keyboard is open or closed.
+      paddingBottom: 0,
       backgroundColor: 'transparent',
+    },
+    // Keyboard chooser sitting left of the composer pill (coding sessions
+    // only). A compact icon + label so it reads as a mode switch, not a
+    // send action.
+    claudeButton: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: theme.spacing.xs,
+      paddingHorizontal: 2,
+    },
+    keyboardToggle: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: theme.spacing.xs,
+      paddingHorizontal: 4,
+    },
+    keyboardToggleText: {
+      fontSize: 9,
+      fontWeight: '700',
+      marginTop: 1,
+      color: theme.colors.textMuted,
     },
     inputWrapper: {
       flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      // Telegram style: Highly translucent pill, NO heavy drop shadows
-      backgroundColor: theme.mode === 'dark' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.04)',
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: theme.mode === 'dark' ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.15)',
-      borderRadius: 20,
+      // The composer is one flat, full-width frosted bar (the user wants the
+      // whole input row to read as a single bar, not a rounded pill floating
+      // inside it). So the wrapper is fully transparent with NO border and NO
+      // border-radius — the BlurView + tint behind it IS the input's surface.
+      backgroundColor: 'transparent',
       paddingHorizontal: theme.spacing.sm,
       minHeight: 36,
       maxHeight: 100,
@@ -1099,11 +2864,46 @@ const createStyles = (theme, insets) =>
 
 // ---------------------------------------------------------------------------
 // PomodoroStatsCard — chat bubble that shows aggregated stats (today, week,
-// all-time) plus the most recent sessions. Mirrors the web app's StatsCard.
+// all-time), a last-7-days focus bar chart, and the most recent sessions.
+// A mobile-appropriate slice of the web PomodoroStatsScreen dashboard:
+// plain Views for the chart (no SVG / native deps), touch-friendly (no hover).
 // ---------------------------------------------------------------------------
+const STATS_CHART_H = 56; // px — bar track height; shared by the height calc + style
+
 function PomodoroStatsCard({ stats, theme }) {
   if (!stats) return null;
   const styles = createStatsStyles(theme);
+
+  // ── Last-7-days focus chart + insights, derived from stats.recent ──
+  // Each recent row carries { mode, status, startedAt, actualDuration };
+  // bucket the trailing 7 days (ending today) by start date.
+  const DAY3 = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const recent = Array.isArray(stats.recent) ? stats.recent : [];
+  const startToday = new Date();
+  startToday.setHours(0, 0, 0, 0);
+  const windowStart = startToday.getTime() - 6 * 86400000;
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(windowStart + i * 86400000);
+    days.push({ label: DAY3[d.getDay()], focusMin: 0 });
+  }
+  let last7Focus = 0;
+  let last7Completed = 0;
+  for (const s of recent) {
+    if (s.mode !== 'focus') continue;
+    const idx = Math.floor((s.startedAt - windowStart) / 86400000);
+    if (idx < 0 || idx > 6) continue;
+    days[idx].focusMin += (s.actualDuration || 0) / 60;
+    last7Focus += 1;
+    if (s.status === 'completed') last7Completed += 1;
+  }
+  const totalMin = Math.round(days.reduce((a, d) => a + d.focusMin, 0));
+  const maxMin = Math.max(1, ...days.map((d) => d.focusMin));
+  const peakIdx = days.reduce((mi, d, i) => (d.focusMin > days[mi].focusMin ? i : mi), 0);
+  const completionRate = last7Focus > 0 ? Math.round((last7Completed / last7Focus) * 100) : 0;
+  const avgMin = last7Completed > 0 ? Math.round(totalMin / last7Completed) : 0;
+  const showChart = totalMin > 0;
+  const accent = theme.colors.accentInfo || '#7dd3fc';
 
   const fmtDuration = (sec) => (sec >= 60 ? `${Math.round(sec / 60)} min` : `${sec}s`);
   const fmtRecent = (ms) =>
@@ -1144,10 +2944,45 @@ function PomodoroStatsCard({ stats, theme }) {
         {renderBucket('All time', stats.allTime)}
       </View>
 
+      {showChart && (
+        <View style={styles.chartSection}>
+          <View style={styles.chartHeader}>
+            <Text style={styles.recentLabel}>Last 7 days</Text>
+            <Text style={styles.chartTotal}>{totalMin} min focus</Text>
+          </View>
+          <View style={styles.chartRow}>
+            {days.map((d, i) => {
+              const h =
+                d.focusMin > 0
+                  ? Math.max(4, Math.round((d.focusMin / maxMin) * STATS_CHART_H))
+                  : 0;
+              return (
+                <View style={styles.chartCol} key={i}>
+                  <View style={styles.chartBarTrack}>
+                    {h > 0 && (
+                      <View
+                        style={[
+                          styles.chartBar,
+                          { height: h, backgroundColor: accent, opacity: i === peakIdx ? 1 : 0.4 },
+                        ]}
+                      />
+                    )}
+                  </View>
+                  <Text style={styles.chartDayLabel}>{d.label}</Text>
+                </View>
+              );
+            })}
+          </View>
+          <Text style={styles.insightLine}>
+            {completionRate}% completed · avg {avgMin} min · peak {days[peakIdx].label}
+          </Text>
+        </View>
+      )}
+
       {stats.recent && stats.recent.length > 0 ? (
         <View>
           <Text style={styles.recentLabel}>Recent sessions</Text>
-          {stats.recent.map((s) => {
+          {stats.recent.slice(0, 6).map((s) => {
             const isCompleted = s.status === 'completed';
             return (
               <View style={styles.recentRow} key={s.id}>
@@ -1163,7 +2998,7 @@ function PomodoroStatsCard({ stats, theme }) {
                   <Text
                     style={[
                       styles.recentStatusText,
-                      { color: isCompleted ? '#4ade80' : '#f87171' },
+                      { color: isCompleted ? theme.colors.accentSuccess : theme.colors.accentError },
                     ]}
                   >
                     {isCompleted ? 'done' : 'stopped'}
@@ -1221,7 +3056,8 @@ const createStatsStyles = (theme) =>
       fontSize: 22,
       fontWeight: '700',
       fontVariant: ['tabular-nums'],
-      color: theme.colors.accentPrimary || '#7dd3fc',
+      // mobile theme has no accentPrimary — use accentInfo (see memory)
+      color: theme.colors.accentInfo || '#7dd3fc',
     },
     bucketTomato: { fontSize: 11, fontWeight: '400', color: theme.colors.textMuted },
     bucketSubline: { fontSize: 11, color: theme.colors.textPrimary, opacity: 0.85 },
@@ -1258,6 +3094,35 @@ const createStatsStyles = (theme) =>
       fontSize: 12,
       color: theme.colors.textMuted,
       fontVariant: ['tabular-nums'],
+    },
+    chartSection: { marginBottom: 12 },
+    chartHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 6,
+    },
+    chartTotal: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: theme.colors.textPrimary,
+      fontVariant: ['tabular-nums'],
+    },
+    chartRow: { flexDirection: 'row', alignItems: 'flex-end' },
+    chartCol: { flex: 1, alignItems: 'center' },
+    chartBarTrack: {
+      height: STATS_CHART_H,
+      width: '100%',
+      justifyContent: 'flex-end',
+      alignItems: 'center',
+    },
+    chartBar: { width: 14, borderRadius: 4 },
+    chartDayLabel: { fontSize: 9, color: theme.colors.textMuted, marginTop: 4 },
+    insightLine: {
+      fontSize: 11,
+      color: theme.colors.textSecondary,
+      marginTop: 8,
+      textAlign: 'center',
     },
     emptyHint: { fontSize: 12, color: theme.colors.textMuted },
   });

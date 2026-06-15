@@ -13,25 +13,125 @@ import {
   AppState,
   ActivityIndicator,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
+import SidecarStatusCard from '../components/SidecarStatusCard';
 import { useServer } from '../context/ServerContext';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import * as SecureStore from 'expo-secure-store';
+import { clearAllCaches } from '../utils/cacheManager';
 
 const MASTER_KEY_STORE = 'vault_master_key';
 const SALT_STORE = 'vault_salt';
 
-export default function SettingsScreen() {
-  const { theme, isDark, toggleTheme } = useTheme();
-  const insets = useSafeAreaInsets();
-  const { serverIP, isConnected, loading, saveIP, checkConnection, api } = useServer();
+export default function SettingsScreen({ active = true }) {
+  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat } = useTheme();
+  const { serverIP, isConnected, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
   const [isHealing, setIsHealing] = useState(false);
+  const [isClearingCache, setIsClearingCache] = useState(false);
+  const [activeTab, setActiveTab] = useState('general');
+  const SETTINGS_TABS = [
+    { key: 'general', label: 'General', icon: 'tune' },
+    { key: 'calendar', label: 'Calendar', icon: 'calendar' },
+    { key: 'connection', label: 'Connection', icon: 'server-network' },
+    { key: 'security', label: 'Security', icon: 'shield-key' },
+  ];
   const { logout, getAuthHeaders } = useAuth();
   const [ipInput, setIpInput] = useState(serverIP);
   const [hasVault, setHasVault] = useState(false);
+
+  // === PROFILE (avatar + display-name alias) ===
+  const [profile, setProfile] = useState(null);       // { displayName, avatarUrl }
+  const [nameInput, setNameInput] = useState('');
+  const [savingName, setSavingName] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  // Server origin (no /api) so a server-relative avatar_url resolves to a full URL.
+  const serverBase = getBaseUrl().replace(/\/api$/, '');
+  // A server-relative avatar ('/api/avatars/…') needs the origin prepended; an
+  // optimistic local pick ('file://', 'ph://', http(s)) is already absolute.
+  const avatarFullUrl = profile?.avatarUrl
+    ? (profile.avatarUrl.startsWith('/') ? `${serverBase}${profile.avatarUrl}` : profile.avatarUrl)
+    : null;
+
+  const loadProfile = useCallback(async () => {
+    try {
+      const res = await api.get('/me');
+      if (res?.user) {
+        setProfile({
+          displayName: res.user.displayName || '',
+          avatarUrl: res.user.avatarUrl || null,
+          stats: res.user.stats || null,   // { points, tasksCompleted, tasksCreated, pomodoros } — may be absent on an older server
+        });
+        setNameInput(res.user.displayName || '');
+      }
+    } catch (e) { /* offline / not logged in — profile section just shows defaults */ }
+  }, [api]);
+
+  useEffect(() => { loadProfile(); }, [loadProfile]);
+
+  // Save the display name (the alias seen across the app). Optimistic: the
+  // field already holds the new value; persist in the background, revert on fail.
+  const handleSaveName = useCallback(async () => {
+    const next = nameInput.trim().slice(0, 60);
+    Keyboard.dismiss();
+    const prev = profile?.displayName || '';
+    if (next === prev) return;
+    setSavingName(true);
+    setProfile(p => ({ ...(p || {}), displayName: next }));
+    try {
+      await api.patch('/me', { displayName: next });
+    } catch (e) {
+      setProfile(p => ({ ...(p || {}), displayName: prev }));
+      setNameInput(prev);
+      Alert.alert('Not saved', 'Could not update your name. Check your connection and try again.');
+    } finally {
+      setSavingName(false);
+    }
+  }, [api, nameInput, profile]);
+
+  const handlePickAvatar = useCallback(async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (perm.status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow photo access to choose a profile picture.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.9,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      const asset = result.assets[0];
+      // Optimistic: show the local image immediately while it uploads. On
+      // failure the catch reverts to the closure's pre-pick `profile`.
+      setProfile(p => ({ ...(p || {}), avatarUrl: asset.uri }));
+      setUploadingAvatar(true);
+      const form = new FormData();
+      form.append('avatar', { uri: asset.uri, name: 'avatar.jpg', type: 'image/jpeg' });
+      // Attach the Bearer token explicitly (matches this screen's heal call);
+      // no Content-Type so RN sets the multipart boundary itself.
+      const resp = await fetch(`${getBaseUrl()}/me/avatar`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders() },
+        body: form,
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success || !data.avatarUrl) throw new Error(data.error || 'upload failed');
+      setProfile(p => ({ ...(p || {}), avatarUrl: data.avatarUrl }));
+    } catch (e) {
+      console.error('[Settings] avatar upload failed:', e?.message);
+      setProfile(p => ({ ...(p || {}), avatarUrl: profile?.avatarUrl || null }));
+      await loadProfile(); // resync to the server's truth
+      Alert.alert('Upload failed', 'Could not set your profile picture. Please try again.');
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }, [getBaseUrl, getAuthHeaders, profile, loadProfile]);
   
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -147,8 +247,13 @@ export default function SettingsScreen() {
                 // --- 🧹 DUAL-ACTION: LOCAL CACHE WIPE ---
                 try {
                   console.log('[Settings] Server healed. Flushing local app cache...');
-                  
-                  // Clear AsyncStorage cache entries related to media
+
+                  // Wipe the actual image bytes (expo-image disk+RAM, temp dirs,
+                  // share files) — the heal regenerated thumbnails server-side, so
+                  // the device must drop its stale copies to pull the fresh ones.
+                  await clearAllCaches();
+
+                  // Also drop any media-related AsyncStorage keys.
                   const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
                   const keys = await AsyncStorage.getAllKeys();
                   const mediaCacheKeys = keys.filter(k => k.includes('media') || k.includes('gallery') || k.includes('image'));
@@ -156,7 +261,7 @@ export default function SettingsScreen() {
                     await AsyncStorage.multiRemove(mediaCacheKeys);
                     console.log(`[Settings] Cleared ${mediaCacheKeys.length} cache keys`);
                   }
-                  
+
                   console.log('[Settings] Local cache successfully purged.');
                 } catch (cacheErr) {
                   console.warn('[Settings] Cache wipe encountered an issue:', cacheErr);
@@ -165,7 +270,7 @@ export default function SettingsScreen() {
 
                 Alert.alert(
                   'Vault Healed & Cache Cleared ✅',
-                  `Healthy Files: ${res.stats.healthy}\nRescued: ${res.stats.rescued || 0}\nThumbnails Built: ${res.stats.regenerated}\nGhosts Purged: ${res.stats.deleted}\n\nLocal app memory has been flushed.`
+                  `Healthy Files: ${res.stats?.healthy ?? 0}\nRescued: ${res.stats?.rescued ?? 0}\nThumbnails Built: ${res.stats?.regenerated ?? 0}\nGhosts Purged: ${res.stats?.deleted ?? 0}\n\nLocal app memory has been flushed.`
                 );
               } else {
                 Alert.alert('Error', res?.error || 'Failed to heal the vault.');
@@ -181,6 +286,23 @@ export default function SettingsScreen() {
       ]
     );
   }, [api]);
+
+  // Manual cache wipe — clears expo-image's disk+RAM cache, the throwaway temp
+  // dirs, and any leftover share files. Photos re-download from the server on
+  // next view, so it's safe (just briefly slower). The app also does this
+  // automatically when backgrounded (see utils/cacheManager).
+  const handleClearCache = useCallback(async () => {
+    if (isClearingCache) return;
+    setIsClearingCache(true);
+    try {
+      await clearAllCaches();
+      Alert.alert('Cache cleared', 'Cached photos and temporary files were removed. Your photos will reload from the server as you browse.');
+    } catch (e) {
+      Alert.alert('Error', 'Could not clear the cache. Please try again.');
+    } finally {
+      setIsClearingCache(false);
+    }
+  }, [isClearingCache]);
 
   const handleResetVault = async () => {
     Alert.alert(
@@ -227,16 +349,137 @@ export default function SettingsScreen() {
   const styles = createStyles(theme);
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    // No top safe-area inset here: this screen is presented inside
+    // TurtleScreen's page-sheet Modal, whose own header strip already
+    // applies insets.top. Adding it again here double-padded the top and
+    // pushed the "Settings" title way down the sheet.
+    <View style={styles.container}>
       {/* Custom Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Settings</Text>
       </View>
 
+      {/* Fixed tab bar — equal-width tabs so nothing squishes or jumps */}
+      <View style={styles.tabBar}>
+        {SETTINGS_TABS.map((t) => {
+          const tabActive = activeTab === t.key;
+          return (
+            <TouchableOpacity
+              key={t.key}
+              style={[styles.tab, tabActive && styles.tabActive]}
+              onPress={() => setActiveTab(t.key)}
+              activeOpacity={0.7}
+            >
+              <Icon
+                name={t.icon}
+                size={16}
+                color={tabActive ? theme.colors.textPrimary : theme.colors.textTertiary}
+              />
+              <Text
+                style={[styles.tabLabel, { color: tabActive ? theme.colors.textPrimary : theme.colors.textTertiary }]}
+                numberOfLines={1}
+              >
+                {t.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
       <KeyboardSafeScreen>
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={styles.inner}>
+            {/* Profile Section — avatar + alias used across the app */}
+            {activeTab === 'general' && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+                  <Icon name="account-circle" size={20} color={theme.colors.textPrimary} />
+                </View>
+                <Text style={styles.sectionTitle}>Profile</Text>
+              </View>
+
+              <View style={styles.profileRow}>
+                <TouchableOpacity onPress={handlePickAvatar} activeOpacity={0.8} disabled={uploadingAvatar}>
+                  <View style={[styles.avatarCircle, { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.border }]}>
+                    {avatarFullUrl ? (
+                      <Image
+                        source={{ uri: avatarFullUrl }}
+                        style={styles.avatarImage}
+                        contentFit="cover"
+                        cachePolicy="memory-disk"
+                        transition={150}
+                      />
+                    ) : (
+                      <Icon name="account" size={40} color={theme.colors.textTertiary} />
+                    )}
+                    {uploadingAvatar && (
+                      <View style={styles.avatarUploadOverlay}>
+                        <ActivityIndicator size="small" color="#fff" />
+                      </View>
+                    )}
+                    <View style={[styles.avatarBadge, { backgroundColor: theme.colors.surfaceHighlight, borderColor: theme.colors.surface }]}>
+                      <Icon name="camera" size={14} color={theme.colors.textPrimary} />
+                    </View>
+                  </View>
+                </TouchableOpacity>
+
+                <View style={styles.profileNameCol}>
+                  <Text style={styles.label}>Display Name</Text>
+                  <View style={styles.inputContainer}>
+                    <Icon name="account-outline" size={18} color={theme.colors.textTertiary} style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Your name or alias"
+                      placeholderTextColor={theme.colors.textPlaceholder}
+                      value={nameInput}
+                      onChangeText={setNameInput}
+                      maxLength={60}
+                      autoCapitalize="words"
+                      returnKeyType="done"
+                      onSubmitEditing={handleSaveName}
+                      blurOnSubmit={true}
+                    />
+                  </View>
+                  <Text style={styles.hint}>This name is shown across the app.</Text>
+                </View>
+              </View>
+
+              {/* Your points — same shape friends see on your card. Renders only
+                  when the server attaches stats (absent on an older build → hidden). */}
+              {profile?.stats && (
+                <View style={styles.profileStatsRow}>
+                  {[
+                    { key: 'points', label: 'Points', icon: 'star-four-points-outline', value: profile.stats.points },
+                    { key: 'tasks', label: 'Tasks', icon: 'checkbox-marked-circle-outline', value: profile.stats.tasksCompleted },
+                    { key: 'pomodoros', label: 'Pomodoros', icon: 'timer-outline', value: profile.stats.pomodoros },
+                  ].map((s) => (
+                    <View key={s.key} style={styles.profileStatTile}>
+                      <Icon name={s.icon} size={16} color={theme.colors.accentInfo} />
+                      <Text style={styles.profileStatValue}>
+                        {typeof s.value === 'number' ? s.value.toLocaleString() : '—'}
+                      </Text>
+                      <Text style={styles.profileStatLabel}>{s.label}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              {nameInput.trim() !== (profile?.displayName || '') && (
+                <TouchableOpacity
+                  style={[styles.primaryButton, savingName && styles.buttonDisabled, { marginBottom: 0 }]}
+                  onPress={handleSaveName}
+                  disabled={savingName}
+                >
+                  <Icon name="content-save" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
+                  <Text style={styles.primaryButtonText}>{savingName ? 'Saving...' : 'Save Name'}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            )}
+
             {/* Appearance Section */}
+            {activeTab === 'general' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -259,7 +502,68 @@ export default function SettingsScreen() {
               </View>
             </View>
 
+            )}
+
+            {/* Storage Section — manual cache control. The app auto-trims the
+                cache on background, but this gives an instant manual wipe. */}
+            {activeTab === 'general' && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+                  <Icon name="database-cog" size={20} color={theme.colors.textPrimary} />
+                </View>
+                <Text style={styles.sectionTitle}>Storage</Text>
+              </View>
+
+              <Text style={[styles.hint, { marginTop: 0 }]}>
+                Cached photos make browsing instant but can build up over time. The app trims this
+                automatically when you leave it — clear it now to free space immediately.
+              </Text>
+
+              <TouchableOpacity
+                style={[styles.secondaryButton, { marginBottom: 0 }, isClearingCache && styles.buttonDisabled]}
+                onPress={handleClearCache}
+                disabled={isClearingCache}
+                activeOpacity={0.7}
+              >
+                {isClearingCache ? (
+                  <ActivityIndicator size="small" color={theme.colors.textPrimary} style={styles.buttonIcon} />
+                ) : (
+                  <Icon name="broom" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
+                )}
+                <Text style={styles.secondaryButtonText}>
+                  {isClearingCache ? 'Clearing...' : 'Clear photo cache'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            )}
+
+            {/* Calendar — time format */}
+            {activeTab === 'calendar' && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+                  <Icon name="calendar-clock" size={20} color={theme.colors.textPrimary} />
+                </View>
+                <Text style={styles.sectionTitle}>Calendar</Text>
+              </View>
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>24-hour time</Text>
+                  <Text style={styles.settingDescription}>Show times as 14:30 instead of 2:30 PM</Text>
+                </View>
+                <Switch
+                  value={timeFormat === '24h'}
+                  onValueChange={(v) => setTimeFormat(v ? '24h' : '12h')}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
+                  thumbColor={timeFormat === '24h' ? theme.colors.textPrimary : theme.colors.textTertiary}
+                />
+              </View>
+            </View>
+            )}
+
             {/* Server Connection Section */}
+            {activeTab === 'connection' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -329,7 +633,7 @@ export default function SettingsScreen() {
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
                     <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(239, 68, 68, 0.1)', justifyContent: 'center', alignItems: 'center' }}>
-                      <Icon name="medkit" size={20} color="#ef4444" />
+                      <Icon name="medical-bag" size={20} color={theme.colors.accentError} />
                     </View>
                     <View>
                       <Text style={{ color: theme.colors.textPrimary, fontSize: 16, fontWeight: '600' }}>
@@ -341,7 +645,7 @@ export default function SettingsScreen() {
                     </View>
                   </View>
                   {isHealing ? (
-                    <ActivityIndicator size="small" color="#ef4444" />
+                    <ActivityIndicator size="small" color={theme.colors.accentError} />
                   ) : (
                     <Icon name="chevron-right" size={24} color={theme.colors.textTertiary} />
                   )}
@@ -349,8 +653,13 @@ export default function SettingsScreen() {
               )}
             </View>
 
+            )}
+
+            {/* AI Sidecar — live status, library progress & inference stats */}
+            {activeTab === 'connection' && <SidecarStatusCard active={active} />}
+
             {/* Password Vault Section */}
-            {hasVault && (
+            {activeTab === 'security' && hasVault && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -366,15 +675,15 @@ export default function SettingsScreen() {
 
                 <TouchableOpacity 
                   style={styles.secondaryButton} 
-                  onPress={() => setShowChangePassword(!showChangePassword)}
+                  onPress={() => Alert.alert('Change Master Password', 'Open the Passwords tab and tap the key icon (top-right). It’s secured with Face ID / Touch ID, with your password as a fallback.')}
                 >
                   <Icon name="lock-reset" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
                   <Text style={styles.secondaryButtonText}>
-                    {showChangePassword ? 'Cancel' : 'Change Master Password'}
+                    Change Master Password
                   </Text>
                 </TouchableOpacity>
 
-                {showChangePassword && (
+                {false && (
                   <View style={styles.changePasswordForm}>
                     <TextInput
                       style={styles.passwordInput}
@@ -429,7 +738,7 @@ export default function SettingsScreen() {
               </View>
             )}
 
-            {!hasVault && (
+            {activeTab === 'security' && !hasVault && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <View style={[styles.iconContainer, { backgroundColor: 'rgba(244, 67, 54, 0.15)' }]}>
@@ -448,6 +757,7 @@ export default function SettingsScreen() {
             )}
 
             {/* Account Section */}
+            {activeTab === 'general' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -480,7 +790,10 @@ export default function SettingsScreen() {
               </TouchableOpacity>
             </View>
 
+            )}
+
             {/* Info Section */}
+            {activeTab === 'security' && (
             <View style={styles.infoBox}>
               <Icon name="information" size={18} color={theme.colors.textPrimary} style={styles.infoIcon} />
               <View style={styles.infoContent}>
@@ -490,6 +803,8 @@ export default function SettingsScreen() {
                 </Text>
               </View>
             </View>
+
+            )}
 
             <View style={styles.bottomPadding} />
           </View>
@@ -517,6 +832,30 @@ const createStyles = (theme) => StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: theme.colors.textPrimary,
+  },
+  tabBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 6,
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
+  },
+  tab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  tabActive: {
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  tabLabel: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   inner: {
     padding: 16,
@@ -734,5 +1073,74 @@ const createStyles = (theme) => StyleSheet.create({
   },
   bottomPadding: {
     height: 100,
+  },
+  profileRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  avatarCircle: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+    marginTop: 18,
+  },
+  avatarImage: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+  },
+  avatarUploadOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 42,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarBadge: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileNameCol: {
+    flex: 1,
+  },
+  // Your-points tile (mirrors the FriendCard stats row).
+  profileStatsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  profileStatTile: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    gap: 2,
+  },
+  profileStatValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
+    fontVariant: ['tabular-nums'],
+  },
+  profileStatLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: theme.colors.textTertiary,
   },
 });
