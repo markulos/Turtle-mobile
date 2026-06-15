@@ -12,7 +12,7 @@ import {
   Keyboard,
   findNodeHandle,
   Platform,
-  KeyboardAvoidingView,
+  LayoutAnimation,
   TextInput,
   RefreshControl,
   ScrollView,
@@ -200,16 +200,28 @@ export default function TasksScreen() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   
   useEffect(() => {
+    // Animate the list's bottom-padding change along the SAME curve and
+    // duration iOS reports for the keyboard, so the content rises in lockstep
+    // with it instead of snapping. LayoutAnimation's built-in `keyboard` type
+    // is exactly the OS keyboard curve; `e.duration` matches its speed.
+    const syncToKeyboard = (e) => {
+      LayoutAnimation.configureNext({
+        duration: e?.duration || 250,
+        update: { type: LayoutAnimation.Types.keyboard },
+      });
+    };
     const showListener = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
       (e) => {
+        syncToKeyboard(e);
         setKeyboardHeight(e.endCoordinates.height);
         setKeyboardVisible(true);
       }
     );
     const hideListener = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => {
+      (e) => {
+        syncToKeyboard(e);
         setKeyboardHeight(0);
         setKeyboardVisible(false);
       }
