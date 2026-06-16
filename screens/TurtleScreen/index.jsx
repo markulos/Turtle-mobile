@@ -126,6 +126,21 @@ export default function TurtleScreen() {
   // while older messages scroll UNDER the composer's blur (Telegram frosted
   // bar). Seeded so there's no first-frame overlap before onLayout measures.
   const [dockHeight, setDockHeight] = useState(72);
+  // True while the keyboard is mid-show/hide. The dock's onLayout normally fires
+  // a LayoutAnimation when its height changes (Claude console expand/collapse),
+  // but during a keyboard transition the console height is ALREADY animating on
+  // the UI thread (useAnimatedKeyboard, frame-synced with this column's lift) —
+  // a competing JS-thread LayoutAnimation makes the panel jump. Gate it off
+  // while the keyboard animates so the Reanimated motion runs alone.
+  const kbAnimatingRef = useRef(false);
+  // Last dock height measured WHILE the keyboard was animating. The Claude
+  // console shrinks its height on the UI thread every keyboard frame, so the
+  // dock's onLayout fires every frame too — pushing setDockHeight (→ FlashList
+  // paddingBottom → a full JS-thread list relayout) on EVERY frame, which
+  // stutters against the smooth Reanimated lift. We stash the value here and
+  // skip the state update during the transition, then flush it once when the
+  // keyboard settles (see the keyboard listener effect). null = nothing pending.
+  const pendingDockHeightRef = useRef(null);
   // This screen sits inside the bottom tab navigator, so its container bottom
   // is ABOVE the tab bar. useAnimatedKeyboard reports height from the SCREEN
   // bottom, so the keyboard padding must subtract the tab-bar height — else
@@ -375,6 +390,24 @@ export default function TurtleScreen() {
       transform: [{ translateY: -Math.max(keyboard.height.value - tabBarHeight, 0) }],
     };
   });
+
+  // Flag the keyboard-transition window so the dock's onLayout suppresses its
+  // LayoutAnimation while the console height animates on the UI thread (see
+  // kbAnimatingRef). Clear a beat after the reported duration so a quick toggle
+  // right after the keyboard settles still animates normally.
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    let clearTimer = null;
+    const mark = (e) => {
+      kbAnimatingRef.current = true;
+      if (clearTimer) clearTimeout(clearTimer);
+      clearTimer = setTimeout(() => { kbAnimatingRef.current = false; }, (e?.duration || 250) + 80);
+    };
+    const s = Keyboard.addListener(showEvt, mark);
+    const h = Keyboard.addListener(hideEvt, mark);
+    return () => { s.remove(); h.remove(); if (clearTimer) clearTimeout(clearTimer); };
+  }, []);
 
   const [showSettings, setShowSettings] = useState(false);
   // Distinct from `showSettings` above (which gates PomodoroSettings).
@@ -1850,13 +1883,28 @@ export default function TurtleScreen() {
         onLayout={(e) => {
           const h = Math.round(e.nativeEvent.layout.height);
           if (h === dockHeight) return;
+          // During a keyboard transition the console height animates on the UI
+          // thread, firing this onLayout every frame. Updating dockHeight here
+          // would relayout the FlashList on every frame (the stutter). The whole
+          // column translates rigidly during the keyboard motion, so the list's
+          // padding doesn't need to change mid-flight anyway — stash the latest
+          // height and let the keyboard-settle handler apply it once at the end.
+          if (kbAnimatingRef.current) {
+            pendingDockHeightRef.current = h;
+            return;
+          }
           // The dock height feeds the inverted chat list's bottom inset
           // (contentContainerStyle paddingTop). When the dock resizes — most
           // notably the Claude console expanding/collapsing — animate that
           // inset so the messages slide in step with the panel instead of
-          // snapping/"refreshing". Matches the console's own easeInEaseOut so
-          // the two move as one, including while the keyboard is up.
-          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          // snapping/"refreshing". BUT not during a keyboard transition: there
+          // the console height is already animating on the UI thread in lockstep
+          // with the column lift, and a competing JS LayoutAnimation makes the
+          // panel jump (the "keyboard-open translation" bug). Let Reanimated own
+          // that motion; only animate the inset for discrete resizes.
+          if (!kbAnimatingRef.current) {
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          }
           setDockHeight(h);
         }}
       >
