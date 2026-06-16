@@ -14,36 +14,33 @@ import {
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  useAnimatedKeyboard,
   withTiming,
   Easing,
   FadeIn,
   FadeOut,
 } from 'react-native-reanimated';
-import { BlurView } from 'expo-blur';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
-import { blurProps, frostOverlayColor } from '../../../utils/frostedChat';
 
-// The frosted panel itself is the thing that resizes, so animate ITS height
-// directly via Reanimated (LayoutAnimation snapped — it can't interpolate a
-// switch between a fixed `height` and a content-driven `maxHeight`).
-const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
+// The panel height is driven directly via Reanimated (LayoutAnimation snapped —
+// it can't interpolate a switch between a fixed `height` and a content-driven
+// `maxHeight`).
 // Same curve the web side uses for its panels — a soft, weighted ease-out.
 const RESIZE_EASING = Easing.bezier(0.32, 0.72, 0, 1);
 const RESIZE_DURATION = 300;
 
 // Compact card height (fits above the input like the pomodoro card)
 // vs. the "full view" height — ~72% of the screen so the whole
-// session transcript is readable without leaving the chat.
+// session transcript is readable without leaving the chat. Both are CEILINGS:
+// the real height is whatever fits in the room above the keyboard (see the
+// animated style), so the panel never grows tall enough to slide under the
+// chat header or hide the composer.
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const COMPACT_MAX_HEIGHT = 280;
 const EXPANDED_MAX_HEIGHT = Math.round(SCREEN_HEIGHT * 0.72);
-// Space to leave below the expanded panel for the composer (+ its safe-area
-// padding) so the full view never grows tall enough to hide the input —
-// especially once the keyboard is up. Subtracted from the room available
-// above the keyboard.
-const INPUT_RESERVE = 150;
+// Never let the panel collapse below this, even if the keyboard leaves almost
+// no room — a small scrollable panel beats a vanished one.
+const MIN_PANEL_HEIGHT = 140;
 
 /**
  * ClaudeConsole — a dedicated live panel for the `/claude` session.
@@ -200,7 +197,7 @@ function QuestionCard({ q, onRespond, theme, styles }) {
   );
 }
 
-export default function ClaudeConsole({ transcript = [], active, busy, live = true, onToggleLive, mode, admin, permissions = [], onRespondPermission, questions = [], onRespondQuestion, onStop, onClose }) {
+export default function ClaudeConsole({ transcript = [], active, busy, live = true, onToggleLive, mode, admin, permissions = [], onRespondPermission, questions = [], onRespondQuestion, onStop, onClose, keyboard, spaceAbove = 0, spaceBelow = 0, tabBarHeight = 0 }) {
   const { theme } = useTheme();
   const styles = createStyles(theme);
   const scrollRef = useRef(null);
@@ -211,15 +208,25 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
   // every session — and that expand-while-keyboard-up was the janky moment.)
   const [expanded, setExpanded] = useState(true);
 
-  // The panel height is driven ENTIRELY on the UI thread so it shrinks in
-  // perfect lockstep with the keyboard. TurtleScreen lifts the whole chat
-  // column above the keyboard using this SAME useAnimatedKeyboard signal, so
-  // reading it here keeps the panel's shrink frame-synced with that lift.
-  // (Previously the shrink came from a JS keyboardWillShow listener animating
-  // on its own timeline → the panel's top wobbled/jumped as the keyboard rose.)
-  const keyboard = useAnimatedKeyboard();
-  // 0 = compact, 1 = expanded. Animated on toggle; the keyboard cap is applied
-  // inside the worklet so the open/close motion and the keyboard shrink compose.
+  // The panel height is driven ENTIRELY on the UI thread so it tracks the
+  // keyboard frame-for-frame. TurtleScreen lifts the whole chat column above the
+  // keyboard, carrying this panel up with it; rather than fight that lift with a
+  // counter-shrink (the old, fragile approach), we simply size the panel to the
+  // ROOM that's actually free between the chat header and the composer. Because
+  // the height is re-derived from that room every frame, it can never exceed it
+  // — so the top stays pinned just under the header with no overshoot or jump,
+  // in BOTH the compact and expanded states.
+  //
+  // CRITICAL: the keyboard shared value is passed in from TurtleScreen — the
+  // SAME instance that drives the column lift (and the header's counter-lift).
+  // A second, local useAnimatedKeyboard() here would track the OS keyboard on
+  // its own timeline; the two desync DURING an open animation (only when the
+  // keyboard rises while the session is already open), so the panel's shrink
+  // lagged the column's lift and its top slid up UNDER the fixed chat header.
+  // One source of truth = the shrink and the lift are always the same frame.
+  // 0 = compact, 1 = expanded. Animated on toggle; both endpoints are clamped to
+  // the available room inside the worklet, so the open/close motion and the
+  // keyboard shrink compose into one smooth resize.
   const expandProgress = useSharedValue(1);
   useEffect(() => {
     expandProgress.value = withTiming(expanded ? 1 : 0, {
@@ -230,14 +237,22 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
 
   const animatedPanelStyle = useAnimatedStyle(() => {
     'worklet';
-    // Full-view height, capped to the room left above the live keyboard so the
-    // composer below always stays visible; never below the compact height.
-    const expandedH = Math.max(
-      COMPACT_MAX_HEIGHT,
-      Math.min(EXPANDED_MAX_HEIGHT, SCREEN_HEIGHT - keyboard.height.value - INPUT_RESERVE),
-    );
-    // Interpolate compact → (keyboard-capped) expanded by the toggle progress.
-    return { height: COMPACT_MAX_HEIGHT + (expandedH - COMPACT_MAX_HEIGHT) * expandProgress.value };
+    const kb = keyboard ? keyboard.height.value : 0;
+    // The dock (this panel + the composer) is lifted by TurtleScreen so it
+    // tracks the keyboard. As it rises, the room between the chat header and the
+    // composer shrinks — so cap the panel height to exactly that room every
+    // frame, frame-locked to the lift (same keyboard shared value). The panel
+    // top therefore stays pinned just under the header and never slides beneath
+    // it. `belowFromBottom` = whatever sits below the panel (composer + banners)
+    // resting on the keyboard's top edge when up, else above the tab bar.
+    const belowFromBottom = Math.max(kb, tabBarHeight) + spaceBelow;
+    const avail = SCREEN_HEIGHT - spaceAbove - belowFromBottom;
+    const cap = Math.max(MIN_PANEL_HEIGHT, avail);
+    const expandedH = Math.min(EXPANDED_MAX_HEIGHT, cap);
+    const compactH = Math.min(COMPACT_MAX_HEIGHT, cap);
+    // Interpolate compact → expanded by the toggle progress; both already fit
+    // the room, so the keyboard shrink rides along for free.
+    return { height: compactH + (expandedH - compactH) * expandProgress.value };
   });
 
   const toggleExpanded = () => setExpanded(prev => !prev);
@@ -260,14 +275,13 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
     : (active || isLogin) ? theme.colors.accentSuccess : theme.colors.accentWarning;
 
   return (
-    // Frosted-glass panel — same Telegram blur as the messaging composer
-    // (shared via ../../../utils/frostedChat) so the two chat boxes match
-    // exactly. The chat messages behind the panel read through the blur.
-    <AnimatedBlurView
-      {...blurProps(theme)}
-      style={[styles.panel, animatedPanelStyle]}
-    >
-      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
+    // OPAQUE panel (not a frosted blur). The whole console window is lifted with
+    // the keyboard by TurtleScreen; a translucent blur would show the STATIC
+    // chat list behind it shearing past as the window moves — that see-through
+    // shear read as "the background sliding with an offset". A solid surface
+    // slides cleanly over the fixed backdrop, and matches the composer below it
+    // (which is already a solid bar in the same colour).
+    <Animated.View style={[styles.panel, animatedPanelStyle]}>
       <View style={styles.header}>
         {/* Admin sessions show no leading icon — the title alone carries the
             mode. Login/standard sessions keep their icon. */}
@@ -418,7 +432,7 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
           );
         })}
       </ScrollView>
-    </AnimatedBlurView>
+    </Animated.View>
   );
 }
 
@@ -428,9 +442,11 @@ const createStyles = (theme) => StyleSheet.create({
   panel: {
     marginHorizontal: 8,
     marginBottom: 8,
-    // Transparent: the BlurView + frostOverlayColor tint provide the
-    // surface. overflow:hidden clips the blur to the rounded card.
-    backgroundColor: 'transparent',
+    // OPAQUE surface so the window slides cleanly over the fixed background when
+    // it tracks the keyboard (a transparent/blur panel shears the static chat
+    // behind it). Same colour as the composer bar below, so the session reads as
+    // one solid window. overflow:hidden clips content to the rounded card.
+    backgroundColor: theme.colors.background,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: theme.colors.border,

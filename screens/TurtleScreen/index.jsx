@@ -126,6 +126,13 @@ export default function TurtleScreen() {
   // while older messages scroll UNDER the composer's blur (Telegram frosted
   // bar). Seeded so there's no first-frame overlap before onLayout measures.
   const [dockHeight, setDockHeight] = useState(72);
+  // The Claude console sizes itself to the room left between the chat header and
+  // the composer. To do that robustly it needs to know what ELSE the dock holds:
+  // anything stacked ABOVE it (a pomodoro card) and BELOW it (queue/finished
+  // banners + the composer). We measure those two groups and feed the heights
+  // down, so the console always fits — no matter which cards happen to be up.
+  const [dockAboveConsole, setDockAboveConsole] = useState(0);   // pomodoro card
+  const [dockBelowConsole, setDockBelowConsole] = useState(120); // banners + composer
   // True while the keyboard is mid-show/hide. The dock's onLayout normally fires
   // a LayoutAnimation when its height changes (Claude console expand/collapse),
   // but during a keyboard transition the console height is ALREADY animating on
@@ -374,6 +381,27 @@ export default function TurtleScreen() {
   // fills the margin instead of leaving bare chat showing through. Static, so
   // it never animates and stays identical whether the keyboard is open or closed.
   const COMPOSER_MARGIN = 12;
+  // True whenever the Claude console is on screen (a live session OR the login
+  // flow).
+  const inClaudeSession = !!claudeUiMode;
+  // ── Keyboard motion ───────────────────────────────────────────────────────
+  // ONE shared value (useAnimatedKeyboard) drives everything; which worklet is
+  // attached to which node is chosen in plain JS at the JSX style arrays (never
+  // branched inside a worklet — that closes over a JS bool and Reanimated won't
+  // reliably rebuild it: the stale-capture trap that broke an earlier attempt).
+  //
+  // • NORMAL CHAT: the whole column lifts (keyboardSpacerStyle) and the header
+  //   counter-lifts to stay pinned (headerCounterStyle); the dock rides inside
+  //   the column, so it takes no transform of its own.
+  // • CLAUDE SESSION: the column + header DO NOT MOVE (background stays dead
+  //   still — the fixed backdrop). ONLY the bottom dock — the console + composer
+  //   window — lifts (sessionDockLift), tracking the keyboard frame-for-frame up
+  //   AND down. The window is OPAQUE (see ClaudeConsole.panel) so it slides as a
+  //   self-contained surface over the static background, with no see-through
+  //   chat shearing behind the blur (that shear was the "background moves with an
+  //   offset" bug). The console caps its own height to stay under the header.
+  //
+  // All three worklets are pure: each ALWAYS computes its live transform.
   const keyboardSpacerStyle = useAnimatedStyle(() => {
     'worklet';
     // Lift the whole column with a TRANSFORM, not by animating
@@ -391,6 +419,39 @@ export default function TurtleScreen() {
     };
   });
 
+  // The chat header lives INSIDE the lifted column (it's an absolute overlay so
+  // the message list scrolls beneath it). Without compensation it would ride up
+  // and off the top of the screen with the column when the keyboard opens —
+  // exactly the "header disappears, chat slides under the status bar" bug. We
+  // cancel the column's lift with an equal-and-opposite translate, so the header
+  // stays pinned at the very top while messages rise UNDER its opaque bar
+  // (WhatsApp-style). It's the exact negation of keyboardSpacerStyle.
+  // Counter-lift for the chat header (NORMAL CHAT only — attached in JSX). The
+  // header is an absolute overlay inside the lifted column; without this it
+  // would ride up off the top with the column. Exact negation of the column
+  // lift, so the header stays pinned while messages rise UNDER it.
+  const headerCounterStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      transform: [{ translateY: Math.max(keyboard.height.value - tabBarHeight, 0) }],
+    };
+  });
+
+  // CLAUDE SESSION only (attached in JSX when a session is open). Lifts just the
+  // bottom dock — the opaque console window + composer — so it tracks the
+  // keyboard up and down. Compositor-only translateY: it slides rigidly with the
+  // keyboard, no relayout. Offset = how far the keyboard rises above the tab bar
+  // (the dock already rests above the tab bar; floor at 0 when closed). The
+  // background column does NOT move (it has no animated style in a session), so
+  // the window glides over a fixed backdrop.
+  const sessionDockLift = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      transform: [{ translateY: -Math.max(keyboard.height.value - tabBarHeight, 0) }],
+    };
+  });
+
+
   // Flag the keyboard-transition window so the dock's onLayout suppresses its
   // LayoutAnimation while the console height animates on the UI thread (see
   // kbAnimatingRef). Clear a beat after the reported duration so a quick toggle
@@ -402,7 +463,19 @@ export default function TurtleScreen() {
     const mark = (e) => {
       kbAnimatingRef.current = true;
       if (clearTimer) clearTimeout(clearTimer);
-      clearTimer = setTimeout(() => { kbAnimatingRef.current = false; }, (e?.duration || 250) + 80);
+      clearTimer = setTimeout(() => {
+        kbAnimatingRef.current = false;
+        // Apply the final dock height that the per-frame onLayouts deferred, in
+        // ONE commit now that the keyboard has settled — so the chat list's
+        // bottom inset matches the console's resting (shrunk/grown) height
+        // without the per-frame relayout storm during the transition.
+        const pending = pendingDockHeightRef.current;
+        pendingDockHeightRef.current = null;
+        if (pending != null) {
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          setDockHeight((prev) => (prev === pending ? prev : pending));
+        }
+      }, (e?.duration || 250) + 80);
     };
     const s = Keyboard.addListener(showEvt, mark);
     const h = Keyboard.addListener(hideEvt, mark);
@@ -1344,7 +1417,10 @@ export default function TurtleScreen() {
 
   return (
     <Reanimated.View
-      style={[styles.container, { flex: 1 }, keyboardSpacerStyle]}
+      // Column lift is attached ONLY in normal chat. In a Claude session the
+      // background must stay perfectly static (no transform at all), so the
+      // animated style is simply not in the array — the dock lifts instead.
+      style={[styles.container, { flex: 1 }, inClaudeSession ? null : keyboardSpacerStyle]}
     >
       {/* Faint turtle watermark — a WhatsApp-style chat backdrop. First child
           so it sits behind everything; the inverted message list above is
@@ -1367,7 +1443,7 @@ export default function TurtleScreen() {
           gets a matching top inset (CHAT_HEADER_BAR_HEIGHT) so the oldest
           visible message clears the bar. zIndex stays 101 (below the vault
           overlay at 200, so the vault still covers the header). */}
-      <View style={[styles.chatHeader, { paddingTop: insets.top }]}>
+      <Reanimated.View style={[styles.chatHeader, { paddingTop: insets.top }, inClaudeSession ? null : headerCounterStyle]}>
         <TouchableOpacity
           onPress={openFriends}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -1412,7 +1488,7 @@ export default function TurtleScreen() {
         >
           <Icon name="cog-outline" size={22} color={theme.colors.textSecondary} />
         </TouchableOpacity>
-      </View>
+      </Reanimated.View>
 
       {/* Friends sheet — org members + a search box to look someone up. */}
       <Modal
@@ -1878,8 +1954,12 @@ export default function TurtleScreen() {
           absolute overlay pinned to the bottom edge. The message list runs
           FULL height behind it, so chat reads through the composer's blur
           (true Telegram frosted bar). Its measured height insets the list. */}
-      <View
-        style={styles.bottomDock}
+      <Reanimated.View
+        // In a Claude session the dock (the opaque console window + composer)
+        // is the ONLY thing that tracks the keyboard — it lifts on its own while
+        // the background stays still. In normal chat the whole column already
+        // lifts the dock, so no transform of its own there.
+        style={[styles.bottomDock, inClaudeSession ? sessionDockLift : null]}
         onLayout={(e) => {
           const h = Math.round(e.nativeEvent.layout.height);
           if (h === dockHeight) return;
@@ -1910,19 +1990,28 @@ export default function TurtleScreen() {
       >
 
       {/* Synthetic pomodoro timer card — driven by server state, sits above
-          the input so it stays in view regardless of chat scroll. */}
-      {pomodoro.state && (
-        <View style={styles.timerCardSlot}>
-          <TimerMessage
-            state={pomodoro.state}
-            onStop={handleStopTimer}
-            onDismiss={pomodoro.dismiss}
-            theme={theme}
-            minimized={timerMinimized}
-            onToggleMinimize={() => setTimerMinimized((m) => !m)}
-          />
-        </View>
-      )}
+          the input so it stays in view regardless of chat scroll. Wrapped in a
+          measuring View (always mounted) so the Claude console knows how much
+          room this card eats from ABOVE it — 0 when no timer is running. */}
+      <View
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          setDockAboveConsole((prev) => (prev === h ? prev : h));
+        }}
+      >
+        {pomodoro.state && (
+          <View style={styles.timerCardSlot}>
+            <TimerMessage
+              state={pomodoro.state}
+              onStop={handleStopTimer}
+              onDismiss={pomodoro.dismiss}
+              theme={theme}
+              minimized={timerMinimized}
+              onToggleMinimize={() => setTimerMinimized((m) => !m)}
+            />
+          </View>
+        )}
+      </View>
 
       {/* Live Claude session console — renders the streamed transcript
           directly from hook state (reliable, unlike interleaving into the
@@ -1942,6 +2031,18 @@ export default function TurtleScreen() {
           onRespondQuestion={claude.respondQuestion}
           onStop={() => { if (claudeUiMode === 'login') claudeLoginStop(); else claudeStop(); }}
           onClose={claudeClose}
+          // Pass the SAME keyboard tracker that lifts the column, so the
+          // console's height shrink stays frame-locked to that lift (a separate
+          // useAnimatedKeyboard inside the console desynced during a mid-session
+          // keyboard open, sliding its top under the chat header).
+          keyboard={keyboard}
+          // Room accounting so the console sizes itself to fit between the chat
+          // header and the composer — never sliding under the header or hiding
+          // the input, in any keyboard state. spaceAbove = status bar + chat
+          // header + pomodoro card; spaceBelow = banners + composer.
+          spaceAbove={insets.top + CHAT_HEADER_BAR_HEIGHT + dockAboveConsole}
+          spaceBelow={dockBelowConsole}
+          tabBarHeight={tabBarHeight}
         />
       )}
 
@@ -1961,6 +2062,16 @@ export default function TurtleScreen() {
         />
       )}
 
+      {/* Everything BELOW the Claude console — the queue/finished banners and
+          the composer. Wrapped in one measuring View so the console knows how
+          much room this group takes from below it (it rests on the keyboard when
+          open), and can size itself to exactly the space that remains. */}
+      <View
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          setDockBelowConsole((prev) => (prev === h ? prev : h));
+        }}
+      >
       {/* Claude task queue banner — tasks pushed from the to-do list waiting
           to run. Drains automatically (one per turn) once a session is live
           and idle. Shows a Start button when no session is running yet, and
@@ -2203,7 +2314,8 @@ export default function TurtleScreen() {
           </TouchableOpacity>
         </View>
       </View>
-      </View>
+      </View>{/* /below-console measuring wrapper */}
+      </Reanimated.View>{/* /bottom dock */}
 
       {/* Vault Overlay */}
       {isVaultOpen && (
