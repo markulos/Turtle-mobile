@@ -6,7 +6,13 @@
 // it grew to multiple GB. This module bounds it:
 //
 //   • sweepTransientCaches()        — always-safe, cheap. Deletes throwaway temp
-//                                     dirs + leaked share files + RAM cache.
+//                                     dirs + leaked share files. Deliberately does
+//                                     NOT wipe expo-image's in-memory cache: that
+//                                     forced a full re-decode of every visible tile
+//                                     on resume (cold "warm scroll"). The OS evicts
+//                                     image RAM under pressure on its own. The
+//                                     explicit Clear-cache button still wipes it
+//                                     (see clearAllCaches).
 //   • maybeClearImageDiskCache()    — wipes expo-image's PERSISTENT disk cache,
 //                                     throttled by max-age so quick app-switches
 //                                     don't keep nuking a warm cache.
@@ -92,7 +98,6 @@ export async function sweepTransientCaches() {
         .map((n) => rm(`${base}${n}`)),
     );
   } catch (e) { /* dir may not exist yet */ }
-  try { await Image.clearMemoryCache(); } catch (e) { /* ignore */ }
 }
 
 // Wipe expo-image's persistent disk cache, throttled by max-age. Returns true
@@ -120,6 +125,9 @@ export async function runCacheMaintenanceOnBackground() {
 // Force-wipe everything now (e.g. a Settings "Clear cache" button).
 export async function clearAllCaches() {
   await sweepTransientCaches();
+  // The explicit "Clear cache" button DOES wipe the in-memory cache (unlike the
+  // per-background sweep, which leaves it warm).
+  try { await Image.clearMemoryCache(); } catch (e) { /* ignore */ }
   try { await Image.clearDiskCache(); } catch (e) { /* ignore */ }
   try { await AsyncStorage.setItem(LAST_DISK_CLEAR_KEY, String(Date.now())); } catch (e) { /* ignore */ }
 }
