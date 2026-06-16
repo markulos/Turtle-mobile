@@ -40,7 +40,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { VirtualizedListContextResetter } from 'react-native/Libraries/Lists/VirtualizedListContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
-import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf } from '../utils/taskHelpers';
+import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters } from '../utils/taskHelpers';
 import { TaskQuickInspector } from './TaskQuickInspector';
 import { WheelTimePicker } from './WheelTimePicker';
 
@@ -288,25 +288,9 @@ const getPriorityColor = (priority, theme) => {
 // — a task that lights up a cell in the calendar grid is the same task
 // that shows in the list when you tap that cell.
 
-const taskPassesFilters = (task, { selectedProject, selectedTags, tagFilterMode, selectedOwners }) => {
-  // Shared-calendar "whose tasks" filter. selectedOwners is a list of user ids
-  // to show; empty/undefined means "everyone" (no filtering by person). A task
-  // with no userId (legacy/unowned) only hides when a specific owner set is on.
-  if (selectedOwners && selectedOwners.length > 0) {
-    if (!task.userId || !selectedOwners.includes(task.userId)) return false;
-  }
-  if (selectedProject !== 'All') {
-    const taskProject = task.project || 'No Project';
-    if (taskProject !== selectedProject) return false;
-  }
-  if (selectedTags && selectedTags.length > 0) {
-    const taskTagSet = new Set((task.tags || []).map(t => t.toLowerCase()));
-    const needles = selectedTags.map(t => t.toLowerCase());
-    const predicate = tagFilterMode === 'all' ? needles.every : needles.some;
-    if (!predicate.call(needles, tag => taskTagSet.has(tag))) return false;
-  }
-  return true;
-};
+// `taskPassesFilters` (owner + project + tags(+mode) + optional search) now
+// lives in utils/taskHelpers as the single source of truth shared with the
+// project tree and the Upcoming agenda — imported above.
 
 // Does a task belong on `dateStr`? `dueDateOnly` is retained as a parameter
 // (still passed `true` everywhere now that the Due/Open toggle is gone), but

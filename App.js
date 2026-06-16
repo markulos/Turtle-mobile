@@ -29,6 +29,7 @@ import TurtleScreen from './screens/TurtleScreen';
 import LoginScreen from './screens/LoginScreen';
 import PhotosScreen from './screens/PhotosScreen';
 import NotesScreen from './screens/NotesScreen';
+import PasswordsScreen from './screens/PasswordsScreen';
 import ShareTargetScreen from './screens/ShareTargetScreen';
 import { ServerProvider } from './context/ServerContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
@@ -37,12 +38,13 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ClaudeQueueProvider } from './context/ClaudeQueueContext';
 import { CommandBusProvider } from './context/CommandBusContext';
 import CommandConsole from './components/CommandConsole';
+import VaultUnlockApproval from './components/VaultUnlockApproval';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
 
 const Tab = createBottomTabNavigator();
 
 function TabNavigator() {
-  const { theme, isDark } = useTheme();
+  const { theme, isDark, hideVaultButton } = useTheme();
   const insets = useSafeAreaInsets();
   const [consoleOpen, setConsoleOpen] = useState(false);
 
@@ -79,6 +81,7 @@ function TabNavigator() {
           if (route.name === 'Tasks') iconName = focused ? 'checkbox-marked-circle' : 'checkbox-marked-circle-outline';
           else if (route.name === 'Notes') iconName = focused ? 'note-text' : 'note-text-outline';
           else if (route.name === 'Photos') iconName = focused ? 'image' : 'image-outline';
+          else if (route.name === 'Vault') iconName = focused ? 'shield-key' : 'shield-key-outline';
           return <Icon name={iconName} size={24} color={color} />;
         },
         tabBarActiveTintColor: theme.colors.textPrimary,
@@ -121,6 +124,16 @@ function TabNavigator() {
         component={PhotosScreen}
         options={{ title: 'Photos' }}
       />
+      {/* Vault tab can be hidden from the navbar via Settings; when hidden,
+          the vault is still reachable through the /vault command in chat or
+          the terminal. */}
+      {!hideVaultButton && (
+        <Tab.Screen
+          name="Vault"
+          component={PasswordsScreen}
+          options={{ title: 'Vault' }}
+        />
+      )}
       <Tab.Screen
         name="Turtle"
         component={TurtleScreen}
@@ -236,6 +249,9 @@ export default function App() {
                   <ClaudeQueueProvider>
                     <CommandBusProvider>
                       <AppContent />
+                      {/* Cross-device biometric vault unlock: surfaces an approval
+                          sheet when the web vault requests an unlock push. */}
+                      <VaultUnlockApproval />
                     </CommandBusProvider>
                   </ClaudeQueueProvider>
                 </VaultProvider>

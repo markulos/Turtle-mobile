@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
+import * as LocalAuthentication from 'expo-local-authentication';
 import {
   checkVaultSetup,
   setupVault,
@@ -11,6 +14,19 @@ import {
   decryptEntries,
 } from '../utils/crypto';
 
+// SecureStore key holding the master password for biometric unlock. Written only
+// AFTER a successful master-password unlock (with the user's opt-in); read only
+// behind a fresh device biometric prompt. SecureStore is the OS keychain/keystore
+// (hardware-encrypted at rest); the biometric is the gate to retrieving it.
+const BIO_PW_KEY = 'turtleVaultMasterPwBio';
+
+// Persisted record of whether the vault was OPEN the last time the app was alive.
+// Set 'true' on a successful unlock, 'false' on a manual lock. On a cold start
+// (app was closed while the vault was open), this is still 'true' — which is the
+// ONLY case where we auto-trigger the biometric prompt. A deliberate manual lock
+// clears it, so the next unlock screen waits for the user instead.
+const VAULT_WAS_OPEN_KEY = 'turtleVaultWasOpen';
+
 export const useVault = (getBaseUrl, isConnected) => {
   const [isSetup, setIsSetup] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
@@ -18,17 +34,67 @@ export const useVault = (getBaseUrl, isConnected) => {
   const [entries, setEntries] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  // True while entries are being fetched/decrypted after an unlock. Lets the UI
+  // show a "Fetching vaults…" loader instead of flashing the empty state before
+  // the server responds.
+  const [isLoadingEntries, setIsLoadingEntries] = useState(false);
+  const [bioAvailable, setBioAvailable] = useState(false); // device has enrolled biometrics
+  const [bioHasSaved, setBioHasSaved] = useState(false);   // a master pw is saved for biometric unlock
+  // Whether the unlock screen should AUTO-trigger the biometric prompt. Armed
+  // only on a cold start where the vault was previously open (see
+  // VAULT_WAS_OPEN_KEY); a manual lock leaves it false.
+  const [autoBioArmed, setAutoBioArmed] = useState(false);
 
-  // Check vault setup status - can be called to refresh
+  // Cold-start arming: if the app was closed while the vault was open, offer
+  // biometrics automatically when the unlock screen appears.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const wasOpen = await AsyncStorage.getItem(VAULT_WAS_OPEN_KEY).catch(() => null);
+      if (alive && wasOpen === 'true') setAutoBioArmed(true);
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Detect biometric hardware + enrollment, and whether a master password is saved.
+  const refreshBiometricState = useCallback(async () => {
+    try {
+      const hasHw = await LocalAuthentication.hasHardwareAsync();
+      const enrolled = hasHw && (await LocalAuthentication.isEnrolledAsync());
+      setBioAvailable(!!enrolled);
+      const saved = await SecureStore.getItemAsync(BIO_PW_KEY).catch(() => null);
+      setBioHasSaved(!!saved);
+    } catch (e) {
+      setBioAvailable(false);
+      setBioHasSaved(false);
+    }
+  }, []);
+  useEffect(() => { refreshBiometricState(); }, [refreshBiometricState]);
+
+  // Check vault setup status — SERVER is source of truth (see comment below).
   const checkSetup = useCallback(async () => {
-    console.log('Checking vault setup...');
     setIsLoading(true);
     try {
-      const setup = await checkVaultSetup();
-      console.log('Vault setup status:', setup);
+      // If my account has any encrypted rows, the vault IS set up (and decryptable
+      // with my master password on ANY device). The local SecureStore verifier is
+      // only a secondary signal (a brand-new vault created locally before its first
+      // save). This is what lets the owner reach an EXISTING vault on a fresh phone
+      // — a missing local verifier used to make the screen offer "create vault"
+      // instead of "unlock".
+      let serverHasEntries = false;
+      if (isConnected) {
+        try {
+          const r = await fetch(`${getBaseUrl()}/passwords`); // authed via ServerContext interceptor
+          if (r.ok) {
+            const rows = await r.json();
+            serverHasEntries = Array.isArray(rows) && rows.length > 0;
+          }
+        } catch (e) { /* offline / transient — fall back to the local verifier */ }
+      }
+      const localVerifier = await checkVaultSetup().catch(() => false);
+      const setup = serverHasEntries || localVerifier;
       setIsSetup(setup);
       if (!setup) {
-        // Ensure clean state if not setup
         setIsUnlocked(false);
         setMasterPassword(null);
         setEntries([]);
@@ -39,7 +105,7 @@ export const useVault = (getBaseUrl, isConnected) => {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [getBaseUrl, isConnected]);
 
   // Check on mount
   useEffect(() => {
@@ -73,47 +139,103 @@ export const useVault = (getBaseUrl, isConnected) => {
     }
   }, [checkSetup]);
 
-  const unlock = useCallback(async (password) => {
-    console.log('=== UNLOCK ===');
-    console.log('Password entered (first 4 chars):', password?.substring(0, 4) + '...');
-    
-    if (!password) {
-      Alert.alert('Error', 'Please enter your password');
-      return false;
-    }
-
-    setIsProcessing(true);
+  // Verify a master password WITHOUT finalizing the unlock: fetch the vault and
+  // try to decrypt one entry. Zero-knowledge — the server never sees the password.
+  // Falls back to the local verifier for a brand-new vault that has no entries yet.
+  const tryPassword = useCallback(async (password) => {
+    if (!password) return false;
     try {
-      // First verify vault is still setup (in case it was reset)
-      const isStillSetup = await checkVaultSetup();
-      console.log('Vault setup status:', isStillSetup);
-      
-      if (!isStillSetup) {
-        await checkSetup(); // Update state to reflect reality
-        Alert.alert('Error', 'Vault has been reset. Please set up a new vault.');
-        return false;
+      if (isConnected) {
+        const r = await fetch(`${getBaseUrl()}/passwords`); // authed via ServerContext interceptor
+        if (r.ok) {
+          const rows = await r.json();
+          if (Array.isArray(rows) && rows.length > 0) {
+            decryptEntry(rows[0], password); // throws if the password is wrong
+            return true;
+          }
+        }
       }
-      
-      const result = await unlockVault(password);
-      console.log('Vault unlocked successfully');
-      console.log('Master password from unlock (first 4 chars):', result.masterPassword.substring(0, 4) + '...');
-      
-      setIsUnlocked(true);
-      setMasterPassword(result.masterPassword);
-      
-      console.log('Calling loadEntries with master password...');
-      await loadEntries(result.masterPassword);
-      console.log('Entries loaded successfully');
+      await unlockVault(password); // no server entries → fall back to the local verifier; throws if wrong
       return true;
-    } catch (error) {
-      console.error('Unlock error:', error.message);
-      Alert.alert('Error', error.message || 'Invalid password');
+    } catch (e) {
       return false;
-    } finally {
-      setIsProcessing(false);
-      console.log('================\n');
     }
   }, [getBaseUrl, isConnected]);
+
+  // Finalize an unlock once the password (and any 2FA) has been confirmed: adopt
+  // the password in memory, load + decrypt all entries, and refresh the local
+  // verifier so the next checkSetup is instant.
+  const finishUnlock = useCallback(async (password) => {
+    setIsProcessing(true);
+    try {
+      setMasterPassword(password);
+      setIsUnlocked(true);
+      // Remember that the vault is open, so a later cold start (app closed while
+      // open) re-arms the automatic biometric prompt.
+      try { await AsyncStorage.setItem(VAULT_WAS_OPEN_KEY, 'true'); } catch (e) { /* non-fatal */ }
+      await loadEntries(password);
+      try { await setupVault(password); } catch (e) { /* local verifier is non-fatal */ }
+      return true;
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [getBaseUrl, isConnected]);
+
+  // ── 2FA step-up (SMS) — only on the master-password FALLBACK path ──────────
+  const requestOtp = useCallback(async () => {
+    try {
+      const r = await fetch(`${getBaseUrl()}/vault/otp/request`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.success === false) return { ok: false, error: data.message || 'Could not send the code' };
+      return { ok: true, dev: !!data.dev, devCode: data.devCode };
+    } catch (e) {
+      return { ok: false, error: 'Could not reach the server' };
+    }
+  }, [getBaseUrl]);
+
+  const verifyOtp = useCallback(async (code) => {
+    try {
+      const r = await fetch(`${getBaseUrl()}/vault/otp/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+      const data = await r.json().catch(() => ({}));
+      return { ok: r.ok && data.success !== false, error: data.message };
+    } catch (e) {
+      return { ok: false, error: 'Could not reach the server' };
+    }
+  }, [getBaseUrl]);
+
+  // ── Biometrics ────────────────────────────────────────────────────────────
+  const saveBiometric = useCallback(async (password) => {
+    try { await SecureStore.setItemAsync(BIO_PW_KEY, password); setBioHasSaved(true); return true; }
+    catch (e) { return false; }
+  }, []);
+
+  const disableBiometric = useCallback(async () => {
+    try { await SecureStore.deleteItemAsync(BIO_PW_KEY); } catch (e) { /* ignore */ }
+    setBioHasSaved(false);
+  }, []);
+
+  // Biometric unlock: prompt Face/Touch ID, retrieve the stored master password,
+  // confirm it still decrypts the vault, and finalize. NO 2FA on this path — the
+  // biometric IS the second factor. If the saved password is stale (changed
+  // elsewhere), drop it and ask for the master password instead.
+  const biometricUnlock = useCallback(async () => {
+    try {
+      const saved = await SecureStore.getItemAsync(BIO_PW_KEY).catch(() => null);
+      if (!saved) return { ok: false, error: 'No biometric login saved yet' };
+      const auth = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Unlock your vault',
+        fallbackLabel: 'Use master password',
+        cancelLabel: 'Cancel',
+      });
+      if (!auth.success) return { ok: false, error: 'cancelled' };
+      const ok = await tryPassword(saved);
+      if (!ok) { await disableBiometric(); return { ok: false, error: 'Saved login is out of date — enter your master password.' }; }
+      await finishUnlock(saved);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: 'Biometric unlock failed' };
+    }
+  }, [tryPassword, finishUnlock, disableBiometric]);
 
   const lock = useCallback(async () => {
     console.log('=== LOCK ===');
@@ -122,6 +244,11 @@ export const useVault = (getBaseUrl, isConnected) => {
     setIsUnlocked(false);
     setMasterPassword(null);
     setEntries([]);
+    // Manual lock: do NOT auto-prompt biometrics on the unlock screen that
+    // follows. Disarm in-session and clear the persisted "was open" flag so a
+    // later cold start won't auto-prompt either.
+    setAutoBioArmed(false);
+    try { await AsyncStorage.setItem(VAULT_WAS_OPEN_KEY, 'false'); } catch (e) { /* non-fatal */ }
     console.log('Vault locked, master password cleared');
     console.log('============\n');
   }, [masterPassword]);
@@ -135,7 +262,8 @@ export const useVault = (getBaseUrl, isConnected) => {
       console.log('Not connected, skipping load');
       return;
     }
-    
+
+    setIsLoadingEntries(true);
     try {
       const response = await fetch(`${getBaseUrl()}/passwords`);
       if (!response.ok) throw new Error('Failed to fetch');
@@ -155,6 +283,8 @@ export const useVault = (getBaseUrl, isConnected) => {
     } catch (error) {
       console.error('Error loading entries:', error);
       Alert.alert('Error', 'Failed to load entries');
+    } finally {
+      setIsLoadingEntries(false);
     }
     console.log('===================\n');
   }, [getBaseUrl, isConnected]);
@@ -386,9 +516,19 @@ export const useVault = (getBaseUrl, isConnected) => {
     isUnlocked,
     isLoading,
     isProcessing,
+    isLoadingEntries,
     entries,
     createVault,
-    unlock,
+    tryPassword,      // verify master password (try-decrypt), no finalize
+    finishUnlock,     // finalize after password (+ any 2FA) confirmed
+    requestOtp,       // send the SMS step-up code (fallback path)
+    verifyOtp,        // verify the SMS step-up code
+    biometricUnlock,  // Face/Touch ID → retrieve + finalize (no 2FA)
+    saveBiometric,    // opt-in: store master pw behind biometric
+    disableBiometric,
+    bioAvailable,
+    bioHasSaved,
+    autoBioArmed,
     lock,
     saveEntry,
     deleteEntry,

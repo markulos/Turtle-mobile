@@ -47,9 +47,115 @@ import { useTheme } from '../../../context/ThemeContext';
 // Create an animated version of FlashList to match our existing architecture
 const AnimatedFlashList = Animated.createAnimatedComponent(FlashList);
 
+// ── Streaming media upload (the large-file fix) ──────────────────────────────
+// The old path appended { uri } to a FormData and sent it via XMLHttpRequest.
+// React Native's FormData reads the whole file into a single in-memory blob
+// before sending, so a large video (hundreds of MB) blew the JS heap and the
+// upload "broke consistently". expo-file-system's createUploadTask STREAMS the
+// file from disk in native code (constant memory), which is the real fix.
+//
+// On top of streaming this adds the failsafes the to-do asked for:
+//   • up to 3 attempts with linear backoff (transient network / 5xx / stall),
+//   • a TWO-PHASE stall watchdog — see below,
+//   • verbose, greppable [Upload] logging of size, status, elapsed, attempt.
+// Returns the FileSystemUploadResult on 2xx; throws after exhausting retries.
+//
+// TWO-PHASE WATCHDOG (the real large-file fix):
+//   Phase 1 — transfer: while bytes are still moving up the wire, cancel +
+//     retry if NOTHING moves for UPLOAD_STALL_MS (a dead tunnel socket).
+//   Phase 2 — processing: the instant the last byte is sent, progress
+//     callbacks STOP firing while the server runs sharp / ExifTool / ffmpeg
+//     remux on the file (seconds→minutes for a large video). That expected
+//     silence is NOT a dead socket. The old single-phase watchdog mistook it
+//     for one: big files took >60s to process server-side, it cancelled mid-
+//     processing, and every retry re-uploaded and re-failed identically —
+//     i.e. "large files break consistently". So once all bytes are sent we
+//     switch to the much longer UPLOAD_PROCESSING_MS grace before giving up.
+const UPLOAD_MAX_ATTEMPTS = 3;
+const UPLOAD_STALL_MS = 60000;        // transfer phase: no bytes for 60s → dead socket
+const UPLOAD_PROCESSING_MS = 300000;  // processing phase: server may transcode for up to 5 min
+async function streamUploadWithRetry({ url, fileUri, mimeType, parameters, token, label, onProgress }) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt++) {
+    const startedAt = Date.now();
+    let lastProgressAt = Date.now();
+    // Set to the timestamp the final byte hit the wire — flips the watchdog
+    // from transfer-phase to processing-phase. Reset per attempt.
+    let allSentAt = null;
+    let stallTimer = null;
+    try {
+      const task = FileSystem.createUploadTask(
+        url,
+        fileUri,
+        {
+          httpMethod: 'POST',
+          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+          fieldName: 'media',
+          mimeType,
+          parameters,
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        },
+        (p) => {
+          lastProgressAt = Date.now();
+          const total = p.totalBytesExpectedToSend || 0;
+          const sent = p.totalBytesSent || 0;
+          if (total > 0 && onProgress) {
+            onProgress(Math.min(99, Math.round((sent / total) * 100)));
+          }
+          // Last byte on the wire → enter processing phase (once).
+          if (total > 0 && sent >= total && allSentAt === null) {
+            allSentAt = Date.now();
+            const secs = ((allSentAt - startedAt) / 1000).toFixed(1);
+            console.log(`[Upload] ⏳ ${label} · ${(total / (1024 * 1024)).toFixed(1)}MB sent in ${secs}s · awaiting server processing…`);
+          }
+        },
+      );
+
+      const result = await new Promise((resolve, reject) => {
+        stallTimer = setInterval(() => {
+          const idleMs = Date.now() - lastProgressAt;
+          const threshold = allSentAt ? UPLOAD_PROCESSING_MS : UPLOAD_STALL_MS;
+          if (idleMs > threshold) {
+            const phase = allSentAt ? 'server processing' : 'transfer';
+            console.warn(`[Upload] ⏱ ${label} · watchdog tripped during ${phase} (idle ${Math.round(idleMs / 1000)}s)`);
+            task.cancelAsync().catch(() => {});
+            reject(new Error(`stalled during ${phase} — no progress for ${Math.round(threshold / 1000)}s`));
+          }
+        }, 5000);
+        task.uploadAsync().then(resolve, reject);
+      });
+      if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
+
+      const status = result?.status ?? 0;
+      const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
+      if (status >= 200 && status < 300) {
+        if (onProgress) onProgress(100);
+        console.log(`[Upload] ✓ ${label} · ${secs}s · HTTP ${status} (attempt ${attempt})`);
+        return result;
+      }
+      lastErr = new Error(`HTTP ${status}: ${String(result?.body || '').slice(0, 300)}`);
+      console.warn(`[Upload] ✗ ${label} · HTTP ${status} (attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS})`);
+      // Client errors (bad request, auth) won't fix themselves on retry — stop.
+      if (status < 500 && status !== 408 && status !== 429) throw lastErr;
+    } catch (e) {
+      if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
+      lastErr = e;
+      console.warn(`[Upload] ✗ ${label} (attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS}): ${e.message}`);
+      if (/HTTP 4\d\d/.test(e.message) && !/HTTP (408|429)/.test(e.message)) break;
+    }
+    if (attempt < UPLOAD_MAX_ATTEMPTS) {
+      await new Promise((r) => setTimeout(r, attempt * 1500)); // 1.5s, 3s backoff
+    }
+  }
+  throw lastErr || new Error('upload failed');
+}
+
 // Master kill-switch for the Instagram-style grid video autoplay preview.
 // Flip to false to fully disable (cells fall back to the static thumbnail).
 const GRID_VIDEO_PREVIEW = true;
+// "Jump to latest" pill: how long after scrolling STOPS before it fades away on
+// its own (a motionless grid sheds the pill). Kept short — a "very brief" idle.
+const GRID_JUMP_IDLE_MS = 1500;
 
 // Constants for hitSlop to prevent re-renders
 const HIT_SLOP_10 = { top: 10, bottom: 10, left: 10, right: 10 };
@@ -185,8 +291,19 @@ const FullScreenVideoPlayer = ({ sourceUrl, isActive, styles, insets }) => {
 //      now falls back to thumbnailUrl first (which is ~60KB webp and
 //      ALWAYS exists). The user sees an instantly-rendered low-res
 //      version, then the raw fades in.
-const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLoad, onLoadProgress, getFullUrl }) => {
+// Dwell before the viewer upgrades from the regular compressed JPEG to the
+// full-resolution HD layer. The viewer only ever loads the regular image up
+// front; the HD bytes are requested only if the user lingers on a photo this
+// long — so quick swipe-bys never pull the heavy original. (Re-introduces a
+// dwell delay that was previously removed; now an explicit product choice to
+// save bandwidth, at the documented 1.5s.)
+const HD_DWELL_MS = 1500;
+
+const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLoad, onLoadProgress, getFullUrl, forceHd = false }) => {
   const [highResLoaded, setHighResLoaded] = useState(false);
+  // Gate for the HD (Layer 2) load: false until the user has dwelled on this
+  // image for HD_DWELL_MS. Reset whenever the image deactivates/changes.
+  const [hdRequested, setHdRequested] = useState(false);
   // Once the high-res layer has fully crossfaded in, we UNMOUNT the fast
   // (thumbnail/compressed) Layer 1 so it doesn't linger behind the full-res
   // image — matching the web viewer, which shows a single full image with no
@@ -206,9 +323,19 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
       setHighResLoaded(false);
       setFastHidden(false); // bring the fast layer back for the next open
       setHiResFallback(false);
+      setHdRequested(false); // re-arm the dwell gate for the next open
       fadeAnim.setValue(0);
     }
   }, [isActive, media.id, fadeAnim]);
+
+  // Dwell gate: once the image is active, wait HD_DWELL_MS before allowing the
+  // HD layer to load. Swiping away (isActive=false) or changing image clears
+  // the timer via cleanup, so a quick pass-by never requests the heavy bytes.
+  useEffect(() => {
+    if (!isActive) return undefined;
+    const t = setTimeout(() => setHdRequested(true), HD_DWELL_MS);
+    return () => clearTimeout(t);
+  }, [isActive, media.id]);
 
   // Crossfade once the raw is decoded and ready; when the fade completes, drop
   // the fast layer so only the full-res image remains.
@@ -294,11 +421,13 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
         />
       )}
 
-      {/* LAYER 2: High-res raw. Loads as soon as isActive flips
-          true — no artificial delay. Unmounts (cancelling the
-          in-flight fetch) the moment isActive flips back to false,
-          which is the swipe-by guard. */}
-      {isActive && (
+      {/* LAYER 2: High-res. Loads after the user dwells on the image for
+          HD_DWELL_MS (hdRequested) OR the moment they zoom in (forceHd) —
+          zooming means they want detail now, so we don't make them wait. The
+          regular compressed JPEG carries the view until then. Unmounts
+          (cancelling the in-flight fetch) the moment isActive flips back to
+          false; the dwell/zoom gate is the swipe-by guard for the bytes. */}
+      {isActive && (hdRequested || forceHd) && (
         <Animated.View style={[StyleSheet.absoluteFillObject, { opacity: fadeAnim, zIndex: 2 }]} pointerEvents="none">
           <Image
             source={{ uri: hiResUri }}
@@ -354,10 +483,13 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
 
   // 1. Track HD State
   const [rawLoaded, setRawLoaded] = useState(false);
+  // True once the user zooms into this image — forces the HD layer to load
+  // immediately (no dwell wait), since a zoomed compressed JPEG looks soft.
+  const [zoomed, setZoomed] = useState(false);
 
   // Reset HD state when user swipes away
   useEffect(() => {
-    if (!isActive) setRawLoaded(false);
+    if (!isActive) { setRawLoaded(false); setZoomed(false); }
   }, [isActive]);
   
   // Reset zoom AND scroll offset when mediaId changes (swipe to a different
@@ -374,6 +506,7 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
     sv.scrollResponderZoomTo?.({ x: 0, y: 0, width, height, animated: false });
     sv.scrollTo?.({ x: 0, y: 0, animated: false });
     isZoomedRef.current = false;
+    setZoomed(false);
   }, [mediaId]);
   
   const handleDoubleTap = useCallback(() => {
@@ -390,6 +523,7 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
             height: height * 0.5,
             animated: true,
           });
+          setZoomed(true); // want detail → load HD now, skip the dwell wait
         } else {
           // Zoom out
           scrollRef.current.scrollResponderZoomTo({
@@ -425,6 +559,15 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
         showsHorizontalScrollIndicator={false}
         showsVerticalScrollIndicator={false}
         pinchGestureEnabled={true}
+        // Catch pinch-zoom (UIScrollView reports zoomScale on scroll events) so
+        // any zoom — not just double-tap — forces the HD layer in immediately.
+        // setZoomed(true) is idempotent (React bails on same value), so calling
+        // it per frame while zooming is cheap.
+        scrollEventThrottle={64}
+        onScroll={(e) => {
+          const z = e?.nativeEvent?.zoomScale ?? 1;
+          if (z > 1.01) setZoomed(true);
+        }}
       >
         <Pressable onPress={handleDoubleTap}>
           <ProgressiveImage
@@ -432,6 +575,7 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
             style={styles.viewerImage}
             contentFit="contain"
             isActive={isActive}
+            forceHd={zoomed}
             onRawLoad={() => {
               setRawLoaded(true);
               if (typeof onLoadComplete === 'function') onLoadComplete();
@@ -491,6 +635,18 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // Toggled from handleGridScroll with a functional updater so we only re-render
   // on the threshold crossing, not every scroll frame.
   const [showGridJump, setShowGridJump] = useState(false);
+  // Fade the jump pill in/out instead of popping it. Stays mounted (taps off)
+  // while it fades to 0, so "no scroll → no button" reads as a gentle fade-out.
+  const gridJumpAnim = useRef(new Animated.Value(0)).current;
+  // Direction tracking: the grid is scaleY(-1) mirrored so offset 0 = newest
+  // (visual bottom). Moving TOWARD the newest = offset DECREASING = a downward
+  // visual swipe; that's the only direction that reveals the pill.
+  const gridJumpLastY = useRef(0);
+  const gridJumpingRef = useRef(false); // true during a tap-to-latest animation
+  const gridJumpIdleTimer = useRef(null); // idle auto-hide: fades the pill once the grid stops moving
+  // The pill's fade lives lower down (see `gridJumpVisible`): besides the scroll
+  // intent it also folds in "is an overlay covering the grid?", and those
+  // overlay states (viewer / select mode / upload sheet) are declared further below.
 
   // Data state
   const [uploadItems, setUploadItems] = useState([]);
@@ -752,6 +908,22 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // without dragging. Coexists with tap-to-toggle and drag-select.
   const [rangeSelectMode, setRangeSelectMode] = useState(false);
   const [rangeAnchorIdx, setRangeAnchorIdx] = useState(null); // drives the hint label
+
+  // Jump-to-latest pill visibility: the scroll logic wants it (showGridJump)
+  // AND nothing is covering the grid — the full-screen viewer (selectedMedia),
+  // select mode's bottom action bar (isSelectMode), or the upload sheet
+  // (uploadModalVisible). Fades between states; the pill's pointerEvents uses the
+  // same flag so a faded-out pill is never tappable.
+  const gridJumpVisible = showGridJump && !selectedMedia && !isSelectMode && !uploadModalVisible;
+  useEffect(() => {
+    Animated.timing(gridJumpAnim, {
+      toValue: gridJumpVisible ? 1 : 0,
+      duration: gridJumpVisible ? 200 : 160,
+      useNativeDriver: true,
+    }).start();
+  }, [gridJumpVisible, gridJumpAnim]);
+  // Clear any pending idle-hide timer on unmount.
+  useEffect(() => () => { if (gridJumpIdleTimer.current) clearTimeout(gridJumpIdleTimer.current); }, []);
 
   // ── Drag-to-select (uploads grid, select mode) ──────────────────────────
   // Touch a photo and drag SIDEWAYS to range-select; vertical swipes still
@@ -1771,11 +1943,33 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     if (ne.layoutMeasurement && ne.layoutMeasurement.height) gridLayoutH.current = ne.layoutMeasurement.height;
     scrollYSv.value = scrubLastY.current;
     maxScrollSv.value = Math.max(1, gridContentH.current - gridLayoutH.current);
-    // Reveal the "jump to newest" pill once we're ~a screenful from the bottom
-    // (newest). Functional updater → React bails out when the flag is unchanged,
-    // so this is free on the vast majority of scroll frames.
-    const wantJump = scrubLastY.current > (gridLayoutH.current || 600) * 0.8;
-    setShowGridJump((prev) => (prev === wantJump ? prev : wantJump));
+    // Reveal the "jump to newest" pill only when (1) scrolled a LOT from the
+    // newest — ~1.5 screens — and (2) moving TOWARD the newest (offset
+    // decreasing = downward swipe in this mirrored grid). Scrolling up into
+    // older keeps it hidden so it's never in the way.
+    const y = scrubLastY.current;
+    const delta = y - gridJumpLastY.current;
+    gridJumpLastY.current = y;
+    if (gridJumpingRef.current) {
+      // Animating to newest from a tap — stay hidden until we arrive.
+      if (y < 80) gridJumpingRef.current = false;
+      setShowGridJump((prev) => (prev === false ? prev : false));
+    } else {
+      const farEnough = y > (gridLayoutH.current || 600) * 1.5;
+      let wantJump;
+      if (!farEnough) wantJump = false;       // near newest → hide
+      else if (delta < -1) wantJump = true;   // toward newest (down) → show
+      else if (delta > 1) wantJump = false;   // into older (up) → hide
+      // Functional updater → React bails out when the flag is unchanged.
+      if (wantJump !== undefined) setShowGridJump((prev) => (prev === wantJump ? prev : wantJump));
+    }
+    // Idle auto-hide: re-arm on every scroll frame so the timer only fires once
+    // the grid goes still (no more frames), fading the pill out a brief moment
+    // later. clear+set is cheap and only runs while actually scrolling.
+    if (gridJumpIdleTimer.current) clearTimeout(gridJumpIdleTimer.current);
+    gridJumpIdleTimer.current = setTimeout(() => {
+      setShowGridJump((prev) => (prev === false ? prev : false));
+    }, GRID_JUMP_IDLE_MS);
     if (!virtualEnabledRef.current || sparseRaf.current != null) return;
     sparseRaf.current = requestAnimationFrame(() => {
       sparseRaf.current = null;
@@ -2578,128 +2772,85 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         let tempManipulatedUri = null;
         
         try {
-          const formData = new FormData();
+          // Multipart TEXT fields go as a flat string map (the streaming uploader
+          // takes `parameters`, not a FormData/blob). The media bytes are streamed
+          // separately from disk by URI — see streamUploadWithRetry.
+          const parameters = {};
           let assetInfo = null;
-          
+
           if (asset.assetId) {
             try { assetInfo = await MediaLibrary.getAssetInfoAsync(asset.assetId); } catch (e) {}
           }
-          
+
           const originalDate = assetInfo?.creationTime || null;
-          if (originalDate) formData.append('originalDate', originalDate.toString());
-          
-          if (assetInfo) {
-            if (assetInfo.width) formData.append('width', assetInfo.width.toString());
-            if (assetInfo.height) formData.append('height', assetInfo.height.toString());
-            formData.append('tags', JSON.stringify(selectedTags.length > 0 ? selectedTags : ['Phone Uploads']));
-          }
-          
+          if (originalDate) parameters.originalDate = originalDate.toString();
+          if (assetInfo?.width) parameters.width = assetInfo.width.toString();
+          if (assetInfo?.height) parameters.height = assetInfo.height.toString();
+          parameters.tags = JSON.stringify(selectedTags.length > 0 ? selectedTags : ['Phone Uploads']);
+
           const originalFilename = asset.fileName || asset.uri.split('/').pop() || 'file';
           const isVideo = asset.mediaType === 'video' || /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|3gp)$/i.test(originalFilename);
           const isHeic = /\.heic$/i.test(originalFilename) || /\.heif$/i.test(originalFilename);
-          
+
           let safeLocalUri = assetInfo?.localUri || asset.uri;
           let mediaUri = safeLocalUri;
           let mediaName = originalFilename;
           let mediaType = isVideo ? 'video/mp4' : 'image/jpeg';
-          
+
           if (isVideo) {
             const { uri } = await VideoThumbnails.getThumbnailAsync(safeLocalUri, { time: 1000, quality: 0.8 });
             tempThumbnailUri = uri;
-            formData.append('media', { uri: mediaUri, name: mediaName, type: mediaType });
-            formData.append('thumbnail', { uri: tempThumbnailUri, name: 'thumbnail.jpg', type: 'image/jpeg' });
-            if (asset.duration) formData.append('duration', Math.round(asset.duration / 1000).toString());
-          } else {
-            if (isHeic) {
-              const manipulated = await ImageManipulator.manipulateAsync(
-                safeLocalUri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+            // A streamed upload carries ONE file; the small captured-frame
+            // thumbnail rides along as a base64 parameter (server decodes it).
+            try {
+              parameters.thumbnailBase64 = await FileSystem.readAsStringAsync(
+                tempThumbnailUri, { encoding: FileSystem.EncodingType.Base64 },
               );
-              tempManipulatedUri = manipulated.uri;
-              mediaUri = tempManipulatedUri;
-              mediaName = originalFilename.replace(/\.heic$/i, '.jpg').replace(/\.heif$/i, '.jpg');
-            }
-            formData.append('media', { uri: mediaUri, name: mediaName, type: mediaType });
+            } catch (e) { /* server falls back to a placeholder thumbnail */ }
+            if (asset.duration) parameters.duration = Math.round(asset.duration / 1000).toString();
+          } else if (isHeic) {
+            const manipulated = await ImageManipulator.manipulateAsync(
+              safeLocalUri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
+            );
+            tempManipulatedUri = manipulated.uri;
+            mediaUri = tempManipulatedUri;
+            mediaName = originalFilename.replace(/\.heic$/i, '.jpg').replace(/\.heif$/i, '.jpg');
+            mediaType = 'image/jpeg';
           }
-          
-          // XHR with byte-level progress tracking.
-          // RN's XHR is finicky about upload progress:
-          //   * property assignment (xhr.upload.onprogress = ...) is unreliable on iOS — use addEventListener.
-          //   * lengthComputable is often false for multipart file uploads, so don't gate on it; just check total.
-          //   * Some platforms don't stream progress at all — we run a smooth fallback ramp in that case.
-          await new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
+          // The streamed part's filename is the cache URI's basename (a UUID), so
+          // send the real name explicitly to preserve it + its extension server-side.
+          parameters.originalName = mediaName;
 
-            // Ensure we don't accidentally create an /api/api/ route.
-            const uploadEndpoint = serverUrl.endsWith('/api')
-              ? `${serverUrl}/media/upload`
-              : `${serverUrl}/api/media/upload`;
+          // Ensure we don't accidentally create an /api/api/ route.
+          const uploadEndpoint = serverUrl.endsWith('/api')
+            ? `${serverUrl}/media/upload`
+            : `${serverUrl}/api/media/upload`;
 
-            // open() before addEventListener for maximum RN/iOS compatibility.
-            xhr.open('POST', uploadEndpoint);
-            if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+          // FAILSAFE: confirm the source exists and isn't empty before we try — a
+          // missing/zero-byte URI is a common silent failure, and we log the size
+          // so the server/client logs can be correlated.
+          const info = await FileSystem.getInfoAsync(mediaUri, { size: true });
+          if (!info.exists) throw new Error(`source file missing: ${mediaUri}`);
+          const sizeMB = (info.size || 0) / (1024 * 1024);
+          console.log(`[Upload] ▶ ${mediaName} · ${sizeMB.toFixed(1)}MB · ${mediaType}${isVideo ? ' (video)' : ''}`);
 
-            let gotRealProgress = false;
-            let fallbackInterval = null;
-            let itemPct = 0; // monotonic per-item byte progress, 0-100
+          // Monotonic per-item progress, fed by the native streaming callback.
+          let itemPct = 0;
+          const onProgress = (pct) => {
+            if (pct <= itemPct) return;
+            itemPct = pct;
+            currentItemPctRef.current = pct;
+            recomputeOverall();
+          };
 
-            const advanceItem = (next) => {
-              if (next <= itemPct) return;
-              itemPct = next;
-              currentItemPctRef.current = next;
-              recomputeOverall();
-            };
-            const stopFallback = () => {
-              if (fallbackInterval) {
-                clearInterval(fallbackInterval);
-                fallbackInterval = null;
-              }
-            };
-
-            xhr.upload.addEventListener('progress', (event) => {
-              const total = event.total || 0;
-              if (total > 0) {
-                gotRealProgress = true;
-                stopFallback();
-                // Cap at 99 so the bar doesn't visually "complete" before onload fires.
-                advanceItem(Math.min(99, Math.round((event.loaded / total) * 100)));
-              }
-            });
-
-            xhr.addEventListener('load', () => {
-              stopFallback();
-              advanceItem(100);
-              if (xhr.status >= 200 && xhr.status < 300) {
-                resolve(xhr.responseText);
-              } else {
-                reject(new Error(`Upload failed with status ${xhr.status}`));
-              }
-            });
-
-            xhr.addEventListener('error', () => {
-              stopFallback();
-              reject(new Error('Network request failed'));
-            });
-            xhr.addEventListener('abort', () => {
-              stopFallback();
-              reject(new Error('Upload aborted'));
-            });
-
-            xhr.send(formData);
-
-            // Fallback ramp: if no real progress event arrives within 400ms,
-            // ease toward 92% so the bar still moves while bytes are in flight.
-            setTimeout(() => {
-              if (gotRealProgress) return;
-              fallbackInterval = setInterval(() => {
-                if (gotRealProgress) {
-                  stopFallback();
-                  return;
-                }
-                // Logarithmic-ish ramp: fast at first, slow near the cap.
-                const step = Math.max(1, Math.round((92 - itemPct) / 12));
-                advanceItem(Math.min(92, itemPct + step));
-              }, 250);
-            }, 400);
+          await streamUploadWithRetry({
+            url: uploadEndpoint,
+            fileUri: mediaUri,
+            mimeType: mediaType,
+            parameters,
+            token,
+            label: mediaName,
+            onProgress,
           });
 
           if (asset.assetId) successfulAssetIds.push(asset.assetId);
@@ -3068,20 +3219,47 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     </View>
   );
 
-  // Handle scroll end - update selectedMedia when swipe completes (better performance)
-  // Handle scroll end - mathematically bulletproof index calculation using ITEM_WIDTH
-  // Handle scroll end - Update instantly without artificial InteractionManager lag
-  const handleMomentumScrollEnd = useCallback((event) => {
-    const index = Math.round(event.nativeEvent.contentOffset.x / ITEM_WIDTH);
-    // Resolve the landed index against the pager's data array (viewerItems,
-    // which is displayItems order — same as the grid).
+  // Resolve which photo is centred from a (left-aligned, ITEM_WIDTH-strided)
+  // scroll offset and adopt it as selectedMedia. SINGLE source of truth for
+  // "which photo is on screen" — everything that acts on the current photo
+  // (tag editor, favourite, info, delete) reads selectedMedia, so it MUST stay
+  // in lockstep with the visible pager position.
+  const syncSelectedFromOffset = useCallback((offsetX) => {
+    const index = Math.round(offsetX / ITEM_WIDTH);
     const newlySelectedItem = viewerItems[index];
-
     if (newlySelectedItem && !newlySelectedItem.isSkeleton && newlySelectedItem.id !== selectedMedia?.id) {
-      // 🚀 SNAP INSTANTLY: Removed runAfterInteractions wrap
       setSelectedMedia(newlySelectedItem);
     }
   }, [viewerItems, selectedMedia]);
+
+  // Mirror the live scroll offset into a ref so a drag-end (which fires BEFORE
+  // the snap settles) can read the FINAL resting offset a beat later.
+  const lastViewerOffsetX = useRef(0);
+  useEffect(() => {
+    const id = scrollX.addListener(({ value }) => { lastViewerOffsetX.current = value; });
+    return () => scrollX.removeListener(id);
+  }, [scrollX]);
+  const dragSettleTimer = useRef(null);
+
+  const handleMomentumScrollEnd = useCallback((event) => {
+    if (dragSettleTimer.current) { clearTimeout(dragSettleTimer.current); dragSettleTimer.current = null; }
+    syncSelectedFromOffset(event.nativeEvent.contentOffset.x);
+  }, [syncSelectedFromOffset]);
+
+  // THE TAG-MISMATCH FIX: a slow drag-release can snap to the next photo via
+  // snapToInterval WITHOUT any momentum phase, so onMomentumScrollEnd never
+  // fires and selectedMedia would stay on the PREVIOUS photo — then tagging /
+  // favouriting silently hits the wrong pic. onScrollEndDrag fires pre-snap, so
+  // we re-read the settled offset shortly after to adopt the photo that's
+  // actually on screen. (Momentum swipes clear this timer in the handler above.)
+  const handleScrollEndDrag = useCallback(() => {
+    if (dragSettleTimer.current) clearTimeout(dragSettleTimer.current);
+    dragSettleTimer.current = setTimeout(() => {
+      dragSettleTimer.current = null;
+      syncSelectedFromOffset(lastViewerOffsetX.current);
+    }, 180);
+  }, [syncSelectedFromOffset]);
+  useEffect(() => () => { if (dragSettleTimer.current) clearTimeout(dragSettleTimer.current); }, []);
 
   // Prefetch ±2 neighbor raw URLs whenever the viewer index changes —
   // but DEFERRED, so the photo the user just opened loads first.
@@ -3643,6 +3821,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               )}
               scrollEventThrottle={16}
               onMomentumScrollEnd={handleMomentumScrollEnd}
+              onScrollEndDrag={handleScrollEndDrag}
             />
           </Animated.View>
 
@@ -3659,8 +3838,16 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                   closeTagEditor();
                 }}
               >
+                {/* Keyboard avoidance: for a vertically-centered card, the KAV's
+                    padding/height shrinks the area so the card re-centers in the
+                    space ABOVE the keyboard (lifts ~half the keyboard height),
+                    riding the OS keyboard curve. Fixes the card being half-covered. */}
+                <KeyboardAvoidingView
+                  style={{ flex: 1 }}
+                  behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                >
                 {/* Scrollable Modal Container - adjusts for keyboard */}
-                <ScrollView 
+                <ScrollView
                   contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center' }}
                   keyboardShouldPersistTaps="handled"
                   keyboardDismissMode="on-drag"
@@ -3821,6 +4008,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                   </View>
                 </Pressable>
                 </ScrollView>
+                </KeyboardAvoidingView>
               </Pressable>
             </Animated.View>
           )}
@@ -3916,22 +4104,23 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             <TouchableOpacity
               onPress={toggleRangeSelect}
               activeOpacity={0.8}
-              style={[styles.premiumBezel, {
+              style={[styles.selectBezel, {
                 flexDirection: 'row', alignItems: 'center', gap: 8,
                 paddingHorizontal: 16, paddingVertical: 9, borderRadius: 22,
-                borderWidth: rangeSelectMode ? 1.5 : 0, borderColor: theme.colors.primary,
+                borderWidth: rangeSelectMode ? 1.5 : StyleSheet.hairlineWidth,
+                borderColor: rangeSelectMode ? theme.colors.primary : (theme.mode === 'dark' ? 'rgba(255,255,255,0.15)' : theme.colors.border),
               }]}
             >
-              <Icon name="unfold-more-horizontal" size={18} color={rangeSelectMode ? theme.colors.primary : 'rgba(255,255,255,0.7)'} />
-              <Text style={{ color: rangeSelectMode ? theme.colors.primary : 'rgba(255,255,255,0.7)', fontWeight: '600', fontSize: 13 }}>
+              <Icon name="unfold-more-horizontal" size={18} color={rangeSelectMode ? theme.colors.primary : theme.colors.textSecondary} />
+              <Text style={{ color: rangeSelectMode ? theme.colors.primary : theme.colors.textSecondary, fontWeight: '600', fontSize: 13 }}>
                 {rangeSelectMode
                   ? (rangeAnchorIdx == null ? 'Tap the first photo' : 'Now tap the last photo')
                   : 'Section Select'}
               </Text>
             </TouchableOpacity>
 
-            <Animated.View style={[styles.premiumBezel, {
-              alignSelf: 'center', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 30, gap: 8
+            <Animated.View style={[styles.selectBezel, {
+              alignSelf: 'center', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 30, gap: 8,
             }]}>
               <TouchableOpacity
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
@@ -3995,12 +4184,12 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                 }}
               >
                 <Icon name="share-variant" size={20} color={theme.colors.primary} />
-                <Text style={{ color: theme.colors.textPrimary, fontWeight: 'bold', fontSize: 15 }}>
+                <Text style={{ color: theme.colors.primary, fontWeight: 'bold', fontSize: 15 }}>
                   Share
                 </Text>
               </TouchableOpacity>
               
-              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.border, marginHorizontal: 8 }} />
+              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.borderStrong, marginHorizontal: 8 }} />
               
               <TouchableOpacity 
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
@@ -4025,12 +4214,12 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                 }}
               >
                 <Icon name="tag-multiple" size={20} color={theme.colors.primary} />
-                <Text style={{ color: theme.colors.textPrimary, fontWeight: 'bold', fontSize: 15 }}>
+                <Text style={{ color: theme.colors.primary, fontWeight: 'bold', fontSize: 15 }}>
                   Tag
                 </Text>
               </TouchableOpacity>
               
-              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.border, marginHorizontal: 8 }} />
+              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.borderStrong, marginHorizontal: 8 }} />
               
               <TouchableOpacity 
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
@@ -4101,15 +4290,14 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             </Animated.View>
             </View>
           ) : (
-            <Animated.View style={[styles.premiumBezel, {
+            <Animated.View style={[styles.selectBezel, {
               borderRadius: 20, padding: 16, width: '100%',
-              backgroundColor: theme.mode === 'dark' ? 'rgba(30, 30, 32, 0.95)' : 'rgba(252, 252, 255, 0.98)'
             }]}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <TouchableOpacity onPress={() => setIsBulkTagging(false)}>
                   <Icon name="close" size={24} color={theme.colors.textSecondary} />
                 </TouchableOpacity>
-                <Text style={{ color: theme.colors.textPrimary, fontWeight: '600' }}>Tagging {selectedGridItems.size} Items</Text>
+                <Text style={{ color: theme.colors.primary, fontWeight: '600' }}>Tagging {selectedGridItems.size} Items</Text>
                 <TouchableOpacity onPress={executeBulkTagSave}>
                   <Text style={{ color: theme.colors.primary, fontWeight: 'bold', fontSize: 16 }}>Save</Text>
                 </TouchableOpacity>
@@ -4198,10 +4386,16 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           uploadModalY.setValue(0);
         }}
       >
-        <View style={styles.uploadModalOverlay}>
+        {/* KeyboardAvoidingView so the centered card lifts clear of the keyboard
+            (recenters in the space above it, on the OS keyboard curve) instead
+            of being half-covered when the tag field is focused. */}
+        <KeyboardAvoidingView
+          style={styles.uploadModalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
           {/* Background dimmer - tap to dismiss */}
-          <Pressable 
-            style={StyleSheet.absoluteFill} 
+          <Pressable
+            style={StyleSheet.absoluteFill}
             onPress={dismissUploadModal}
           />
           <Animated.View 
@@ -4381,7 +4575,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               </View>
             )}
           </Animated.View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Compact "uploading in background" pill — shown when the user taps
@@ -4740,19 +4934,30 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         )}
 
         {/* Jump-to-newest pill — bottom-CENTRE so it clears the right-edge
-            scrubber. Only on the Photos tab, only once scrolled away from the
-            newest item. Tapping animates back to offset 0 (the visual bottom). */}
-        {activeTab === 'uploads' && showGridJump && (
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() => {
-              try { gridRef.current?.scrollToOffset?.({ offset: 0, animated: true }); } catch (e) { /* mid-layout */ }
-              setShowGridJump(false);
-            }}
+            scrubber. Only on the Photos tab; fades IN once scrolled a long way
+            from the newest item and fades OUT when back near it (no abrupt pop).
+            Tapping animates back to offset 0 (the visual bottom). */}
+        {activeTab === 'uploads' && (
+          <Animated.View
+            pointerEvents={gridJumpVisible ? 'auto' : 'none'}
             style={{
               position: 'absolute',
               bottom: insets.bottom + 24,
               alignSelf: 'center',
+              opacity: gridJumpAnim,
+              transform: [{ scale: gridJumpAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] }) }],
+              zIndex: 60,
+            }}
+          >
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => {
+              gridJumpingRef.current = true; // suppress re-show during the animation
+              if (gridJumpIdleTimer.current) { clearTimeout(gridJumpIdleTimer.current); gridJumpIdleTimer.current = null; }
+              try { gridRef.current?.scrollToOffset?.({ offset: 0, animated: true }); } catch (e) { /* mid-layout */ }
+              setShowGridJump(false);
+            }}
+            style={{
               flexDirection: 'row',
               alignItems: 'center',
               gap: 6,
@@ -4765,12 +4970,12 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               shadowRadius: 8,
               shadowOffset: { width: 0, height: 3 },
               elevation: 6,
-              zIndex: 60,
             }}
           >
             <Icon name="chevron-double-down" size={18} color={theme.colors.background} />
             <Text style={{ color: theme.colors.background, fontSize: 13, fontWeight: '700' }}>Latest</Text>
           </TouchableOpacity>
+          </Animated.View>
         )}
       </View>
 
@@ -5378,6 +5583,23 @@ const createStyles = (theme) =>
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 5,
+    },
+    // Like premiumBezel but THEME-AWARE — for floating chrome that sits over the
+    // app's own surface (the grid), not over a photo. The dark premiumBezel is
+    // correct over images (white icons), but unreadable in light mode over the
+    // light grid; this matches the app's elevated surfaces in both modes.
+    selectBezel: {
+      // Pure monochrome, theme-adaptive: full black-on-white in light, full
+      // white-on-black in dark. background is pure #000/#FFF; the hairline edge
+      // keeps the pill separated from same-tone content behind it.
+      backgroundColor: theme.colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.mode === 'dark' ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.18)',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: theme.mode === 'dark' ? 0.3 : 0.14,
       shadowRadius: 8,
       elevation: 5,
     },

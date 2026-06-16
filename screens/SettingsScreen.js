@@ -22,16 +22,19 @@ import { useServer } from '../context/ServerContext';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import * as SecureStore from 'expo-secure-store';
-import { clearAllCaches } from '../utils/cacheManager';
+import { clearAllCaches, getCacheSizeBytes, formatBytes } from '../utils/cacheManager';
 
 const MASTER_KEY_STORE = 'vault_master_key';
 const SALT_STORE = 'vault_salt';
 
 export default function SettingsScreen({ active = true }) {
-  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat } = useTheme();
+  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton } = useTheme();
   const { serverIP, isConnected, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
   const [isHealing, setIsHealing] = useState(false);
   const [isClearingCache, setIsClearingCache] = useState(false);
+  // null = not yet measured / measuring; number = bytes currently cached.
+  const [cacheBytes, setCacheBytes] = useState(null);
+  const [measuringCache, setMeasuringCache] = useState(false);
   const [activeTab, setActiveTab] = useState('general');
   const SETTINGS_TABS = [
     { key: 'general', label: 'General', icon: 'tune' },
@@ -291,6 +294,27 @@ export default function SettingsScreen({ active = true }) {
   // dirs, and any leftover share files. Photos re-download from the server on
   // next view, so it's safe (just briefly slower). The app also does this
   // automatically when backgrounded (see utils/cacheManager).
+  // Measure the on-disk cache size. Best-effort: a failure just leaves the
+  // size as 0 rather than blocking the screen.
+  const measureCache = useCallback(async () => {
+    setMeasuringCache(true);
+    try {
+      const bytes = await getCacheSizeBytes();
+      setCacheBytes(bytes);
+    } catch (e) {
+      setCacheBytes(0);
+    } finally {
+      setMeasuringCache(false);
+    }
+  }, []);
+
+  // Measure once when the General tab is showing (where the Storage card lives).
+  useEffect(() => {
+    if (activeTab === 'general' && cacheBytes === null && !measuringCache) {
+      measureCache();
+    }
+  }, [activeTab, cacheBytes, measuringCache, measureCache]);
+
   const handleClearCache = useCallback(async () => {
     if (isClearingCache) return;
     setIsClearingCache(true);
@@ -301,8 +325,10 @@ export default function SettingsScreen({ active = true }) {
       Alert.alert('Error', 'Could not clear the cache. Please try again.');
     } finally {
       setIsClearingCache(false);
+      // Re-measure so the displayed size reflects the now-empty cache.
+      measureCache();
     }
-  }, [isClearingCache]);
+  }, [isClearingCache, measureCache]);
 
   const handleResetVault = async () => {
     Alert.alert(
@@ -504,6 +530,33 @@ export default function SettingsScreen({ active = true }) {
 
             )}
 
+            {/* Navigation Section — control what shows in the bottom navbar. */}
+            {activeTab === 'general' && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+                  <Icon name="dock-bottom" size={20} color={theme.colors.textPrimary} />
+                </View>
+                <Text style={styles.sectionTitle}>Navigation</Text>
+              </View>
+
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Hide Vault button</Text>
+                  <Text style={styles.settingDescription}>
+                    Remove the Vault tab from the navbar. Open it with the /vault command in chat or terminal.
+                  </Text>
+                </View>
+                <Switch
+                  value={hideVaultButton}
+                  onValueChange={setHideVaultButton}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
+                  thumbColor={hideVaultButton ? theme.colors.textPrimary : theme.colors.textTertiary}
+                />
+              </View>
+            </View>
+            )}
+
             {/* Storage Section — manual cache control. The app auto-trims the
                 cache on background, but this gives an instant manual wipe. */}
             {activeTab === 'general' && (
@@ -519,6 +572,24 @@ export default function SettingsScreen({ active = true }) {
                 Cached photos make browsing instant but can build up over time. The app trims this
                 automatically when you leave it — clear it now to free space immediately.
               </Text>
+
+              {/* Current cache footprint. Tappable to re-measure on demand. */}
+              <TouchableOpacity
+                style={styles.cacheSizeRow}
+                onPress={measureCache}
+                disabled={measuringCache}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Cache size</Text>
+                  <Text style={styles.settingDescription}>Tap to refresh</Text>
+                </View>
+                {measuringCache || cacheBytes === null ? (
+                  <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                ) : (
+                  <Text style={styles.cacheSizeValue}>{formatBytes(cacheBytes)}</Text>
+                )}
+              </TouchableOpacity>
 
               <TouchableOpacity
                 style={[styles.secondaryButton, { marginBottom: 0 }, isClearingCache && styles.buttonDisabled]}
@@ -904,6 +975,23 @@ const createStyles = (theme) => StyleSheet.create({
   settingDescription: {
     fontSize: 13,
     color: theme.colors.textTertiary,
+  },
+  cacheSizeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    marginBottom: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
+  cacheSizeValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
+    fontVariant: ['tabular-nums'],
+    marginLeft: 12,
   },
   statusContainer: {
     flexDirection: 'row',

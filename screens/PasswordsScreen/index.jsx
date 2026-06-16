@@ -32,9 +32,18 @@ export default function PasswordsScreen() {
     isUnlocked,
     isLoading,
     isProcessing,
+    isLoadingEntries,
     entries,
     createVault,
-    unlock,
+    tryPassword,
+    finishUnlock,
+    requestOtp,
+    verifyOtp,
+    biometricUnlock,
+    saveBiometric,
+    bioAvailable,
+    bioHasSaved,
+    autoBioArmed,
     lock,
     saveEntry,
     deleteEntry,
@@ -100,7 +109,20 @@ export default function PasswordsScreen() {
   }
 
   if (!isUnlocked) {
-    return <UnlockScreen onUnlock={unlock} isProcessing={isProcessing} />;
+    return (
+      <UnlockScreen
+        tryPassword={tryPassword}
+        finishUnlock={finishUnlock}
+        requestOtp={requestOtp}
+        verifyOtp={verifyOtp}
+        biometricUnlock={biometricUnlock}
+        saveBiometric={saveBiometric}
+        bioAvailable={bioAvailable}
+        bioHasSaved={bioHasSaved}
+        autoBioArmed={autoBioArmed}
+        isProcessing={isProcessing}
+      />
+    );
   }
 
   return (
@@ -156,12 +178,21 @@ export default function PasswordsScreen() {
           />
         )}
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <Icon name="shield-key" size={48} color={theme.colors.textMuted} />
-            <Text style={styles.emptyText}>
-              {searchQuery ? 'No matches found' : 'No entries saved'}
-            </Text>
-          </View>
+          isLoadingEntries ? (
+            // Still fetching from the server — show a loader rather than
+            // flashing "No entries saved" before the vault has loaded.
+            <View style={styles.empty}>
+              <ActivityIndicator size="large" color={theme.colors.textPrimary} />
+              <Text style={styles.emptyText}>Fetching vaults…</Text>
+            </View>
+          ) : (
+            <View style={styles.empty}>
+              <Icon name="shield-key" size={48} color={theme.colors.textMuted} />
+              <Text style={styles.emptyText}>
+                {searchQuery ? 'No matches found' : 'No entries saved'}
+              </Text>
+            </View>
+          )
         }
         ListFooterComponent={<View style={{ height: 100 }} />}
       />

@@ -6,6 +6,7 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
+  Animated,
   Platform,
   Keyboard,
   Switch,
@@ -155,17 +156,64 @@ export default function TurtleScreen() {
     });
   }, [messages, inputText]);
 
-  // Toggle the "scroll to latest" pill. Inverted list → contentOffset.y grows
-  // as you scroll UP into older messages; show the pill past ~half a screen.
-  // Functional updater keeps this a no-op render except on the threshold cross.
+  // FlashList v2 dropped the `inverted` prop. We keep `messages` newest-first
+  // internally (so every `[newMsg, ...prev]` prepend + history append still
+  // works), and render a CHRONOLOGICAL copy (oldest → newest) so the newest
+  // message sits at the BOTTOM like iMessage/Instagram. v2's
+  // maintainVisibleContentPosition keeps this smooth (starts at the bottom,
+  // auto-scrolls on new messages, holds position when older history loads up top).
+  const chronologicalMessages = useMemo(
+    () => visibleMessages.slice().reverse(),
+    [visibleMessages],
+  );
+
+  // Toggle the "scroll to latest" pill. Chronological list → the newest message
+  // is at the BOTTOM. Rules: (1) only once scrolled a LOT up into history (~a
+  // full screen), and (2) only while the user is moving DOWN, toward the latest
+  // — scrolling up into history keeps it hidden so it never sits in the way.
+  const lastChatOffsetY = useRef(0);
+  const chatJumpingRef = useRef(false); // true during a tap-to-latest animation
   const handleChatScroll = useCallback((e) => {
-    const y = e?.nativeEvent?.contentOffset?.y ?? 0;
-    const want = y > 280;
+    const ne = e?.nativeEvent;
+    const offsetY = ne?.contentOffset?.y ?? 0;
+    const viewH = ne?.layoutMeasurement?.height ?? 0;
+    const contentH = ne?.contentSize?.height ?? 0;
+    const distanceFromBottom = contentH - viewH - offsetY;
+    const delta = offsetY - lastChatOffsetY.current; // >0 = scrolling down (toward latest)
+    lastChatOffsetY.current = offsetY;
+
+    // While we're animating to the bottom from a tap, keep it hidden until we
+    // arrive (otherwise the downward auto-scroll would re-trigger "show").
+    if (chatJumpingRef.current) {
+      if (distanceFromBottom < 80) chatJumpingRef.current = false;
+      setShowChatJump((prev) => (prev === false ? prev : false));
+      return;
+    }
+
+    const farEnough = distanceFromBottom > Math.max(viewH * 0.9, 450);
+    let want;
+    if (!farEnough) want = false;        // near the latest → hide
+    else if (delta > 1) want = true;     // scrolling down toward latest → show
+    else if (delta < -1) want = false;   // scrolling up into history → hide
+    else return;                         // negligible movement → leave as-is
     setShowChatJump((prev) => (prev === want ? prev : want));
   }, []);
 
+  // Smoothly fade the pill in/out instead of popping it. Stays mounted (with
+  // taps disabled) while it fades to 0 so "no scroll → no button" reads as a
+  // gentle fade-out, like a native messenger.
+  const chatJumpAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(chatJumpAnim, {
+      toValue: showChatJump ? 1 : 0,
+      duration: showChatJump ? 200 : 160,
+      useNativeDriver: true,
+    }).start();
+  }, [showChatJump, chatJumpAnim]);
+
   const scrollChatToLatest = useCallback(() => {
-    try { scrollViewRef.current?.scrollToOffset?.({ offset: 0, animated: true }); } catch (e) { /* mid-layout */ }
+    chatJumpingRef.current = true; // suppress re-show during the downward animation
+    try { scrollViewRef.current?.scrollToEnd?.({ animated: true }); } catch (e) { /* mid-layout */ }
     setShowChatJump(false);
   }, []);
   // Commands pushed from the global CommandConsole (long-press the Turtle tab).
@@ -1247,6 +1295,20 @@ export default function TurtleScreen() {
     );
   }
 
+  // Smoothly ease the chat layout whenever a top-of-chat element is added or
+  // removed (the queued-task banner, the finished banner, or the pomodoro card).
+  // Without this the messages list snaps to its new height the instant the
+  // banner mounts, so the session view briefly collides with / is overset by the
+  // absolute header. Diffing a signature DURING render schedules the animation
+  // for THIS commit — a useEffect would fire one commit too late and miss the
+  // first appearance (the exact case the user hit).
+  const chatTopLayoutSig = `${claudeQueue.length > 0}|${showDoneBanner}|${!!pomodoro.state}`;
+  const prevChatTopLayoutSig = useRef(chatTopLayoutSig);
+  if (prevChatTopLayoutSig.current !== chatTopLayoutSig) {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    prevChatTopLayoutSig.current = chatTopLayoutSig;
+  }
+
   return (
     <Reanimated.View
       style={[styles.container, { flex: 1 }, keyboardSpacerStyle]}
@@ -1597,18 +1659,24 @@ export default function TurtleScreen() {
       <FlashList
         ref={scrollViewRef}
         contentContainerStyle={{
-          // Inverted list: paddingTop is the VISUAL BOTTOM (clearance under the
-          // composer dock); paddingBottom is the VISUAL TOP, so it reserves room
-          // for the chat header bar above. Without it the oldest message hides
-          // behind the bar when scrolled to the top.
+          // Chronological (non-inverted) list: paddingTop reserves room for the
+          // chat header bar above; paddingBottom is clearance under the composer
+          // dock so the newest message isn't hidden behind it.
           // (FlashList's contentContainerStyle only supports padding — the rest
           // of styles.messagesContent was just flexGrow + horizontal padding.)
           paddingHorizontal: theme.spacing.sm,
-          paddingTop: dockHeight,
-          paddingBottom: insets.top + CHAT_HEADER_BAR_HEIGHT,
+          paddingTop: insets.top + CHAT_HEADER_BAR_HEIGHT,
+          paddingBottom: dockHeight,
         }}
         showsVerticalScrollIndicator={false}
-        inverted={true} // Flips rendering physics upside down
+        // FlashList v2 has no `inverted`; this keeps the newest message pinned to
+        // the bottom like every messenger. Starts rendering from the bottom, and
+        // auto-scrolls to the newest message when one arrives and the user is
+        // already near the bottom (won't yank them up while reading history).
+        maintainVisibleContentPosition={{
+          startRenderingFromBottom: true,
+          autoscrollToBottomThreshold: 0.2,
+        }}
         // Instagram / iMessage-style keyboard handling:
         //   - "interactive" on iOS lets the keyboard slide down proportionally
         //     as the user drags the message list, then snap closed.
@@ -1621,13 +1689,15 @@ export default function TurtleScreen() {
         keyboardShouldPersistTaps="handled"
         onScroll={handleChatScroll}
         scrollEventThrottle={16}
-        data={visibleMessages}
+        data={chronologicalMessages}
         keyExtractor={(item) => item.id}
-        onEndReached={() => {
+        // Older history lives at the TOP now, so load more when the user nears
+        // the start of the list (MVCP holds their scroll position when it lands).
+        onStartReached={() => {
           if (hasMoreHistory && !isLoadingHistory) fetchChatHistory(true);
         }}
-        onEndReachedThreshold={0.5}
-        ListHeaderComponent={
+        onStartReachedThreshold={0.5}
+        ListFooterComponent={
           isLoading ? (
             <View style={styles.loadingBubble}>
               <Text style={styles.loadingText}>Turtle is typing...</Text>
@@ -1735,16 +1805,23 @@ export default function TurtleScreen() {
       </View>
 
       {/* Scroll-to-latest pill — floats just above the composer dock, bottom
-          right, only while scrolled up into history. Tapping animates back to
-          the newest message (offset 0 on the inverted list). */}
-      {showChatJump && (
+          right, only once scrolled a long way up into history. Fades in/out with
+          scroll (no scroll → fades away). Tapping animates back to the newest. */}
+      <Animated.View
+        pointerEvents={showChatJump ? 'auto' : 'none'}
+        style={{
+          position: 'absolute',
+          bottom: dockHeight + 12,
+          right: 16,
+          opacity: chatJumpAnim,
+          transform: [{ scale: chatJumpAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] }) }],
+          zIndex: 40,
+        }}
+      >
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={scrollChatToLatest}
           style={{
-            position: 'absolute',
-            bottom: dockHeight + 12,
-            right: 16,
             width: 40,
             height: 40,
             borderRadius: 20,
@@ -1758,12 +1835,11 @@ export default function TurtleScreen() {
             shadowRadius: 6,
             shadowOffset: { width: 0, height: 2 },
             elevation: 6,
-            zIndex: 40,
           }}
         >
           <Icon name="chevron-double-down" size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-      )}
+      </Animated.View>
 
       {/* Bottom dock — the cards + the frosted composer, floated as ONE
           absolute overlay pinned to the bottom edge. The message list runs
@@ -2528,10 +2604,8 @@ const createStyles = (theme, insets) =>
       justifyContent: 'center',
       alignItems: 'center',
       paddingVertical: 100,
-      // No scaleY:-1 here — FlashList already orients ListEmptyComponent upright
-      // (its inverted cells render upright without a manual flip too). A counter-
-      // flip double-inverted this template, showing it upside down when the chat
-      // was empty (e.g. while offline).
+      // No transform — the list renders chronologically (not inverted), so the
+      // empty state is naturally upright.
     },
     emptyTitle: {
       fontSize: 20,

@@ -10,20 +10,28 @@ import {
   ActivityIndicator,
   Platform,
   Dimensions,
-  LayoutAnimation,
-  UIManager,
-  Keyboard,
 } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  useAnimatedKeyboard,
+  withTiming,
+  Easing,
+  FadeIn,
+  FadeOut,
+} from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { blurProps, frostOverlayColor } from '../../../utils/frostedChat';
 
-// Enable LayoutAnimation on Android so the expand/collapse height
-// change eases smoothly instead of snapping.
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+// The frosted panel itself is the thing that resizes, so animate ITS height
+// directly via Reanimated (LayoutAnimation snapped — it can't interpolate a
+// switch between a fixed `height` and a content-driven `maxHeight`).
+const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
+// Same curve the web side uses for its panels — a soft, weighted ease-out.
+const RESIZE_EASING = Easing.bezier(0.32, 0.72, 0, 1);
+const RESIZE_DURATION = 300;
 
 // Compact card height (fits above the input like the pomodoro card)
 // vs. the "full view" height — ~72% of the screen so the whole
@@ -202,47 +210,37 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
   // the compact card. (Was compact-by-default, which meant manually expanding
   // every session — and that expand-while-keyboard-up was the janky moment.)
   const [expanded, setExpanded] = useState(true);
-  // Live keyboard height, so the expanded view can shrink to stay above the
-  // keyboard instead of growing tall enough to cover the composer.
-  const [kbHeight, setKbHeight] = useState(0);
 
+  // The panel height is driven ENTIRELY on the UI thread so it shrinks in
+  // perfect lockstep with the keyboard. TurtleScreen lifts the whole chat
+  // column above the keyboard using this SAME useAnimatedKeyboard signal, so
+  // reading it here keeps the panel's shrink frame-synced with that lift.
+  // (Previously the shrink came from a JS keyboardWillShow listener animating
+  // on its own timeline → the panel's top wobbled/jumped as the keyboard rose.)
+  const keyboard = useAnimatedKeyboard();
+  // 0 = compact, 1 = expanded. Animated on toggle; the keyboard cap is applied
+  // inside the worklet so the open/close motion and the keyboard shrink compose.
+  const expandProgress = useSharedValue(1);
   useEffect(() => {
-    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    // Shrink the panel on the keyboard's OWN curve/duration (LayoutAnimation's
-    // built-in `keyboard` type), not the generic easeInEaseOut preset, so the
-    // resize tracks the keyboard rise instead of drifting at its own pace.
-    const syncToKeyboard = (e) => {
-      LayoutAnimation.configureNext({
-        duration: e?.duration || 250,
-        update: { type: LayoutAnimation.Types.keyboard },
-      });
-    };
-    const onShow = (e) => {
-      syncToKeyboard(e);
-      setKbHeight(e?.endCoordinates?.height || 0);
-    };
-    const onHide = (e) => {
-      syncToKeyboard(e);
-      setKbHeight(0);
-    };
-    const s = Keyboard.addListener(showEvt, onShow);
-    const h = Keyboard.addListener(hideEvt, onHide);
-    return () => { s.remove(); h.remove(); };
-  }, []);
+    expandProgress.value = withTiming(expanded ? 1 : 0, {
+      duration: RESIZE_DURATION,
+      easing: RESIZE_EASING,
+    });
+  }, [expanded]);
 
-  // Full-view height, capped to whatever room is left above the keyboard so
-  // the composer below the panel always stays visible. Never smaller than
-  // the compact height (otherwise "expand" could paradoxically shrink it).
-  const expandedHeight = Math.max(
-    COMPACT_MAX_HEIGHT,
-    Math.min(EXPANDED_MAX_HEIGHT, SCREEN_HEIGHT - kbHeight - INPUT_RESERVE),
-  );
+  const animatedPanelStyle = useAnimatedStyle(() => {
+    'worklet';
+    // Full-view height, capped to the room left above the live keyboard so the
+    // composer below always stays visible; never below the compact height.
+    const expandedH = Math.max(
+      COMPACT_MAX_HEIGHT,
+      Math.min(EXPANDED_MAX_HEIGHT, SCREEN_HEIGHT - keyboard.height.value - INPUT_RESERVE),
+    );
+    // Interpolate compact → (keyboard-capped) expanded by the toggle progress.
+    return { height: COMPACT_MAX_HEIGHT + (expandedH - COMPACT_MAX_HEIGHT) * expandProgress.value };
+  });
 
-  const toggleExpanded = () => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpanded(prev => !prev);
-  };
+  const toggleExpanded = () => setExpanded(prev => !prev);
 
   // Keep the newest line in view as output streams in. Re-runs on
   // expand too so opening the full view lands on the latest line. Skipped while
@@ -265,9 +263,9 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
     // Frosted-glass panel — same Telegram blur as the messaging composer
     // (shared via ../../../utils/frostedChat) so the two chat boxes match
     // exactly. The chat messages behind the panel read through the blur.
-    <BlurView
+    <AnimatedBlurView
       {...blurProps(theme)}
-      style={[styles.panel, expanded ? { height: expandedHeight } : { maxHeight: COMPACT_MAX_HEIGHT }]}
+      style={[styles.panel, animatedPanelStyle]}
     >
       <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
       <View style={styles.header}>
@@ -332,7 +330,11 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
       {/* Pending approval + question cards — pinned above the transcript so
           they're always in view, not scrolled away. */}
       {(permissions.length > 0 || questions.length > 0) && (
-        <View style={styles.permList}>
+        <Animated.View
+          entering={FadeIn.duration(220)}
+          exiting={FadeOut.duration(160)}
+          style={styles.permList}
+        >
           {permissions.map((perm) => (
             <PermissionCard
               key={perm.requestId}
@@ -351,23 +353,31 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
               styles={styles}
             />
           ))}
-        </View>
+        </Animated.View>
       )}
 
       {/* Paused banner — the live stream is off; the session is still working
           server-side. Tap to go live and catch up. */}
       {paused && (
-        <TouchableOpacity activeOpacity={0.7} onPress={onToggleLive} style={styles.pausedBanner}>
-          <Icon name="pause-circle-outline" size={14} color={theme.colors.accentWarning} />
-          <Text style={styles.pausedText} numberOfLines={2}>
-            Live log paused — Claude is still working in the background. Tap to go live & catch up.
-          </Text>
-        </TouchableOpacity>
+        <Animated.View entering={FadeIn.duration(220)} exiting={FadeOut.duration(160)}>
+          <TouchableOpacity activeOpacity={0.7} onPress={onToggleLive} style={styles.pausedBanner}>
+            <Icon name="pause-circle-outline" size={14} color={theme.colors.accentWarning} />
+            <Text style={styles.pausedText} numberOfLines={2}>
+              Live log paused — Claude is still working in the background. Tap to go live & catch up.
+            </Text>
+          </TouchableOpacity>
+        </Animated.View>
       )}
 
       <ScrollView
         ref={scrollRef}
-        style={[styles.body, expanded && styles.bodyExpanded]}
+        // ALWAYS flex:1. The panel now has a concrete Reanimated-driven height
+        // in BOTH states, so the body must fill it every frame of the resize —
+        // otherwise, on collapse, dropping flex:1 the instant `expanded` flips
+        // would snap the transcript to ~0 height while the border animated down
+        // around it (a two-part, janky motion). Filling the animated height
+        // keeps it one smooth shrink/grow.
+        style={[styles.body, styles.bodyExpanded]}
         contentContainerStyle={styles.bodyContent}
         keyboardShouldPersistTaps="handled"
       >
@@ -408,7 +418,7 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
           );
         })}
       </ScrollView>
-    </BlurView>
+    </AnimatedBlurView>
   );
 }
 
@@ -425,8 +435,10 @@ const createStyles = (theme) => StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     overflow: 'hidden',
-    // maxHeight is applied inline so it can switch between the compact
-    // card and the full-height "open fully" view (see COMPACT/EXPANDED).
+    // Height is driven inline by Reanimated (animatedPanelStyle) — it
+    // interpolates between COMPACT_MAX_HEIGHT and the keyboard-capped expanded
+    // height so collapse/expand AND the keyboard shrink are one smooth motion
+    // (see expandProgress + useAnimatedKeyboard / RESIZE_*).
   },
   header: {
     flexDirection: 'row',
@@ -504,10 +516,10 @@ const createStyles = (theme) => StyleSheet.create({
   },
   pausedText: { flex: 1, fontSize: 12, color: theme.colors.textSecondary, lineHeight: 16 },
   body: { paddingHorizontal: 12 },
-  // When expanded the panel is a FIXED height, so the scroll body fills the
-  // remaining space (flex:1) — that's what lets the full view occupy all the
-  // room even with little/no log, showing empty space below rather than
-  // collapsing to fit the content. (Compact mode stays content-sized.)
+  // The panel has a concrete (Reanimated-animated) height in BOTH states, so
+  // the scroll body fills the remaining space (flex:1) in both — letting the
+  // view occupy all its room even with little/no log, and keeping the body in
+  // lockstep with the height during the resize. Always applied (see ScrollView).
   bodyExpanded: { flex: 1 },
   bodyContent: { paddingVertical: 10, gap: 6 },
   lineRow: {},

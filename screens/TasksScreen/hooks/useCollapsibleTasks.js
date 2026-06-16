@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { normalizeTags, sortTasks } from '../utils/taskHelpers';
+import { sortTasks, taskPassesFilters } from '../utils/taskHelpers';
 
 /**
  * Hook for managing collapsible task lists with lazy loading
@@ -11,6 +11,7 @@ export const useCollapsibleTasks = (tasks, projects = [], options = {}) => {
     selectedProject = 'All',
     selectedTags = [],
     tagFilterMode = 'any',
+    selectedOwners = [],
     searchQuery = '',
   } = options;
   const trimmedQuery = searchQuery.trim().toLowerCase();
@@ -39,36 +40,19 @@ export const useCollapsibleTasks = (tasks, projects = [], options = {}) => {
     }));
   }, []);
 
-  // Filter tasks
+  // Filter tasks. `showIncompleteOnly` is a list-level toggle handled here;
+  // everything else (owner / project / tags+mode / search) goes through the
+  // shared `taskPassesFilters` predicate so the tree, the calendar, and the
+  // Upcoming agenda all hide exactly the same tasks for a given filter set.
   const filteredTasks = useMemo(() => {
     let result = tasks;
     if (showIncompleteOnly) {
       result = result.filter(t => !t.completed);
     }
-    if (selectedProject !== 'All') {
-      result = result.filter(t => 
-        selectedProject === 'No Project' ? !t.project : t.project === selectedProject
-      );
-    }
-    if (selectedTags.length > 0) {
-      result = result.filter(task => {
-        const taskTags = normalizeTags(task.tags).map(t => t.toLowerCase());
-        const selected = selectedTags.map(t => t.toLowerCase());
-        return tagFilterMode === 'all'
-          ? selected.every(tag => taskTags.includes(tag))
-          : selected.some(tag => taskTags.includes(tag));
-      });
-    }
-    if (isSearching) {
-      result = result.filter(task => {
-        const titleMatches = (task.title || '').toLowerCase().includes(trimmedQuery);
-        if (titleMatches) return true;
-        const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
-        return subtasks.some(st => (st?.title || '').toLowerCase().includes(trimmedQuery));
-      });
-    }
-    return result;
-  }, [tasks, showIncompleteOnly, selectedProject, selectedTags, tagFilterMode, isSearching, trimmedQuery]);
+    return result.filter(t => taskPassesFilters(t, {
+      selectedProject, selectedTags, tagFilterMode, selectedOwners, searchQuery,
+    }));
+  }, [tasks, showIncompleteOnly, selectedProject, selectedTags, tagFilterMode, selectedOwners, searchQuery]);
 
   // Group tasks by project and tags
   const groupedData = useMemo(() => {

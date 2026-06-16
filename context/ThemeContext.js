@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const THEME_STORAGE_KEY = '@connected_pass_theme';
 const TIME_FORMAT_STORAGE_KEY = '@connected_pass_time_format';
+const HIDE_VAULT_BUTTON_KEY = '@connected_pass_hide_vault_button';
 
 // Golden Ratio - 1.618
 const PHI = 1.618;
@@ -190,11 +191,16 @@ const ThemeContext = createContext({
   toggleTheme: () => {},
   timeFormat: '12h', // '12h' (AM/PM, default) | '24h'
   setTimeFormat: () => {},
+  // When true, the Vault tab is hidden from the bottom navbar; the vault is
+  // then reachable only via the /vault command in chat / terminal.
+  hideVaultButton: false,
+  setHideVaultButton: () => {},
 });
 
 export const ThemeProvider = ({ children }) => {
   const [isDark, setIsDark] = useState(true);
   const [timeFormat, setTimeFormatState] = useState('12h');
+  const [hideVaultButton, setHideVaultButtonState] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -211,6 +217,10 @@ export const ThemeProvider = ({ children }) => {
       if (savedFmt === '24h' || savedFmt === '12h') {
         setTimeFormatState(savedFmt);
       }
+      const savedHideVault = await AsyncStorage.getItem(HIDE_VAULT_BUTTON_KEY);
+      if (savedHideVault !== null) {
+        setHideVaultButtonState(savedHideVault === 'true');
+      }
     } catch (error) {
       console.error('Error loading theme:', error);
     } finally {
@@ -225,6 +235,16 @@ export const ThemeProvider = ({ children }) => {
       await AsyncStorage.setItem(TIME_FORMAT_STORAGE_KEY, next);
     } catch (error) {
       console.error('Error saving time format:', error);
+    }
+  };
+
+  const setHideVaultButton = async (hide) => {
+    const next = !!hide;
+    setHideVaultButtonState(next);
+    try {
+      await AsyncStorage.setItem(HIDE_VAULT_BUTTON_KEY, next ? 'true' : 'false');
+    } catch (error) {
+      console.error('Error saving hide-vault-button setting:', error);
     }
   };
 
@@ -246,8 +266,8 @@ export const ThemeProvider = ({ children }) => {
   // setTimeFormat are stable-enough closures; the meaningful deps are the
   // values they expose.
   const value = useMemo(
-    () => ({ theme, isDark, toggleTheme, timeFormat, setTimeFormat }),
-    [theme, isDark, timeFormat],
+    () => ({ theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton }),
+    [theme, isDark, timeFormat, hideVaultButton],
   );
 
   if (isLoading) {

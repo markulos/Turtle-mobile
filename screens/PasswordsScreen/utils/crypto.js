@@ -1,15 +1,19 @@
 import CryptoJS from 'crypto-js';
 import * as SecureStore from 'expo-secure-store';
+import * as Crypto from 'expo-crypto';
 
 const MASTER_KEY_STORE = 'vault_master_key';
 const SALT_STORE = 'vault_salt';
 
-// Generate random hex string
+// Generate random hex string (bytes * 2 chars) from a CSPRNG.
+// Uses expo-crypto's getRandomBytes (synchronous, real CSPRNG) instead of
+// Math.random(), which is NOT cryptographically secure — predictable salts/IVs
+// would weaken the AES-256-CBC vault encryption.
 const generateRandomHex = (bytes) => {
-  const chars = '0123456789abcdef';
+  const random = Crypto.getRandomBytes(bytes); // CSPRNG, synchronous Uint8Array
   let result = '';
-  for (let i = 0; i < bytes * 2; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  for (let i = 0; i < random.length; i++) {
+    result += random[i].toString(16).padStart(2, '0');
   }
   return result;
 };

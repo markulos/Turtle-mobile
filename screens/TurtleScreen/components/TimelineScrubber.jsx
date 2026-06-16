@@ -53,22 +53,36 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 // on Android until then; silent no-op on iOS without the module.
 let _Haptics = null;
 try { _Haptics = require('expo-haptics'); } catch (e) { _Haptics = null; }
+// Per-month tick while scrubbing. A "Rigid" impact is the crisp, percussive
+// tap Google Photos uses on each boundary — far more satisfying than the faint
+// selectionAsync tick. Fall back down the chain on older expo-haptics / Android.
 const tickHaptic = () => {
   try {
+    if (_Haptics && _Haptics.impactAsync) {
+      const s = _Haptics.ImpactFeedbackStyle || {};
+      _Haptics.impactAsync(s.Rigid || s.Light);
+      return;
+    }
     if (_Haptics && _Haptics.selectionAsync) { _Haptics.selectionAsync(); return; }
-    if (Platform.OS === 'android') Vibration.vibrate(4);
+    if (Platform.OS === 'android') Vibration.vibrate(8);
   } catch (e) { /* haptics are garnish, never an error */ }
 };
+// Grab feels firmer than a tick — a Medium impact when you catch the handle.
 const grabHaptic = () => {
   try {
-    if (_Haptics && _Haptics.impactAsync) { _Haptics.impactAsync(_Haptics.ImpactFeedbackStyle.Light); return; }
+    if (_Haptics && _Haptics.impactAsync) {
+      const s = _Haptics.ImpactFeedbackStyle || {};
+      _Haptics.impactAsync(s.Medium || s.Light);
+      return;
+    }
+    if (Platform.OS === 'android') { Vibration.vibrate(12); return; }
     tickHaptic();
   } catch (e) { /* ignore */ }
 };
 
 const AnimatedTextInput = Reanimated.createAnimatedComponent(TextInput);
 
-const THUMB = 18;            // resting thumb diameter
+const THUMB = 24;            // resting thumb diameter (bigger Google-Photos-style grab handle)
 const RAIL_W = 36;           // touch strip width
 const HIDE_DELAY_MS = 1400;  // idle time before the rail fades
 
@@ -158,9 +172,11 @@ const TimelineScrubber = ({
 
   const jumpThrottled = (f) => {
     'worklet';
-    // One grid row (3 items) of travel between jumps keeps scrollToOffset
-    // calls sparse while still feeling 1:1 under the finger.
-    if (lastSent.value < 0 || Math.abs(f - lastSent.value) * Math.max(1, data.total) >= 3 || f <= 0 || f >= 1) {
+    // Fire onJump once per single item of travel (was 3 = a full grid row). The
+    // tighter gate makes the grid track the finger much more closely — the rail
+    // feels responsive rather than stepping a row at a time — while still
+    // coalescing sub-item jitter so scrollToOffset isn't called every frame.
+    if (lastSent.value < 0 || Math.abs(f - lastSent.value) * Math.max(1, data.total) >= 1 || f <= 0 || f >= 1) {
       lastSent.value = f;
       runOnJS(onJump)(f);
     }
@@ -172,9 +188,10 @@ const TimelineScrubber = ({
   // stays put the instant you grab it, then follows your finger 1:1. This is the
   // Google-Photos handle feel — tapping elsewhere on the rail does nothing.
   const pan = Gesture.Pan()
-    // Generous invisible grab zone around the small visible dot so it's easy to
-    // catch with a thumb, without making the rest of the rail touchable.
-    .hitSlop({ top: 14, bottom: 14, left: 16, right: 6 })
+    // Generous invisible grab zone around the visible handle so it's easy to
+    // catch with a thumb (Google-Photos-sized), without making the rest of the
+    // rail touchable.
+    .hitSlop({ top: 22, bottom: 22, left: 30, right: 12 })
     .onBegin(() => {
       'worklet';
       dragging.value = 1;
@@ -372,7 +389,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     padding: 0,
     margin: 0,
-    minWidth: 86,
+    // Sized to fit the widest month name ("September" at 16px/800 + spacing).
+    // A right-aligned single-line TextInput clips its content when it overflows,
+    // so the field must always be at least as wide as the longest label.
+    minWidth: 112,
     textAlign: 'right',
   },
   bubbleCount: {
@@ -381,7 +401,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     padding: 0,
     margin: 0,
-    minWidth: 86,
+    minWidth: 112,
     textAlign: 'right',
   },
 });

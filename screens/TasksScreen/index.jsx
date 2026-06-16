@@ -31,13 +31,23 @@ import { useTheme } from '../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTaskData } from './hooks/useTaskData';
 import { useCollapsibleTasks } from './hooks/useCollapsibleTasks';
-import { advanceDueDate, itemTypeOf } from './utils/taskHelpers';
+import { advanceDueDate, itemTypeOf, taskPassesFilters } from './utils/taskHelpers';
 
 // An event is "over" once its end is in the past — start time + duration (a
 // default hour when unset), or the end of its day for an all-day event. Used to
 // auto-tick events off the calendar; birthdays and recurring items are exempt
 // (they're not one-shot, so "done forever" would be wrong).
 const EVENT_DEFAULT_DURATION_MIN = 60;
+
+// Same stable per-owner colour as the calendar badges and the FilterMenu
+// swatch (hash userId → hue), so the active-filter chip matches everywhere.
+const ownerColor = (userId) => {
+  if (!userId) return '#888888';
+  let h = 0;
+  for (let i = 0; i < userId.length; i++) h = (h * 31 + userId.charCodeAt(i)) % 360;
+  return `hsl(${h}, 60%, 52%)`;
+};
+
 const eventIsOver = (item, nowMs) => {
   if (!item || itemTypeOf(item) !== 'event') return false;
   if (item.recurring && item.recurring !== 'none') return false;
@@ -64,6 +74,8 @@ import {
   CalendarView,
 } from './components';
 import FriendCard from '../TurtleScreen/components/FriendCard';
+import { useNavigation } from '@react-navigation/native';
+import { useCommandBus } from '../../context/CommandBusContext';
 
 // Must match MAX_HEIGHT in ProjectDropdown.jsx — the page below the picker
 // is translated down by exactly this much as the picker reveals, so the two
@@ -79,6 +91,8 @@ export default function TasksScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const { isConnected, api } = useServer();
+  const navigation = useNavigation();
+  const { dispatch: dispatchCommand } = useCommandBus();
   const menuAnimation = useRef(new Animated.Value(0)).current;
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFilterMenu, setShowFilterMenu] = useState(false);
@@ -284,22 +298,13 @@ export default function TasksScreen() {
   const dayStats = useMemo(() => {
     const d = calendarDate instanceof Date ? calendarDate : new Date();
     const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    const passesFilter = (t) => {
-      if (selectedProject !== 'All') {
-        const matches = selectedProject === 'No Project' ? !t.project : (t.project || 'No Project') === selectedProject;
-        if (!matches) return false;
-      }
-      if (selectedTags.length > 0) {
-        const tt = t.tags || [];
-        if (tagFilterMode === 'all') { if (!selectedTags.every((x) => tt.includes(x))) return false; }
-        else if (!selectedTags.some((x) => tt.includes(x))) return false;
-      }
-      return true;
-    };
-    const scheduled = tasks.filter((t) => t.dueDate === dateStr && passesFilter(t));
+    // Same shared active-filter predicate as the tree/calendar/agenda (owner +
+    // project + tags) so the header count agrees with what's actually shown.
+    const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners };
+    const scheduled = tasks.filter((t) => t.dueDate === dateStr && taskPassesFilters(t, filters));
     const completed = scheduled.filter((t) => t.completed).length;
     return { total: scheduled.length, completed };
-  }, [tasks, calendarDate, selectedProject, selectedTags, tagFilterMode]);
+  }, [tasks, calendarDate, selectedProject, selectedTags, tagFilterMode, selectedOwners]);
   const dayPct = dayStats.total ? Math.round((dayStats.completed / dayStats.total) * 100) : 0;
 
   // Project colors - distinct colors that work well with green/yellow palette
@@ -347,23 +352,27 @@ export default function TasksScreen() {
     selectedProject,
     selectedTags,
     tagFilterMode,
+    selectedOwners,
     searchQuery,
   });
 
-  // "Upcoming" agenda shown ABOVE the by-topic project tree in the list view.
-  // A global summary (independent of the project/tag filter below) so "what's
-  // next" is always one glance away. Two bands, in this order:
+  // "Upcoming" agenda shown ABOVE the by-topic project tree in the list view —
+  // a quick "what's next" glance. Two bands, in this order:
   //   1. TIMED tasks dated today or later — the actually-scheduled stuff,
   //      soonest first (by date then time).
   //   2. UNTIMED open tasks ("pending" — added to a day without confirming a
   //      time, or no date at all). NOT limited to today; just open tasks,
   //      newest-created first.
+  // It now honors the SAME active filters as the tree/calendar (owner / project
+  // / tags+mode / search) via the shared `taskPassesFilters`, so selecting a
+  // person or project narrows the agenda in lockstep with everything else.
   // Items here also appear in their project/topic group below — that
   // duplication is intentional (quick agenda + organised tree).
   const upcomingTasks = useMemo(() => {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    const open = (tasks || []).filter((t) => t && !t.completed);
+    const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners, searchQuery };
+    const open = (tasks || []).filter((t) => t && !t.completed && taskPassesFilters(t, filters));
     const timed = open
       .filter((t) => t.time && typeof t.dueDate === 'string' && t.dueDate >= todayStr)
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || String(a.time).localeCompare(String(b.time)));
@@ -371,7 +380,7 @@ export default function TasksScreen() {
       .filter((t) => !t.time)
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     return [...timed, ...untimed];
-  }, [tasks]);
+  }, [tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners, searchQuery]);
 
   // Prepend the upcoming section to the grouped tree (only when it has items);
   // a section footer renders the gap before the project tree.
@@ -711,7 +720,7 @@ export default function TasksScreen() {
   }
 
   // Check if any filters active
-  const hasActiveFilters = !showIncompleteOnly || selectedTags.length > 0;
+  const hasActiveFilters = !showIncompleteOnly || selectedTags.length > 0 || selectedOwners.length > 0;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -780,7 +789,7 @@ export default function TasksScreen() {
             {hasActiveFilters && (
               <View style={styles.headerFilterBadge}>
                 <Text style={styles.headerFilterBadgeText}>
-                  {selectedTags.length + (!showIncompleteOnly ? 1 : 0)}
+                  {selectedTags.length + selectedOwners.length + (!showIncompleteOnly ? 1 : 0)}
                 </Text>
               </View>
             )}
@@ -877,13 +886,32 @@ export default function TasksScreen() {
               <View key={tag} style={[styles.filterChip, styles.tagFilterChip]}>
                 <Icon name="tag" size={12} color={theme.colors.textPrimary} />
                 <Text style={[styles.filterChipText, styles.tagFilterChipText]}>{tag}</Text>
-                <TouchableOpacity onPress={() => 
+                <TouchableOpacity onPress={() =>
                   setSelectedTags(prev => prev.filter(t => t !== tag))
                 }>
                   <Icon name="close" size={14} color={theme.colors.textTertiary} />
                 </TouchableOpacity>
               </View>
             ))}
+            {/* Whose-tasks selections — one chip per selected owner, with the
+                same colour dot the calendar badges carry. Tap × to drop just
+                that person; this mirrors how the tag chips above work. */}
+            {selectedOwners.map(ownerId => {
+              const owner = owners.find(o => o.userId === ownerId);
+              return (
+                <View key={ownerId} style={[styles.filterChip, styles.ownerFilterChip]}>
+                  <View style={[styles.ownerFilterDot, { backgroundColor: ownerColor(ownerId) }]} />
+                  <Text style={[styles.filterChipText, styles.tagFilterChipText]}>
+                    {owner ? owner.ownerName : 'Unknown'}
+                  </Text>
+                  <TouchableOpacity onPress={() =>
+                    setSelectedOwners(prev => prev.filter(id => id !== ownerId))
+                  }>
+                    <Icon name="close" size={14} color={theme.colors.textTertiary} />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
           </Animated.ScrollView>
         </View>
       )}
@@ -972,6 +1000,15 @@ export default function TasksScreen() {
         onDelete={() => { handleDelete(selectedTask.id); setShowDetail(false); }}
         onTagPress={() => {}}
         onToggleSubtask={handleToggleSubtask}
+        onStartPomodoro={() => {
+          // Route through the Turtle chat's /pomodoro pipeline (CommandBus
+          // delivers it exactly as if typed); the task title rides along as the
+          // session label. Then jump to the Turtle tab where the timer lives.
+          const label = (selectedTask?.title || '').trim();
+          dispatchCommand(label ? `/pomodoro focus ${label}` : '/pomodoro focus');
+          setShowDetail(false);
+          navigation.navigate('Turtle');
+        }}
       />
 
       {/* Owner profile — opened by tapping a task's owner badge on the shared
@@ -1844,8 +1881,17 @@ const createStyles = (theme) => StyleSheet.create({
   warningChip: { 
     backgroundColor: 'rgba(255, 193, 7, 0.15)' 
   },
-  tagFilterChip: { 
-    backgroundColor: theme.colors.surface 
+  tagFilterChip: {
+    backgroundColor: theme.colors.surface
+  },
+  ownerFilterChip: {
+    backgroundColor: theme.colors.surface,
+  },
+  ownerFilterDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 2,
   },
   filterChipText: { 
     fontSize: theme.typography.body, 

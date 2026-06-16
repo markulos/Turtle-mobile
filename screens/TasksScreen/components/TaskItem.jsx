@@ -39,7 +39,7 @@ const TaskItemImpl = ({
   scrollToItem,
   keyboardVisible
 }) => {
-  const { theme } = useTheme();
+  const { theme, timeFormat } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [editingSubtaskId, setEditingSubtaskId] = useState(null);
@@ -138,7 +138,7 @@ const TaskItemImpl = ({
                   <View style={styles.timeBadge}>
                     <Icon name="clock" size={12} color={theme.colors.background} />
                     <Text style={styles.timeText}>
-                      {formatTime12h(item.time)}
+                      {formatTime12h(item.time, { timeFormat })}
                     </Text>
                   </View>
                 )}
@@ -256,7 +256,7 @@ const TaskItemImpl = ({
                     <View style={styles.editSubtaskTimeBadge}>
                       <Icon name="clock" size={12} color={theme.colors.background} />
                       <Text style={styles.editSubtaskTimeText}>
-                        {formatTime12h(editSubtaskTime)}
+                        {formatTime12h(editSubtaskTime, { timeFormat })}
                       </Text>
                     </View>
                   )}
@@ -275,7 +275,7 @@ const TaskItemImpl = ({
                         <View style={styles.subtaskTimeBadge}>
                           <Icon name="clock" size={8} color={theme.colors.accentPrimary} />
                           <Text style={styles.subtaskTimeText}>
-                            {formatTime12h(subtask.time, { meridiem: false })}
+                            {formatTime12h(subtask.time, { meridiem: false, timeFormat })}
                           </Text>
                         </View>
                       )}

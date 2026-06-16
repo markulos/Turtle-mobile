@@ -42,6 +42,43 @@ const rm = async (uri) => {
   try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch (e) { /* ignore */ }
 };
 
+// Recursively sum the byte size of everything under `uri`. Directories are
+// walked; files contribute their `size`. Best-effort: anything unreadable is
+// skipped so a single bad entry can't fail the whole measurement.
+const dirSize = async (uri) => {
+  let info;
+  try { info = await FileSystem.getInfoAsync(uri, { size: true }); } catch (e) { return 0; }
+  if (!info || !info.exists) return 0;
+  if (!info.isDirectory) return info.size || 0;
+  let names;
+  try { names = await FileSystem.readDirectoryAsync(uri); } catch (e) { return 0; }
+  // Ensure a trailing slash before joining child names.
+  const prefix = uri.endsWith('/') ? uri : `${uri}/`;
+  const sizes = await Promise.all(names.map((n) => dirSize(`${prefix}${n}`)));
+  return sizes.reduce((a, b) => a + b, 0);
+};
+
+// Total bytes the app cache is currently occupying. This walks
+// FileSystem.cacheDirectory, which holds the transient temp dirs, leftover
+// share files, AND expo-image's persistent disk cache (it lives under the same
+// OS caches directory) — i.e. exactly what clearAllCaches() wipes.
+export async function getCacheSizeBytes() {
+  const base = baseDir();
+  if (!base) return 0;
+  return dirSize(base);
+}
+
+// "1.4 GB" / "327 MB" / "812 KB" / "0 B" — compact human-readable bytes.
+export function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let val = n / 1024;
+  let i = 0;
+  while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
+  return `${val < 10 ? val.toFixed(1) : Math.round(val)} ${units[i]}`;
+}
+
 // Always-safe, cheap cleanup. Safe to run on every background.
 export async function sweepTransientCaches() {
   const base = baseDir();

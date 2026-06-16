@@ -1,13 +1,19 @@
 // Format a "HH:MM" 24-hour time string into a 12-hour label, e.g.
 // "14:05" → "2:05 PM". Pass { meridiem: false } for the compact subtask
 // badge that omits the AM/PM suffix ("2:05"). Returns '' for empty input.
-export const formatTime12h = (time, { meridiem = true } = {}) => {
+// `timeFormat` honors the user's Calendar setting ('12h' | '24h'). In 24h mode
+// we return e.g. "14:05" (meridiem is irrelevant); in 12h mode, "2:05 PM" (or
+// "2:05" when meridiem:false for the compact subtask badge). Pass timeFormat
+// from the ThemeContext setting so the toggle actually takes effect.
+export const formatTime12h = (time, { meridiem = true, timeFormat = '12h' } = {}) => {
   if (!time || typeof time !== 'string') return '';
   const [h, m] = time.split(':').map(Number);
   if (Number.isNaN(h) || Number.isNaN(m)) return time;
+  const mm = m.toString().padStart(2, '0');
+  if (timeFormat === '24h') return `${h.toString().padStart(2, '0')}:${mm}`;
   const isPM = h >= 12;
   const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  const base = `${displayH}:${m.toString().padStart(2, '0')}`;
+  const base = `${displayH}:${mm}`;
   return meridiem ? `${base} ${isPM ? 'PM' : 'AM'}` : base;
 };
 
@@ -143,8 +149,55 @@ export const normalizeTags = (tags) => {
   return tags.split(',').map(t => t.trim()).filter(Boolean);
 };
 
-export const parseTags = (input) => 
+export const parseTags = (input) =>
   input.split(/[,\s]+/).map(t => t.trim().toLowerCase()).filter(Boolean);
+
+// ── Canonical active-filter predicate ─────────────────────────────────
+// THE single source of truth for "does this task survive the active
+// filters?", shared by the calendar grid, the project tree, and the
+// Upcoming agenda so every surface agrees on what a filter hides. Covers
+// the owner ("whose tasks") filter + project + tags(+mode) + an optional
+// text search (title or any subtask title). `showIncompleteOnly` is
+// deliberately NOT here — it's a list-level concern each caller applies
+// itself (e.g. the Upcoming agenda is always incomplete-only).
+//   • selectedOwners — empty/undefined ⇒ everyone; a task with no userId
+//     hides only when a specific owner set is active.
+//   • selectedProject — 'All' ⇒ every project; else exact match
+//     ('No Project' matches tasks with no project).
+//   • selectedTags + tagFilterMode ('any' | 'all').
+//   • searchQuery — trimmed/lowercased substring over title + subtasks.
+export const taskPassesFilters = (task, {
+  selectedProject = 'All',
+  selectedTags = [],
+  tagFilterMode = 'any',
+  selectedOwners = [],
+  searchQuery = '',
+} = {}) => {
+  if (!task) return false;
+  if (selectedOwners && selectedOwners.length > 0) {
+    if (!task.userId || !selectedOwners.includes(task.userId)) return false;
+  }
+  if (selectedProject !== 'All') {
+    const taskProject = task.project || 'No Project';
+    if (taskProject !== selectedProject) return false;
+  }
+  if (selectedTags && selectedTags.length > 0) {
+    const taskTagSet = new Set(normalizeTags(task.tags).map(t => t.toLowerCase()));
+    const needles = selectedTags.map(t => t.toLowerCase());
+    const ok = tagFilterMode === 'all'
+      ? needles.every(tag => taskTagSet.has(tag))
+      : needles.some(tag => taskTagSet.has(tag));
+    if (!ok) return false;
+  }
+  const q = (searchQuery || '').trim().toLowerCase();
+  if (q) {
+    const titleMatch = (task.title || '').toLowerCase().includes(q);
+    const subMatch = Array.isArray(task.subtasks)
+      && task.subtasks.some(st => (st?.title || '').toLowerCase().includes(q));
+    if (!titleMatch && !subMatch) return false;
+  }
+  return true;
+};
 
 export const sortTasks = (a, b) => {
   // First sort by completion status (incomplete first)

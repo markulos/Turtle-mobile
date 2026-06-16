@@ -32,6 +32,7 @@ export const TaskDetail = ({
   onTagPress,
   onToggleSubtask,
   onQueueForClaude,
+  onStartPomodoro,
 }) => {
   const { theme } = useTheme();
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -320,6 +321,21 @@ export const TaskDetail = ({
               </View>
             )}
 
+            {/* Start a focus timer for this task. Routes through the Turtle
+                chat's /pomodoro pipeline (the task title rides along as the
+                session label), then jumps to the Turtle tab where the timer
+                card lives. */}
+            {onStartPomodoro && (
+              <TouchableOpacity
+                style={styles.pomodoroBtn}
+                onPress={onStartPomodoro}
+                activeOpacity={0.85}
+              >
+                <Icon name="timer-outline" size={20} color={theme.colors.textPrimary} />
+                <Text style={styles.pomodoroText}>Start Pomodoro</Text>
+              </TouchableOpacity>
+            )}
+
             {/* Hand this task off to the Claude session (Turtle tab). It's
                 added to a queue that Claude works through one at a time. */}
             {onQueueForClaude && (
@@ -556,6 +572,24 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textMuted,
   },
   
+  pomodoroBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 20,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: 1,
+    // accentPrimary is a web-only token (undefined on mobile); accentInfo is the
+    // valid blue accent here.
+    borderColor: theme.colors.accentInfo || theme.colors.border,
+  },
+  pomodoroText: {
+    color: theme.colors.textPrimary,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
   claudeQueueBtn: {
     flexDirection: 'row',
     alignItems: 'center',
