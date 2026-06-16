@@ -26,6 +26,24 @@ export const serverOrigin = (raw) => {
   return s.includes(':') ? `http://${s}` : `http://${s}:3000`;
 };
 
+// Candidate HTTP/2 origin for MEDIA bytes (thumbnails, photos), served by the TLS
+// listener on :3443 (server.js). A grid fires ~150 tiny WebP GETs per page; over
+// HTTP/1.1 they serialize behind the ~6-connection cap, while HTTP/2 multiplexes
+// them on one stream. We only USE this after a successful probe (see
+// checkConnection): if the device doesn't trust the cert, or :3443 is
+// unreachable, the probe fails and media silently falls back to the http origin —
+// so this can never break image loading, it only upgrades the transport when it
+// can. An already-https saved server (e.g. a Tailscale Funnel with a real cert)
+// is its own candidate.
+const HTTPS_MEDIA_PORT = 3443;
+export const h2MediaCandidate = (raw) => {
+  const s = String(raw || '').trim().replace(/\/+$/, '');
+  if (!s) return '';
+  if (/^https:\/\//i.test(s)) return s;
+  const host = s.replace(/^https?:\/\//i, '').split(':')[0];
+  return host ? `https://${host}:${HTTPS_MEDIA_PORT}` : '';
+};
+
 // Module-level JWT holder. The api wrapper attaches this as a Bearer token on
 // every request. AuthContext sits BELOW ServerProvider in the tree (it calls
 // useServer()), so ServerContext can't read it directly — instead AuthContext
@@ -81,6 +99,11 @@ export const ServerProvider = ({ children }) => {
   const [serverIP, setServerIP] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Origin for MEDIA bytes. '' = use the plain http origin (the default AND the
+  // fallback). Only set to the https://host:3443 HTTP/2 listener after a
+  // successful probe, so an untrusted cert or a closed :3443 can never break
+  // image loading — it just stays on http.
+  const [mediaOrigin, setMediaOrigin] = useState('');
 
   useEffect(() => {
     loadSavedIP();
@@ -89,9 +112,15 @@ export const ServerProvider = ({ children }) => {
   // Keep the interceptor's origin matcher current as the saved server changes.
   useEffect(() => {
     _serverApiOrigin = serverIP ? serverOrigin(serverIP) : '';
+    setMediaOrigin(''); // reset; re-probed by checkConnection for the new server
   }, [serverIP]);
 
   const getBaseUrl = () => `${serverOrigin(serverIP)}/api`;
+  // Base URL for MEDIA bytes — the probed HTTP/2 origin when available, else the
+  // http origin. Image components build thumbnail/photo URLs against THIS (not
+  // getBaseUrl), so the grid's many small GETs multiplex over HTTP/2 when the
+  // device trusts the cert; otherwise it is byte-for-byte the current http path.
+  const getMediaBaseUrl = () => `${mediaOrigin || serverOrigin(serverIP)}/api`;
 
   const apiGet = async (endpoint) => {
     const response = await fetch(`${getBaseUrl()}${endpoint}`, { headers: { ...authHeader() } });
@@ -196,22 +225,44 @@ export const ServerProvider = ({ children }) => {
     }
   };
 
+  // Probe the HTTP/2 media listener (:3443). On success, route media bytes over
+  // it; on ANY failure (untrusted cert, :3443 closed, timeout) fall back to the
+  // http origin. Best-effort + non-blocking — never throws into checkConnection.
+  const probeHttp2Media = async (ip) => {
+    const cand = h2MediaCandidate(ip);
+    if (!cand) { setMediaOrigin(''); return; }
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 3000);
+      const r = await fetch(`${cand}/api/health`, { signal: controller.signal });
+      clearTimeout(t);
+      setMediaOrigin(r.ok ? cand : '');
+    } catch (e) {
+      setMediaOrigin(''); // cert untrusted / unreachable → stay on http
+    }
+  };
+
   const checkConnection = async (ip) => {
     setLoading(true);
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
-      
+
       const response = await fetch(`${serverOrigin(ip)}/api/health`, {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
-      
+
       const connected = response.ok;
       setIsConnected(connected);
+      // Reachable over http — now see if HTTP/2 (:3443) is also reachable+trusted
+      // for media. Fire-and-forget; updates mediaOrigin when it resolves.
+      if (connected) probeHttp2Media(ip);
+      else setMediaOrigin('');
       return connected;
     } catch (error) {
       setIsConnected(false);
+      setMediaOrigin('');
       return false;
     } finally {
       setLoading(false);
@@ -223,9 +274,9 @@ export const ServerProvider = ({ children }) => {
   // plus stable setState setters, so serverIP/isConnected/loading are the only
   // deps that change what this value represents.
   const value = useMemo(
-    () => ({ serverIP, isConnected, loading, saveIP, checkConnection, getBaseUrl, api }),
+    () => ({ serverIP, isConnected, loading, saveIP, checkConnection, getBaseUrl, getMediaBaseUrl, api }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [serverIP, isConnected, loading],
+    [serverIP, isConnected, loading, mediaOrigin],
   );
 
   return (

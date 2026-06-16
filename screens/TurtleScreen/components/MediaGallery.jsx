@@ -624,7 +624,7 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
  */
 export default function MediaGallery({ onClose, autoUpload = false }) {
   const { theme } = useTheme();
-  const { api, getBaseUrl } = useServer();
+  const { api, getBaseUrl, getMediaBaseUrl } = useServer();
   const { token } = useAuth();
   const insets = useSafeAreaInsets();
   
@@ -3023,11 +3023,16 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     }
   }, [selectedMedia, api, selectedAlbum]);
 
-  // Helper to construct full URL
+  // Helper to construct a full MEDIA url. Built off the media origin (HTTP/2 when
+  // the device can reach + trust :3443, probed in ServerContext; else the plain
+  // http origin), so the grid's many small thumbnail GETs can multiplex over one
+  // HTTP/2 stream when available. Falls back to getBaseUrl if an older provider
+  // doesn't expose getMediaBaseUrl yet.
   const getFullUrl = useCallback((path) => {
-    const baseUrl = getBaseUrl().replace(/\/api$/, '');
+    const base = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl());
+    const baseUrl = base.replace(/\/api$/, '');
     return `${baseUrl}${path}`;
-  }, [getBaseUrl]);
+  }, [getMediaBaseUrl, getBaseUrl]);
 
   // Warm expo-image's cache for the loaded pages immediately around the
   // viewport (±1 page ≈ the current screen + its neighbours). Called as pages
