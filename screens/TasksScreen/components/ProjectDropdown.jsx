@@ -88,6 +88,9 @@ export const ProjectDropdown = ({
   onSelect,
   onManage,
   onAddProject,
+  // Board name → display name of whoever shared it WITH me. Such rows get a
+  // "shared in" people glyph + a folder-account icon so they read as not-mine.
+  incomingShareLabels = {},
 }) => {
   const { theme } = useTheme();
   const [newProjectName, setNewProjectName] = useState('');
@@ -176,6 +179,7 @@ export const ProjectDropdown = ({
       >
         {items.map(({ key, icon, label }) => {
           const isActive = selected === key;
+          const sharedBy = incomingShareLabels[key];
           return (
             <TouchableOpacity
               key={key}
@@ -184,7 +188,7 @@ export const ProjectDropdown = ({
               activeOpacity={0.6}
             >
               <Icon
-                name={icon}
+                name={sharedBy ? 'folder-account' : icon}
                 size={20}
                 color={isActive ? theme.colors.textPrimary : theme.colors.textSecondary}
               />
@@ -194,6 +198,15 @@ export const ProjectDropdown = ({
               >
                 {label}
               </Text>
+              {sharedBy ? (
+                <Icon
+                  name="account-multiple"
+                  size={14}
+                  color={theme.colors.accentInfo}
+                  style={{ marginRight: 6 }}
+                  accessibilityLabel={`Shared by ${sharedBy}`}
+                />
+              ) : null}
               <Text style={styles.count}>{getCount(key)}</Text>
             </TouchableOpacity>
           );

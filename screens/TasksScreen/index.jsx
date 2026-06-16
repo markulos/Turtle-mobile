@@ -260,6 +260,25 @@ export default function TasksScreen() {
     lazyRefresh,
   } = useTaskData(api, isConnected);
 
+  // Boards shared WITH me → { boardName: sharerDisplayName }, for the picker's
+  // "shared in" badge. The board names themselves already arrive via GET
+  // /projects (now scoped to mine + shared); this just labels which are shared.
+  const [sharedInLabels, setSharedInLabels] = useState({});
+  useEffect(() => {
+    if (!isConnected) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const sh = await api.get('/shares');
+        if (cancelled) return;
+        const map = {};
+        for (const s of Array.isArray(sh?.incoming) ? sh.incoming : []) map[s.project] = s.fromName;
+        setSharedInLabels(map);
+      } catch { /* keep last */ }
+    })();
+    return () => { cancelled = true; };
+  }, [api, isConnected]);
+
   // Always-current snapshot of `tasks` so the row handlers below (held by
   // memoized TaskItem rows) read the LATEST array, never a stale closure.
   const tasksRef = useRef(tasks);
@@ -1431,6 +1450,7 @@ export default function TasksScreen() {
         }}
         onManage={() => setShowProjectManager(true)}
         onAddProject={addProject}
+        incomingShareLabels={sharedInLabels}
       />
       </View>
 
