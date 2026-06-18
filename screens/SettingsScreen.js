@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import ParticipantPicker from './TasksScreen/components/ParticipantPicker';
+import CalendarPartners from './TasksScreen/components/CalendarPartners';
 import {
   View,
   Text,
@@ -51,6 +53,7 @@ export default function SettingsScreen({ active = true }) {
   const [nameInput, setNameInput] = useState('');
   const [savingName, setSavingName] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [defaultParticipants, setDefaultParticipants] = useState([]); // calendar: auto-added to new tasks
   // Server origin (no /api) so a server-relative avatar_url resolves to a full URL.
   const serverBase = getBaseUrl().replace(/\/api$/, '');
   // A server-relative avatar ('/api/avatars/…') needs the origin prepended; an
@@ -69,8 +72,19 @@ export default function SettingsScreen({ active = true }) {
           stats: res.user.stats || null,   // { points, tasksCompleted, tasksCreated, pomodoros } — may be absent on an older server
         });
         setNameInput(res.user.displayName || '');
+        setDefaultParticipants(
+          Array.isArray(res.user.settings?.defaultParticipants) ? res.user.settings.defaultParticipants : [],
+        );
       }
     } catch (e) { /* offline / not logged in — profile section just shows defaults */ }
+  }, [api]);
+
+  // Persist the calendar default-participants list (optimistic; next load reconciles).
+  const handleChangeDefaults = useCallback(async (ids) => {
+    setDefaultParticipants(ids);
+    try {
+      await api.patch('/me/settings', { defaultParticipants: ids });
+    } catch (e) { /* keep optimistic */ }
   }, [api]);
 
   useEffect(() => { loadProfile(); }, [loadProfile]);
@@ -629,6 +643,29 @@ export default function SettingsScreen({ active = true }) {
                   trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
                   thumbColor={timeFormat === '24h' ? theme.colors.textPrimary : theme.colors.textTertiary}
                 />
+              </View>
+              {/* Default participants — pond members auto-added to tasks you create */}
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Default participants</Text>
+                  <Text style={styles.settingDescription}>People always added to tasks you create</Text>
+                </View>
+              </View>
+              <View style={{ paddingHorizontal: 16, paddingBottom: 14, marginTop: -6 }}>
+                <ParticipantPicker selected={defaultParticipants} onChange={handleChangeDefaults} />
+              </View>
+
+              {/* Calendar partners — share your whole calendar with a partner (view-only),
+                  and see partners' calendars merged onto yours. Backed by /api/shares
+                  'all-tasks'; partner tasks render with owner badges (multiUser). */}
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Calendar partners</Text>
+                  <Text style={styles.settingDescription}>See a partner&rsquo;s tasks on your calendar, and share yours with them</Text>
+                </View>
+              </View>
+              <View style={{ paddingHorizontal: 16, paddingBottom: 16, marginTop: -6 }}>
+                <CalendarPartners />
               </View>
             </View>
             )}

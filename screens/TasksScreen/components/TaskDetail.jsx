@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Modal,
   View,
   Text,
+  TextInput,
   TouchableOpacity,
   ScrollView,
   StyleSheet,
@@ -11,6 +12,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
+import { useServer } from '../../../context/ServerContext';
 import { normalizeTags, getPriorityColor, areAllSubtasksCompleted, itemTypeOf, itemColorOf } from '../utils/taskHelpers';
 import { REMINDER_OPTIONS } from '../utils/constants';
 
@@ -21,6 +23,17 @@ import { REMINDER_OPTIONS } from '../utils/constants';
 const EDGE_BACK_ZONE_PX = 24;
 const EDGE_BACK_COMMIT_DX = 80;
 const EDGE_BACK_COMMIT_VX = 0.5;
+
+const commentInitials = (name) => (String(name || '').match(/\b\w/g) || ['?']).slice(0, 2).join('').toUpperCase();
+const fmtCommentTime = (ms) => {
+  try {
+    const d = new Date(ms);
+    const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return d.toDateString() === new Date().toDateString()
+      ? t
+      : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} · ${t}`;
+  } catch { return ''; }
+};
 
 export const TaskDetail = ({ 
   task, 
@@ -35,9 +48,51 @@ export const TaskDetail = ({
   onStartPomodoro,
 }) => {
   const { theme } = useTheme();
+  const { api } = useServer();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [isClosing, setIsClosing] = useState(false);
-  
+  const [pomoCount, setPomoCount] = useState(0);
+  const [comments, setComments] = useState([]);
+  const [commentDraft, setCommentDraft] = useState('');
+  const [postingComment, setPostingComment] = useState(false);
+
+  // Per-task completed-pomodoro count for the meta chip (read-only on mobile;
+  // removing some lives in the web edit modal). Refetched when the sheet opens.
+  useEffect(() => {
+    if (!visible || !task?.id) return;
+    let cancelled = false;
+    api.get(`/pomodoros?taskId=${encodeURIComponent(task.id)}`)
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res?.pomodoros) ? res.pomodoros : [];
+        setPomoCount(list.filter((p) => p.status === 'completed' && p.completedAt).length);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [api, visible, task?.id]);
+
+  // Comment thread — anyone who can SEE the task (owner, shared-board, involved)
+  // may read + reply; the server gates by taskVisibility. Loaded on open.
+  const loadComments = useCallback(async () => {
+    if (!task?.id) return;
+    try {
+      const res = await api.get(`/tasks/${task.id}/comments`);
+      setComments(Array.isArray(res?.comments) ? res.comments : []);
+    } catch { /* keep last */ }
+  }, [api, task?.id]);
+  useEffect(() => { if (visible && task?.id) loadComments(); }, [visible, task?.id, loadComments]);
+  const postComment = useCallback(async () => {
+    const content = commentDraft.trim();
+    if (!content || postingComment) return;
+    setPostingComment(true);
+    try {
+      const res = await api.post(`/tasks/${task.id}/comments`, { content });
+      setCommentDraft('');
+      if (res?.comment) setComments((prev) => [...prev, res.comment]);
+      else await loadComments();
+    } catch { /* keep draft */ } finally { setPostingComment(false); }
+  }, [api, task?.id, commentDraft, postingComment, loadComments]);
+
   useEffect(() => {
     if (visible) {
       setIsClosing(false);
@@ -255,6 +310,15 @@ export const TaskDetail = ({
                   </Text>
                 </View>
               )}
+
+              {pomoCount > 0 && (
+                <View style={styles.metaItem}>
+                  <Icon name="timer-outline" size={16} color={theme.colors.accentInfo} />
+                  <Text style={styles.metaText}>
+                    {pomoCount} {pomoCount === 1 ? 'pomodoro' : 'pomodoros'} spent
+                  </Text>
+                </View>
+              )}
             </View>
 
             {task.description && (
@@ -359,6 +423,54 @@ export const TaskDetail = ({
                 <Icon name="delete" size={20} color={theme.colors.textPrimary} />
                 <Text style={styles.actionText}>Delete</Text>
               </TouchableOpacity>
+            </View>
+
+            {/* Comments — read + reply. Gated server-side by taskVisibility, so
+                the owner, shared-board members, and involved parties can all
+                participate. */}
+            <View style={styles.section}>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: theme.colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                {comments.length ? `Comments · ${comments.length}` : 'Comments'}
+              </Text>
+              {comments.length === 0 ? (
+                <Text style={{ fontSize: 13, color: theme.colors.textTertiary, fontStyle: 'italic', paddingVertical: 6 }}>
+                  No comments yet. Start the conversation.
+                </Text>
+              ) : (
+                comments.map((c) => (
+                  <View key={c.id} style={{ flexDirection: 'row', gap: 10, paddingVertical: 8 }}>
+                    <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: (theme.colors.accentInfo || '#0a84ff') + '33', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: theme.colors.accentInfo || '#0a84ff' }}>
+                        {commentInitials(c.authorName)}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ fontSize: 13 }}>
+                        <Text style={{ fontWeight: '700', color: theme.colors.textPrimary }}>{c.authorName}</Text>
+                        <Text style={{ color: theme.colors.textTertiary }}>{`  ${fmtCommentTime(c.createdAt)}`}</Text>
+                      </Text>
+                      <Text style={{ fontSize: 14, color: theme.colors.textPrimary, marginTop: 2 }}>{c.content}</Text>
+                    </View>
+                  </View>
+                ))
+              )}
+              <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 10 }}>
+                <TextInput
+                  style={{ flex: 1, minHeight: 40, maxHeight: 120, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, color: theme.colors.textPrimary, backgroundColor: theme.colors.surfaceElevated }}
+                  placeholder="Add a comment…"
+                  placeholderTextColor={theme.colors.textTertiary}
+                  value={commentDraft}
+                  onChangeText={setCommentDraft}
+                  multiline
+                />
+                <TouchableOpacity
+                  onPress={postComment}
+                  disabled={!commentDraft.trim() || postingComment}
+                  style={{ width: 44, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.accentInfo || '#0a84ff', opacity: commentDraft.trim() && !postingComment ? 1 : 0.5 }}
+                >
+                  <Icon name="send" size={18} color="#fff" />
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </ScrollView>

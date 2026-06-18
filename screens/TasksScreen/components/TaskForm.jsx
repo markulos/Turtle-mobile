@@ -13,6 +13,7 @@ import {
   Keyboard,
   Dimensions,
   KeyboardAvoidingView,
+  Switch,
 } from 'react-native';
 import Reanimated, {
   useSharedValue,
@@ -31,6 +32,7 @@ import { FormField } from './FormField';
 import { DatePickerModal } from './DatePickerModal';
 import { WheelTimePicker } from './WheelTimePicker';
 import { normalizeTags, parseTags, getPriorityColor } from '../utils/taskHelpers';
+import ParticipantPicker from './ParticipantPicker';
 import {
   PRIORITIES,
   ITEM_TYPES,
@@ -67,9 +69,20 @@ const TYPE_COPY = {
   },
 };
 
+// Reminder lead-time presets (minutes before due). Multi-select; tasks only.
+const REMINDER_PRESETS = [
+  { min: 0, label: 'At time' },
+  { min: 15, label: '15 min' },
+  { min: 60, label: '1 hour' },
+  { min: 120, label: '2 hours' },
+  { min: 1440, label: '1 day' },
+];
+
 const blankForm = (itemType = 'task') => ({
   title: '', description: '', priority: 'medium', completed: false,
-  project: '', dueDate: '', time: '', tags: [], recurring: 'none',
+  project: '', dueDate: '', time: '', tags: [], involvedUsers: [],
+  reminders: { leads: [], sms: false, involved: false },
+  recurring: 'none',
   itemType,
   // Occasion extras (event/birthday). Flattened here for easy editing; packed
   // into a `meta` object on save.
@@ -157,6 +170,14 @@ export const TaskForm = ({
           ...blankForm(type),
           ...initialData,
           tags: normalizeTags(initialData.tags),
+          involvedUsers: Array.isArray(initialData.involvedUsers) ? initialData.involvedUsers : [],
+          reminders: (initialData.reminders && typeof initialData.reminders === 'object')
+            ? {
+                leads: Array.isArray(initialData.reminders.leads) ? initialData.reminders.leads : [],
+                sms: !!initialData.reminders.sms,
+                involved: !!initialData.reminders.involved,
+              }
+            : { leads: [], sms: false, involved: false },
           isAppointment: !!isAppointment,
           recurring: initialData.recurring || 'none',
           itemType: type,
@@ -676,6 +697,80 @@ export const TaskForm = ({
                         </TouchableOpacity>
                       </View>
                     ))}
+                  </View>
+                )}
+              </FormField>
+            )}
+
+            {/* People involved — Tasks only. They see the task (view-only) and
+                get an assignment notification when newly added. */}
+            {isTask && (
+              <FormField label="People involved">
+                <ParticipantPicker
+                  selected={formData.involvedUsers || []}
+                  onChange={(ids) => updateField('involvedUsers', ids)}
+                />
+              </FormField>
+            )}
+
+            {/* Reminders — Tasks only. Lead times before due; push always, SMS
+                opt-in, to the owner and (optionally) involved parties. */}
+            {isTask && (
+              <FormField label="Reminders">
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                  {REMINDER_PRESETS.map((p) => {
+                    const leads = (formData.reminders && formData.reminders.leads) || [];
+                    const on = leads.includes(p.min);
+                    return (
+                      <TouchableOpacity
+                        key={p.min}
+                        onPress={() => {
+                          const cur = (formData.reminders && formData.reminders.leads) || [];
+                          const next = cur.includes(p.min)
+                            ? cur.filter((x) => x !== p.min)
+                            : [...cur, p.min].sort((a, b) => a - b);
+                          updateField('reminders', { ...(formData.reminders || {}), leads: next });
+                        }}
+                        style={{
+                          paddingVertical: 8,
+                          paddingHorizontal: 14,
+                          borderRadius: 8,
+                          borderWidth: 1,
+                          borderColor: on ? theme.colors.accentInfo : theme.colors.border,
+                          backgroundColor: on ? theme.colors.accentInfo + '22' : theme.colors.surfaceElevated,
+                        }}
+                      >
+                        <Text style={{ fontSize: 13, color: on ? theme.colors.accentInfo : theme.colors.textSecondary }}>
+                          {p.label === 'At time' ? 'At time' : `${p.label} before`}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {((formData.reminders && formData.reminders.leads) || []).length > 0 && (
+                  <View style={{ marginTop: 10 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8 }}>
+                      <Text style={{ fontSize: 14, color: theme.colors.textPrimary, flex: 1, paddingRight: 12 }}>
+                        Also text me (SMS)
+                      </Text>
+                      <Switch
+                        value={!!(formData.reminders && formData.reminders.sms)}
+                        onValueChange={(v) => updateField('reminders', { ...(formData.reminders || {}), sms: v })}
+                        trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accentInfo }}
+                        thumbColor="#fff"
+                      />
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8 }}>
+                      <Text style={{ fontSize: 14, color: theme.colors.textPrimary, flex: 1, paddingRight: 12 }}>
+                        Also notify people involved
+                      </Text>
+                      <Switch
+                        value={!!(formData.reminders && formData.reminders.involved)}
+                        onValueChange={(v) => updateField('reminders', { ...(formData.reminders || {}), involved: v })}
+                        trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accentInfo }}
+                        thumbColor="#fff"
+                      />
+                    </View>
                   </View>
                 )}
               </FormField>
