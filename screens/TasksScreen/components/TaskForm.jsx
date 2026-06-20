@@ -43,6 +43,11 @@ import {
 
 // Off-screen start/stop point for the sheet's slide-up present animation.
 const SHEET_H = Dimensions.get('window').height || 900;
+// When the form is reached by continuing the calendar quick inspector, it rises
+// this short distance into place (instead of all the way from off-screen) so the
+// two sheets read as one continuous card. Small enough that the backdrop dim —
+// derived from sheetY over [0, SHEET_H] — barely changes, so it never flashes.
+const CONTINUE_OFFSET = 120;
 // Snap spring — tuned to match the calendar day-sheet's rise/settle feel.
 const SHEET_SPRING = { damping: 22, stiffness: 220, mass: 0.9 };
 
@@ -81,7 +86,7 @@ const REMINDER_PRESETS = [
 const blankForm = (itemType = 'task') => ({
   title: '', description: '', priority: 'medium', completed: false,
   project: '', dueDate: '', time: '', tags: [], involvedUsers: [],
-  reminders: { leads: [], sms: false, involved: false },
+  taskReminders: { leads: [], sms: false, involved: false },
   recurring: 'none',
   itemType,
   // Occasion extras (event/birthday). Flattened here for easy editing; packed
@@ -104,6 +109,9 @@ export const TaskForm = ({
   // Date (YYYY-MM-DD) to pre-fill as the due/occasion date when creating from a
   // tapped calendar day. Ignored when editing.
   initialDate = null,
+  // True when opened by continuing the calendar quick inspector — present from
+  // the quick card's resting spot (CONTINUE_OFFSET) rather than off-screen.
+  continueFromQuick = false,
   projects,
   allTags,
   onAddProject,
@@ -146,9 +154,11 @@ export const TaskForm = ({
 
   useEffect(() => {
     if (visible) {
-      // Present: spring the sheet up from off-screen (dim fades in via the
-      // sheetY-derived backdrop style).
-      sheetY.value = SHEET_H;
+      // Present: spring the sheet up into place (dim fades in via the
+      // sheetY-derived backdrop style). When continuing from the quick
+      // inspector we start just below the open position so it grows out of that
+      // card rather than sliding the full height — a seamless hand-off.
+      sheetY.value = continueFromQuick ? CONTINUE_OFFSET : SHEET_H;
       sheetY.value = withSpring(0, SHEET_SPRING);
       if (initialData) {
         // Check if task is an appointment (createdAt matches dueDate)
@@ -171,7 +181,7 @@ export const TaskForm = ({
           ...initialData,
           tags: normalizeTags(initialData.tags),
           involvedUsers: Array.isArray(initialData.involvedUsers) ? initialData.involvedUsers : [],
-          reminders: (initialData.reminders && typeof initialData.reminders === 'object')
+          taskReminders: (initialData.reminders && typeof initialData.reminders === 'object' && !Array.isArray(initialData.reminders))
             ? {
                 leads: Array.isArray(initialData.reminders.leads) ? initialData.reminders.leads : [],
                 sms: !!initialData.reminders.sms,
@@ -193,7 +203,7 @@ export const TaskForm = ({
       setGuestInput('');
       setShowSuggestions(false);
     }
-  }, [visible, initialData, initialType, initialDate, sheetY]);
+  }, [visible, initialData, initialType, initialDate, continueFromQuick, sheetY]);
 
   // Stable JS callbacks the gesture/animation worklets invoke via runOnJS. They
   // read the latest ref on the JS thread, so the gesture never has to rebuild
@@ -350,6 +360,11 @@ export const TaskForm = ({
     delete finalTask.guests;
     delete finalTask.reminders;
     delete finalTask.yearly;
+    // Task reminder config → the tasks.reminders column (separate from the
+    // birthday/event meta.reminders packed above). Only tasks carry it; the
+    // delete above removed the stale spread, so re-set it from taskReminders.
+    if (type === 'task') finalTask.reminders = formData.taskReminders || { leads: [], sms: false, involved: false };
+    delete finalTask.taskReminders;
 
     const confirmationDetails = [
       `${type === 'birthday' ? 'Name' : 'Title'}: ${finalTask.title}`,
@@ -719,17 +734,17 @@ export const TaskForm = ({
               <FormField label="Reminders">
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                   {REMINDER_PRESETS.map((p) => {
-                    const leads = (formData.reminders && formData.reminders.leads) || [];
+                    const leads = (formData.taskReminders && formData.taskReminders.leads) || [];
                     const on = leads.includes(p.min);
                     return (
                       <TouchableOpacity
                         key={p.min}
                         onPress={() => {
-                          const cur = (formData.reminders && formData.reminders.leads) || [];
+                          const cur = (formData.taskReminders && formData.taskReminders.leads) || [];
                           const next = cur.includes(p.min)
                             ? cur.filter((x) => x !== p.min)
                             : [...cur, p.min].sort((a, b) => a - b);
-                          updateField('reminders', { ...(formData.reminders || {}), leads: next });
+                          updateField('taskReminders', { ...(formData.taskReminders || {}), leads: next });
                         }}
                         style={{
                           paddingVertical: 8,
@@ -747,15 +762,15 @@ export const TaskForm = ({
                     );
                   })}
                 </View>
-                {((formData.reminders && formData.reminders.leads) || []).length > 0 && (
+                {((formData.taskReminders && formData.taskReminders.leads) || []).length > 0 && (
                   <View style={{ marginTop: 10 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8 }}>
                       <Text style={{ fontSize: 14, color: theme.colors.textPrimary, flex: 1, paddingRight: 12 }}>
                         Also text me (SMS)
                       </Text>
                       <Switch
-                        value={!!(formData.reminders && formData.reminders.sms)}
-                        onValueChange={(v) => updateField('reminders', { ...(formData.reminders || {}), sms: v })}
+                        value={!!(formData.taskReminders && formData.taskReminders.sms)}
+                        onValueChange={(v) => updateField('taskReminders', { ...(formData.taskReminders || {}), sms: v })}
                         trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accentInfo }}
                         thumbColor="#fff"
                       />
@@ -765,8 +780,8 @@ export const TaskForm = ({
                         Also notify people involved
                       </Text>
                       <Switch
-                        value={!!(formData.reminders && formData.reminders.involved)}
-                        onValueChange={(v) => updateField('reminders', { ...(formData.reminders || {}), involved: v })}
+                        value={!!(formData.taskReminders && formData.taskReminders.involved)}
+                        onValueChange={(v) => updateField('taskReminders', { ...(formData.taskReminders || {}), involved: v })}
                         trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accentInfo }}
                         thumbColor="#fff"
                       />
