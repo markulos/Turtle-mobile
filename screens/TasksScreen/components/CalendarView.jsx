@@ -465,17 +465,22 @@ const DayPane = React.memo(function DayPane({
       });
   }, [tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners, dayStr]);
 
-  // Split this day's items into calendar occasions (events + birthdays) and
-  // timed tasks (those with a HH:MM start). Untimed tasks aren't bucketed here
-  // — the cross-day Pending strip below is the single home for the backlog.
-  const { occasions, timedTasks } = useMemo(() => {
+  // Split this day's items into calendar occasions (events + birthdays), timed
+  // tasks (those with a HH:MM start) and untimed tasks (dated for THIS day but
+  // with no time yet). The untimed bucket is this day's "TBD" list — tasks that
+  // belong to the day but haven't been slotted into an hour, shown below so they
+  // appear in the day's to-do list instead of being lost. (The cross-day Pending
+  // strip is now only the truly undated backlog — see pendingTasks.)
+  const { occasions, timedTasks, untimedTasks } = useMemo(() => {
     const occ = [];
     const timed = [];
+    const untimed = [];
     for (const task of dayTasks) {
       if (itemTypeOf(task) !== 'task') { occ.push(task); continue; }
       if (task.time && /^\d{1,2}:\d{2}/.test(task.time)) timed.push(task);
+      else untimed.push(task);
     }
-    return { occasions: occ, timedTasks: timed };
+    return { occasions: occ, timedTasks: timed, untimedTasks: untimed };
   }, [dayTasks]);
 
   // Collapsed-schedule model: each timed task as a {start,end,duration} segment
@@ -776,6 +781,61 @@ const DayPane = React.memo(function DayPane({
                 </TouchableOpacity>
               );
             })}
+          </View>
+        )}
+
+        {/* To Do — this day's tasks with no time set yet ("TBD"). They're
+            dated for this day but unscheduled, so they show here in the day's
+            to-do list with a TBD marker rather than only the hour grid. Tap to
+            inspect (where a time can be added); checkbox completes. */}
+        {untimedTasks.length > 0 && (
+          <View style={styles.untimedSection}>
+            <View style={styles.untimedHeader}>
+              <Text style={styles.untimedLabel}>To Do · No Time Set</Text>
+              <Text style={styles.untimedCount}>{untimedTasks.length}</Text>
+            </View>
+            {untimedTasks.map(task => (
+              <TouchableOpacity
+                key={task.id}
+                style={[styles.untimedItem, task.completed && styles.taskItemCompleted]}
+                onPress={() => (onTaskInspect || onTaskPress)?.(task)}
+                onLongPress={() => onTaskLongPress?.(task)}
+              >
+                <TouchableOpacity
+                  style={styles.checkbox}
+                  onPress={(e) => { e.stopPropagation(); onToggleComplete?.(task.id); }}
+                >
+                  <Icon
+                    name={task.completed ? 'checkbox-marked' : 'checkbox-blank-outline'}
+                    size={18}
+                    color={task.completed ? theme.colors.accentSuccess : theme.colors.textTertiary}
+                  />
+                </TouchableOpacity>
+                <Text
+                  style={[styles.untimedTitle, task.completed && styles.taskTitleCompleted]}
+                  numberOfLines={1}
+                >
+                  {task.title}
+                </Text>
+                <View style={styles.tbdBadge}>
+                  <Text style={styles.tbdBadgeText}>TBD</Text>
+                </View>
+                {multiUser && task.userId && (
+                  <TouchableOpacity
+                    style={[styles.ownerBadge, { backgroundColor: ownerColor(task.userId) }]}
+                    onPress={() => onOwnerPress?.(task)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Owner: ${task.ownerName || 'Unknown'}. Open profile`}
+                  >
+                    <Text style={styles.ownerBadgeText}>{ownerInitial(task.ownerName)}</Text>
+                  </TouchableOpacity>
+                )}
+                {task.priority && (
+                  <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(task.priority, theme) }]} />
+                )}
+              </TouchableOpacity>
+            ))}
           </View>
         )}
 
@@ -1502,23 +1562,20 @@ export const CalendarView = ({
       });
   }, [selectedDate, tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners]);
 
-  // PENDING tasks — incomplete, untimed tasks across ALL dates (not just the
-  // selected day). Surfaced in the day planner's "Pending Tasks" strip so your
-  // unscheduled backlog is reachable from EVERY day, not only its due date.
+  // PENDING tasks — incomplete tasks with NO due date AND no time: the truly
+  // unscheduled backlog. Surfaced in the day planner's "Pending Tasks" strip so
+  // it's reachable from EVERY day. Dated-but-untimed tasks are deliberately
+  // excluded here — they now show on their own day's "To Do · No Time Set" (TBD)
+  // list instead, so they aren't duplicated across every day.
   const pendingTasks = useMemo(() => {
     const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners };
     return tasks
       .filter(t => !t.completed
         && itemTypeOf(t) === 'task' // events/birthdays show in their own strip
+        && !t.dueDate               // dated tasks live on their day (timed grid or TBD list)
         && taskPassesFilters(t, filters)
         && !(t.time && /^\d{1,2}:\d{2}/.test(t.time)))
-      .sort((a, b) => {
-        // Soonest due first; undated pending tasks sink to the bottom.
-        const ad = a.dueDate || '9999-12-31';
-        const bd = b.dueDate || '9999-12-31';
-        if (ad !== bd) return ad < bd ? -1 : 1;
-        return (a.title || '').localeCompare(b.title || '');
-      });
+      .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
   }, [tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners]);
 
   // True iff the selected date is "today" — drives the live red
@@ -2163,7 +2220,9 @@ export const CalendarView = ({
         onOpenFull={() => {
           const t = inspectorTask;
           setInspectorTaskId(null);
-          if (t) onTaskLongPress?.(t);
+          // Second arg = continue from the quick card, so the full form rises
+          // from where this sheet sat instead of re-sliding from off-screen.
+          if (t) onTaskLongPress?.(t, true);
         }}
       />
 
@@ -2703,6 +2762,24 @@ const createStyles = (theme) => StyleSheet.create({
     fontSize: theme.typography.body,
     color: theme.colors.textPrimary,
     fontWeight: '500',
+  },
+  // "TBD" chip on a dated-but-untimed task — reads as a placeholder time so the
+  // task sits in the day's to-do list until an hour is set. Muted outlined pill
+  // so it doesn't compete with real timed-task colour coding.
+  tbdBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginLeft: 8,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
+  tbdBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    color: theme.colors.textTertiary,
   },
   // Smaller priority chip used inside compact rows / blocks where the
   // larger priorityIndicator would crowd the title.

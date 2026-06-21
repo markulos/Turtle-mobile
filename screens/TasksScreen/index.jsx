@@ -114,6 +114,9 @@ export default function TasksScreen() {
   const [newItemDate, setNewItemDate] = useState(null);
   const [showDetail, setShowDetail] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
+  // True when the edit form was reached by continuing the calendar quick
+  // inspector (so it presents as a continuation, not a fresh slide-up).
+  const [formContinue, setFormContinue] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [showIncompleteOnly, setShowIncompleteOnly] = useState(true);
   const [selectedProject, setSelectedProject] = useState('All');
@@ -680,8 +683,13 @@ export default function TasksScreen() {
     await collectTags([newTag]);
   };
 
-  const openEditForm = (task) => {
+  // `continueFromQuick` is true only on the hand-off from the calendar quick
+  // inspector (drag up / "Edit details"): the full form then rises from where
+  // the quick card sat — and keeps the backdrop dim steady — so it reads as the
+  // same sheet continuing, not a second sheet re-sliding from off-screen.
+  const openEditForm = (task, continueFromQuick = false) => {
     setEditingTask(task);
+    setFormContinue(continueFromQuick);
     setShowTaskForm(true);
   };
 
@@ -693,6 +701,7 @@ export default function TasksScreen() {
     setEditingTask(null);
     setNewItemType(type || 'task');
     setNewItemDate(date || null);
+    setFormContinue(false);
     setShowTaskForm(true);
   }, []);
 
@@ -1000,6 +1009,7 @@ export default function TasksScreen() {
         initialData={editingTask}
         initialType={newItemType}
         initialDate={newItemDate}
+        continueFromQuick={formContinue}
         projects={projects}
         allTags={allTags}
         onAddProject={addProject}

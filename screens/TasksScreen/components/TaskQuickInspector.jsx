@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   View,
@@ -14,6 +14,7 @@ import {
   Alert,
   Platform,
   Easing,
+  FlatList,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
@@ -28,6 +29,11 @@ import { DatePickerModal } from './DatePickerModal';
 // commit-on-edit feel (title on blur/Enter, time/date on pick) in a phone sheet.
 
 const SCREEN_H = Dimensions.get('window').height || 900;
+const SCREEN_W = Dimensions.get('window').width || 390;
+// Width of one week page in the reschedule pager: screen width minus the sheet's
+// horizontal padding (18) and the reschedule panel's padding (12), both sides.
+// pagingEnabled snaps on the list's own width, so each page must match this.
+const RESCHEDULE_PAGE_W = SCREEN_W - (18 + 12) * 2;
 // iOS keyboard ease (Animated has no built-in "keyboard" curve); the synced
 // speed comes from the OS-reported duration, this just matches the shape.
 const KB_EASING = Easing.bezier(0.17, 0.59, 0.4, 0.77);
@@ -48,8 +54,12 @@ const formatDateShort = (dateStr) => {
   });
 };
 
-// ── Local-date helpers for the Reschedule week strip ──────────────────────
+// ── Local-date helpers for the Reschedule week pager ──────────────────────
 const WEEKDAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const pad2 = (n) => String(n).padStart(2, '0');
 const toDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const parseDateStr = (s) => {
@@ -57,19 +67,43 @@ const parseDateStr = (s) => {
   const [y, m, d] = String(s).split('-').map(Number);
   return new Date(y, (m || 1) - 1, d || 1);
 };
-// The seven days (Sun→Sat) of the week containing `refStr` (the task's current
-// day, or today). Each carries its YYYY-MM-DD key, weekday abbr, and number.
-const weekDaysOf = (refStr) => {
+// The Sunday that starts the week containing `refStr`.
+const weekStartOf = (refStr) => {
   const ref = parseDateStr(refStr);
   const start = new Date(ref);
   start.setDate(ref.getDate() - ref.getDay()); // back up to Sunday
+  start.setHours(0, 0, 0, 0);
+  return start;
+};
+// Weeks the pager spans on each side of the anchor week (~half a year either
+// way) — enough swipe range without an unbounded list.
+const WEEK_WINDOW = 26;
+// Build the swipeable list of weeks centred on `anchorStr`'s week. Each entry is
+// one week (Sun→Sat) of day cells carrying their YYYY-MM-DD key, weekday abbr,
+// number, and a today flag. The anchor week sits at index WEEK_WINDOW.
+const buildWeeks = (anchorStr) => {
+  const anchor = weekStartOf(anchorStr);
   const todayStr = toDateStr(new Date());
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    const dateStr = toDateStr(d);
-    return { dateStr, dow: WEEKDAY_ABBR[d.getDay()], dayNum: d.getDate(), isToday: dateStr === todayStr };
+  return Array.from({ length: WEEK_WINDOW * 2 + 1 }, (_, wi) => {
+    const ws = new Date(anchor);
+    ws.setDate(anchor.getDate() + (wi - WEEK_WINDOW) * 7);
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(ws);
+      d.setDate(ws.getDate() + i);
+      const dateStr = toDateStr(d);
+      return { dateStr, dow: WEEKDAY_ABBR[d.getDay()], dayNum: d.getDate(), isToday: dateStr === todayStr };
+    });
+    return { key: toDateStr(ws), days };
   });
+};
+// "June 2026", or "Jun – Jul 2026" when a week straddles two months/years.
+const weekLabel = (days) => {
+  if (!days || !days.length) return '';
+  const a = parseDateStr(days[0].dateStr);
+  const b = parseDateStr(days[6].dateStr);
+  if (a.getMonth() === b.getMonth()) return `${MONTHS_LONG[a.getMonth()]} ${a.getFullYear()}`;
+  if (a.getFullYear() === b.getFullYear()) return `${MONTHS_SHORT[a.getMonth()]} – ${MONTHS_SHORT[b.getMonth()]} ${b.getFullYear()}`;
+  return `${MONTHS_SHORT[a.getMonth()]} ${a.getFullYear()} – ${MONTHS_SHORT[b.getMonth()]} ${b.getFullYear()}`;
 };
 
 export const TaskQuickInspector = ({
@@ -115,6 +149,16 @@ export const TaskQuickInspector = ({
   const [showRescheduleTime, setShowRescheduleTime] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState(null); // YYYY-MM-DD
   const [rescheduleTime, setRescheduleTime] = useState('');    // HH:MM (24h) or ''
+  // Week pager: the week list is centred on `rescheduleAnchor` (fixed when the
+  // panel opens, so picking a day in another week never re-windows the strip);
+  // `visibleWeekIdx` tracks the week currently in view for the month label.
+  const [rescheduleAnchor, setRescheduleAnchor] = useState(null);
+  const [visibleWeekIdx, setVisibleWeekIdx] = useState(WEEK_WINDOW);
+  const weekPagerRef = useRef(null);
+  const weeks = useMemo(
+    () => buildWeeks(rescheduleAnchor || toDateStr(new Date())),
+    [rescheduleAnchor],
+  );
 
   // Slide up + fade in on open.
   useEffect(() => {
@@ -161,11 +205,23 @@ export const TaskQuickInspector = ({
     setShowReschedule(false);
   }, [task?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Open the reschedule panel, seeded from the task's current day + time.
+  // Open the reschedule panel, seeded from the task's current day + time. The
+  // pager's week list is anchored on that day and scrolled to its (centre) week.
   const openReschedule = () => {
-    setRescheduleDate(task?.dueDate || toDateStr(new Date()));
+    const seed = task?.dueDate || toDateStr(new Date());
+    setRescheduleDate(seed);
     setRescheduleTime(task?.time || '');
+    setRescheduleAnchor(seed);
+    setVisibleWeekIdx(WEEK_WINDOW);
     setShowReschedule(true);
+  };
+
+  // Step the week pager by ±1 week via the chevrons (swiping does the same).
+  const goWeek = (delta) => {
+    const next = Math.max(0, Math.min(weeks.length - 1, visibleWeekIdx + delta));
+    if (next === visibleWeekIdx) return;
+    setVisibleWeekIdx(next);
+    weekPagerRef.current?.scrollToIndex({ index: next, animated: true });
   };
 
   // Commit the new day + time in one update, then — if a co-owner is on the
@@ -342,24 +398,63 @@ export const TaskQuickInspector = ({
           ) : (
             <View style={styles.reschedulePanel}>
               <Text style={styles.rescheduleHeading}>Move to another day</Text>
-              <View style={styles.weekRow}>
-                {weekDaysOf(rescheduleDate || task.dueDate).map((d) => {
-                  const active = d.dateStr === rescheduleDate;
-                  return (
-                    <TouchableOpacity
-                      key={d.dateStr}
-                      style={[styles.weekCell, active && styles.weekCellActive]}
-                      onPress={() => setRescheduleDate(d.dateStr)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.weekDow, active && styles.weekTextActive]}>{d.dow}</Text>
-                      <Text style={[styles.weekNum, active && styles.weekTextActive, d.isToday && !active && styles.weekNumToday]}>
-                        {d.dayNum}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+
+              {/* Week navigator: swipe the strip left/right across weeks (or tap
+                  the chevrons), then tap a day to pick the new date. */}
+              <View style={styles.weekNavRow}>
+                <TouchableOpacity
+                  onPress={() => goWeek(-1)}
+                  disabled={visibleWeekIdx <= 0}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={styles.weekNavBtn}
+                >
+                  <Icon name="chevron-left" size={20} color={visibleWeekIdx <= 0 ? theme.colors.textTertiary : theme.colors.textSecondary} />
+                </TouchableOpacity>
+                <Text style={styles.weekNavLabel}>{weekLabel(weeks[visibleWeekIdx]?.days)}</Text>
+                <TouchableOpacity
+                  onPress={() => goWeek(1)}
+                  disabled={visibleWeekIdx >= weeks.length - 1}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={styles.weekNavBtn}
+                >
+                  <Icon name="chevron-right" size={20} color={visibleWeekIdx >= weeks.length - 1 ? theme.colors.textTertiary : theme.colors.textSecondary} />
+                </TouchableOpacity>
               </View>
+
+              <FlatList
+                ref={weekPagerRef}
+                data={weeks}
+                keyExtractor={(w) => w.key}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                initialScrollIndex={WEEK_WINDOW}
+                getItemLayout={(_, index) => ({ length: RESCHEDULE_PAGE_W, offset: RESCHEDULE_PAGE_W * index, index })}
+                onMomentumScrollEnd={(e) => {
+                  const idx = Math.round(e.nativeEvent.contentOffset.x / RESCHEDULE_PAGE_W);
+                  if (idx !== visibleWeekIdx) setVisibleWeekIdx(idx);
+                }}
+                renderItem={({ item }) => (
+                  <View style={[styles.weekRow, { width: RESCHEDULE_PAGE_W }]}>
+                    {item.days.map((d) => {
+                      const active = d.dateStr === rescheduleDate;
+                      return (
+                        <TouchableOpacity
+                          key={d.dateStr}
+                          style={[styles.weekCell, active && styles.weekCellActive]}
+                          onPress={() => setRescheduleDate(d.dateStr)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={[styles.weekDow, active && styles.weekTextActive]}>{d.dow}</Text>
+                          <Text style={[styles.weekNum, active && styles.weekTextActive, d.isToday && !active && styles.weekNumToday]}>
+                            {d.dayNum}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              />
 
               {/* Time row + confirm/cancel */}
               <View style={styles.rescheduleActions}>
@@ -383,14 +478,21 @@ export const TaskQuickInspector = ({
             </View>
           )}
 
-          {/* Edit-details affordance — opens the full form for everything else. */}
+          {/* Edit-details — the prominent way into the full editor. The same
+              card simply grows into the full form (matching radius / handle /
+              dim / shadow), so it reads as one continuous sheet. Also reachable
+              by dragging this sheet up by its handle — the chevron advertises
+              that gesture. */}
           <TouchableOpacity
             style={styles.editDetails}
             onPress={() => { commitTitle(); onOpenFull?.(); }}
-            activeOpacity={0.7}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Edit details — open the full editor"
           >
-            <Icon name="pencil-outline" size={14} color={theme.colors.textSecondary} />
+            <Icon name="pencil-outline" size={18} color={theme.colors.accentInfo} />
             <Text style={styles.editDetailsText}>Edit details</Text>
+            <Icon name="chevron-up" size={20} color={theme.colors.textTertiary} />
           </TouchableOpacity>
 
           <WheelTimePicker
@@ -425,29 +527,40 @@ const createStyles = (theme) => StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
   },
+  // Matches the full TaskForm's backdrop dim so the hand-off between the two
+  // sheets is seamless — same darkness behind both.
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
+  // Same radius / border / shadow as the full TaskForm's `content` sheet, so the
+  // quick card reads as the first chapter of the same sheet — dragging up (or
+  // tapping "Edit details") just continues it into the full editor.
   sheet: {
     backgroundColor: theme.colors.background,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
     paddingHorizontal: 18,
     paddingBottom: 22,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.border,
+    borderColor: theme.colors.border,
+    // Soft lift off the dimmed backdrop (mirrors TaskForm).
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 20,
+    elevation: 18,
   },
   header: {
-    paddingTop: 8,
+    paddingTop: 10,
     paddingBottom: 10,
     alignItems: 'center',
   },
   grabHandle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: theme.colors.border,
+    width: 44,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: theme.colors.borderStrong || theme.colors.border,
   },
   titleRow: {
     flexDirection: 'row',
@@ -514,15 +627,20 @@ const createStyles = (theme) => StyleSheet.create({
   editDetails: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    alignSelf: 'flex-start',
+    gap: 10,
     marginTop: 16,
-    paddingVertical: 4,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
   },
   editDetailsText: {
-    fontSize: 13,
-    color: theme.colors.textSecondary,
-    fontWeight: '500',
+    flex: 1,
+    fontSize: 15,
+    color: theme.colors.textPrimary,
+    fontWeight: '600',
   },
   // ── Reschedule ──
   rescheduleBtn: {
@@ -556,6 +674,23 @@ const createStyles = (theme) => StyleSheet.create({
     fontWeight: '600',
     color: theme.colors.textSecondary,
     marginBottom: 10,
+  },
+  weekNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  weekNavBtn: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weekNavLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
   },
   weekRow: {
     flexDirection: 'row',

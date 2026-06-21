@@ -20,7 +20,17 @@ import Animated, {
   FadeOut,
 } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../../context/ThemeContext';
+import { blurProps, frostOverlayColor } from '../../../utils/frostedChat';
+
+// Glossy top sheen laid over the frosted blur — a soft light highlight that
+// fades out, giving the glass a polished, lit look. Subtler in dark mode.
+const glossColors = (theme) =>
+  theme.mode === 'dark'
+    ? ['rgba(255,255,255,0.10)', 'rgba(255,255,255,0.03)', 'transparent']
+    : ['rgba(255,255,255,0.45)', 'rgba(255,255,255,0.12)', 'transparent'];
 
 // The panel height is driven directly via Reanimated (LayoutAnimation snapped —
 // it can't interpolate a switch between a fixed `height` and a content-driven
@@ -275,13 +285,25 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
     : (active || isLogin) ? theme.colors.accentSuccess : theme.colors.accentWarning;
 
   return (
-    // OPAQUE panel (not a frosted blur). The whole console window is lifted with
-    // the keyboard by TurtleScreen; a translucent blur would show the STATIC
-    // chat list behind it shearing past as the window moves — that see-through
-    // shear read as "the background sliding with an offset". A solid surface
-    // slides cleanly over the fixed backdrop, and matches the composer below it
-    // (which is already a solid bar in the same colour).
+    // Glossy frosted-glass window. The height animates on THIS plain Animated.View
+    // (cheap) while the BlurView fills it as an absolute layer (animating a blur
+    // node's own height is the expensive/janky path — avoided here). overflow:
+    // hidden + borderRadius clip all three layers to the rounded card:
+    //   1) BlurView      — the frosted glass (blurs the chat behind it)
+    //   2) frost tint    — translucent colour so it reads as a real surface
+    //   3) gloss gradient — a soft top light sheen for the polished look
+    // The window is lifted with the keyboard by TurtleScreen; the blur tint is
+    // strong enough that the static chat behind reads as a soft frost rather
+    // than visibly shearing as the window slides.
     <Animated.View style={[styles.panel, animatedPanelStyle]}>
+      <BlurView pointerEvents="none" style={styles.glassFill} {...blurProps(theme)} />
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
+      <LinearGradient
+        pointerEvents="none"
+        colors={glossColors(theme)}
+        locations={[0, 0.5, 1]}
+        style={styles.panelGloss}
+      />
       <View style={styles.header}>
         {/* Admin sessions show no leading icon — the title alone carries the
             mode. Login/standard sessions keep their icon. */}
@@ -442,11 +464,10 @@ const createStyles = (theme) => StyleSheet.create({
   panel: {
     marginHorizontal: 8,
     marginBottom: 8,
-    // OPAQUE surface so the window slides cleanly over the fixed background when
-    // it tracks the keyboard (a transparent/blur panel shears the static chat
-    // behind it). Same colour as the composer bar below, so the session reads as
-    // one solid window. overflow:hidden clips content to the rounded card.
-    backgroundColor: theme.colors.background,
+    // Transparent: the BlurView + frost tint + gloss gradient (rendered as
+    // absolute layers inside) provide the glassy surface. overflow:hidden clips
+    // those layers to the rounded card.
+    backgroundColor: 'transparent',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -455,6 +476,28 @@ const createStyles = (theme) => StyleSheet.create({
     // interpolates between COMPACT_MAX_HEIGHT and the keyboard-capped expanded
     // height so collapse/expand AND the keyboard shrink are one smooth motion
     // (see expandProgress + useAnimatedKeyboard / RESIZE_*).
+  },
+  // The frosted-glass layer. FIXED height (the panel's tallest possible size),
+  // anchored at the top — NOT absoluteFill. The panel's height animates with the
+  // keyboard; if the blur tracked that height it would re-sample the blur every
+  // frame (expensive). At a fixed height the panel's overflow:hidden simply
+  // clips it, so the blur renders once and the shrink is free.
+  glassFill: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: EXPANDED_MAX_HEIGHT,
+  },
+  // Top sheen for the gloss — a light highlight over the upper third of the
+  // glass that fades to transparent. Absolute so it overlays the blur + tint
+  // without taking layout space; clipped to the rounded card by the panel.
+  panelGloss: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '45%',
   },
   header: {
     flexDirection: 'row',

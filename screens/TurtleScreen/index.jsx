@@ -20,6 +20,7 @@ import {
 import Reanimated, {
   useAnimatedKeyboard,
   useAnimatedStyle,
+  useSharedValue,
 } from 'react-native-reanimated';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -384,6 +385,18 @@ export default function TurtleScreen() {
   // True whenever the Claude console is on screen (a live session OR the login
   // flow).
   const inClaudeSession = !!claudeUiMode;
+  // UI-thread mirror of inClaudeSession. The three keyboard-lift worklets below
+  // are ALWAYS attached (never swapped against null in the JSX) and branch on
+  // THIS shared value to decide which node carries the lift. Why: swapping an
+  // animated style for `null` in a style array doesn't reliably clear the
+  // last-committed transform — on minimize the dock kept its −K sessionDockLift
+  // AND the column newly applied −K, leaving the composer stuck one keyboard
+  // height too high. Reading a shared value inside the worklet (NOT a JS bool —
+  // that's the stale-capture trap) flips both nodes in the SAME UI frame, so the
+  // lift hands off atomically and the composer never moves. Updated in an effect
+  // below so we never write a shared value mid-render.
+  const sessionSV = useSharedValue(inClaudeSession);
+  useEffect(() => { sessionSV.value = inClaudeSession; }, [inClaudeSession, sessionSV]);
   // ── Keyboard motion ───────────────────────────────────────────────────────
   // ONE shared value (useAnimatedKeyboard) drives everything; which worklet is
   // attached to which node is chosen in plain JS at the JSX style arrays (never
@@ -414,8 +427,11 @@ export default function TurtleScreen() {
     // already sits above the tab bar; floor at 0 so a closed keyboard doesn't
     // shove it down). The static COMPOSER_MARGIN preserves the resting gap, so
     // the pill ends up exactly COMPOSER_MARGIN above the keyboard's top edge.
+    // In a Claude session the column stays static (the dock lifts instead), so
+    // this returns 0 there — handed off atomically via sessionSV.
+    const lift = sessionSV.value ? 0 : Math.max(keyboard.height.value - tabBarHeight, 0);
     return {
-      transform: [{ translateY: -Math.max(keyboard.height.value - tabBarHeight, 0) }],
+      transform: [{ translateY: -lift }],
     };
   });
 
@@ -432,8 +448,13 @@ export default function TurtleScreen() {
   // lift, so the header stays pinned while messages rise UNDER it.
   const headerCounterStyle = useAnimatedStyle(() => {
     'worklet';
+    // Exact negation of the column lift — but only when the column actually
+    // lifts (normal chat). In a session the column is static, so no counter is
+    // needed and this returns 0. Same sessionSV gate as the column, so the two
+    // stay in lockstep.
+    const lift = sessionSV.value ? 0 : Math.max(keyboard.height.value - tabBarHeight, 0);
     return {
-      transform: [{ translateY: Math.max(keyboard.height.value - tabBarHeight, 0) }],
+      transform: [{ translateY: lift }],
     };
   });
 
@@ -446,8 +467,14 @@ export default function TurtleScreen() {
   // the window glides over a fixed backdrop.
   const sessionDockLift = useAnimatedStyle(() => {
     'worklet';
+    // The dock carries the lift ONLY in a session; in normal chat the column
+    // lifts it instead, so this returns 0. Gated on the same sessionSV as the
+    // column/header, so when the session is minimized the lift moves off the
+    // dock and onto the column in the SAME frame — the composer's net position
+    // is unchanged and it never jumps.
+    const lift = sessionSV.value ? Math.max(keyboard.height.value - tabBarHeight, 0) : 0;
     return {
-      transform: [{ translateY: -Math.max(keyboard.height.value - tabBarHeight, 0) }],
+      transform: [{ translateY: -lift }],
     };
   });
 
@@ -1417,10 +1444,11 @@ export default function TurtleScreen() {
 
   return (
     <Reanimated.View
-      // Column lift is attached ONLY in normal chat. In a Claude session the
-      // background must stay perfectly static (no transform at all), so the
-      // animated style is simply not in the array — the dock lifts instead.
-      style={[styles.container, { flex: 1 }, inClaudeSession ? null : keyboardSpacerStyle]}
+      // Column lift is ALWAYS attached; the worklet itself returns 0 in a Claude
+      // session (where the background must stay static and the dock lifts
+      // instead). Gating inside the worklet — not by swapping for null here —
+      // avoids a stale transform sticking on the session→chat handoff.
+      style={[styles.container, { flex: 1 }, keyboardSpacerStyle]}
     >
       {/* Faint turtle watermark — a WhatsApp-style chat backdrop. First child
           so it sits behind everything; the inverted message list above is
@@ -1443,7 +1471,7 @@ export default function TurtleScreen() {
           gets a matching top inset (CHAT_HEADER_BAR_HEIGHT) so the oldest
           visible message clears the bar. zIndex stays 101 (below the vault
           overlay at 200, so the vault still covers the header). */}
-      <Reanimated.View style={[styles.chatHeader, { paddingTop: insets.top }, inClaudeSession ? null : headerCounterStyle]}>
+      <Reanimated.View style={[styles.chatHeader, { paddingTop: insets.top }, headerCounterStyle]}>
         <TouchableOpacity
           onPress={openFriends}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -1959,7 +1987,7 @@ export default function TurtleScreen() {
         // is the ONLY thing that tracks the keyboard — it lifts on its own while
         // the background stays still. In normal chat the whole column already
         // lifts the dock, so no transform of its own there.
-        style={[styles.bottomDock, inClaudeSession ? sessionDockLift : null]}
+        style={[styles.bottomDock, sessionDockLift]}
         onLayout={(e) => {
           const h = Math.round(e.nativeEvent.layout.height);
           if (h === dockHeight) return;

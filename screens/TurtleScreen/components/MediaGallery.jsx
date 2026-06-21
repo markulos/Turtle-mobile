@@ -644,6 +644,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const gridJumpLastY = useRef(0);
   const gridJumpingRef = useRef(false); // true during a tap-to-latest animation
   const gridJumpIdleTimer = useRef(null); // idle auto-hide: fades the pill once the grid stops moving
+  const scrubTailFrame = useRef(0); // throttles handleGridScroll's JS-only tail (pill/idle/prefetch) to every 4th frame
   // The pill's fade lives lower down (see `gridJumpVisible`): besides the scroll
   // intent it also folds in "is an overlay covering the grid?", and those
   // overlay states (viewer / select mode / upload sheet) are declared further below.
@@ -1943,6 +1944,14 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     if (ne.layoutMeasurement && ne.layoutMeasurement.height) gridLayoutH.current = ne.layoutMeasurement.height;
     scrollYSv.value = scrubLastY.current;
     maxScrollSv.value = Math.max(1, gridContentH.current - gridLayoutH.current);
+    // The scrubber SVs above track EVERY frame (smooth thumb). Everything below
+    // is JS-only UI bookkeeping (jump-pill visibility, idle re-arm, sparse
+    // prefetch) that doesn't need 60Hz — running it per frame was the dominant
+    // per-frame JS cost on this handler (incl. a clearTimeout+setTimeout churn
+    // ~60×/s). Throttle it to every 4th frame; at 1500ms idle the ~64ms
+    // granularity is imperceptible.
+    scrubTailFrame.current = (scrubTailFrame.current + 1) & 3;
+    if (scrubTailFrame.current !== 0) return;
     // Reveal the "jump to newest" pill only when (1) scrolled a LOT from the
     // newest — ~1.5 screens — and (2) moving TOWARD the newest (offset
     // decreasing = downward swipe in this mirrored grid). Scrolling up into
@@ -1963,9 +1972,8 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       // Functional updater → React bails out when the flag is unchanged.
       if (wantJump !== undefined) setShowGridJump((prev) => (prev === wantJump ? prev : wantJump));
     }
-    // Idle auto-hide: re-arm on every scroll frame so the timer only fires once
-    // the grid goes still (no more frames), fading the pill out a brief moment
-    // later. clear+set is cheap and only runs while actually scrolling.
+    // Idle auto-hide: re-arm so the timer only fires once the grid goes still
+    // (no more frames), fading the pill out a brief moment later.
     if (gridJumpIdleTimer.current) clearTimeout(gridJumpIdleTimer.current);
     gridJumpIdleTimer.current = setTimeout(() => {
       setShowGridJump((prev) => (prev === false ? prev : false));
@@ -3179,8 +3187,13 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     // One path for slots AND loaded items — GridItem renders both shapes
     // (see its UNIFIED CELL note), so a resolving slot is a re-render of the
     // same mounted cell, never a component swap.
+    // The per-cell counter-flip MUST live on this wrapper View (not on GridItem's
+    // root) — FlashList v2 renders the cell such that moving the flip onto the
+    // TouchableOpacity inverts the grid (newest ended up at the top). Keep the
+    // wrapper; styles.cellFlip is a hoisted constant so there's still no per-cell
+    // {transform:[...]} allocation.
     return (
-      <View style={{ transform: [{ scaleX: -1 }, { scaleY: -1 }] }}>
+      <View style={styles.cellFlip}>
         <GridItem
           item={item}
           activeTab={activeTab}
@@ -3211,7 +3224,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // Render empty state
   // Render empty state (Inverted grids need scaleY: -1 to render right-side up)
   const renderEmpty = () => (
-    <View style={[styles.emptyContainer, { transform: [{ scaleX: -1 }, { scaleY: -1 }] }]}>
+    <View style={[styles.emptyContainer, styles.cellFlip]}>
       <Icon name="image-off" size={64} color={theme.colors.textMuted} />
       <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
         No uploads yet
@@ -5772,6 +5785,11 @@ const createStyles = (theme) =>
       padding: 0,
       paddingBottom: 0,
     },
+    // Per-cell counter-flip for the scaleX(-1)+scaleY(-1) mirrored grid (see the
+    // grid list's DOUBLE-FLIP note). Hoisted to a StyleSheet constant so it's one
+    // shared reference instead of a fresh {transform:[...]} object+array allocated
+    // per cell per render in the hottest scroll path.
+    cellFlip: { transform: [{ scaleX: -1 }, { scaleY: -1 }] },
     thumbnailContainer: {
       width: THUMBNAIL_SIZE,
       height: THUMBNAIL_SIZE,

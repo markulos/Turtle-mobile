@@ -34,16 +34,27 @@ import {
   FlatList,
   ScrollView,
   Animated,
-  Easing,
   useWindowDimensions,
   StyleSheet,
-  Modal,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Alert,
   Keyboard,
 } from 'react-native';
+// Reanimated drives the composer's keyboard-synced lift the SAME way the Turtle
+// Claude session dock does (useAnimatedKeyboard → a compositor-only translateY
+// worklet). This is why the composer is an in-tree overlay and NOT a <Modal>:
+// useAnimatedKeyboard tracks the root window only, so it can't see the keyboard
+// from inside a Modal's separate native window. See keyboard-sync-patterns.
+import Reanimated, {
+  useAnimatedKeyboard,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+  runOnJS,
+  Easing as REasing,
+} from 'react-native-reanimated';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -59,6 +70,12 @@ const FILTER_TODO = 'todo';
 const FILTER_ORDER = [FILTER_ALL, FILTER_NOTE, FILTER_TODO];
 // Sentinel topic for notes that carry no tags (shown as its own "Untagged" chip).
 const UNTAGGED = '__untagged__';
+
+// Composer modes. 'feedback' persists as a to-do but auto-stamps the Turtle 3D
+// tag + a platform tag so the cue rides along when the to-do is handed to the
+// Claude session (formatNoteForClaude already emits the Tags line).
+const FEEDBACK_TAG = 'TURTLE 3D';
+const PLATFORM_TAGS = { web: 'Web app', mobile: 'Mobile app' };
 
 // Derive browsable "topics" from note tags, mirroring the web NotesScreen: a
 // topic is the segment BEFORE the first '/', so `moodboard/wedding` lives under
@@ -197,6 +214,12 @@ export default function NotesScreen() {
       Alert.alert('Delete failed', e.message || String(e));
     }
   };
+
+  // Single tap → open the note/todo straight in the editor composer.
+  const openEditNote = useCallback((note) => {
+    setEditingNote(note);
+    setComposerOpen(true);
+  }, []);
 
   // Long-press menu: choose to Edit or Delete the note/todo.
   const showNoteActions = (note) => {
@@ -337,6 +360,7 @@ export default function NotesScreen() {
         renderItem={({ item }) => (
           <NoteRow
             note={item}
+            onPress={openEditNote}
             onToggleDone={toggleDone}
             onLongPress={showNoteActions}
             onSendToClaude={sendTodoToClaude}
@@ -627,13 +651,16 @@ const topicChipStyles = (theme, isDark) => StyleSheet.create({
 });
 
 // ── Note row ────────────────────────────────────────────────
-function NoteRowImpl({ note, onToggleDone, onLongPress, onSendToClaude, theme, isDark }) {
+function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude, theme, isDark }) {
   const isTodo = note.type === 'todo';
   const isDone = !!note.done;
   const styles = noteRowStyles(theme, isDark);
   return (
     <TouchableOpacity
       activeOpacity={0.8}
+      // Single tap opens the note/todo for editing right away. Long-press still
+      // opens the action sheet (kept as the path to Delete).
+      onPress={() => onPress(note)}
       onLongPress={() => onLongPress(note)}
       delayLongPress={350}
       style={styles.row}
@@ -803,7 +830,10 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
 function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, theme, isDark }) {
   const [content, setContent] = useState('');
   const [description, setDescription] = useState('');
-  const [type, setType] = useState('note');
+  // Composer mode: 'note' | 'todo' | 'feedback'. To-do is the default for a new
+  // capture; 'feedback' additionally reveals the platform selector below.
+  const [mode, setMode] = useState('todo');
+  const [platform, setPlatform] = useState('web');
   // Tags are now a selected SET (chips) plus a draft for the tag being typed,
   // instead of one comma-separated string — so existing tags can be tapped to
   // add, and selected ones tapped to remove.
@@ -814,18 +844,29 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
   const isEditing = !!initialNote;
   const { height: screenHeight } = useWindowDimensions();
 
+  // The live keyboard height as a UI-thread shared value — the SAME primitive the
+  // Turtle session dock rides. Driving the sheet's translateY straight off this
+  // (a compositor-only transform, no relayout) is what makes the composer track
+  // the keyboard frame-for-frame, in perfect lockstep, exactly like the session
+  // card — including the interactive swipe-down dismiss.
+  const keyboard = useAnimatedKeyboard();
+  // The sheet rests above the tab bar, while the keyboard rises from the window
+  // bottom — so the lift it needs is (keyboardHeight − tabBarHeight), floored at
+  // 0. Identical offset to the session dock's sessionDockLift.
+  const tabBarHeight = useBottomTabBarHeight();
+
   // Drives the open/close reveal: 0 = fully closed, 1 = fully open. The backdrop
-  // dim and the sheet's slide both interpolate off this single value so they
-  // move in perfect lockstep.
-  const reveal = useRef(new Animated.Value(0)).current;
-  // Keep the modal mounted through the *exit* animation: the parent flips
-  // `visible` to false immediately, but we linger until the slide-down + fade
-  // finishes, then unmount.
-  const [mounted, setMounted] = useState(visible);
+  // dim and the sheet's slide both read off this one shared value so they move
+  // in perfect lockstep.
+  const reveal = useSharedValue(0);
   // Sheet height (captured onLayout) so the card slides up from exactly its own
-  // height — no guessing, no clipped peek. Falls back to ~60% of the screen
-  // until the first layout pass lands.
-  const [sheetHeight, setSheetHeight] = useState(Math.round(screenHeight * 0.6));
+  // height — no guessing, no clipped peek. A shared value so the slide worklet
+  // reads it on the UI thread; seeded at ~60% of the screen until first layout.
+  const sheetH = useSharedValue(Math.round(screenHeight * 0.6));
+  // Keep the overlay mounted through the *exit* animation: the parent flips
+  // `visible` to false immediately, but we linger until the slide-down finishes,
+  // then unmount.
+  const [mounted, setMounted] = useState(visible);
   // Imperative focus: autoFocus fires on mount (before the card has slid in),
   // which pops the keyboard early and ruins the "rise together" feel. We focus
   // on the next frame instead so the keyboard rises in step with the card.
@@ -837,7 +878,9 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
     if (visible) {
       setContent(initialNote?.content || '');
       setDescription(initialNote?.description || '');
-      setType(initialNote?.type === 'todo' ? 'todo' : 'note');
+      // Editing keeps the note's real kind; a fresh capture defaults to to-do.
+      setMode(initialNote ? (initialNote.type === 'todo' ? 'todo' : 'note') : 'todo');
+      setPlatform('web');
       setTags(Array.isArray(initialNote?.tags) ? initialNote.tags.filter(Boolean) : []);
       setTagDraft('');
       setBusy(false);
@@ -846,34 +889,41 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
 
   // Open/close animation. Uses the iOS sheet-presentation curve
   // (cubic-bezier 0.32, 0.72, 0, 1) — the same deceleration the keyboard rises
-  // on — so the card, the background fade, and the keyboard all feel like one
-  // motion. Opening is a touch slower than closing, like a native sheet.
+  // on — so the card slide, the background fade, and the keyboard all feel like
+  // one motion. Opening is a touch slower than closing, like a native sheet.
+  const OPEN_EASING = REasing.bezier(0.32, 0.72, 0, 1);
   useEffect(() => {
     if (visible) {
       setMounted(true);
-      reveal.setValue(0);
-      Animated.timing(reveal, {
-        toValue: 1,
-        duration: 340,
-        easing: Easing.bezier(0.32, 0.72, 0, 1),
-        useNativeDriver: true,
-      }).start();
+      reveal.value = 0;
+      reveal.value = withTiming(1, { duration: 340, easing: OPEN_EASING });
       // Pop the keyboard in step with the slide — next frame, once the sheet
       // has laid out — so the two rise together.
       requestAnimationFrame(() => contentRef.current?.focus());
     } else if (mounted) {
       Keyboard.dismiss();
-      Animated.timing(reveal, {
-        toValue: 0,
-        duration: 240,
-        easing: Easing.bezier(0.32, 0.72, 0, 1),
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) setMounted(false);
+      reveal.value = withTiming(0, { duration: 240, easing: OPEN_EASING }, (finished) => {
+        'worklet';
+        if (finished) runOnJS(setMounted)(false);
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
+
+  // The sheet's transform: closed slides it fully below the screen
+  // ((1−reveal)·sheetHeight), and the keyboard lift raises it so its bottom edge
+  // pins to the keyboard's top — both folded into ONE compositor-only translateY,
+  // recomputed every keyboard frame on the UI thread.
+  const sheetStyle = useAnimatedStyle(() => {
+    'worklet';
+    const lift = Math.max(keyboard.height.value - tabBarHeight, 0);
+    return { transform: [{ translateY: (1 - reveal.value) * sheetH.value - lift }] };
+  });
+  // Backdrop dim deepens exactly as the sheet rises (reads the same shared value).
+  const dimStyle = useAnimatedStyle(() => {
+    'worklet';
+    return { opacity: reveal.value * 0.45 };
+  });
 
   // Add a tag (typed or tapped), de-duped and trimmed; clears the draft.
   const addTag = (raw) => {
@@ -895,88 +945,109 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
     const finalTags = [...tags];
     const pending = tagDraft.trim();
     if (pending && !finalTags.includes(pending)) finalTags.push(pending);
+    // Feedback persists as a to-do and gets the Turtle 3D + platform tags
+    // (case-insensitive dedupe so we don't double-stamp).
+    if (mode === 'feedback') {
+      for (const t of [FEEDBACK_TAG, PLATFORM_TAGS[platform]]) {
+        if (!finalTags.some((x) => x.toLowerCase() === t.toLowerCase())) finalTags.push(t);
+      }
+    }
+    const type = mode === 'note' ? 'note' : 'todo';
     await onSubmit({ content, description, type, tags: finalTags });
     setBusy(false);
   };
 
+  if (!mounted) return null;
   return (
-    <Modal
-      visible={mounted}
-      animationType="none"
-      transparent
-      onRequestClose={onClose}
-    >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.backdrop}
+    // In-tree overlay (NOT a Modal) so useAnimatedKeyboard can see the keyboard
+    // — that's the whole reason this matches the session card. Fills the screen
+    // above the tab bar; box-none lets taps reach the backdrop / sheet below.
+    <View style={styles.backdrop} pointerEvents="box-none">
+      {/* Background fade — same shared value driving the card's slide, so the dim
+          deepens exactly as the sheet rises. */}
+      <Reanimated.View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, dimStyle]}
+      />
+      {/* Tap the dim backdrop above the sheet to dismiss everything; matches the
+          iOS sheet idiom and gives an obvious "out" if the keyboard feels stuck. */}
+      <TouchableWithoutFeedback onPress={onClose} accessible={false}>
+        <View style={{ flex: 1 }} />
+      </TouchableWithoutFeedback>
+      <Reanimated.View
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          if (h > 0) sheetH.value = h;
+        }}
+        style={[styles.sheet, sheetStyle]}
       >
-        {/* Background fade — interpolates with the same value driving the
-            card's slide, so the dim deepens exactly as the sheet rises. */}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            StyleSheet.absoluteFill,
-            { backgroundColor: '#000', opacity: reveal.interpolate({ inputRange: [0, 1], outputRange: [0, 0.45] }) },
-          ]}
-        />
-        {/* Tap the dim backdrop above the sheet to dismiss everything;
-            this matches the iOS sheet idiom and gives the user an
-            obvious "out" if the keyboard ever feels stuck. */}
-        <TouchableWithoutFeedback onPress={onClose} accessible={false}>
-          <View style={{ flex: 1 }} />
-        </TouchableWithoutFeedback>
-        <Animated.View
-          onLayout={(e) => {
-            const h = Math.round(e.nativeEvent.layout.height);
-            if (h > 0 && h !== sheetHeight) setSheetHeight(h);
-          }}
-          style={[
-            styles.sheet,
-            { transform: [{ translateY: reveal.interpolate({ inputRange: [0, 1], outputRange: [sheetHeight, 0] }) }] },
-          ]}
-        >
-          {/* Tapping ANYWHERE on the sheet that isn't an input
-              dismisses the keyboard. The sheet itself stays open;
-              only the dim backdrop above closes the whole modal. */}
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <View>
-              <View style={styles.handle} />
+        {/* Tapping anywhere on the sheet that isn't an input dismisses the
+            keyboard. The sheet stays open; only the dim backdrop closes it. */}
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+          <View>
+            <View style={styles.handle} />
           <View style={styles.headerRow}>
             <Text style={styles.title}>
               {isEditing
-                ? (type === 'todo' ? 'Edit todo' : 'Edit note')
-                : (type === 'todo' ? 'New todo' : 'New note')}
+                ? (mode === 'note' ? 'Edit note' : 'Edit todo')
+                : (mode === 'feedback' ? 'New feedback' : mode === 'todo' ? 'New todo' : 'New note')}
             </Text>
             <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Icon name="close" size={22} color={theme.colors.textSecondary} />
             </TouchableOpacity>
           </View>
 
-          {/* Type toggle */}
+          {/* Mode toggle — note / todo / feedback */}
           <View style={styles.typeToggle}>
-            <TouchableOpacity
-              onPress={() => setType('note')}
-              style={[styles.typeOpt, type === 'note' && styles.typeOptActive]}
-            >
-              <Icon name="text" size={14} color={type === 'note' ? (isDark ? '#0a0a0a' : '#fff') : theme.colors.textSecondary} />
-              <Text style={[styles.typeOptText, type === 'note' && styles.typeOptTextActive]}>
-                Note
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => setType('todo')}
-              style={[styles.typeOpt, type === 'todo' && styles.typeOptActive]}
-            >
-              <Icon name="checkbox-marked-circle-outline" size={14} color={type === 'todo' ? (isDark ? '#0a0a0a' : '#fff') : theme.colors.textSecondary} />
-              <Text style={[styles.typeOptText, type === 'todo' && styles.typeOptTextActive]}>
-                Todo
-              </Text>
-            </TouchableOpacity>
+            {[
+              { key: 'note', label: 'Note', icon: 'text' },
+              { key: 'todo', label: 'Todo', icon: 'checkbox-marked-circle-outline' },
+              { key: 'feedback', label: 'Feedback', icon: 'message-text-outline' },
+            ].map((opt) => {
+              const active = mode === opt.key;
+              return (
+                <TouchableOpacity
+                  key={opt.key}
+                  onPress={() => setMode(opt.key)}
+                  style={[styles.typeOpt, active && styles.typeOptActive]}
+                >
+                  <Icon name={opt.icon} size={14} color={active ? (isDark ? '#0a0a0a' : '#fff') : theme.colors.textSecondary} />
+                  <Text style={[styles.typeOptText, active && styles.typeOptTextActive]}>
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
+
+          {/* Feedback platform — which app the feedback is about. Stamped as a
+              tag so it cues the Claude session when the to-do is sent over. */}
+          {mode === 'feedback' && (
+            <View style={styles.typeToggle}>
+              {[
+                { key: 'web', label: PLATFORM_TAGS.web, icon: 'web' },
+                { key: 'mobile', label: PLATFORM_TAGS.mobile, icon: 'cellphone' },
+              ].map((opt) => {
+                const active = platform === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    onPress={() => setPlatform(opt.key)}
+                    style={[styles.typeOpt, active && styles.typeOptActive]}
+                  >
+                    <Icon name={opt.icon} size={14} color={active ? (isDark ? '#0a0a0a' : '#fff') : theme.colors.textSecondary} />
+                    <Text style={[styles.typeOptText, active && styles.typeOptTextActive]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
 
           <TextInput
             ref={contentRef}
-            placeholder={type === 'todo' ? 'Buy milk' : 'Anything to remember'}
+            placeholder={mode === 'note' ? 'Anything to remember' : mode === 'feedback' ? 'Feedback for Claude' : 'Buy milk'}
             placeholderTextColor={theme.colors.textPlaceholder}
             value={content}
             onChangeText={setContent}
@@ -1084,25 +1155,31 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
           </View>
             </View>
           </TouchableWithoutFeedback>
-        </Animated.View>
-      </KeyboardAvoidingView>
-    </Modal>
+        </Reanimated.View>
+      </View>
   );
 }
 
 const composerStyles = (theme, isDark) => StyleSheet.create({
+  // Full-screen in-tree overlay (the composer is no longer a Modal). Absolutely
+  // fills the NotesScreen above the tab bar; flex-end anchors the sheet to the
+  // bottom so its keyboard lift reads as rising off the bottom edge. The dim is
+  // a separate animated layer (fades in with the card), not a static fill.
   backdrop: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
     justifyContent: 'flex-end',
-    // The dim is an animated overlay (fades in with the card), not a static
-    // fill — see the Animated.View in ComposerModal.
+    zIndex: 100,
   },
   sheet: {
     backgroundColor: theme.colors.background,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 20,
-    paddingBottom: 36,
+    // Bottom gap below the Save row. When the keyboard is up the sheet's
+    // bottom edge pins to the keyboard top, so this is the visual margin
+    // between the Save button and the keyboard — kept tight but enough to
+    // breathe (was 36, which read as too airy).
+    paddingBottom: 22,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     borderBottomWidth: 0,

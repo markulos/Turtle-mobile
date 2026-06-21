@@ -83,9 +83,40 @@ const REMINDER_PRESETS = [
   { min: 1440, label: '1 day' },
 ];
 
+// End time is stored as a `duration` (minutes from `time`), matching the web
+// app + the server's `duration` column. The form derives the wall-clock end
+// from time + duration for display, and converts a picked end back into a
+// duration on save. null/≤0 duration ⇒ "no end time", rendered as a pin.
+const hhmmToMinutes = (t) => {
+  if (!t || typeof t !== 'string') return -1;
+  const [h, m] = t.split(':').map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return -1;
+  return h * 60 + m;
+};
+const addMinutesToHHMM = (t, mins) => {
+  const base = hhmmToMinutes(t);
+  if (base < 0) return '';
+  // Clamp to 23:59 — the picker can't represent 24:00, and a same-day end is
+  // all the calendar block needs.
+  const total = Math.min(base + mins, 23 * 60 + 59);
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+};
+const minutesBetween = (start, end) => {
+  const s = hhmmToMinutes(start);
+  const e = hhmmToMinutes(end);
+  if (s < 0 || e < 0) return 0;
+  return e - s;
+};
+const formatDurationShort = (mins) => {
+  if (!Number.isFinite(mins) || mins <= 0) return '';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+};
+
 const blankForm = (itemType = 'task') => ({
   title: '', description: '', priority: 'medium', completed: false,
-  project: '', dueDate: '', time: '', tags: [], involvedUsers: [],
+  project: '', dueDate: '', time: '', duration: null, tags: [], involvedUsers: [],
   taskReminders: { leads: [], sms: false, involved: false },
   recurring: 'none',
   itemType,
@@ -132,6 +163,7 @@ export const TaskForm = ({
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
 
   const titleInputRef = useRef(null);
   const descInputRef = useRef(null);
@@ -350,6 +382,7 @@ export const TaskForm = ({
       };
       finalTask.recurring = 'none';
       finalTask.time = ''; // birthdays are all-day
+      finalTask.duration = null;
     } else {
       finalTask.meta = {};
     }
@@ -368,7 +401,10 @@ export const TaskForm = ({
 
     const confirmationDetails = [
       `${type === 'birthday' ? 'Name' : 'Title'}: ${finalTask.title}`,
-      finalTask.time ? `Time: ${finalTask.time}` : null,
+      finalTask.time ? `Time: ${formatTime12(finalTask.time)}` : null,
+      finalTask.time && finalTask.duration > 0
+        ? `Ends: ${formatTime12(addMinutesToHHMM(finalTask.time, finalTask.duration))} (${formatDurationShort(finalTask.duration)})`
+        : null,
       finalTask.dueDate ? `Date: ${finalTask.dueDate}` : null,
       type === 'birthday' && finalTask.meta.yearly ? 'Repeats every year' : null,
       type === 'event' && finalTask.meta.guests?.length ? `Guests: ${finalTask.meta.guests.length}` : null,
@@ -904,7 +940,7 @@ export const TaskForm = ({
                   style={styles.datePickerButton}
                   onPress={() => setShowTimePicker(true)}
                 >
-                  <Icon name="clock-outline" size={20} color={formData.time ? theme.colors.accentPrimary : theme.colors.textSecondary} />
+                  <Icon name="clock-outline" size={20} color={formData.time ? theme.colors.accentInfo : theme.colors.textSecondary} />
                   <Text style={[
                     styles.datePickerText,
                     !formData.time && styles.datePickerPlaceholder
@@ -917,9 +953,44 @@ export const TaskForm = ({
                 {formData.time && (
                   <TouchableOpacity
                     style={styles.clearDateBtn}
-                    onPress={() => updateField('time', '')}
+                    // Clearing the start time drops the end time too — an end
+                    // with no start has nothing to anchor to.
+                    onPress={() => setFormData(prev => ({ ...prev, time: '', duration: null }))}
                   >
                     <Text style={styles.clearDateText}>Clear time</Text>
+                  </TouchableOpacity>
+                )}
+              </FormField>
+            )}
+
+            {/* End time — tasks + events, only once a start time exists (an end
+                is meaningless without one). Stored as `duration` (end − start in
+                minutes); the calendar reads that to size the block. Birthdays are
+                all-day, so no end. */}
+            {!isBirthday && formData.time && (
+              <FormField label="End time (optional)">
+                <TouchableOpacity
+                  style={styles.datePickerButton}
+                  onPress={() => setShowEndTimePicker(true)}
+                >
+                  <Icon name="clock-check-outline" size={20} color={formData.duration > 0 ? theme.colors.accentInfo : theme.colors.textSecondary} />
+                  <Text style={[
+                    styles.datePickerText,
+                    !(formData.duration > 0) && styles.datePickerPlaceholder
+                  ]}>
+                    {formData.duration > 0
+                      ? `${formatTime12(addMinutesToHHMM(formData.time, formData.duration))}  ·  ${formatDurationShort(formData.duration)}`
+                      : 'Set an end time...'}
+                  </Text>
+                  <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
+                </TouchableOpacity>
+
+                {formData.duration > 0 && (
+                  <TouchableOpacity
+                    style={styles.clearDateBtn}
+                    onPress={() => updateField('duration', null)}
+                  >
+                    <Text style={styles.clearDateText}>Clear end time</Text>
                   </TouchableOpacity>
                 )}
               </FormField>
@@ -1008,6 +1079,25 @@ export const TaskForm = ({
                 setShowTimePicker(false);
               }}
               initialTime={formData.time}
+            />
+
+            {/* End Time Picker — picks a wall-clock end; we store the gap as a
+                duration. An end at/before the start snaps to a 15-minute floor
+                so the block is never zero/negative. Picker "Clear" → no end. */}
+            <WheelTimePicker
+              visible={showEndTimePicker}
+              onClose={() => setShowEndTimePicker(false)}
+              onSelect={(end) => {
+                setShowEndTimePicker(false);
+                if (!end) { updateField('duration', null); return; }
+                const mins = minutesBetween(formData.time, end);
+                updateField('duration', mins > 0 ? mins : 15);
+              }}
+              initialTime={
+                formData.duration > 0
+                  ? addMinutesToHHMM(formData.time, formData.duration)
+                  : addMinutesToHHMM(formData.time, 60)
+              }
             />
 
             {/* Date Picker Modal */}
