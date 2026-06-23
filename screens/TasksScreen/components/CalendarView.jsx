@@ -1794,19 +1794,19 @@ export const CalendarView = ({
   const renderMonth = useCallback(({ item: monthDate }) => {
     const data = buildCalendarDataFor(monthDate);
     const activeMonth = MONTHS_LIST[currentMonthIndex];
-    // Paint the title on the active month AND its immediate neighbours
-    // (±1 month) so the header for the month above/below is ALREADY
-    // mounted and slides in with the page on scroll — no pop-in after the
-    // snap settles. Each page renders its OWN month/year. Neighbours are
-    // a full viewport off-screen while you're on the current month, so
-    // their headers stay hidden until you actually scroll to them.
-    // Pages further than ±1 reserve the SAME title band with an empty
-    // spacer so every page is exactly monthH and snapping stays clean.
+    // Paint the title across a ±6-month neighbourhood so headers are
+    // ALREADY mounted through a fast scroll (no blank/pop-in as pages
+    // whip by). Matches the FlatList render window below. Each page
+    // renders its OWN month/year. Neighbours are full viewports off-screen
+    // while you're on the current month, so their headers stay hidden
+    // until you actually scroll to them. Pages beyond the window reserve
+    // the SAME title band with an empty spacer so every page is exactly
+    // monthH and snapping stays clean.
     const monthsApart = Math.abs(
       (monthDate.getFullYear() - activeMonth.getFullYear()) * 12 +
       (monthDate.getMonth() - activeMonth.getMonth())
     );
-    const showTitle = monthsApart <= 1;
+    const showTitle = monthsApart <= 6;
     // Whether this page is the real current calendar month (today) —
     // drives the inline "Today" jump shortcut (only useful off-today).
     const isCurrentMonth =
@@ -2083,10 +2083,17 @@ export const CalendarView = ({
             snapToAlignment="start"
             decelerationRate="fast"
             showsVerticalScrollIndicator={false}
-            // 1 = prerender exactly one month above + below the visible
-            // page. Cheap to render, makes the partial-month peek
-            // during a swipe look populated immediately.
-            windowSize={3}
+            // Each page is a full viewport, so windowSize (in viewport
+            // units) ≈ months kept mounted. 13 = ~6 months above + below
+            // the visible page, so a FAST scroll lands on already-rendered
+            // months instead of blank pages. maxToRenderPerBatch +
+            // updateCellsBatchingPeriod fill that window in fast while the
+            // finger is still moving; getItemLayout means none of it needs
+            // measuring. Matches the ±6 title-preload window above.
+            windowSize={13}
+            maxToRenderPerBatch={6}
+            updateCellsBatchingPeriod={30}
+            initialNumToRender={3}
             removeClippedSubviews
             style={{ height: monthH, marginTop: HINT_STRIP, marginBottom: SHEET_PEEK_RESERVE }}
           />
