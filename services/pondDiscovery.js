@@ -10,6 +10,8 @@
 // Subnet selection: expo-network (when present — it's a native module, so it
 // activates after the next dev-app rebuild) gives the device's own /24.
 // Until then we sweep the common home subnets, which covers most routers.
+import { serverOrigin } from '../context/ServerContext';
+
 let Network = null;
 try {
   // eslint-disable-next-line global-require
@@ -21,6 +23,18 @@ try {
 const COMMON_SUBNETS = ['192.168.0', '192.168.1', '192.168.2', '10.0.0'];
 const PROBE_TIMEOUT_MS = 600;
 const CONCURRENCY = 32;
+
+// Public Tailscale Funnel ponds — HTTPS URLs reachable from ANYWHERE (cellular,
+// off the home LAN), unlike the subnet sweep below which only works on Wi-Fi.
+// Seeded with the known pond; the login screen unions this with any funnel the
+// user has previously connected to (persisted in AsyncStorage), and walks the
+// whole list to confirm which pond invited a given number. A private pond
+// reveals itself ONLY to a phone it invited (server-enforced via
+// /api/auth/pond/info?phone=), so the funnel that answers IS the right server.
+export const SEED_FUNNELS = ['https://arch-main.tail25e0bc.ts.net'];
+// Funnels go over the internet/tailnet with a TLS handshake, so they need a far
+// longer leash than the 600 ms LAN probe (which is one hop away).
+const FUNNEL_TIMEOUT_MS = 4000;
 
 async function deviceSubnet(onStatus) {
   try {
@@ -51,21 +65,32 @@ async function deviceSubnet(onStatus) {
   return null;
 }
 
-async function probe(host, phone) {
+// Probe ONE origin's /api/auth/pond/info. Returns the self-described pond (with
+// `host` = the origin we probed, so the caller can save exactly what it can
+// reach) or null. Shared by the LAN sweep and the funnel walk.
+async function probeOrigin(origin, phone, timeoutMs) {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const qs = phone ? `?phone=${encodeURIComponent(phone)}` : '';
-    const r = await fetch(`http://${host}:3000/api/auth/pond/info${qs}`, { signal: ctrl.signal });
+    const r = await fetch(`${origin}/api/auth/pond/info${qs}`, { signal: ctrl.signal });
     if (!r.ok) return null;
     const d = await r.json().catch(() => null);
-    if (d && d.success && d.pond) return { ...d.pond, host };
+    if (d && d.success && d.pond) return { ...d.pond, host: origin };
   } catch (e) {
     /* not a turtle server / no response — the overwhelmingly common case */
   } finally {
     clearTimeout(t);
   }
   return null;
+}
+
+// LAN probe: a bare host on the home subnet. We keep `host` as the bare host
+// (not the full http://…:3000 origin) so the existing UI shows/saves it exactly
+// as before — serverOrigin() re-expands it on save.
+async function probe(host, phone) {
+  const p = await probeOrigin(`http://${host}:3000`, phone, PROBE_TIMEOUT_MS);
+  return p ? { ...p, host } : null;
 }
 
 // Sweep for ponds. `phone` (optional) unlocks private ponds you're invited to.
@@ -103,4 +128,57 @@ export async function scanForPonds(phone, onFound, onStatus) {
   console.log(`[pond-scan] DONE: probed ${hosts.length} hosts across [${subnets.join(', ')}], found ${found.length} pond(s)`);
   onStatus && onStatus(`probed ${hosts.length} addresses on ${subnets.join(', ')} — found ${found.length} pond${found.length === 1 ? '' : 's'}`);
   return found;
+}
+
+// Normalize + de-dupe a list of funnel URLs (trim, drop trailing slash, blanks).
+const cleanFunnels = (funnels) =>
+  Array.from(new Set((funnels || []).map((f) => String(f || '').trim().replace(/\/+$/, '')).filter(Boolean)));
+
+// Probe a list of funnel URLs (in parallel) with the phone. Returns the ponds
+// that REVEAL themselves to this number — i.e. ones that invited it, or that are
+// open for search. `onFound(pond)` streams hits so the login list can show them
+// live alongside LAN hits. Each hit's `host` is the funnel URL itself (set by
+// probeOrigin), which is the address an invitee can reach from anywhere.
+export async function scanFunnels(phone, funnels, onFound) {
+  const list = cleanFunnels(funnels);
+  if (!list.length) return [];
+  console.log('[funnel-scan] probing', list.length, 'funnel(s)', phone ? '(phone supplied)' : '(no phone — open ponds only)');
+  const found = [];
+  await Promise.all(
+    list.map(async (origin) => {
+      const p = await probeOrigin(origin, phone, FUNNEL_TIMEOUT_MS);
+      if (p) {
+        console.log('[funnel-scan] HIT:', origin, '→', p.name, p.invited ? '(invited)' : '(open)');
+        found.push(p);
+        if (onFound) onFound(p);
+      }
+    }),
+  );
+  console.log(`[funnel-scan] DONE: ${found.length}/${list.length} funnel(s) answered for this number`);
+  return found;
+}
+
+// Find the ONE funnel URL to save for a number, preferring a pond that actually
+// INVITED it over a merely-open one. Returns the funnel URL string, or null.
+export async function confirmPondForPhone(phone, funnels) {
+  const ponds = await scanFunnels(phone, funnels);
+  if (!ponds.length) return null;
+  const chosen = ponds.find((p) => p.invited) || ponds[0];
+  return chosen ? chosen.host : null;
+}
+
+// Decide the server to use for a number right after the phone is entered:
+//   • If the server we ALREADY have confirms this number is invited, keep it
+//     (returns null = "no change") — so a fast LAN/Tailscale path isn't traded
+//     for a slower funnel hop when you're already on the right network at home.
+//   • Otherwise (current server unreachable or doesn't know this number, e.g.
+//     a fresh install on cellular) return the funnel URL whose pond invited it.
+// Both probes run concurrently, so the worst case is one timeout, not two.
+export async function confirmServerForPhone(currentServer, phone, funnels) {
+  const curProbe = currentServer
+    ? probeOrigin(serverOrigin(currentServer), phone, FUNNEL_TIMEOUT_MS)
+    : Promise.resolve(null);
+  const [cur, funnelUrl] = await Promise.all([curProbe, confirmPondForPhone(phone, funnels)]);
+  if (cur && cur.invited) return null; // current server already invited this number — keep it
+  return funnelUrl; // switch to the funnel that did (or null if none matched)
 }

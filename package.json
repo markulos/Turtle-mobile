@@ -22,6 +22,7 @@
     "crypto-js": "^4.2.0",
     "expo": "~54.0.35",
     "expo-blur": "~15.0.8",
+    "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",
     "expo-contacts": "~15.0.11",
     "expo-crypto": "~15.0.9",

@@ -14,6 +14,7 @@ import {
   ScrollView,
   Platform,
   Easing,
+  InteractionManager,
   PanResponder,
   TextInput,
   Keyboard,
@@ -4055,19 +4056,32 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // Because tabIndicatorX is bound to pageScrollX, the indicator will slide automatically!
   const handleTabPress = useCallback((tab) => {
     const index = TABS.indexOf(tab);
-    if (index >= 0 && pagesScrollRef.current) {
-      pagesScrollRef.current.scrollTo({ x: index * width, animated: true });
-    }
-    
-    // Tap active "Photos" tab to smoothly scroll to most recent (offset 0)
-    if (tab === 'uploads' && activeTab === 'uploads' && gridRef.current) {
-      gridRef.current.scrollToOffset({ offset: 0, animated: true });
+    if (index < 0) return;
+
+    // Re-tapping the active tab: no slide — just jump the Photos grid to newest.
+    if (tab === activeTab) {
+      if (tab === 'uploads' && gridRef.current) {
+        gridRef.current.scrollToOffset({ offset: 0, animated: true });
+      }
+      return;
     }
 
-    setActiveTab(tab);
-    // Reset back to root Photo Vault when leaving the main Photos tab
-    if (tab === 'albums') setSelectedAlbum('All');
-  }, [TABS, width, activeTab]);
+    // Native paging slide — starts instantly and runs buttery-smooth on the UI
+    // thread (no JS-thread per-frame work to stutter it). Fire it FIRST and on
+    // its own tick; the tab's heavier state work (grid active-tab gating +
+    // fetchAlbums) is deferred to runAfterInteractions so the synchronous
+    // re-render can't hold the scroll command back from flushing to native —
+    // that hold-back was the "delay on press". Both pages are already mounted,
+    // so nothing blanks: the destination just slides in, then its data work
+    // runs once the slide has settled.
+    if (pagesScrollRef.current) {
+      pagesScrollRef.current.scrollTo({ x: index * width, animated: true });
+    }
+    InteractionManager.runAfterInteractions(() => {
+      setActiveTab(tab);
+      if (tab === 'albums') setSelectedAlbum('All');
+    });
+  }, [TABS, activeTab, width]);
 
   // SWIPE END: The ScrollView tells React it finished moving.
   const commitTab = useCallback((index) => {

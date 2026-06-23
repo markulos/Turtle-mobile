@@ -27,6 +27,9 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Contacts from 'expo-contacts';
 import * as Haptics from 'expo-haptics';
+// NOTE: expo-clipboard is resolved lazily at call time (see copyInviteLink) — it
+// ships a native module that only exists in a dev build compiled after the dep
+// was added, so a static top-level import crashes older binaries on load.
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FlashList } from '@shopify/flash-list';
 import { frostBorderColor, FROST_OVERLAP } from '../../utils/frostedChat';
@@ -586,6 +589,10 @@ export default function TurtleScreen() {
   const [inviteBusy, setInviteBusy] = useState(false);
   // { type: 'ok' | 'err', text } — small inline banner under the field.
   const [inviteNote, setInviteNote] = useState(null);
+  // { phone, joinUrl } for the last invite — surfaces a copy/share card so the
+  // owner can send the link by hand when the auto-SMS doesn't land. Null hides it.
+  const [inviteResult, setInviteResult] = useState(null);
+  const [inviteCopied, setInviteCopied] = useState(false);
 
   // Strip a contact/manual number down to the digits (and a single
   // leading +) the server stores. Keeps matching with invited_phones
@@ -606,10 +613,22 @@ export default function TurtleScreen() {
     }
     setInviteBusy(true);
     setInviteNote(null);
+    setInviteResult(null);
+    setInviteCopied(false);
     try {
-      await api.post('/auth/invites', { phone });
+      // The endpoint adds them to the invite list AND returns a per-invitee
+      // joinUrl (whether or not the auto-text landed) — we surface that link so
+      // the owner can copy/send it by hand.
+      const resp = await api.post('/auth/invites', { phone });
+      const joinUrl = resp?.joinUrl || null;
       setInvitePhone('');
-      setInviteNote({ type: 'ok', text: `Invited ${phone} — they'll hop in with a texted code.` });
+      setInviteNote({
+        type: 'ok',
+        text: resp?.smsSent
+          ? `Invited ${phone} — they got a tap-to-join text.`
+          : `Invited ${phone} — the auto-text didn't land. Copy the link below and send it yourself.`,
+      });
+      if (joinUrl) setInviteResult({ phone, joinUrl });
       // Surface them immediately in the pending list, then reconcile.
       setPendingInvites((prev) =>
         prev.some((p) => p.phone === phone) ? prev : [{ phone }, ...prev],
@@ -630,6 +649,39 @@ export default function TurtleScreen() {
       setInviteBusy(false);
     }
   }, [api, normalizePhone, loadFriends]);
+
+  // Copy the last invitee's join link to the clipboard so the owner can paste
+  // it into iMessage/WhatsApp themselves. Brief "Copied!" confirmation.
+  const copyInviteLink = useCallback(async () => {
+    if (!inviteResult?.joinUrl) return;
+    // Resolve expo-clipboard lazily: it's a NATIVE module that only exists in a
+    // dev build compiled after the dep was added. Requiring it at call time (vs
+    // a top-level import) lets a binary that predates it degrade to the OS share
+    // sheet instead of crashing the whole app on load.
+    let clip = null;
+    try { clip = require('expo-clipboard'); } catch { /* not in this build */ }
+    if (clip?.setStringAsync) {
+      try {
+        await clip.setStringAsync(inviteResult.joinUrl);
+        Haptics.selectionAsync().catch(() => {});
+        setInviteCopied(true);
+        setTimeout(() => setInviteCopied(false), 1800);
+        return;
+      } catch { /* clipboard present but failed — fall through to share */ }
+    }
+    // No clipboard module in this build: hand the link to the OS share sheet.
+    try { await Share.share({ message: inviteResult.joinUrl }); } catch { /* dismissed */ }
+  }, [inviteResult]);
+
+  // Hand the invitee's join link to the OS share sheet (iMessage, WhatsApp, …).
+  const shareInviteResult = useCallback(async () => {
+    if (!inviteResult?.joinUrl) return;
+    try {
+      await Share.share({
+        message: `You're invited to my Turtle pond 🐢 Tap to join: ${inviteResult.joinUrl}`,
+      });
+    } catch { /* user dismissed the sheet — nothing to do */ }
+  }, [inviteResult]);
 
   // Open the native contact picker, pull the first phone number off
   // the chosen contact, and pre-fill it into the invite field (the
@@ -1636,6 +1688,41 @@ export default function TurtleScreen() {
                 <Text style={[styles.inviteNoteText, { color: theme.colors.textSecondary }]}>{inviteNote.text}</Text>
               </View>
             )}
+
+            {/* Copy/share the just-created invitee link — lets the owner send it
+                by hand when the auto-text didn't land. */}
+            {inviteResult && (
+              <View style={styles.inviteLinkCard}>
+                <Text style={[styles.inviteLinkLabel, { color: theme.colors.textTertiary }]}>
+                  Invite link for {inviteResult.phone}
+                </Text>
+                <Text
+                  style={[styles.inviteLinkUrl, { color: theme.colors.textSecondary }]}
+                  numberOfLines={1}
+                  ellipsizeMode="middle"
+                >
+                  {inviteResult.joinUrl}
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                  <TouchableOpacity
+                    style={[styles.inviteSendBtn, { flex: 1, flexDirection: 'row', justifyContent: 'center', gap: 6 }, inviteCopied && { backgroundColor: '#34c759' }]}
+                    onPress={copyInviteLink}
+                    activeOpacity={0.85}
+                  >
+                    <Icon name={inviteCopied ? 'check' : 'content-copy'} size={16} color="#fff" />
+                    <Text style={styles.inviteSendText}>{inviteCopied ? 'Copied!' : 'Copy link'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.inviteManualBtn, { width: 'auto', paddingHorizontal: 14, flexDirection: 'row', gap: 6 }]}
+                    onPress={shareInviteResult}
+                    activeOpacity={0.7}
+                  >
+                    <Icon name="share-variant" size={16} color={theme.colors.textSecondary} />
+                    <Text style={{ color: theme.colors.textSecondary, fontWeight: '600' }}>Share</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
           </View>
 
           <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
@@ -1678,7 +1765,13 @@ export default function TurtleScreen() {
                 })}
                 {filteredPending.length > 0 && <Text style={styles.friendSectionLabel}>Invited (pending)</Text>}
                 {filteredPending.map((p) => (
-                  <View key={`pending-${p.phone}`} style={styles.friendRow}>
+                  <TouchableOpacity
+                    key={`pending-${p.phone}`}
+                    style={styles.friendRow}
+                    activeOpacity={0.6}
+                    onPress={() => setSelectedFriend({ phone: p.phone, pending: true, invitedAt: p.invitedAt, joined: false, role: 'member' })}
+                    accessibilityLabel={`Open invite status for ${p.phone}`}
+                  >
                     <View style={styles.friendAvatar}>
                       <Icon name="clock-outline" size={18} color={theme.colors.textTertiary} />
                     </View>
@@ -1686,7 +1779,8 @@ export default function TurtleScreen() {
                       <Text style={styles.friendName} numberOfLines={1}>{p.phone}</Text>
                       <Text style={styles.friendSub}>Invited — hasn't joined yet</Text>
                     </View>
-                  </View>
+                    <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
+                  </TouchableOpacity>
                 ))}
               </>
             )}
@@ -2642,6 +2736,23 @@ const createStyles = (theme, insets) =>
       flex: 1,
       fontSize: 12.5,
       lineHeight: 17,
+    },
+    inviteLinkCard: {
+      backgroundColor: theme.colors.surfaceElevated,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      borderRadius: 12,
+      padding: 12,
+    },
+    inviteLinkLabel: {
+      fontSize: 11,
+      fontWeight: '600',
+      textTransform: 'uppercase',
+      letterSpacing: 0.4,
+      marginBottom: 4,
+    },
+    inviteLinkUrl: {
+      fontSize: 13,
     },
     friendEmpty: {
       fontSize: 14,

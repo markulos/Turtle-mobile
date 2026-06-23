@@ -897,9 +897,14 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
       setMounted(true);
       reveal.value = 0;
       reveal.value = withTiming(1, { duration: 340, easing: OPEN_EASING });
-      // Pop the keyboard in step with the slide — next frame, once the sheet
-      // has laid out — so the two rise together.
-      requestAnimationFrame(() => contentRef.current?.focus());
+      // Auto-focus ONLY for a fresh capture — a new note is a "start typing now"
+      // action, so the keyboard rising in step with the slide is the right feel.
+      // OPENING AN EXISTING NOTE is a "read it first" action: just slide the card
+      // up with NO keyboard, and let the user tap the title or description field
+      // to bring the keyboard up when they actually want to edit.
+      if (!initialNote) {
+        requestAnimationFrame(() => contentRef.current?.focus());
+      }
     } else if (mounted) {
       Keyboard.dismiss();
       reveal.value = withTiming(0, { duration: 240, easing: OPEN_EASING }, (finished) => {

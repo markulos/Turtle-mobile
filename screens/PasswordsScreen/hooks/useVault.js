@@ -72,8 +72,15 @@ export const useVault = (getBaseUrl, isConnected) => {
   useEffect(() => { refreshBiometricState(); }, [refreshBiometricState]);
 
   // Check vault setup status — SERVER is source of truth (see comment below).
-  const checkSetup = useCallback(async () => {
-    setIsLoading(true);
+  // `showLoader` gates the FULL-SCREEN loading state: only the initial mount load
+  // should blank the whole screen. A silent re-check (foreground recheck, post-
+  // reset) must NOT flip isLoading — doing so unmounts the entire vault view (and
+  // any open modal) and remounts it, which is what caused the Change-Master-
+  // Password modal to re-fire Face ID endlessly: the Face ID overlay backgrounds
+  // the app → AppState 'active' → checkSetup → isLoading true → modal unmounts →
+  // false → modal remounts → its mount effect runs Face ID again → loop.
+  const checkSetup = useCallback(async (showLoader = false) => {
+    if (showLoader) setIsLoading(true);
     try {
       // If my account has any encrypted rows, the vault IS set up (and decryptable
       // with my master password on ANY device). The local SecureStore verifier is
@@ -103,13 +110,14 @@ export const useVault = (getBaseUrl, isConnected) => {
       console.error('Error checking vault setup:', error);
       setIsSetup(false);
     } finally {
-      setIsLoading(false);
+      if (showLoader) setIsLoading(false);
     }
   }, [getBaseUrl, isConnected]);
 
-  // Check on mount
+  // Check on mount — the ONLY call that drives the full-screen loader (isLoading
+  // starts true, so this must clear it). All other callers re-check silently.
   useEffect(() => {
-    checkSetup();
+    checkSetup(true);
   }, [checkSetup]);
 
   const createVault = useCallback(async (password, confirmPassword) => {

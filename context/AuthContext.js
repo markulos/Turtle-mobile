@@ -7,7 +7,7 @@
 
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import { useServer, setApiAuthToken } from './ServerContext';
+import { useServer, setApiAuthToken, serverOrigin } from './ServerContext';
 import { clearAllCaches } from '../utils/cacheManager';
 
 const AuthContext = createContext();
@@ -174,12 +174,17 @@ export const AuthProvider = ({ children }) => {
    * present when the server is in dev mode (no real SMS) — used to prefill the
    * code field for local testing.
    */
-  const requestOtp = async (phone, invite) => {
+  // `serverOverride` lets the login screen send the OTP to a server it JUST
+  // confirmed (e.g. the funnel that invited this number) without waiting for the
+  // saveIP() state update to propagate through context — avoids a stale closure
+  // firing the request at the previous server.
+  const requestOtp = async (phone, invite, serverOverride) => {
     try {
       setLoginError(null);
-      if (!serverIP) return noServerError();
-      const baseUrl = getBaseUrl();
-      const url = `${baseUrl.replace('/api', '')}/api/auth/otp/request`;
+      const effectiveServer = serverOverride || serverIP;
+      if (!effectiveServer) return noServerError();
+      const origin = serverOrigin(effectiveServer);
+      const url = `${origin}/api/auth/otp/request`;
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -205,13 +210,14 @@ export const AuthProvider = ({ children }) => {
    * Verify an SMS code and, on success, store the issued JWT (which flips
    * isAuthenticated → the app un-gates). Returns { success, error? }.
    */
-  const verifyOtp = async (phone, code, invite) => {
+  const verifyOtp = async (phone, code, invite, serverOverride) => {
     try {
       setLoginError(null);
-      if (!serverIP) return noServerError();
+      const effectiveServer = serverOverride || serverIP;
+      if (!effectiveServer) return noServerError();
       setIsLoading(true);
-      const baseUrl = getBaseUrl();
-      const url = `${baseUrl.replace('/api', '')}/api/auth/otp/verify`;
+      const origin = serverOrigin(effectiveServer);
+      const url = `${origin}/api/auth/otp/verify`;
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

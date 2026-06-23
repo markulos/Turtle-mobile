@@ -8,7 +8,7 @@
  *     which flips isAuthenticated and the app un-gates automatically.
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -25,9 +25,10 @@ import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useServer, serverOrigin } from '../../context/ServerContext';
 import { DismissKeyboardView } from '../../components/KeyboardSafeView';
-import { scanForPonds } from '../../services/pondDiscovery';
+import { scanForPonds, scanFunnels, confirmServerForPhone, SEED_FUNNELS } from '../../services/pondDiscovery';
 
 // Brand turtle, rendered to a 1024px PNG. Was a 6.4 MB auto-traced SVG
 // (7,069 hyper-precise paths) bundled into the app for a logo shown at ~120px
@@ -39,6 +40,9 @@ const turtleIcon = require('../../assets/turtle-icon.png');
 // fast local path at home. Tapping a chip fills the field AND saves+tests it.
 // (Keep in sync with ServerContext.DEFAULT_SERVER_HOST + the iOS dev-build notes.)
 const SERVER_PRESETS = [
+  // Funnel first — a public HTTPS pond address that works from ANYWHERE (cellular
+  // included), so it's the one-tap path for an invitee who isn't on the home LAN.
+  { label: 'Funnel', host: 'https://arch-main.tail25e0bc.ts.net', hint: 'anywhere' },
   { label: 'Tailscale', host: '100.105.43.69', hint: 'away / cellular' },
   { label: 'Home Wi-Fi', host: '192.168.2.93', hint: 'same LAN' },
 ];
@@ -72,6 +76,37 @@ export default function LoginScreen() {
   // shown in the UI AND console.logged so the Metro log captures the trail.
   const [scanStatus, setScanStatus] = useState('');
   const scanSeqRef = useRef(0);
+  // Funnels the user has successfully connected to before — unioned with the
+  // hard-coded seed list so a pond reached once stays a candidate next time.
+  const [rememberedFunnels, setRememberedFunnels] = useState([]);
+  useEffect(() => {
+    AsyncStorage.getItem('rememberedFunnels')
+      .then((raw) => {
+        if (!raw) return;
+        try {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) setRememberedFunnels(arr.filter((x) => typeof x === 'string'));
+        } catch { /* corrupt entry — ignore, the seed list still works */ }
+      })
+      .catch(() => {});
+  }, []);
+  // The full set of funnel URLs to probe: seed ∪ remembered.
+  const funnelCandidates = useCallback(
+    () => Array.from(new Set([...SEED_FUNNELS, ...rememberedFunnels])),
+    [rememberedFunnels],
+  );
+  // Persist a funnel we just connected to (https URLs only — bare IPs aren't
+  // funnels and would never be reachable off-LAN). Newest-first, capped.
+  const rememberFunnel = useCallback((url) => {
+    const u = String(url || '').trim().replace(/\/+$/, '');
+    if (!/^https:\/\//i.test(u)) return;
+    setRememberedFunnels((cur) => {
+      if (cur.includes(u)) return cur;
+      const next = [u, ...cur].slice(0, 8);
+      AsyncStorage.setItem('rememberedFunnels', JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
 
   const startPondScan = (phoneForScan) => {
     const seq = ++scanSeqRef.current;
@@ -79,12 +114,16 @@ export default function LoginScreen() {
     setScanning(true);
     setScanStatus('');
     console.log('[pond-scan] starting; phone supplied:', !!phoneForScan);
+    const addPond = (p) => {
+      if (scanSeqRef.current !== seq) return; // a newer scan superseded this one
+      setPonds((prev) => (prev.some((x) => x.host === p.host) ? prev : [...prev, p]));
+    };
+    // Funnels resolve in parallel and reach from anywhere (incl. cellular), so
+    // they surface near-instantly even when the LAN sweep finds nothing.
+    scanFunnels(phoneForScan, funnelCandidates(), addPond);
     scanForPonds(
       phoneForScan,
-      (p) => {
-        if (scanSeqRef.current !== seq) return; // a newer scan superseded this one
-        setPonds((prev) => (prev.some((x) => x.host === p.host) ? prev : [...prev, p]));
-      },
+      addPond,
       (msg) => {
         if (scanSeqRef.current === seq) setScanStatus(msg);
       },
@@ -121,6 +160,10 @@ export default function LoginScreen() {
   const [invitePreview, setInvitePreview] = useState(null);
   const previewTimerRef = useRef(null);
   const verifyingRef = useRef(false); // guard so autofill auto-submit + a manual tap don't double-fire
+  // The server confirmed at send-code time (the funnel/pond that invited this
+  // number). Carried to the verify step so both hit the SAME pond even before
+  // the saveIP() state change has propagated through context.
+  const confirmedServerRef = useRef(null);
   const [busy, setBusy] = useState(false); // local spinner for the send-code call
   const [devCode, setDevCode] = useState(''); // shown only when the server is in dev mode
 
@@ -211,6 +254,7 @@ export default function LoginScreen() {
     setServerBusy(false);
     setServerNoteOk(ok);
     if (ok) {
+      rememberFunnel(v); // no-op unless it's an https funnel URL
       setServerNote(`Connected to ${v}`);
       setShowServerInput(false);
       setLocalError('');
@@ -222,16 +266,39 @@ export default function LoginScreen() {
   const handleSendCode = async () => {
     setLocalError('');
     setDevCode('');
-    if (!serverIP) {
-      setLocalError('Tap the invite link from your text — it sets everything up automatically.');
-      return;
-    }
     if (!phone.trim()) {
       setLocalError('Enter your phone number');
       return;
     }
     setBusy(true);
-    const r = await requestOtp(phone.trim(), invite.trim() || undefined);
+
+    // Confirm which pond invited THIS number before sending the code. We probe
+    // the current server and the funnel list (seed ∪ remembered) in parallel; a
+    // private pond reveals itself only to a number it invited, so the funnel
+    // that answers is the right server. If the server we already have is the one
+    // that invited them, we keep it (no needless switch off a fast LAN path).
+    // This is what lets an invitee on cellular — nothing set up — just type
+    // their number and land on the correct pond's funnel.
+    let activeServer = serverIP || '';
+    try {
+      const confirmed = await confirmServerForPhone(serverIP, phone.trim(), funnelCandidates());
+      if (confirmed) {
+        await saveIP(confirmed);
+        rememberFunnel(confirmed);
+        activeServer = confirmed;
+      }
+    } catch (e) {
+      console.log('[funnel-confirm] failed (non-fatal):', e.message);
+    }
+    confirmedServerRef.current = activeServer || null;
+
+    if (!activeServer) {
+      setBusy(false);
+      setLocalError("Couldn't find the pond that invited this number. Tap the invite link from your text, or set the server under Advanced.");
+      return;
+    }
+
+    const r = await requestOtp(phone.trim(), invite.trim() || undefined, activeServer);
     setBusy(false);
     if (r.success) {
       setOtpStep('code');
@@ -257,7 +324,7 @@ export default function LoginScreen() {
     verifyingRef.current = true;
     // On success AuthContext stores the token → isAuthenticated flips → App.js
     // unmounts this screen automatically, so there's nothing to navigate to here.
-    const r = await verifyOtp(phone.trim(), c, invite.trim() || undefined);
+    const r = await verifyOtp(phone.trim(), c, invite.trim() || undefined, confirmedServerRef.current || undefined);
     verifyingRef.current = false;
     if (!r.success) setLocalError(r.error || 'Invalid or expired code');
   };
@@ -603,15 +670,18 @@ export default function LoginScreen() {
                         activeOpacity={0.8}
                       >
                         <Icon
-                          name={p.host.startsWith('100.') ? 'shield-lock-outline' : 'wifi'}
+                          name={/^https?:\/\//i.test(p.host) ? 'web' : p.host.startsWith('100.') ? 'shield-lock-outline' : 'wifi'}
                           size={13}
                           color={active ? theme.colors.primary : theme.colors.textSecondary}
                         />
                         <Text style={[styles.presetChipText, { color: active ? theme.colors.primary : theme.colors.textSecondary }]}>
                           {p.label}
                         </Text>
-                        <Text style={[styles.presetChipHost, { color: theme.colors.textMuted }]}>
-                          {p.host}
+                        <Text
+                          style={[styles.presetChipHost, { color: theme.colors.textMuted }]}
+                          numberOfLines={1}
+                        >
+                          {p.host.replace(/^https?:\/\//i, '')}
                         </Text>
                       </TouchableOpacity>
                     );
@@ -918,6 +988,8 @@ const styles = StyleSheet.create({
   presetChipHost: {
     fontSize: 11,
     marginLeft: 'auto',
+    flexShrink: 1,
+    minWidth: 0,
   },
   serverNote: {
     fontSize: 12,
