@@ -1252,19 +1252,23 @@ export const CalendarView = ({
   const styles = createStyles(theme);
 
   // ── Fill-the-screen month sizing ─────────────────────────────
-  // The per-month title block is gone, so the grid claims the whole
-  // calendar viewport. We measure the calendar area (`calAreaH`) and
-  // grow each cell so 6 rows + the day-of-week labels exactly fill the
-  // space above the docked sheet peek. Falls back to the static
-  // MONTH_HEIGHT / CELL_HEIGHT until the first layout lands.
+  // We measure the calendar area (`calAreaH`) and grow each cell so the
+  // title block + day-of-week labels + 6 rows exactly fill the space
+  // above the docked sheet peek. The MONTH_TITLE_HEIGHT band is reserved
+  // on EVERY page (so snapping stays pixel-perfect) even though only the
+  // active month actually paints its title into it — see renderMonth.
+  // Falls back to the static MONTH_HEIGHT / CELL_HEIGHT until first layout.
   const [calAreaH, setCalAreaH] = useState(0);
   const { monthH, cellH } = useMemo(() => {
     const usable = calAreaH > 0 ? calAreaH - SHEET_PEEK_RESERVE - HINT_STRIP : 0;
     if (usable <= 0) return { monthH: MONTH_HEIGHT, cellH: CELL_HEIGHT };
-    const gridH = usable - DAYS_HEADER_HEIGHT - GRID_PADDING_TOP;
+    const gridH = usable - MONTH_TITLE_HEIGHT - DAYS_HEADER_HEIGHT - GRID_PADDING_TOP;
     // Never shrink below the original cell size; only grow to fill.
     const cell = Math.max(CELL_HEIGHT, gridH / 6);
-    return { monthH: DAYS_HEADER_HEIGHT + GRID_PADDING_TOP + 6 * cell, cellH: cell };
+    return {
+      monthH: MONTH_TITLE_HEIGHT + DAYS_HEADER_HEIGHT + GRID_PADDING_TOP + 6 * cell,
+      cellH: cell,
+    };
   }, [calAreaH]);
 
   // Faint swipe-hint carets (up = previous month, down = next month).
@@ -1789,14 +1793,49 @@ export const CalendarView = ({
   //     would just shift the work to extra cache invalidation.
   const renderMonth = useCallback(({ item: monthDate }) => {
     const data = buildCalendarDataFor(monthDate);
+    const activeMonth = MONTHS_LIST[currentMonthIndex];
+    // Only the active (in-view) month paints its title. Neighbouring
+    // months keep the SAME title band reserved (so every page is exactly
+    // monthH and snapping stays clean) but render it empty — so a
+    // half-swiped next/previous month doesn't show its header until it
+    // actually becomes the active month.
+    const isActive =
+      monthDate.getFullYear() === activeMonth.getFullYear() &&
+      monthDate.getMonth() === activeMonth.getMonth();
+    // Whether this page is the real current calendar month (today) —
+    // drives the inline "Today" jump shortcut (only useful off-today).
+    const isCurrentMonth =
+      monthDate.getFullYear() === MONTHS_LIST[TODAY_INDEX].getFullYear() &&
+      monthDate.getMonth() === MONTHS_LIST[TODAY_INDEX].getMonth();
     return (
       <View style={[styles.monthPage, { height: monthH }]}>
-        {/* The per-month month/year title block was removed so the grid
-            claims the full viewport (cells grow to fill — see `cellH`).
-            Day-of-week labels sit at the top of each page above the grid. */}
+        {/* Month/year title — same style/aesthetic as before, but painted
+            only on the active month. Off-active pages reserve the band
+            with an empty spacer so the grid still lines up and snaps. */}
+        {isActive ? (
+          <View style={styles.monthYear}>
+            <View style={styles.monthTitleRow}>
+              <Text style={styles.monthText}>{MONTHS[monthDate.getMonth()]}</Text>
+              <Text style={styles.yearText}>{monthDate.getFullYear()}</Text>
+            </View>
+            {!isCurrentMonth && (
+              <TouchableOpacity
+                onPress={goToToday}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.todayInline}
+                accessibilityRole="button"
+                accessibilityLabel="Go to today"
+              >
+                <Icon name="calendar-today" size={14} color={theme.colors.accentSuccess} />
+                <Text style={styles.todayInlineText}>Today</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : (
+          <View style={styles.monthTitleSpacer} />
+        )}
 
-        {/* Day-of-week labels — at the top of each month's page so they
-            scroll with the month. */}
+        {/* Day-of-week labels — sit just under the title band. */}
         <View style={styles.daysHeader}>
           {DAYS.map(day => (
             <View key={day} style={styles.dayHeaderCell}>
@@ -1850,7 +1889,7 @@ export const CalendarView = ({
         </View>
       </View>
     );
-  }, [buildCalendarDataFor, handleDatePress, theme, styles, monthH, cellH]);
+  }, [buildCalendarDataFor, handleDatePress, goToToday, theme, styles, monthH, cellH, currentMonthIndex]);
 
   // Helper to get task title and subtitle for selected date
   const getTaskListTitle = () => {
@@ -2031,9 +2070,9 @@ export const CalendarView = ({
             onScrollToIndexFailed={onScrollToIndexFailed}
             onMomentumScrollEnd={onMomentumScrollEnd}
             // Signals FlatList that visible cells should re-render when
-            // selectedDate changes — otherwise the "selected" highlight
-            // can lag behind taps until the user scrolls.
-            extraData={selectedDate}
+            // selectedDate OR the active month changes — the latter so the
+            // title appears/disappears on the right page as you swipe.
+            extraData={`${+selectedDate}-${currentMonthIndex}`}
             snapToInterval={monthH}
             snapToAlignment="start"
             decelerationRate="fast"
@@ -2354,6 +2393,12 @@ const createStyles = (theme) => StyleSheet.create({
     justifyContent: 'space-between',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
+  },
+  // Empty stand-in for the title band on non-active months — same height
+  // as monthYear so every FlatList page stays exactly monthH (keeps
+  // snapToInterval pixel-perfect) but paints no header/divider.
+  monthTitleSpacer: {
+    height: MONTH_TITLE_HEIGHT,
   },
   // Inline row that holds the month name + year on a shared baseline.
   // Mirrors the web app's `<span>{monthName}</span><span>{year}</span>`
