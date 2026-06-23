@@ -7,6 +7,7 @@ import {
   Animated,
   StyleSheet,
   Switch,
+  ScrollView,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
@@ -63,12 +64,15 @@ export const FilterMenu = ({
       <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]}>
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
       </Animated.View>
-      <Animated.View 
+      <Animated.View
         style={[styles.container, { transform: [{ translateY }], opacity }]}
-        onStartShouldSetResponder={() => true}
-        onTouchEnd={(e) => e.stopPropagation()}
       >
-          
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={true}
+          keyboardShouldPersistTaps="handled"
+        >
           {/* Incomplete Filter Toggle */}
           <View style={styles.section}>
             <View style={styles.toggleRow}>
@@ -178,6 +182,7 @@ export const FilterMenu = ({
               <Text style={styles.clearAllText}>Clear All Filters</Text>
             </TouchableOpacity>
           )}
+        </ScrollView>
       </Animated.View>
     </Modal>
   );
@@ -196,8 +201,15 @@ const createStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.background,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    padding: 20,
     maxHeight: '70%',
+    overflow: 'hidden',
+  },
+  scroll: {
+    flexGrow: 0,
+  },
+  scrollContent: {
+    padding: 20,
+    paddingBottom: 40,
   },
   section: { 
     marginBottom: 20 
