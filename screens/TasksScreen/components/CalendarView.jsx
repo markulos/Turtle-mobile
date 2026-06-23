@@ -1794,14 +1794,19 @@ export const CalendarView = ({
   const renderMonth = useCallback(({ item: monthDate }) => {
     const data = buildCalendarDataFor(monthDate);
     const activeMonth = MONTHS_LIST[currentMonthIndex];
-    // Only the active (in-view) month paints its title. Neighbouring
-    // months keep the SAME title band reserved (so every page is exactly
-    // monthH and snapping stays clean) but render it empty — so a
-    // half-swiped next/previous month doesn't show its header until it
-    // actually becomes the active month.
-    const isActive =
-      monthDate.getFullYear() === activeMonth.getFullYear() &&
-      monthDate.getMonth() === activeMonth.getMonth();
+    // Paint the title on the active month AND its immediate neighbours
+    // (±1 month) so the header for the month above/below is ALREADY
+    // mounted and slides in with the page on scroll — no pop-in after the
+    // snap settles. Each page renders its OWN month/year. Neighbours are
+    // a full viewport off-screen while you're on the current month, so
+    // their headers stay hidden until you actually scroll to them.
+    // Pages further than ±1 reserve the SAME title band with an empty
+    // spacer so every page is exactly monthH and snapping stays clean.
+    const monthsApart = Math.abs(
+      (monthDate.getFullYear() - activeMonth.getFullYear()) * 12 +
+      (monthDate.getMonth() - activeMonth.getMonth())
+    );
+    const showTitle = monthsApart <= 1;
     // Whether this page is the real current calendar month (today) —
     // drives the inline "Today" jump shortcut (only useful off-today).
     const isCurrentMonth =
@@ -1809,10 +1814,11 @@ export const CalendarView = ({
       monthDate.getMonth() === MONTHS_LIST[TODAY_INDEX].getMonth();
     return (
       <View style={[styles.monthPage, { height: monthH }]}>
-        {/* Month/year title — same style/aesthetic as before, but painted
-            only on the active month. Off-active pages reserve the band
-            with an empty spacer so the grid still lines up and snaps. */}
-        {isActive ? (
+        {/* Month/year title — same style/aesthetic as before, painted on
+            the active month + its ±1 neighbours so it's pre-loaded for
+            scroll. Far pages reserve the band with an empty spacer so the
+            grid still lines up and snaps. */}
+        {showTitle ? (
           <View style={styles.monthYear}>
             <View style={styles.monthTitleRow}>
               <Text style={styles.monthText}>{MONTHS[monthDate.getMonth()]}</Text>
