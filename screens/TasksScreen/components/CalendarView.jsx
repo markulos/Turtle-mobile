@@ -20,6 +20,9 @@ import Reanimated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
+  withRepeat,
+  withTiming,
+  Easing,
   runOnJS,
   interpolate,
   Extrapolation,
@@ -100,6 +103,13 @@ const CELL_HEIGHT = DAY_WIDTH + 10;
 // layout space. Plus the title, day-of-week labels, and paddingTop,
 // this is the per-month FlatList page height.
 const MONTH_HEIGHT = MONTH_TITLE_HEIGHT + DAYS_HEADER_HEIGHT + GRID_PADDING_TOP + 6 * CELL_HEIGHT;
+// Bottom strip reserved for the docked task-panel header peek — the grid fills
+// the calendar viewport down to (but not behind) this. Mirrors the
+// `calendarContent` paddingBottom so the dynamic month-height math lines up.
+const SHEET_PEEK_RESERVE = 80;
+// Thin strip at the very top of the calendar viewport that holds the up-caret
+// swipe hint so it sits ABOVE the day-of-week labels instead of over them.
+const HINT_STRIP = 20;
 
 // ── Hourly timetable constants ────────────────────────────────
 //
@@ -1241,6 +1251,42 @@ export const CalendarView = ({
 
   const styles = createStyles(theme);
 
+  // ── Fill-the-screen month sizing ─────────────────────────────
+  // The per-month title block is gone, so the grid claims the whole
+  // calendar viewport. We measure the calendar area (`calAreaH`) and
+  // grow each cell so 6 rows + the day-of-week labels exactly fill the
+  // space above the docked sheet peek. Falls back to the static
+  // MONTH_HEIGHT / CELL_HEIGHT until the first layout lands.
+  const [calAreaH, setCalAreaH] = useState(0);
+  const { monthH, cellH } = useMemo(() => {
+    const usable = calAreaH > 0 ? calAreaH - SHEET_PEEK_RESERVE - HINT_STRIP : 0;
+    if (usable <= 0) return { monthH: MONTH_HEIGHT, cellH: CELL_HEIGHT };
+    const gridH = usable - DAYS_HEADER_HEIGHT - GRID_PADDING_TOP;
+    // Never shrink below the original cell size; only grow to fill.
+    const cell = Math.max(CELL_HEIGHT, gridH / 6);
+    return { monthH: DAYS_HEADER_HEIGHT + GRID_PADDING_TOP + 6 * cell, cellH: cell };
+  }, [calAreaH]);
+
+  // Faint swipe-hint carets (up = previous month, down = next month).
+  // A single shared value loops 0→1→0; the two chevrons read it with
+  // opposite translateY so they breathe outward from the grid edges.
+  const hintSV = useSharedValue(0);
+  useEffect(() => {
+    hintSV.value = withRepeat(
+      withTiming(1, { duration: 1500, easing: Easing.inOut(Easing.quad) }),
+      -1,
+      true,
+    );
+  }, [hintSV]);
+  const hintTopStyle = useAnimatedStyle(() => ({
+    opacity: 0.12 + hintSV.value * 0.20,
+    transform: [{ translateY: hintSV.value * -4 }],
+  }));
+  const hintBottomStyle = useAnimatedStyle(() => ({
+    opacity: 0.12 + hintSV.value * 0.20,
+    transform: [{ translateY: hintSV.value * 4 }],
+  }));
+
   // Snap the sheet to docked/raised and keep `isExpanded` in sync.
   // `raise=true` → panel up (isExpanded false); `raise=false` → docked.
   const snapSheet = useCallback((raise) => {
@@ -1640,12 +1686,12 @@ export const CalendarView = ({
   // and the FlatList settles on a page, OR when a programmatic scroll
   // (from chevrons / Today) finishes its momentum.
   const onMomentumScrollEnd = useCallback((e) => {
-    const idx = Math.round(e.nativeEvent.contentOffset.y / MONTH_HEIGHT);
+    const idx = Math.round(e.nativeEvent.contentOffset.y / monthH);
     const clamped = Math.max(0, Math.min(MONTHS_LIST.length - 1, idx));
     if (clamped !== currentMonthIndex) {
       setCurrentMonthIndex(clamped);
     }
-  }, [currentMonthIndex]);
+  }, [currentMonthIndex, monthH]);
 
   // Scroll to a given month index. Used by the chevrons + Today
   // button. We set currentMonthIndex up front so the visible state
@@ -1670,14 +1716,30 @@ export const CalendarView = ({
     scrollToMonth(TODAY_INDEX);
   }, [scrollToMonth, jumpToDate]);
 
-  // FlatList per-item layout. With every month at exactly MONTH_HEIGHT,
+  // FlatList per-item layout. With every month at exactly `monthH`,
   // this lets initialScrollIndex jump straight to today without measuring.
   const getItemLayout = useCallback((_, index) => ({
-    length: MONTH_HEIGHT,
-    offset: MONTH_HEIGHT * index,
+    length: monthH,
+    offset: monthH * index,
     index,
-  }), []);
+  }), [monthH]);
   const keyExtractor = useCallback((item) => `${item.getFullYear()}-${item.getMonth()}`, []);
+
+  // When the calendar area is first measured, `monthH` jumps from its
+  // static estimate to the real fill-the-screen height. The list was
+  // positioned with the old offsets, so re-anchor it to the visible
+  // month once (guarded) to absorb the height change without a drift.
+  const didRescaleRef = useRef(false);
+  useEffect(() => {
+    if (calAreaH > 0 && !didRescaleRef.current) {
+      didRescaleRef.current = true;
+      requestAnimationFrame(() => {
+        try {
+          flatListRef.current?.scrollToIndex({ index: currentMonthIndex, animated: false, viewPosition: 0 });
+        } catch (e) { /* getItemLayout makes this reliable; ignore races */ }
+      });
+    }
+  }, [calAreaH, currentMonthIndex]);
 
   const handleAddTask = () => {
     if (!newTaskTitle.trim()) return;
@@ -1727,41 +1789,14 @@ export const CalendarView = ({
   //     would just shift the work to extra cache invalidation.
   const renderMonth = useCallback(({ item: monthDate }) => {
     const data = buildCalendarDataFor(monthDate);
-    const isCurrentMonth =
-      monthDate.getFullYear() === MONTHS_LIST[TODAY_INDEX].getFullYear() &&
-      monthDate.getMonth() === MONTHS_LIST[TODAY_INDEX].getMonth();
     return (
-      <View style={styles.monthPage}>
-        {/* Title row — month bold + year thin on a shared baseline,
-            left-aligned with comfortable indent. Matches the web app's
-            ScrollableCalendar header (fontWeight 500/100 at 28px). The
-            Today shortcut sits on the right rail, visible only on
-            non-current months so it never adds clutter when there's
-            nothing to jump to. */}
-        <View style={styles.monthYear}>
-          <View style={styles.monthTitleRow}>
-            <Text style={styles.monthText}>{MONTHS[monthDate.getMonth()]}</Text>
-            <Text style={styles.yearText}>{monthDate.getFullYear()}</Text>
-          </View>
-          {!isCurrentMonth && (
-            <TouchableOpacity
-              onPress={goToToday}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              style={styles.todayInline}
-              accessibilityRole="button"
-              accessibilityLabel="Go to today"
-            >
-              <Icon name="calendar-today" size={14} color={theme.colors.accentSuccess} />
-              <Text style={styles.todayInlineText}>Today</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+      <View style={[styles.monthPage, { height: monthH }]}>
+        {/* The per-month month/year title block was removed so the grid
+            claims the full viewport (cells grow to fill — see `cellH`).
+            Day-of-week labels sit at the top of each page above the grid. */}
 
-        {/* Day-of-week labels — moved INSIDE each month's page so they
-            scroll with the month and so we can draw a hairline divider
-            between the title and these labels (a "slick" iOS-like
-            separator that wouldn't have a clean attachment point if the
-            labels were static above the FlatList). */}
+        {/* Day-of-week labels — at the top of each month's page so they
+            scroll with the month. */}
         <View style={styles.daysHeader}>
           {DAYS.map(day => (
             <View key={day} style={styles.dayHeaderCell}>
@@ -1773,7 +1808,7 @@ export const CalendarView = ({
         <View style={styles.calendarGrid}>
           {data.map((cell) => {
             if (cell.type === 'empty') {
-              return <View key={cell.key} style={styles.emptyCell} />;
+              return <View key={cell.key} style={[styles.emptyCell, { height: cellH }]} />;
             }
             const projectCount = getProjectCount(cell.tasks);
             const heat = getContributionColor(cell.tasks.length);
@@ -1782,6 +1817,7 @@ export const CalendarView = ({
                 key={cell.key}
                 style={[
                   styles.dayCell,
+                  { height: cellH },
                   cell.isToday && styles.todayCell,
                   cell.isSelected && styles.selectedCell,
                 ]}
@@ -1814,7 +1850,7 @@ export const CalendarView = ({
         </View>
       </View>
     );
-  }, [buildCalendarDataFor, handleDatePress, goToToday, theme, styles]);
+  }, [buildCalendarDataFor, handleDatePress, theme, styles, monthH, cellH]);
 
   // Helper to get task title and subtitle for selected date
   const getTaskListTitle = () => {
@@ -1962,7 +1998,10 @@ export const CalendarView = ({
       {/* Calendar Content — always mounted behind the sheet. It fades
           out as the sheet rises to cover it (calendarStyle) so nothing
           shows through the sheet's rounded top corners at full travel. */}
-      <Reanimated.View style={[styles.calendarContent, calendarStyle]}>
+      <Reanimated.View
+        style={[styles.calendarContent, calendarStyle]}
+        onLayout={(e) => setCalAreaH(e.nativeEvent.layout.height)}
+      >
           {/* Minimal chrome — the whole collapsible top header, the
               chevron-left/right row, and the standalone Today button
               are all gone. Navigation is purely swipe-driven via the
@@ -1995,7 +2034,7 @@ export const CalendarView = ({
             // selectedDate changes — otherwise the "selected" highlight
             // can lag behind taps until the user scrolls.
             extraData={selectedDate}
-            snapToInterval={MONTH_HEIGHT}
+            snapToInterval={monthH}
             snapToAlignment="start"
             decelerationRate="fast"
             showsVerticalScrollIndicator={false}
@@ -2004,8 +2043,19 @@ export const CalendarView = ({
             // during a swipe look populated immediately.
             windowSize={3}
             removeClippedSubviews
-            style={{ height: MONTH_HEIGHT }}
+            style={{ height: monthH, marginTop: HINT_STRIP, marginBottom: SHEET_PEEK_RESERVE }}
           />
+
+          {/* Faint animated swipe-hint carets — up = previous month,
+              down = next month. pointerEvents none so they never
+              intercept a tap/scroll; they fade with the calendar as the
+              sheet rises (they're inside calendarStyle's fade). */}
+          <Reanimated.View pointerEvents="none" style={[styles.swipeHintTop, hintTopStyle]}>
+            <Icon name="chevron-up" size={28} color={theme.colors.textSecondary} />
+          </Reanimated.View>
+          <Reanimated.View pointerEvents="none" style={[styles.swipeHintBottom, hintBottomStyle]}>
+            <Icon name="chevron-down" size={28} color={theme.colors.textSecondary} />
+          </Reanimated.View>
       </Reanimated.View>
 
       {/* Selected Date Tasks — a draggable bottom sheet. Always full
@@ -2259,15 +2309,31 @@ const createStyles = (theme) => StyleSheet.create({
   // with breathing room above and below instead of being top-piled.
   calendarContent: {
     flex: 1,
-    justifyContent: 'center',
-    // Reserve the task-panel-header strip at the bottom so the
-    // calendar's centred content never lands behind it. The strip is
-    // ~64px when collapsed (see taskListHeader paddingVertical: 12
-    // plus its text content); 80 leaves a small visual buffer. The week
-    // strip is hidden when docked (it lives below the header), so it
-    // doesn't factor into this reservation.
-    paddingBottom: 80,
+    // The month grid now fills this area (cells grow via `cellH`), so no
+    // vertical centring. The top/bottom strips are reserved by the
+    // FlatList's own margins (not padding here) so the absolute caret
+    // hints keep a stable top/bottom origin regardless of Yoga's
+    // padding-vs-absolute behaviour.
     overflow: 'hidden',
+  },
+  // Faint swipe-hint carets, centred horizontally at the top/bottom
+  // edges of the calendar viewport. The bottom one sits just above the
+  // reserved sheet-peek strip. Opacity/translate are animated inline.
+  swipeHintTop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 5,
+  },
+  swipeHintBottom: {
+    position: 'absolute',
+    bottom: SHEET_PEEK_RESERVE + 2,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 5,
   },
   
   // Per-month title block — fixed height = MONTH_TITLE_HEIGHT so
