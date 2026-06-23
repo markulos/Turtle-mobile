@@ -655,7 +655,6 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const [loading, setLoading] = useState(true);
   const [isPaginating, setIsPaginating] = useState(false); // Prevents overlapping fetch calls
   const [uploading, setUploading] = useState(false);
-  const [uploadStats, setUploadStats] = useState({ current: 0, total: 0, failed: 0, fileProgress: 0 });
   const [refreshing, setRefreshing] = useState(false);
   
   // === LOCAL SYNC GALLERY STATE ===
@@ -4832,7 +4831,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                         <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Smart Sync</Text>
                       </TouchableOpacity>
                     </View>
-                    {uploading && <Text style={{ marginTop: 12, fontSize: 13, fontWeight: '600', color: theme.colors.primary }}>Uploading {uploadStats.current === 0 ? 1 : uploadStats.current} of {uploadStats.total} • {uploadStats.fileProgress.toFixed(0)}% Complete</Text>}
+                    {uploading && <Text style={{ marginTop: 12, fontSize: 13, fontWeight: '600', color: theme.colors.primary }}>Uploading {Math.min(uploadingItemIndex, pendingAssets.length)} of {pendingAssets.length} • {uploadPercentage}% Complete</Text>}
                   </View>
                 </View>
                 </View>
@@ -5034,7 +5033,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         {/* Progress Bar */}
         {uploading && (
           <View style={{ position: 'absolute', top: insets.top, left: 0, right: 0, height: 1.5, backgroundColor: 'transparent', zIndex: 25 }}>
-            <View style={{ height: '100%', width: `${uploadStats.fileProgress}%`, backgroundColor: theme.mode === 'dark' ? '#FFFFFF' : '#000000' }} />
+            <View style={{ height: '100%', width: `${uploadPercentage}%`, backgroundColor: theme.mode === 'dark' ? '#FFFFFF' : '#000000' }} />
           </View>
         )}
 
