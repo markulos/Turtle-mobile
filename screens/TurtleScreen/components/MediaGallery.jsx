@@ -5358,10 +5358,20 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
   // single re-render with the new initial values — no useEffect lag,
   // no flash of stale state.
   const prevItemIdRef = useRef(item.id);
+  const prevTagsRef = useRef(item.tags);
   if (prevItemIdRef.current !== item.id) {
     prevItemIdRef.current = item.id;
+    prevTagsRef.current = item.tags;
     setHasFailed(false);
     setDuration(item.duration);
+    setLocalTags(item.tags || []);
+  } else if (prevTagsRef.current !== item.tags) {
+    // SAME cell, tags changed in place — e.g. a bulk-tag assignment updated THIS
+    // item (same id, new tags JSON). Without re-syncing here, localTags stays at
+    // the pre-assignment value, so the self-heal below still treats the item as
+    // "untagged" and can overwrite the freshly-assigned tags with the file's
+    // EXIF keywords (the "my tags don't stick / silently revert" bug).
+    prevTagsRef.current = item.tags;
     setLocalTags(item.tags || []);
   }
   
