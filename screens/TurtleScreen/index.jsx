@@ -1979,60 +1979,55 @@ export default function TurtleScreen() {
             onAssignDev={assignDevFromCard}
             onRemoveDev={removeDevAccount}
           />
+
+          {/* Share-a-project — a page over the profile. Also an `overlay` nested
+              in the Friends tree (a sibling Modal won't present over the others
+              on iOS). Lists your projects; tap to share view-only / un-share. */}
+          <EdgeSwipePage overlay visible={!!shareTarget} onClose={() => setShareTarget(null)}>
+            <View style={{ flex: 1, paddingTop: insets.top + 6 }}>
+              <View style={[styles.settingsSheetHeader, { justifyContent: 'flex-start', alignItems: 'center' }]}>
+                <TouchableOpacity onPress={() => setShareTarget(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={styles.settingsCloseButton} accessibilityLabel="Back">
+                  <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
+                </TouchableOpacity>
+                <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.textPrimary, flex: 1 }} numberOfLines={1}>
+                  Share with {shareTarget?.displayName || shareTarget?.phone || 'friend'}
+                </Text>
+              </View>
+              <Text style={[styles.friendSub, { paddingHorizontal: 20, marginBottom: 8 }]}>
+                Pick a project to share, view-only. They'll see its tasks in their planner.
+              </Text>
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
+                {myProjects.length === 0 ? (
+                  <Text style={styles.friendEmpty}>{shareBusy ? 'Loading…' : 'You have no projects to share yet.'}</Text>
+                ) : (
+                  myProjects.map((proj) => {
+                    const shared = sharedWithTarget.find((s) => s.project === proj);
+                    return (
+                      <View key={proj} style={styles.friendRow}>
+                        <View style={styles.friendAvatar}>
+                          <Icon name="folder-outline" size={18} color={theme.colors.textSecondary} />
+                        </View>
+                        <Text style={[styles.friendName, { flex: 1 }]} numberOfLines={1}>{proj}</Text>
+                        {shared ? (
+                          <TouchableOpacity disabled={shareBusy} onPress={() => unShare(shared.id)} style={[styles.shareChip, { backgroundColor: theme.colors.surfaceElevated }]}>
+                            <Icon name="check" size={15} color="#34c759" />
+                            <Text style={[styles.shareChipText, { color: theme.colors.textSecondary }]}>Shared</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <TouchableOpacity disabled={shareBusy} onPress={() => doShare(proj)} style={[styles.shareChip, { backgroundColor: theme.colors.primary || '#0a84ff' }]}>
+                            <Icon name="account-plus-outline" size={15} color="#fff" />
+                            <Text style={[styles.shareChipText, { color: '#fff' }]}>Share</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                  })
+                )}
+              </ScrollView>
+            </View>
+          </EdgeSwipePage>
         </View>
       </EdgeSwipePage>
-
-      {/* Share-a-project sheet — opened from a member's card (or directly).
-          Lists your projects; tap to share view-only (or un-share). Stacks
-          over the card / Friends. */}
-      <Modal
-        visible={!!shareTarget}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setShareTarget(null)}
-      >
-        <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
-          <View style={[styles.settingsSheetHeader, { paddingTop: Platform.OS === 'android' ? insets.top + 6 : 12, justifyContent: 'space-between', alignItems: 'center' }]}>
-            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.textPrimary, paddingLeft: 4, flex: 1 }} numberOfLines={1}>
-              Share with {shareTarget?.displayName || shareTarget?.phone || 'friend'}
-            </Text>
-            <TouchableOpacity onPress={() => setShareTarget(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={styles.settingsCloseButton} accessibilityLabel="Close">
-              <Icon name="close" size={22} color={theme.colors.textPrimary} />
-            </TouchableOpacity>
-          </View>
-          <Text style={[styles.friendSub, { paddingHorizontal: 20, marginBottom: 8 }]}>
-            Pick a project to share, view-only. They'll see its tasks in their planner.
-          </Text>
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
-            {myProjects.length === 0 ? (
-              <Text style={styles.friendEmpty}>{shareBusy ? 'Loading…' : 'You have no projects to share yet.'}</Text>
-            ) : (
-              myProjects.map((proj) => {
-                const shared = sharedWithTarget.find((s) => s.project === proj);
-                return (
-                  <View key={proj} style={styles.friendRow}>
-                    <View style={styles.friendAvatar}>
-                      <Icon name="folder-outline" size={18} color={theme.colors.textSecondary} />
-                    </View>
-                    <Text style={[styles.friendName, { flex: 1 }]} numberOfLines={1}>{proj}</Text>
-                    {shared ? (
-                      <TouchableOpacity disabled={shareBusy} onPress={() => unShare(shared.id)} style={[styles.shareChip, { backgroundColor: theme.colors.surfaceElevated }]}>
-                        <Icon name="check" size={15} color="#34c759" />
-                        <Text style={[styles.shareChipText, { color: theme.colors.textSecondary }]}>Shared</Text>
-                      </TouchableOpacity>
-                    ) : (
-                      <TouchableOpacity disabled={shareBusy} onPress={() => doShare(proj)} style={[styles.shareChip, { backgroundColor: theme.colors.primary || '#0a84ff' }]}>
-                        <Icon name="account-plus-outline" size={15} color="#fff" />
-                        <Text style={[styles.shareChipText, { color: '#fff' }]}>Share</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                );
-              })
-            )}
-          </ScrollView>
-        </View>
-      </Modal>
 
       {/* Full-screen Settings sheet — slides up from the bottom on
           tap of the gear above. Wrapping the screen in a Modal keeps
