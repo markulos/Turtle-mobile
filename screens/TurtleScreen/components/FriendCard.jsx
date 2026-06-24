@@ -100,8 +100,9 @@ export default function FriendCard({
 
   return (
     // A pushed PAGE (slides in from the right, left-edge swipe goes back) rather
-    // than a sheet — see EdgeSwipePage. Reliably stacks over the Friends page.
-    <EdgeSwipePage visible={!!friend} onClose={onClose}>
+    // than a sheet. `overlay` so it nests INSIDE the Friends page (a 2nd sibling
+    // modal won't present over the first on iOS) — see EdgeSwipePage.
+    <EdgeSwipePage overlay visible={!!friend} onClose={onClose}>
       <View style={{ flex: 1, paddingTop: insets.top + 6 }}>
         <View style={styles.header}>
           <TouchableOpacity

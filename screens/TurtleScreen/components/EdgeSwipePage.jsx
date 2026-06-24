@@ -30,8 +30,13 @@ const COMMIT_VX = 0.5;
  *   visible   — show/hide. Toggling it animates the page in/out.
  *   onClose() — called when the page should be dismissed (X or a committed swipe).
  *   children  — the page content (laid out full-screen; add your own top inset).
+ *   overlay   — render as an in-tree absolute-fill overlay instead of a Modal.
+ *               REQUIRED when stacking over another EdgeSwipePage/Modal: iOS
+ *               won't present a second sibling Modal while the first is up, so a
+ *               nested page must live INSIDE the parent page's tree, not as its
+ *               own modal. (Top-level pages over a tab use the Modal form.)
  */
-export default function EdgeSwipePage({ visible, onClose, children }) {
+export default function EdgeSwipePage({ visible, onClose, children, overlay = false }) {
   const { theme } = useTheme();
   const tx = useRef(new Animated.Value(SCREEN_W)).current;
   const [mounted, setMounted] = useState(false);
@@ -97,23 +102,34 @@ export default function EdgeSwipePage({ visible, onClose, children }) {
 
   const content = visible ? children : lastChildren.current;
 
+  const inner = (
+    <View style={StyleSheet.absoluteFill}>
+      <Animated.View
+        style={[StyleSheet.absoluteFill, { backgroundColor: '#000', opacity: dimOpacity }]}
+        pointerEvents="none"
+      />
+      <Animated.View
+        style={[
+          StyleSheet.absoluteFill,
+          { backgroundColor: theme.colors.background, transform: [{ translateX: tx }] },
+        ]}
+        {...responder.panHandlers}
+      >
+        {content}
+      </Animated.View>
+    </View>
+  );
+
+  // Overlay form: an absolute-fill layer drawn inside the parent's tree (used
+  // when nesting over another page — no second native modal, which iOS drops).
+  if (overlay) {
+    return mounted ? <View style={StyleSheet.absoluteFill}>{inner}</View> : null;
+  }
+
+  // Top-level form: its own transparent over-full-screen modal.
   return (
     <Modal visible={mounted} transparent animationType="none" statusBarTranslucent onRequestClose={() => onCloseRef.current?.()}>
-      <View style={StyleSheet.absoluteFill}>
-        <Animated.View
-          style={[StyleSheet.absoluteFill, { backgroundColor: '#000', opacity: dimOpacity }]}
-          pointerEvents="none"
-        />
-        <Animated.View
-          style={[
-            StyleSheet.absoluteFill,
-            { backgroundColor: theme.colors.background, transform: [{ translateX: tx }] },
-          ]}
-          {...responder.panHandlers}
-        >
-          {content}
-        </Animated.View>
-      </View>
+      {inner}
     </Modal>
   );
 }

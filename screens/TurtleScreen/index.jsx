@@ -1961,26 +1961,26 @@ export default function TurtleScreen() {
               </View>
             )}
           </ScrollView>
+
+          {/* Member profile — a page that slides in OVER the friends list. It
+              lives INSIDE the Friends page (overlay) on purpose: a second
+              sibling Modal won't present over the first on iOS. */}
+          <FriendCard
+            friend={selectedFriend}
+            serverBase={serverBase}
+            onClose={() => setSelectedFriend(null)}
+            onShare={(f) => openShare(f)}
+            isOwner={isOwner}
+            devCode={devCode}
+            isDevAccount={
+              !!selectedFriend?.phone &&
+              devAccounts.some((d) => normalizePhone(d.phone) === normalizePhone(selectedFriend.phone))
+            }
+            onAssignDev={assignDevFromCard}
+            onRemoveDev={removeDevAccount}
+          />
         </View>
       </EdgeSwipePage>
-
-      {/* Member profile card — opens when you tap a friend in the list and
-          stacks over the Friends sheet. Leads with "who they are" (avatar,
-          name, number, role, stats) and offers project-sharing from there. */}
-      <FriendCard
-        friend={selectedFriend}
-        serverBase={serverBase}
-        onClose={() => setSelectedFriend(null)}
-        onShare={(f) => openShare(f)}
-        isOwner={isOwner}
-        devCode={devCode}
-        isDevAccount={
-          !!selectedFriend?.phone &&
-          devAccounts.some((d) => normalizePhone(d.phone) === normalizePhone(selectedFriend.phone))
-        }
-        onAssignDev={assignDevFromCard}
-        onRemoveDev={removeDevAccount}
-      />
 
       {/* Share-a-project sheet — opened from a member's card (or directly).
           Lists your projects; tap to share view-only (or un-share). Stacks
