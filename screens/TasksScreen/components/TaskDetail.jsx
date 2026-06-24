@@ -55,6 +55,11 @@ export const TaskDetail = ({
   const [comments, setComments] = useState([]);
   const [commentDraft, setCommentDraft] = useState('');
   const [postingComment, setPostingComment] = useState(false);
+  // Pond members, used to resolve the task's involvedUsers (user IDs) to display
+  // names for the read-only "People involved" chips. Same source the editor's
+  // ParticipantPicker uses (/api/friends). Only fetched when the task actually
+  // has assignees so a solo task makes no extra call.
+  const [friends, setFriends] = useState([]);
 
   // Per-task completed-pomodoro count for the meta chip (read-only on mobile;
   // removing some lives in the web edit modal). Refetched when the sheet opens.
@@ -70,6 +75,18 @@ export const TaskDetail = ({
       .catch(() => {});
     return () => { cancelled = true; };
   }, [api, visible, task?.id]);
+
+  // Resolve assignee names for the "People involved" chips. Skipped entirely
+  // for tasks with no one assigned.
+  const involvedUsers = Array.isArray(task?.involvedUsers) ? task.involvedUsers : [];
+  useEffect(() => {
+    if (!visible || involvedUsers.length === 0) return;
+    let cancelled = false;
+    api.get('/friends')
+      .then((r) => { if (!cancelled) setFriends(Array.isArray(r?.friends) ? r.friends : []); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [api, visible, involvedUsers.length]);
 
   // Comment thread — anyone who can SEE the task (owner, shared-board, involved)
   // may read + reply; the server gates by taskVisibility. Loaded on open.
@@ -172,6 +189,13 @@ export const TaskDetail = ({
   const reminderLabels = (Array.isArray(task.meta?.reminders) ? task.meta.reminders : [])
     .map(v => (REMINDER_OPTIONS.find(o => o.value === v)?.label) || v);
   const yearly = kind === 'birthday' && task.meta?.yearly !== false;
+
+  // People involved (tasks only). Resolve IDs -> display name via the fetched
+  // pond members; fall back to the raw id if the member list hasn't loaded yet.
+  const nameOfUser = (id) => {
+    const f = friends.find((x) => x.id === id);
+    return f ? (f.displayName || f.phone || 'Member') : id;
+  };
 
   const styles = createStyles(theme);
 
@@ -337,6 +361,22 @@ export const TaskDetail = ({
                     <View key={idx} style={styles.tagChip}>
                       <Icon name="account" size={12} color={theme.colors.textPrimary} />
                       <Text style={styles.tagText}>{g}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {/* People involved — tasks. They can see the task (view-only) and
+                were notified when added. Edit the set via the task editor. */}
+            {!isOccasion && involvedUsers.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>People involved ({involvedUsers.length})</Text>
+                <View style={styles.tagsRow}>
+                  {involvedUsers.map((id) => (
+                    <View key={id} style={styles.tagChip}>
+                      <Icon name="account" size={12} color={theme.colors.accentInfo} />
+                      <Text style={styles.tagText}>{nameOfUser(id)}</Text>
                     </View>
                   ))}
                 </View>
