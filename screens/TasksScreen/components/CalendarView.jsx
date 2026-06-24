@@ -2592,6 +2592,7 @@ const createStyles = (theme) => StyleSheet.create({
     alignItems: 'stretch',
     paddingTop: 3,
     paddingHorizontal: 3,
+    overflow: 'hidden', // clip the title list to the cell — never bleed into the next row
   },
   dayTextList: {
     textAlign: 'center',
