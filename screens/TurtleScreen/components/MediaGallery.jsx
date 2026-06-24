@@ -1791,6 +1791,11 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     // flips. VIEWER-ONLY — the grid array (uploadDisplayItems) is never reversed.
     return base.slice().reverse();
   }, [activeTab, uploadDisplayItems, displayItems]);
+  // Mirror for openViewer to read without depending on (and thus re-creating
+  // on) this frequently-changing array — keeps openViewer/renderItem stable so
+  // the grid doesn't re-render every cell as sparse pages land mid-scroll.
+  const viewerSourceItemsRef = useRef(viewerSourceItems);
+  viewerSourceItemsRef.current = viewerSourceItems;
   const viewerItems = useMemo(
     () => (viewerSoloItem ? [viewerSoloItem] : viewerSourceItems),
     [viewerSourceItems, viewerSoloItem],
@@ -2328,7 +2333,11 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       // Index into the SAME array the pager walks (and the grid renders), so
       // the tapped photo is found and left/right swipe works across the whole
       // loaded set. Only fall back to the solo viewer if it's genuinely absent.
-      const index = viewerSourceItems.findIndex(i => i.id === item.id);
+      // Read via ref (not the closed-over value) so this callback stays STABLE
+      // as the list grows — otherwise its identity changed on every sparse page
+      // land, which changed renderItem and re-rendered every visible grid cell
+      // during scroll (the source of the laggy taps / select delay).
+      const index = viewerSourceItemsRef.current.findIndex(i => i.id === item.id);
       setViewerSoloItem(index !== -1 ? null : item);
       scrollX.setValue(index !== -1 ? index * ITEM_WIDTH : 0);
 
@@ -2368,7 +2377,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     } else {
       executeOpen();
     }
-  }, [scaleAnim, opacityAnim, viewerSourceItems, scrollX]);
+  }, [scaleAnim, opacityAnim, scrollX]);
 
   // Close full-screen viewer.
   // (A zoom-guard branch used to live here, but `zoomScale` was never written
