@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { generateKey, encryptIntent, createIntent } from '../utils/crypto';
 import { useServer } from './ServerContext';
@@ -120,7 +120,11 @@ export const VaultProvider = ({ children }) => {
     }
   }, [api, isConnected]);
 
-  const value = {
+  // Memoized so consumers (PasswordsScreen, unlock approval) don't re-render
+  // every time the provider re-renders — only when the vault state actually
+  // changes. All the handlers are useCallback-stable, so the real deps are the
+  // three state values.
+  const value = useMemo(() => ({
     vaultKey,
     hasVaultKey: !!vaultKey,
     isInitializing,
@@ -130,7 +134,7 @@ export const VaultProvider = ({ children }) => {
     executeCommand,
     getAvailableCommands,
     checkHealth
-  };
+  }), [vaultKey, isInitializing, cryptoReady, setupVaultKey, clearVaultKey, executeCommand, getAvailableCommands, checkHealth]);
 
   return (
     <VaultContext.Provider value={value}>
