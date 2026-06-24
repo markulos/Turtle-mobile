@@ -1674,7 +1674,7 @@ export default function TurtleScreen() {
           to go back to the Turtle tab), org members + a search box + invites. */}
       <EdgeSwipePage visible={showFriends} onClose={() => setShowFriends(false)}>
         <View style={{ flex: 1 }}>
-          <View style={[styles.settingsSheetHeader, { paddingTop: insets.top + 6, alignItems: 'center' }]}>
+          <View style={[styles.settingsSheetHeader, { paddingTop: insets.top + 6, justifyContent: 'flex-start', alignItems: 'center' }]}>
             <TouchableOpacity
               onPress={() => setShowFriends(false)}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -1683,7 +1683,7 @@ export default function TurtleScreen() {
             >
               <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
             </TouchableOpacity>
-            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.textPrimary, paddingLeft: 4 }}>Friends</Text>
+            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.textPrimary }}>Friends</Text>
           </View>
 
           <View style={{ paddingHorizontal: 16, paddingBottom: 10, gap: 10 }}>

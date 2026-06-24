@@ -12,8 +12,8 @@ import { useTheme } from '../../../context/ThemeContext';
 const { width: SCREEN_W } = Dimensions.get('window');
 // Left bezel zone the back-swipe must start in, and the commit thresholds —
 // either drag a third of the way across, or flick rightward fast enough.
-const EDGE_ZONE_PX = 28;
-const COMMIT_DX = SCREEN_W * 0.33;
+const EDGE_ZONE_PX = 44;
+const COMMIT_DX = SCREEN_W * 0.3;
 const COMMIT_VX = 0.5;
 
 /**
