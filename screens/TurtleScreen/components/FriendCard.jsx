@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -42,11 +42,29 @@ const fmtTime12 = (t) => {
  *                server-relative avatarUrl into a full URL.
  *   onClose()  — dismiss the card.
  *   onShare(f) — optional; open the project-share flow for this member.
+ *   isOwner      — true when the VIEWER is the pond owner (unlocks dev-account
+ *                  controls). Distinct from this member's own role.
+ *   isDevAccount — true when this member's phone is already a developer account.
+ *   devCode      — the fixed sign-in code dev accounts use (display only).
+ *   onAssignDev(phone) — make this phone a developer account; returns a promise.
+ *   onRemoveDev(phone) — revoke developer access for this phone.
  */
-export default function FriendCard({ friend, serverBase, onClose, onShare, tasks = [] }) {
+export default function FriendCard({
+  friend,
+  serverBase,
+  onClose,
+  onShare,
+  tasks = [],
+  isOwner = false,
+  isDevAccount = false,
+  devCode = '11111',
+  onAssignDev,
+  onRemoveDev,
+}) {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = makeStyles(theme);
+  const [devBusy, setDevBusy] = useState(false);
 
   // This member's tasks (passed by the calendar). Pending first, each list in
   // soonest-date order, so the card reads like a quick agenda for that person.
@@ -55,8 +73,14 @@ export default function FriendCard({ friend, serverBase, onClose, onShare, tasks
   const doneTasks = tasks.filter((t) => t.completed).sort(byDate);
   const orderedTasks = [...pendingTasks, ...doneTasks].slice(0, 12);
 
-  const isOwner = friend?.role === 'owner';
+  const friendIsOwner = friend?.role === 'owner';
   const name = friend?.displayName || friend?.phone || 'Member';
+  // Invited-on date for pending invitees (defensive against ms/ISO/garbage).
+  const invitedOn = friend?.invitedAt ? new Date(friend.invitedAt) : null;
+  const invitedStr = invitedOn && !isNaN(invitedOn.getTime()) ? invitedOn.toLocaleDateString() : null;
+  // Whether to offer developer-account controls: viewer is owner, this isn't the
+  // owner's own card, and we have a phone to key the account on.
+  const canManageDev = isOwner && !friendIsOwner && !!friend?.phone;
   // A server-relative avatar ('/api/avatars/…') needs the origin prepended;
   // an absolute URL is used as-is. Null → fall back to the role glyph.
   const avatarUri = friend?.avatarUrl
@@ -106,9 +130,9 @@ export default function FriendCard({ friend, serverBase, onClose, onShare, tasks
               />
             ) : (
               <Icon
-                name={isOwner ? 'crown-outline' : 'account'}
+                name={friendIsOwner ? 'crown-outline' : 'account'}
                 size={52}
-                color={isOwner ? '#f5a623' : theme.colors.textSecondary}
+                color={friendIsOwner ? '#f5a623' : theme.colors.textSecondary}
               />
             )}
           </View>
@@ -117,16 +141,16 @@ export default function FriendCard({ friend, serverBase, onClose, onShare, tasks
           <Text style={styles.name} numberOfLines={1}>{name}</Text>
           <View style={styles.roleBadge}>
             <Icon
-              name={isOwner ? 'crown' : 'account-outline'}
+              name={friendIsOwner ? 'crown' : 'account-outline'}
               size={13}
-              color={isOwner ? '#f5a623' : theme.colors.accentInfo}
+              color={friendIsOwner ? '#f5a623' : theme.colors.accentInfo}
             />
-            <Text style={[styles.roleText, { color: isOwner ? '#f5a623' : theme.colors.accentInfo }]}>
-              {isOwner ? 'Owner' : 'Member'}
+            <Text style={[styles.roleText, { color: friendIsOwner ? '#f5a623' : theme.colors.accentInfo }]}>
+              {friendIsOwner ? 'Owner' : 'Member'}
             </Text>
           </View>
 
-          {/* Details — phone + sign-in status */}
+          {/* Details — phone + invited-on + sign-in status */}
           <View style={styles.detailCard}>
             {friend?.phone ? (
               <View style={styles.detailRow}>
@@ -134,7 +158,13 @@ export default function FriendCard({ friend, serverBase, onClose, onShare, tasks
                 <Text style={styles.detailText} numberOfLines={1}>{friend.phone}</Text>
               </View>
             ) : null}
-            <View style={[styles.detailRow, friend?.phone && styles.detailRowDivided]}>
+            {invitedStr ? (
+              <View style={[styles.detailRow, friend?.phone && styles.detailRowDivided]}>
+                <Icon name="email-outline" size={18} color={theme.colors.textTertiary} />
+                <Text style={styles.detailText} numberOfLines={1}>Invited {invitedStr}</Text>
+              </View>
+            ) : null}
+            <View style={[styles.detailRow, (friend?.phone || invitedStr) && styles.detailRowDivided]}>
               <Icon
                 name={friend?.joined ? 'check-circle-outline' : 'clock-outline'}
                 size={18}
@@ -144,7 +174,60 @@ export default function FriendCard({ friend, serverBase, onClose, onShare, tasks
                 {friend?.joined ? 'Signed in' : "Hasn't signed in yet"}
               </Text>
             </View>
+            {isDevAccount ? (
+              <View style={[styles.detailRow, styles.detailRowDivided]}>
+                <Icon name="account-cog" size={18} color={theme.colors.accentInfo} />
+                <Text style={[styles.detailText, { color: theme.colors.accentInfo }]}>
+                  Developer account · signs in with code {devCode}
+                </Text>
+              </View>
+            ) : null}
           </View>
+
+          {/* Developer access — owner only. For someone who can't receive an SMS
+              OTP, grant a developer account so they sign in with the fixed code.
+              Offered for not-yet-joined invitees; a revoke option once granted. */}
+          {canManageDev && (isDevAccount || !friend?.joined) ? (
+            <>
+              <Text style={styles.sectionLabel}>Developer access</Text>
+              {isDevAccount ? (
+                <TouchableOpacity
+                  style={[styles.devRevokeBtn, devBusy && { opacity: 0.6 }]}
+                  disabled={devBusy}
+                  activeOpacity={0.85}
+                  onPress={async () => {
+                    if (!onRemoveDev) return;
+                    setDevBusy(true);
+                    try { await onRemoveDev(friend.phone); } finally { setDevBusy(false); }
+                  }}
+                  accessibilityLabel="Remove developer access"
+                >
+                  <Icon name="account-remove-outline" size={18} color={theme.colors.accentError} />
+                  <Text style={[styles.devRevokeText, { color: theme.colors.accentError }]}>Remove developer access</Text>
+                </TouchableOpacity>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    style={[styles.devBtn, devBusy && { opacity: 0.6 }]}
+                    disabled={devBusy}
+                    activeOpacity={0.85}
+                    onPress={async () => {
+                      if (!onAssignDev) return;
+                      setDevBusy(true);
+                      try { await onAssignDev(friend.phone); } finally { setDevBusy(false); }
+                    }}
+                    accessibilityLabel="Make developer account"
+                  >
+                    <Icon name="account-cog-outline" size={18} color="#fff" />
+                    <Text style={styles.devBtnText}>{devBusy ? 'Adding…' : 'Make developer account'}</Text>
+                  </TouchableOpacity>
+                  <Text style={[styles.statsHint, { alignSelf: 'flex-start', textAlign: 'left' }]}>
+                    They'll sign in with code {devCode} — no SMS needed.
+                  </Text>
+                </>
+              )}
+            </>
+          ) : null}
 
           {/* Stats — scaffold for future points (tasks + pomodoros) */}
           <Text style={styles.sectionLabel}>Stats</Text>
@@ -396,5 +479,36 @@ const makeStyles = (theme) =>
       fontSize: 15,
       fontWeight: '700',
       color: '#fff',
+    },
+    devBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      alignSelf: 'stretch',
+      paddingVertical: 14,
+      borderRadius: 14,
+      backgroundColor: theme.colors.accentInfo || '#0a84ff',
+    },
+    devBtnText: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: '#fff',
+    },
+    devRevokeBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      alignSelf: 'stretch',
+      paddingVertical: 13,
+      borderRadius: 14,
+      backgroundColor: theme.colors.surface,
+      borderWidth: 0.5,
+      borderColor: theme.colors.border,
+    },
+    devRevokeText: {
+      fontSize: 15,
+      fontWeight: '700',
     },
   });

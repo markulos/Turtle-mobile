@@ -589,6 +589,28 @@ export default function TurtleScreen() {
     }
   }, [api, normalizePhone, loadDevAccounts, devCode]);
 
+  // Assign a developer account straight from a member's profile card (vs the
+  // sheet's text field). Surfaces feedback via Alert since the card is its own
+  // surface; refreshes the list so the card's isDevAccount prop flips.
+  const assignDevFromCard = useCallback(async (phone) => {
+    const norm = normalizePhone(phone);
+    if (!norm) return;
+    try {
+      const r = await api.post('/auth/dev-accounts', { phone: norm });
+      await loadDevAccounts();
+      Alert.alert('Developer account', `${norm} can now sign in with code ${r?.code || devCode} — no SMS.`);
+    } catch (e) {
+      const m = e?.message || '';
+      const forbidden = /\b403\b/.test(m) || /owner only/i.test(m);
+      Alert.alert(
+        'Developer account',
+        forbidden
+          ? 'Only the pond owner can add developer accounts.'
+          : (m.replace(/^API Error \d+:\s*/, '').slice(0, 140) || 'Could not add that developer account.'),
+      );
+    }
+  }, [api, normalizePhone, loadDevAccounts, devCode]);
+
   const removeDevAccount = useCallback((phone) => {
     Alert.alert(
       'Remove developer account',
@@ -1953,6 +1975,14 @@ export default function TurtleScreen() {
         serverBase={serverBase}
         onClose={() => setSelectedFriend(null)}
         onShare={(f) => openShare(f)}
+        isOwner={isOwner}
+        devCode={devCode}
+        isDevAccount={
+          !!selectedFriend?.phone &&
+          devAccounts.some((d) => normalizePhone(d.phone) === normalizePhone(selectedFriend.phone))
+        }
+        onAssignDev={assignDevFromCard}
+        onRemoveDev={removeDevAccount}
       />
 
       {/* Share-a-project sheet — opened from a member's card (or directly).
