@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const THEME_STORAGE_KEY = '@connected_pass_theme';
 const TIME_FORMAT_STORAGE_KEY = '@connected_pass_time_format';
 const HIDE_VAULT_BUTTON_KEY = '@connected_pass_hide_vault_button';
+const CALENDAR_DAY_TASKS_KEY = '@connected_pass_calendar_day_tasks';
 
 // Golden Ratio - 1.618
 const PHI = 1.618;
@@ -195,12 +196,18 @@ const ThemeContext = createContext({
   // then reachable only via the /vault command in chat / terminal.
   hideVaultButton: false,
   setHideVaultButton: () => {},
+  // When true, each calendar day cell lists its tasks in small text (iOS
+  // Calendar style) instead of the compact project dots. Defaults to dots
+  // (false) so the grid stays uncluttered until the user opts in.
+  showCalendarDayTasks: false,
+  setShowCalendarDayTasks: () => {},
 });
 
 export const ThemeProvider = ({ children }) => {
   const [isDark, setIsDark] = useState(true);
   const [timeFormat, setTimeFormatState] = useState('12h');
   const [hideVaultButton, setHideVaultButtonState] = useState(false);
+  const [showCalendarDayTasks, setShowCalendarDayTasksState] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -220,6 +227,10 @@ export const ThemeProvider = ({ children }) => {
       const savedHideVault = await AsyncStorage.getItem(HIDE_VAULT_BUTTON_KEY);
       if (savedHideVault !== null) {
         setHideVaultButtonState(savedHideVault === 'true');
+      }
+      const savedDayTasks = await AsyncStorage.getItem(CALENDAR_DAY_TASKS_KEY);
+      if (savedDayTasks !== null) {
+        setShowCalendarDayTasksState(savedDayTasks === 'true');
       }
     } catch (error) {
       console.error('Error loading theme:', error);
@@ -248,6 +259,16 @@ export const ThemeProvider = ({ children }) => {
     }
   };
 
+  const setShowCalendarDayTasks = async (show) => {
+    const next = !!show;
+    setShowCalendarDayTasksState(next);
+    try {
+      await AsyncStorage.setItem(CALENDAR_DAY_TASKS_KEY, next ? 'true' : 'false');
+    } catch (error) {
+      console.error('Error saving calendar-day-tasks setting:', error);
+    }
+  };
+
   const toggleTheme = async () => {
     const newIsDark = !isDark;
     setIsDark(newIsDark);
@@ -266,8 +287,12 @@ export const ThemeProvider = ({ children }) => {
   // setTimeFormat are stable-enough closures; the meaningful deps are the
   // values they expose.
   const value = useMemo(
-    () => ({ theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton }),
-    [theme, isDark, timeFormat, hideVaultButton],
+    () => ({
+      theme, isDark, toggleTheme, timeFormat, setTimeFormat,
+      hideVaultButton, setHideVaultButton,
+      showCalendarDayTasks, setShowCalendarDayTasks,
+    }),
+    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks],
   );
 
   if (isLoading) {

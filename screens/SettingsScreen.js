@@ -30,7 +30,7 @@ const MASTER_KEY_STORE = 'vault_master_key';
 const SALT_STORE = 'vault_salt';
 
 export default function SettingsScreen({ active = true }) {
-  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton } = useTheme();
+  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks } = useTheme();
   const { serverIP, isConnected, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
   const [isHealing, setIsHealing] = useState(false);
   const [isClearingCache, setIsClearingCache] = useState(false);
@@ -642,6 +642,20 @@ export default function SettingsScreen({ active = true }) {
                   onValueChange={(v) => setTimeFormat(v ? '24h' : '12h')}
                   trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
                   thumbColor={timeFormat === '24h' ? theme.colors.textPrimary : theme.colors.textTertiary}
+                />
+              </View>
+              {/* Day-cell appearance — list task titles (iOS Calendar style) vs the
+                  compact project dots in each day of the month grid. */}
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>List tasks in day cells</Text>
+                  <Text style={styles.settingDescription}>Show a tiny list of task titles in each day instead of dots</Text>
+                </View>
+                <Switch
+                  value={showCalendarDayTasks}
+                  onValueChange={(v) => setShowCalendarDayTasks(v)}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
+                  thumbColor={showCalendarDayTasks ? theme.colors.textPrimary : theme.colors.textTertiary}
                 />
               </View>
               {/* Default participants — pond members auto-added to tasks you create */}

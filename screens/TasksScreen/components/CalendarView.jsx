@@ -31,6 +31,7 @@ import Reanimated, {
   LinearTransition,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { LinearGradient } from 'expo-linear-gradient';
 // Resets the VirtualizedList "am I nested?" context for a subtree. The day
 // pager below is a horizontal FlatList that legitimately lives inside the
 // horizontal calendar⇄list pager (an Animated.ScrollView in TasksScreen) —
@@ -187,6 +188,19 @@ const yToTimeString = (locationY) => {
 //
 // Pulled out of the component so they aren't redefined on every render
 // and so they can be reused without closure capture.
+
+// Convert a #RRGGBB hex (the theme background) to an rgba() string at the
+// given alpha — used to build the soft, fade-to-transparent gradient behind
+// the swipe-hint chevrons so they overlay the grid instead of masking it.
+// Non-hex inputs (already-rgba tokens) are returned unchanged.
+const hexToRgba = (hex, alpha) => {
+  if (typeof hex !== 'string' || hex[0] !== '#') return hex;
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
 
 const toDateString = (date) => {
   const y = date.getFullYear();
@@ -1136,7 +1150,7 @@ export const CalendarView = ({
   // (task) => void — tapping a task's owner badge opens that person's profile.
   onOwnerPress,
 }) => {
-  const { theme, timeFormat } = useTheme();
+  const { theme, timeFormat, showCalendarDayTasks } = useTheme();
   const use24h = timeFormat === '24h';
   // currentMonthIndex is the source of truth for "which month is on
   // screen". currentDate is derived from it so all the existing
@@ -1793,20 +1807,16 @@ export const CalendarView = ({
   //     would just shift the work to extra cache invalidation.
   const renderMonth = useCallback(({ item: monthDate }) => {
     const data = buildCalendarDataFor(monthDate);
-    const activeMonth = MONTHS_LIST[currentMonthIndex];
-    // Paint the title across a ±6-month neighbourhood so headers are
-    // ALREADY mounted through a fast scroll (no blank/pop-in as pages
-    // whip by). Matches the FlatList render window below. Each page
-    // renders its OWN month/year. Neighbours are full viewports off-screen
-    // while you're on the current month, so their headers stay hidden
-    // until you actually scroll to them. Pages beyond the window reserve
-    // the SAME title band with an empty spacer so every page is exactly
-    // monthH and snapping stays clean.
-    const monthsApart = Math.abs(
-      (monthDate.getFullYear() - activeMonth.getFullYear()) * 12 +
-      (monthDate.getMonth() - activeMonth.getMonth())
-    );
-    const showTitle = monthsApart <= 6;
+    // Every page paints its OWN month/year title (the old, pre-gated
+    // logic). Gating the title to a ±N window around `currentMonthIndex`
+    // tied its visibility to scroll state — and `currentMonthIndex` only
+    // updates on momentum-settle, so a fast scroll outran it and landed on
+    // blank header bands until the snap finished. Painting unconditionally
+    // means the header is part of the page itself: it's already there the
+    // instant the page scrolls into view, with no pop-in and no dependence
+    // on scroll timing. The layout is unchanged — the MONTH_TITLE_HEIGHT
+    // band is reserved on every page regardless, so snapping stays
+    // pixel-perfect; we just always fill it.
     // Whether this page is the real current calendar month (today) —
     // drives the inline "Today" jump shortcut (only useful off-today).
     const isCurrentMonth =
@@ -1815,31 +1825,26 @@ export const CalendarView = ({
     return (
       <View style={[styles.monthPage, { height: monthH }]}>
         {/* Month/year title — same style/aesthetic as before, painted on
-            the active month + its ±1 neighbours so it's pre-loaded for
-            scroll. Far pages reserve the band with an empty spacer so the
-            grid still lines up and snaps. */}
-        {showTitle ? (
-          <View style={styles.monthYear}>
-            <View style={styles.monthTitleRow}>
-              <Text style={styles.monthText}>{MONTHS[monthDate.getMonth()]}</Text>
-              <Text style={styles.yearText}>{monthDate.getFullYear()}</Text>
-            </View>
-            {!isCurrentMonth && (
-              <TouchableOpacity
-                onPress={goToToday}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                style={styles.todayInline}
-                accessibilityRole="button"
-                accessibilityLabel="Go to today"
-              >
-                <Icon name="calendar-today" size={14} color={theme.colors.accentSuccess} />
-                <Text style={styles.todayInlineText}>Today</Text>
-              </TouchableOpacity>
-            )}
+            EVERY page so it's already mounted with the page and slides in
+            seamlessly on scroll (no pop-in, no scroll-timing dependency). */}
+        <View style={styles.monthYear}>
+          <View style={styles.monthTitleRow}>
+            <Text style={styles.monthText}>{MONTHS[monthDate.getMonth()]}</Text>
+            <Text style={styles.yearText}>{monthDate.getFullYear()}</Text>
           </View>
-        ) : (
-          <View style={styles.monthTitleSpacer} />
-        )}
+          {!isCurrentMonth && (
+            <TouchableOpacity
+              onPress={goToToday}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.todayInline}
+              accessibilityRole="button"
+              accessibilityLabel="Go to today"
+            >
+              <Icon name="calendar-today" size={14} color={theme.colors.accentSuccess} />
+              <Text style={styles.todayInlineText}>Today</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
         {/* Day-of-week labels — sit just under the title band. */}
         <View style={styles.daysHeader}>
@@ -1863,6 +1868,7 @@ export const CalendarView = ({
                 style={[
                   styles.dayCell,
                   { height: cellH },
+                  showCalendarDayTasks && styles.dayCellList,
                   cell.isToday && styles.todayCell,
                   cell.isSelected && styles.selectedCell,
                 ]}
@@ -1870,24 +1876,50 @@ export const CalendarView = ({
               >
                 <Text style={[
                   styles.dayText,
+                  showCalendarDayTasks && styles.dayTextList,
                   cell.isToday && styles.todayText,
-                  cell.tasks.length > 0 && { color: heat },
+                  !showCalendarDayTasks && cell.tasks.length > 0 && { color: heat },
                 ]}>
                   {cell.day}
                 </Text>
 
-                {projectCount > 0 && (
-                  <View style={styles.projectDots}>
-                    {Array.from({ length: Math.min(projectCount, 3) }).map((_, idx) => (
-                      <View
-                        key={idx}
-                        style={[styles.projectDot, { backgroundColor: heat }]}
-                      />
-                    ))}
-                    {projectCount > 3 && (
-                      <Text style={[styles.moreProjects, { color: heat }]}>+</Text>
-                    )}
-                  </View>
+                {showCalendarDayTasks ? (
+                  // iOS-Calendar-style tiny list of task titles, colored by the
+                  // item's own color (events/birthdays) or its priority (tasks).
+                  cell.tasks.length > 0 && (
+                    <View style={styles.dayTaskList}>
+                      {cell.tasks.slice(0, 4).map((t, idx) => (
+                        <Text
+                          key={t.id || idx}
+                          numberOfLines={1}
+                          style={[
+                            styles.dayTaskItem,
+                            { color: itemColorOf(t) || getPriorityColor(t.priority, theme) },
+                            t.completed && styles.dayTaskItemDone,
+                          ]}
+                        >
+                          {t.title || 'Untitled'}
+                        </Text>
+                      ))}
+                      {cell.tasks.length > 4 && (
+                        <Text style={styles.dayTaskMore}>+{cell.tasks.length - 4} more</Text>
+                      )}
+                    </View>
+                  )
+                ) : (
+                  projectCount > 0 && (
+                    <View style={styles.projectDots}>
+                      {Array.from({ length: Math.min(projectCount, 3) }).map((_, idx) => (
+                        <View
+                          key={idx}
+                          style={[styles.projectDot, { backgroundColor: heat }]}
+                        />
+                      ))}
+                      {projectCount > 3 && (
+                        <Text style={[styles.moreProjects, { color: heat }]}>+</Text>
+                      )}
+                    </View>
+                  )
                 )}
               </TouchableOpacity>
             );
@@ -1895,7 +1927,7 @@ export const CalendarView = ({
         </View>
       </View>
     );
-  }, [buildCalendarDataFor, handleDatePress, goToToday, theme, styles, monthH, cellH, currentMonthIndex]);
+  }, [buildCalendarDataFor, handleDatePress, goToToday, theme, styles, monthH, cellH, showCalendarDayTasks]);
 
   // Helper to get task title and subtitle for selected date
   const getTaskListTitle = () => {
@@ -2076,9 +2108,11 @@ export const CalendarView = ({
             onScrollToIndexFailed={onScrollToIndexFailed}
             onMomentumScrollEnd={onMomentumScrollEnd}
             // Signals FlatList that visible cells should re-render when
-            // selectedDate OR the active month changes — the latter so the
-            // title appears/disappears on the right page as you swipe.
-            extraData={`${+selectedDate}-${currentMonthIndex}`}
+            // selectedDate changes — otherwise the "selected" highlight can
+            // lag behind taps until the user scrolls. (No longer keyed on the
+            // active month: every page paints its own title now, so it never
+            // needs a re-render to appear/disappear.)
+            extraData={+selectedDate}
             snapToInterval={monthH}
             snapToAlignment="start"
             decelerationRate="fast"
@@ -2089,7 +2123,8 @@ export const CalendarView = ({
             // months instead of blank pages. maxToRenderPerBatch +
             // updateCellsBatchingPeriod fill that window in fast while the
             // finger is still moving; getItemLayout means none of it needs
-            // measuring. Matches the ±6 title-preload window above.
+            // measuring. Each mounted page paints its own title, so headers
+            // are populated across this whole window with no pop-in.
             windowSize={13}
             maxToRenderPerBatch={6}
             updateCellsBatchingPeriod={30}
@@ -2101,11 +2136,21 @@ export const CalendarView = ({
           {/* Faint animated swipe-hint carets — up = previous month,
               down = next month. pointerEvents none so they never
               intercept a tap/scroll; they fade with the calendar as the
-              sheet rises (they're inside calendarStyle's fade). */}
+              sheet rises (they're inside calendarStyle's fade). Behind each
+              chevron sits a LinearGradient that's strongest at the screen
+              edge and dissolves to transparent toward the grid — so the
+              caret stays legible without masking the month underneath. */}
           <Reanimated.View pointerEvents="none" style={[styles.swipeHintTop, hintTopStyle]}>
             <Icon name="chevron-up" size={28} color={theme.colors.textSecondary} />
           </Reanimated.View>
           <Reanimated.View pointerEvents="none" style={[styles.swipeHintBottom, hintBottomStyle]}>
+            <LinearGradient
+              colors={[hexToRgba(theme.colors.background, 0), hexToRgba(theme.colors.background, 0.9)]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 0, y: 1 }}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
+            />
             <Icon name="chevron-down" size={28} color={theme.colors.textSecondary} />
           </Reanimated.View>
       </Reanimated.View>
@@ -2371,12 +2416,18 @@ const createStyles = (theme) => StyleSheet.create({
   // Faint swipe-hint carets, centred horizontally at the top/bottom
   // edges of the calendar viewport. The bottom one sits just above the
   // reserved sheet-peek strip. Opacity/translate are animated inline.
+  // Fixed height so the gradient backdrop has room to dissolve over a few
+  // pixels; the chevron is anchored to the screen edge (the strong end of
+  // the fade) and overflow is clipped so the gradient never bleeds past.
   swipeHintTop: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
+    height: 52,
     alignItems: 'center',
+    justifyContent: 'flex-start',
+    overflow: 'hidden',
     zIndex: 5,
   },
   swipeHintBottom: {
@@ -2384,7 +2435,10 @@ const createStyles = (theme) => StyleSheet.create({
     bottom: SHEET_PEEK_RESERVE + 2,
     left: 0,
     right: 0,
+    height: 52,
     alignItems: 'center',
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
     zIndex: 5,
   },
   
@@ -2406,12 +2460,6 @@ const createStyles = (theme) => StyleSheet.create({
     justifyContent: 'space-between',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
-  },
-  // Empty stand-in for the title band on non-active months — same height
-  // as monthYear so every FlatList page stays exactly monthH (keeps
-  // snapToInterval pixel-perfect) but paints no header/divider.
-  monthTitleSpacer: {
-    height: MONTH_TITLE_HEIGHT,
   },
   // Inline row that holds the month name + year on a shared baseline.
   // Mirrors the web app's `<span>{monthName}</span><span>{year}</span>`
@@ -2536,6 +2584,37 @@ const createStyles = (theme) => StyleSheet.create({
   todayText: {
     fontWeight: '300',
     color: theme.colors.accentSuccess,
+  },
+  // List mode: top-align the cell so the day number sits at the top with the
+  // task titles stacked beneath it (vs centered for the dots mode).
+  dayCellList: {
+    justifyContent: 'flex-start',
+    alignItems: 'stretch',
+    paddingTop: 3,
+    paddingHorizontal: 3,
+  },
+  dayTextList: {
+    textAlign: 'center',
+    marginBottom: 2,
+  },
+  dayTaskList: {
+    alignSelf: 'stretch',
+    gap: 1,
+  },
+  dayTaskItem: {
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '500',
+  },
+  dayTaskItemDone: {
+    textDecorationLine: 'line-through',
+    opacity: 0.5,
+  },
+  dayTaskMore: {
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '600',
+    color: theme.colors.textTertiary,
   },
   projectDots: {
     flexDirection: 'row',
