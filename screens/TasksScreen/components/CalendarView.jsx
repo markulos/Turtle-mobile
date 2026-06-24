@@ -1884,25 +1884,33 @@ export const CalendarView = ({
                 </Text>
 
                 {showCalendarDayTasks ? (
-                  // iOS-Calendar-style tiny list of task titles, colored by the
-                  // item's own color (events/birthdays) or its priority (tasks).
+                  // iOS-Calendar-style tiny list: each task on a soft tinted
+                  // pill (the item's own color for events/birthdays, else its
+                  // priority color) so titles stay legible against the grid.
                   cell.tasks.length > 0 && (
                     <View style={styles.dayTaskList}>
-                      {cell.tasks.slice(0, 4).map((t, idx) => (
-                        <Text
-                          key={t.id || idx}
-                          numberOfLines={1}
-                          style={[
-                            styles.dayTaskItem,
-                            { color: itemColorOf(t) || getPriorityColor(t.priority, theme) },
-                            t.completed && styles.dayTaskItemDone,
-                          ]}
-                        >
-                          {t.title || 'Untitled'}
-                        </Text>
-                      ))}
-                      {cell.tasks.length > 4 && (
-                        <Text style={styles.dayTaskMore}>+{cell.tasks.length - 4} more</Text>
+                      {cell.tasks.slice(0, 3).map((t, idx) => {
+                        const c = itemColorOf(t) || getPriorityColor(t.priority, theme);
+                        return (
+                          <View
+                            key={t.id || idx}
+                            style={[styles.dayTaskPill, { backgroundColor: hexToRgba(c, 0.18) }]}
+                          >
+                            <Text
+                              numberOfLines={1}
+                              style={[
+                                styles.dayTaskItem,
+                                { color: c },
+                                t.completed && styles.dayTaskItemDone,
+                              ]}
+                            >
+                              {t.title || 'Untitled'}
+                            </Text>
+                          </View>
+                        );
+                      })}
+                      {cell.tasks.length > 3 && (
+                        <Text style={styles.dayTaskMore}>+{cell.tasks.length - 3} more</Text>
                       )}
                     </View>
                   )
@@ -2600,22 +2608,31 @@ const createStyles = (theme) => StyleSheet.create({
   },
   dayTaskList: {
     alignSelf: 'stretch',
-    gap: 1,
+    gap: 2,
+  },
+  // iOS-style event pill: a soft tinted rounded chip per task. Keeps the title
+  // readable against the grid and groups it visually.
+  dayTaskPill: {
+    borderRadius: 4,
+    paddingHorizontal: 3,
+    paddingVertical: 1,
   },
   dayTaskItem: {
-    fontSize: 8,
-    lineHeight: 10,
-    fontWeight: '500',
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '600',
   },
   dayTaskItemDone: {
     textDecorationLine: 'line-through',
-    opacity: 0.5,
+    opacity: 0.55,
   },
   dayTaskMore: {
     fontSize: 8,
-    lineHeight: 10,
-    fontWeight: '600',
+    lineHeight: 11,
+    fontWeight: '700',
     color: theme.colors.textTertiary,
+    paddingHorizontal: 3,
+    marginTop: 1,
   },
   projectDots: {
     flexDirection: 'row',
