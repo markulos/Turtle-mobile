@@ -4,9 +4,9 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   ScrollView,
   Modal,
-  Platform,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -100,25 +100,33 @@ export default function FriendCard({
   ];
 
   return (
+    // Transparent / over-full-screen so it reliably presents OVER the Friends
+    // pageSheet modal. Stacking a second native pageSheet on top of another
+    // doesn't show on iOS — a transparent modal drawn as our own bottom sheet
+    // does. Tap the dimmed area or the X to dismiss.
     <Modal
       visible={!!friend}
+      transparent
       animationType="slide"
-      presentationStyle="pageSheet"
+      statusBarTranslucent
       onRequestClose={onClose}
     >
-      <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
-        <View style={[styles.header, { paddingTop: Platform.OS === 'android' ? insets.top + 6 : 12 }]}>
-          <TouchableOpacity
-            onPress={onClose}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            style={styles.closeBtn}
-            accessibilityLabel="Close profile"
-          >
-            <Icon name="close" size={22} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
-        </View>
+      <View style={styles.backdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close profile" />
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <View style={styles.grabber} />
+          <View style={styles.header}>
+            <TouchableOpacity
+              onPress={onClose}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.closeBtn}
+              accessibilityLabel="Close profile"
+            >
+              <Icon name="close" size={22} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
 
-        <ScrollView contentContainerStyle={styles.body}>
+          <ScrollView contentContainerStyle={styles.body}>
           {/* Avatar */}
           <View style={styles.avatarWrap}>
             {avatarUri ? (
@@ -289,7 +297,8 @@ export default function FriendCard({
               <Text style={styles.shareBtnText}>Share a project</Text>
             </TouchableOpacity>
           ) : null}
-        </ScrollView>
+          </ScrollView>
+        </View>
       </View>
     </Modal>
   );
@@ -297,12 +306,32 @@ export default function FriendCard({
 
 const makeStyles = (theme) =>
   StyleSheet.create({
+    backdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.55)',
+      justifyContent: 'flex-end',
+    },
+    sheet: {
+      maxHeight: '92%',
+      backgroundColor: theme.colors.background,
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      overflow: 'hidden',
+    },
+    grabber: {
+      alignSelf: 'center',
+      width: 40,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: theme.colors.border,
+      marginTop: 8,
+      marginBottom: 2,
+    },
     header: {
       flexDirection: 'row',
       justifyContent: 'flex-end',
       paddingHorizontal: 12,
       paddingBottom: 6,
-      backgroundColor: theme.colors.background,
     },
     closeBtn: {
       width: 36,
