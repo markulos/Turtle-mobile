@@ -1647,14 +1647,20 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
   // === INSTAGRAM-STYLE EDGE SWIPE PHYSICS ===
   const albumSlideAnim = useRef(new Animated.Value(0)).current;
+  // The PanResponder below is created ONCE (useRef), so its onMoveShouldSet
+  // closure would capture `selectedAlbum` from the first render ('All') forever
+  // — making the `!== 'All'` guard always false, so the album back-swipe never
+  // fired. Mirror the live value into a ref the closure reads instead.
+  const selectedAlbumRef = useRef(selectedAlbum);
+  selectedAlbumRef.current = selectedAlbum;
 
   const edgeSwipeResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, gestureState) => {
         // Only respond to horizontal right-swipes from strict left edge when inside an album
-        return selectedAlbum !== 'All' && 
-               gestureState.moveX < 40 && 
-               Math.abs(gestureState.dx) > Math.abs(gestureState.dy) && 
+        return selectedAlbumRef.current !== 'All' &&
+               gestureState.moveX < 40 &&
+               Math.abs(gestureState.dx) > Math.abs(gestureState.dy) &&
                gestureState.dx > 10;
       },
       onPanResponderMove: (_, gestureState) => {
