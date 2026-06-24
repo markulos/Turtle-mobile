@@ -51,6 +51,7 @@ import { useTerminalSession } from './hooks/useTerminalSession';
 import ClaudeConsole from './components/ClaudeConsole';
 import TerminalConsole from './components/TerminalConsole';
 import FriendCard from './components/FriendCard';
+import EdgeSwipePage from './components/EdgeSwipePage';
 // SettingsScreen used to be its own tab. We surface it from inside
 // the Turtle page now via the top-right gear icon — the tab bar
 // shed a slot, and Settings reads more like a "preferences sheet"
@@ -1669,24 +1670,20 @@ export default function TurtleScreen() {
         </TouchableOpacity>
       </Reanimated.View>
 
-      {/* Friends sheet — org members + a search box to look someone up. */}
-      <Modal
-        visible={showFriends}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setShowFriends(false)}
-      >
-        <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
-          <View style={[styles.settingsSheetHeader, { paddingTop: Platform.OS === 'android' ? insets.top + 6 : 12, justifyContent: 'space-between', alignItems: 'center' }]}>
-            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.textPrimary, paddingLeft: 4 }}>Friends</Text>
+      {/* Friends — a pushed PAGE (slides in from the right; swipe the left edge
+          to go back to the Turtle tab), org members + a search box + invites. */}
+      <EdgeSwipePage visible={showFriends} onClose={() => setShowFriends(false)}>
+        <View style={{ flex: 1 }}>
+          <View style={[styles.settingsSheetHeader, { paddingTop: insets.top + 6, alignItems: 'center' }]}>
             <TouchableOpacity
               onPress={() => setShowFriends(false)}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               style={styles.settingsCloseButton}
-              accessibilityLabel="Close friends"
+              accessibilityLabel="Back"
             >
-              <Icon name="close" size={22} color={theme.colors.textPrimary} />
+              <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
             </TouchableOpacity>
+            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.textPrimary, paddingLeft: 4 }}>Friends</Text>
           </View>
 
           <View style={{ paddingHorizontal: 16, paddingBottom: 10, gap: 10 }}>
@@ -1965,7 +1962,7 @@ export default function TurtleScreen() {
             )}
           </ScrollView>
         </View>
-      </Modal>
+      </EdgeSwipePage>
 
       {/* Member profile card — opens when you tap a friend in the list and
           stacks over the Friends sheet. Leads with "who they are" (avatar,

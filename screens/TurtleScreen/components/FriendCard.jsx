@@ -4,15 +4,14 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Pressable,
   ScrollView,
-  Modal,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { formatDueDate } from '../../TasksScreen/utils/taskHelpers';
+import EdgeSwipePage from './EdgeSwipePage';
 
 // "3:45 PM" from "HH:MM" (24h); '' when unset.
 const fmtTime12 = (t) => {
@@ -100,31 +99,21 @@ export default function FriendCard({
   ];
 
   return (
-    // Transparent / over-full-screen so it reliably presents OVER the Friends
-    // pageSheet modal. Stacking a second native pageSheet on top of another
-    // doesn't show on iOS — a transparent modal drawn as our own bottom sheet
-    // does. Tap the dimmed area or the X to dismiss.
-    <Modal
-      visible={!!friend}
-      transparent
-      animationType="slide"
-      statusBarTranslucent
-      onRequestClose={onClose}
-    >
-      <View style={styles.backdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close profile" />
-        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-          <View style={styles.grabber} />
-          <View style={styles.header}>
-            <TouchableOpacity
-              onPress={onClose}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              style={styles.closeBtn}
-              accessibilityLabel="Close profile"
-            >
-              <Icon name="close" size={22} color={theme.colors.textPrimary} />
-            </TouchableOpacity>
-          </View>
+    // A pushed PAGE (slides in from the right, left-edge swipe goes back) rather
+    // than a sheet — see EdgeSwipePage. Reliably stacks over the Friends page.
+    <EdgeSwipePage visible={!!friend} onClose={onClose}>
+      <View style={{ flex: 1, paddingTop: insets.top + 6 }}>
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={onClose}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.closeBtn}
+            accessibilityLabel="Back"
+          >
+            <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+          <View style={{ flex: 1 }} />
+        </View>
 
           <ScrollView contentContainerStyle={styles.body}>
           {/* Avatar */}
@@ -297,40 +286,18 @@ export default function FriendCard({
               <Text style={styles.shareBtnText}>Share a project</Text>
             </TouchableOpacity>
           ) : null}
-          </ScrollView>
-        </View>
+        </ScrollView>
       </View>
-    </Modal>
+    </EdgeSwipePage>
   );
 }
 
 const makeStyles = (theme) =>
   StyleSheet.create({
-    backdrop: {
-      flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.55)',
-      justifyContent: 'flex-end',
-    },
-    sheet: {
-      maxHeight: '92%',
-      backgroundColor: theme.colors.background,
-      borderTopLeftRadius: 20,
-      borderTopRightRadius: 20,
-      overflow: 'hidden',
-    },
-    grabber: {
-      alignSelf: 'center',
-      width: 40,
-      height: 5,
-      borderRadius: 3,
-      backgroundColor: theme.colors.border,
-      marginTop: 8,
-      marginBottom: 2,
-    },
     header: {
       flexDirection: 'row',
-      justifyContent: 'flex-end',
-      paddingHorizontal: 12,
+      alignItems: 'center',
+      paddingHorizontal: 8,
       paddingBottom: 6,
     },
     closeBtn: {
