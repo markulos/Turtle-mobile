@@ -542,10 +542,74 @@ export default function TurtleScreen() {
       setFriendsLoading(false);
     }
   }, [api]);
+  // Owner-gated: pull dev accounts + the fixed code from the invites endpoint
+  // (requireOwner). Success → this user is the owner, show the block; 403 →
+  // hide it. Never throws (swallowed) so a non-owner's Friends sheet is clean.
+  const loadDevAccounts = useCallback(async () => {
+    try {
+      const r = await api.get('/auth/invites');
+      setIsOwner(true);
+      setDevAccounts(Array.isArray(r?.devAccounts) ? r.devAccounts : []);
+      if (r?.devCode) setDevCode(String(r.devCode));
+    } catch {
+      setIsOwner(false);
+      setDevAccounts([]);
+    }
+  }, [api]);
   const openFriends = useCallback(async () => {
     setShowFriends(true);
-    await loadFriends();
-  }, [loadFriends]);
+    setDevNote(null);
+    await Promise.all([loadFriends(), loadDevAccounts()]);
+  }, [loadFriends, loadDevAccounts]);
+
+  const addDevAccount = useCallback(async (rawPhone) => {
+    const phone = normalizePhone(rawPhone);
+    if (!phone || phone.replace(/\D/g, '').length < 5) {
+      setDevNote({ type: 'err', text: 'Enter a valid phone number.' });
+      return;
+    }
+    setDevBusy(true);
+    setDevNote(null);
+    try {
+      const r = await api.post('/auth/dev-accounts', { phone });
+      setDevPhone('+1 ');
+      setDevNote({ type: 'ok', text: `${phone} can sign in with code ${r?.code || devCode} — no SMS.` });
+      await loadDevAccounts();
+    } catch (e) {
+      const m = e?.message || '';
+      const forbidden = /\b403\b/.test(m) || /owner only/i.test(m);
+      setDevNote({
+        type: 'err',
+        text: forbidden
+          ? 'Only the pond owner can add developer accounts.'
+          : (m.replace(/^API Error \d+:\s*/, '').slice(0, 140) || 'Could not add that developer account.'),
+      });
+    } finally {
+      setDevBusy(false);
+    }
+  }, [api, normalizePhone, loadDevAccounts, devCode]);
+
+  const removeDevAccount = useCallback((phone) => {
+    Alert.alert(
+      'Remove developer account',
+      `${phone} will no longer be able to sign in with the developer code.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.delete('/auth/dev-accounts/' + encodeURIComponent(phone));
+              await loadDevAccounts();
+            } catch (e) {
+              Alert.alert('Remove', e?.message || 'Could not remove that developer account.');
+            }
+          },
+        },
+      ],
+    );
+  }, [api, loadDevAccounts]);
 
   // Mint a Discord-style invite link (7-day default, unlimited uses) and hand
   // it to the OS share sheet. The deep link carries the SERVER ADDRESS too, so
@@ -593,6 +657,19 @@ export default function TurtleScreen() {
   // owner can send the link by hand when the auto-SMS doesn't land. Null hides it.
   const [inviteResult, setInviteResult] = useState(null);
   const [inviteCopied, setInviteCopied] = useState(false);
+
+  // ── Developer accounts (owner-only) ──────────────────────────────
+  // Owner-added phones that sign in with the fixed devCode and NO SMS —
+  // for testing on numbers that can't receive OTP. Mirrors the web
+  // OrgPanel block. Gated by simply trying GET /auth/invites: it's
+  // requireOwner server-side, so a 200 means the current user is the
+  // owner (and carries devAccounts + devCode); a 403 hides the block.
+  const [isOwner, setIsOwner] = useState(false);
+  const [devAccounts, setDevAccounts] = useState([]);
+  const [devCode, setDevCode] = useState('11111');
+  const [devPhone, setDevPhone] = useState('+1 ');
+  const [devBusy, setDevBusy] = useState(false);
+  const [devNote, setDevNote] = useState(null); // { type: 'ok'|'err', text }
 
   // Strip a contact/manual number down to the digits (and a single
   // leading +) the server stores. Keeps matching with invited_phones
@@ -1783,6 +1860,86 @@ export default function TurtleScreen() {
                   </TouchableOpacity>
                 ))}
               </>
+            )}
+
+            {/* Developer accounts — owner only. Phones that sign in with the
+                fixed code + no SMS, for testing numbers that can't get OTP. */}
+            {isOwner && (
+              <View style={{ marginTop: 18 }}>
+                <Text style={styles.friendSectionLabel}>Developer accounts</Text>
+                <Text style={[styles.inviteNoteText, { color: theme.colors.textTertiary, marginLeft: 2, marginBottom: 10 }]}>
+                  Test logins that sign in with code {devCode} and no SMS.
+                </Text>
+
+                <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                  <View style={[styles.friendSearchBox, { flex: 1, height: 44 }]}>
+                    <Icon name="account-cog-outline" size={18} color={theme.colors.textTertiary} />
+                    <TextInput
+                      style={styles.friendSearchInput}
+                      placeholder="Phone, e.g. +1 415 555 0100"
+                      placeholderTextColor={theme.colors.textTertiary}
+                      value={devPhone}
+                      onChangeText={setDevPhone}
+                      keyboardType="phone-pad"
+                      autoCorrect={false}
+                      onSubmitEditing={() => addDevAccount(devPhone)}
+                    />
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.inviteSendBtn, devBusy && { opacity: 0.6 }]}
+                    disabled={devBusy}
+                    onPress={() => addDevAccount(devPhone)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.inviteSendText}>{devBusy ? '…' : 'Add'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {devNote && (
+                  <View
+                    style={[
+                      styles.inviteNote,
+                      devNote.type === 'ok'
+                        ? { backgroundColor: 'rgba(52,199,89,0.12)' }
+                        : { backgroundColor: 'rgba(255,69,58,0.12)' },
+                    ]}
+                  >
+                    <Icon
+                      name={devNote.type === 'ok' ? 'check-circle' : 'alert-circle'}
+                      size={15}
+                      color={devNote.type === 'ok' ? '#34c759' : '#ff453a'}
+                    />
+                    <Text style={[styles.inviteNoteText, { color: theme.colors.textSecondary }]}>{devNote.text}</Text>
+                  </View>
+                )}
+
+                {devAccounts.length === 0 ? (
+                  <Text style={[styles.friendEmpty, { textAlign: 'left', paddingVertical: 12 }]}>
+                    No developer accounts yet.
+                  </Text>
+                ) : (
+                  devAccounts.map((d) => (
+                    <View key={`dev-${d.phone}`} style={styles.friendRow}>
+                      <View style={styles.friendAvatar}>
+                        <Icon name="account-cog" size={18} color={theme.colors.accentInfo} />
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={styles.friendName} numberOfLines={1}>{d.label || d.phone}</Text>
+                        <Text style={styles.friendSub} numberOfLines={1}>
+                          Developer · code {devCode}{d.label ? ` · ${d.phone}` : ''}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => removeDevAccount(d.phone)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        accessibilityLabel={`Remove developer account ${d.phone}`}
+                      >
+                        <Icon name="trash-can-outline" size={18} color={theme.colors.accentError} />
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
+              </View>
             )}
           </ScrollView>
         </View>
