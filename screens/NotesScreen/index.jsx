@@ -62,6 +62,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useServer } from '../../context/ServerContext';
 import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
+import { tapHaptic, impactHaptic } from '../../utils/haptics';
 
 const FILTER_ALL = 'all';
 const FILTER_NOTE = 'note';
@@ -71,10 +72,10 @@ const FILTER_ORDER = [FILTER_ALL, FILTER_NOTE, FILTER_TODO];
 // Sentinel topic for notes that carry no tags (shown as its own "Untagged" chip).
 const UNTAGGED = '__untagged__';
 
-// Composer modes. 'feedback' persists as a to-do but auto-stamps the Turtle 3D
-// tag + a platform tag so the cue rides along when the to-do is handed to the
-// Claude session (formatNoteForClaude already emits the Tags line).
-const FEEDBACK_TAG = 'TURTLE 3D';
+// Composer modes. 'feedback' persists as a to-do but auto-stamps an app tag
+// ("Turtle App" / "Turtle 3D") + a platform tag (Turtle App only) so the cue
+// rides along when the to-do is handed to the Claude session.
+const APP_TAGS = { 'turtle-app': 'Turtle App', 'turtle-3d': 'Turtle 3D' };
 const PLATFORM_TAGS = { web: 'Web app', mobile: 'Mobile app' };
 
 // Derive browsable "topics" from note tags, mirroring the web NotesScreen: a
@@ -503,6 +504,7 @@ export default function NotesScreen() {
       <TouchableOpacity
         accessibilityLabel="Add note"
         style={styles.fab}
+        onPressIn={() => tapHaptic()}
         onPress={() => { setEditingNote(null); setComposerOpen(true); }}
         activeOpacity={0.85}
       >
@@ -668,6 +670,7 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
       {/* Leading icon — checkbox (todo) or note glyph */}
       {isTodo ? (
         <TouchableOpacity
+          onPressIn={() => tapHaptic()}
           onPress={() => onToggleDone(note)}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           style={[styles.checkbox, isDone && styles.checkboxDone]}
@@ -716,6 +719,7 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
           Claude session to work through. */}
       {isTodo && onSendToClaude && (
         <TouchableOpacity
+          onPressIn={() => impactHaptic('medium')}
           onPress={() => onSendToClaude(note)}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           style={styles.sendBtn}
@@ -833,6 +837,7 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
   // Composer mode: 'note' | 'todo' | 'feedback'. To-do is the default for a new
   // capture; 'feedback' additionally reveals the platform selector below.
   const [mode, setMode] = useState('todo');
+  const [app, setApp] = useState('turtle-app');
   const [platform, setPlatform] = useState('web');
   // Tags are now a selected SET (chips) plus a draft for the tag being typed,
   // instead of one comma-separated string — so existing tags can be tapped to
@@ -880,6 +885,7 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
       setDescription(initialNote?.description || '');
       // Editing keeps the note's real kind; a fresh capture defaults to to-do.
       setMode(initialNote ? (initialNote.type === 'todo' ? 'todo' : 'note') : 'todo');
+      setApp('turtle-app');
       setPlatform('web');
       setTags(Array.isArray(initialNote?.tags) ? initialNote.tags.filter(Boolean) : []);
       setTagDraft('');
@@ -953,7 +959,7 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
     // Feedback persists as a to-do and gets the Turtle 3D + platform tags
     // (case-insensitive dedupe so we don't double-stamp).
     if (mode === 'feedback') {
-      for (const t of [FEEDBACK_TAG, PLATFORM_TAGS[platform]]) {
+      for (const t of [APP_TAGS[app], ...(app === 'turtle-app' ? [PLATFORM_TAGS[platform]] : [])]) {
         if (!finalTags.some((x) => x.toLowerCase() === t.toLowerCase())) finalTags.push(t);
       }
     }
@@ -1025,9 +1031,33 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
             })}
           </View>
 
-          {/* Feedback platform — which app the feedback is about. Stamped as a
-              tag so it cues the Claude session when the to-do is sent over. */}
+          {/* Feedback app — Turtle App vs Turtle 3D. Stamped as a tag so it cues
+              the Claude session when the to-do is sent over. */}
           {mode === 'feedback' && (
+            <View style={styles.typeToggle}>
+              {[
+                { key: 'turtle-app', label: 'Turtle App', icon: 'application' },
+                { key: 'turtle-3d', label: 'Turtle 3D', icon: 'cube-outline' },
+              ].map((opt) => {
+                const active = app === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    onPress={() => setApp(opt.key)}
+                    style={[styles.typeOpt, active && styles.typeOptActive]}
+                  >
+                    <Icon name={opt.icon} size={14} color={active ? (isDark ? '#0a0a0a' : '#fff') : theme.colors.textSecondary} />
+                    <Text style={[styles.typeOptText, active && styles.typeOptTextActive]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Platform sub-selector — only for the Turtle App (web vs mobile). */}
+          {mode === 'feedback' && app === 'turtle-app' && (
             <View style={styles.typeToggle}>
               {[
                 { key: 'web', label: PLATFORM_TAGS.web, icon: 'web' },
@@ -1142,6 +1172,7 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
               <Icon name="keyboard-close" size={18} color={theme.colors.textSecondary} />
             </TouchableOpacity>
             <TouchableOpacity
+              onPressIn={() => impactHaptic('medium')}
               onPress={() => { Keyboard.dismiss(); handleSubmit(); }}
               disabled={busy || !content.trim()}
               style={[
