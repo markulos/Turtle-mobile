@@ -20,7 +20,6 @@ import {
   Keyboard,
   InputAccessoryView,
   KeyboardAvoidingView,
-  Vibration,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -34,6 +33,7 @@ import * as Sharing from 'expo-sharing';
 import { sweepTransientCaches } from '../../../utils/cacheManager';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { tapHaptic as hapticTick, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 // Context hooks — these used to live mid-file (lines 41 + 137 historical),
 // which triggered an `import/first` warning on every Fast Refresh and
 // was the recurring console noise the user was seeing. Consolidated here.
@@ -177,18 +177,8 @@ const SLOT_CACHE = [];
 const slotAt = (i) => SLOT_CACHE[i] || (SLOT_CACHE[i] = { id: `vskel-${i}`, isSkeleton: true });
 
 const { width, height } = Dimensions.get('window');
-// Light haptic "tick" for the timeline scrubber. Prefers expo-haptics (the
-// nice iOS selection tap) when it's installed + built into the dev client,
-// else falls back to React Native's built-in Vibration so it works right away
-// with no native rebuild. Both are wrapped so a missing module never throws.
-let _Haptics = null;
-try { _Haptics = require('expo-haptics'); } catch (e) { _Haptics = null; }
-const hapticTick = () => {
-  try {
-    if (_Haptics && _Haptics.selectionAsync) { _Haptics.selectionAsync(); return; }
-  } catch (e) { /* native module not in this build — fall through */ }
-  try { Vibration.vibrate(8); } catch (e) { /* no vibrator — ignore */ }
-};
+// hapticTick is the shared selection-tick (imported above, aliased from
+// utils/haptics) so the gallery buzzes identically to the rest of the app.
 
 // Month/year from a 'YYYY-MM' bucket key → "June 2026".
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -3479,6 +3469,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           <TouchableOpacity
             style={[styles.uploadButton, { backgroundColor: selectedLocalAssets.size > 0 ? theme.colors.primary : theme.colors.surface }]}
             disabled={selectedLocalAssets.size === 0}
+            onPressIn={() => impactHaptic('medium')}
             onPress={queueSelectedForUpload}
           >
             <Icon name="cloud-upload" size={20} color={selectedLocalAssets.size > 0 ? theme.colors.background : theme.colors.textMuted} />
@@ -3692,7 +3683,8 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                 <Icon name="share-variant" size={28} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
               </TouchableOpacity>
 
-              <TouchableOpacity 
+              <TouchableOpacity
+                onPressIn={() => hapticTick()}
                 onPress={toggleFavourite}
                 hitSlop={HIT_SLOP_20}
                 activeOpacity={0.6}
@@ -3721,6 +3713,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                   <TouchableOpacity
                     style={styles.shareSheetOption}
                     activeOpacity={0.7}
+                    onPressIn={() => hapticTick()}
                     onPress={() => { const m = shareChooser; setShareChooser(null); doShare(m, 'regular'); }}
                   >
                     <Icon name="image-outline" size={22} color={theme.colors.accentInfo} />
@@ -3732,6 +3725,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                   <TouchableOpacity
                     style={styles.shareSheetOption}
                     activeOpacity={0.7}
+                    onPressIn={() => hapticTick()}
                     onPress={() => { const m = shareChooser; setShareChooser(null); doShare(m, 'full'); }}
                   >
                     <Icon name="image-size-select-actual" size={22} color={theme.colors.primary} />
@@ -4018,8 +4012,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                     >
                       <Text style={{ color: theme.colors.textPrimary }}>Cancel</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary }]}
+                      onPressIn={() => impactHaptic('medium')}
                       onPress={() => {
                         // Resolve the tag set (chips + whatever's still typed),
                         // then close the editor INSTANTLY. Persistence runs in
@@ -4564,8 +4559,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               >
                 <Text style={{ color: theme.colors.textPrimary }}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary, opacity: uploading ? 0.6 : 1 }]}
+                onPressIn={() => impactHaptic('medium')}
                 onPress={executeUpload}
                 disabled={uploading}
               >
@@ -4675,6 +4671,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                 <Text style={{ color: theme.colors.textPrimary, fontWeight: '600' }}>Keep</Text>
               </TouchableOpacity>
               <TouchableOpacity
+                onPressIn={() => notifyHaptic('warning')}
                 onPress={async () => {
                   const ids = pendingDelete?.ids || [];
                   setPendingDelete(null);
@@ -4837,7 +4834,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                   </View>
                   <View style={{ alignItems: 'center', width: '100%', marginTop: 8 }}>
                     <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-                      <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPress={handleUpload} disabled={uploading} activeOpacity={0.7}>
+                      <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPressIn={() => impactHaptic('medium')} onPress={handleUpload} disabled={uploading} activeOpacity={0.7}>
                         <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="image-plus" size={18} color={theme.colors.primary} /></View>
                         <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Upload</Text>
                       </TouchableOpacity>
@@ -4931,11 +4928,12 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                 const covers = albumCovers[item] || [];
                 const gridItems = [...covers, null, null, null, null].slice(0, 4);
                 return (
-                  <TouchableOpacity 
-                    style={styles.albumFolderCard} 
-                    activeOpacity={0.9} 
-                    onPress={() => { setSelectedAlbum(item); handleTabPress('uploads'); }} 
-                    onLongPress={() => showAlbumOptions(item)} 
+                  <TouchableOpacity
+                    style={styles.albumFolderCard}
+                    activeOpacity={0.9}
+                    onPressIn={() => hapticTick()}
+                    onPress={() => { setSelectedAlbum(item); handleTabPress('uploads'); }}
+                    onLongPress={() => showAlbumOptions(item)}
                     delayLongPress={500}
                   >
                     <View style={styles.albumGridContainer}>
@@ -5045,12 +5043,8 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           }
         ]}
       >
-        {/* Progress Bar */}
-        {uploading && (
-          <View style={{ position: 'absolute', top: insets.top, left: 0, right: 0, height: 1.5, backgroundColor: 'transparent', zIndex: 25 }}>
-            <View style={{ height: '100%', width: `${uploadPercentage}%`, backgroundColor: theme.mode === 'dark' ? '#FFFFFF' : '#000000' }} />
-          </View>
-        )}
+        {/* Upload progress bar relocated to the bottom (just above the navbar) —
+            see the root-level bar near the end of this render. */}
 
         {/* Top Row: Title & Actions (Compact) */}
         <View style={[styles.header, { height: 44, paddingHorizontal: 16 }]}>
@@ -5237,6 +5231,15 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           })}
         </View>
       </View>
+
+      {/* Upload progress — a thin determinate bar fixed just above the navbar
+          (relocated here from the top header). pointerEvents none so it never
+          blocks taps; bottom offset gives a slight margin above the nav bar. */}
+      {uploading && (
+        <View pointerEvents="none" style={{ position: 'absolute', bottom: insets.bottom + 10, left: 0, right: 0, height: 1.5, backgroundColor: 'transparent', zIndex: 30 }}>
+          <View style={{ height: '100%', width: `${uploadPercentage}%`, backgroundColor: theme.mode === 'dark' ? '#FFFFFF' : '#000000' }} />
+        </View>
+      )}
 
     </View>
   );
