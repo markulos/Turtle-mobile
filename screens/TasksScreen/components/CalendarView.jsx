@@ -47,6 +47,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters } from '../utils/taskHelpers';
 import { TaskQuickInspector } from './TaskQuickInspector';
 import { WheelTimePicker } from './WheelTimePicker';
+import { tapHaptic } from '../../../utils/haptics';
 
 // Spring used for every snap of the day-tasks bottom sheet (drag release,
 // tap-toggle, programmatic open). Tuned snappy-but-soft; expect on-device
@@ -827,6 +828,7 @@ const DayPane = React.memo(function DayPane({
               >
                 <TouchableOpacity
                   style={styles.checkbox}
+                  onPressIn={() => tapHaptic()}
                   onPress={(e) => { e.stopPropagation(); onToggleComplete?.(task.id); }}
                 >
                   <Icon
@@ -890,6 +892,7 @@ const DayPane = React.memo(function DayPane({
               >
                 <TouchableOpacity
                   style={styles.checkbox}
+                  onPressIn={() => tapHaptic()}
                   onPress={(e) => { e.stopPropagation(); onToggleComplete?.(task.id); }}
                 >
                   <Icon
@@ -967,11 +970,20 @@ const DayPane = React.memo(function DayPane({
               const task = seg.task;
               const projectColor = getProjectColor(task.project);
               const isLast = idx === segments.length - 1;
+              // Status pill mirrors the Upcoming timeline: done / overdue / upcoming.
+              const overdue = !task.completed && !!task.dueDate && isOverdue(task.dueDate);
+              const status = task.completed
+                ? { color: theme.colors.accentSuccess || '#2BA84A', icon: 'check', label: 'Done' }
+                : overdue
+                  ? { color: theme.colors.accentError || theme.colors.accentDanger || '#E5484D', icon: 'alert-circle-outline', label: 'Overdue' }
+                  : { color: theme.colors.accentWarning || '#E8911A', icon: 'clock-outline', label: 'Upcoming' };
               return (
                 <View key={task.id} style={styles.segRow}>
-                  {/* Left rail: a node per task + a dashed connector to the next. */}
+                  {/* Left rail: an activity-icon node per task + a connector line. */}
                   <View style={styles.segRail}>
-                    <View style={[styles.segNode, task.completed && styles.segNodeDone]} />
+                    <View style={[styles.segIconCircle, task.completed ? styles.segIconDone : { borderColor: projectColor }]}>
+                      <Icon name={task.completed ? 'check' : itemIconOf(task)} size={task.completed ? 17 : 15} color={task.completed ? '#fff' : projectColor} />
+                    </View>
                     {!isLast && <View style={styles.segRailLine} />}
                   </View>
                   <View style={styles.segBody}>
@@ -981,7 +993,10 @@ const DayPane = React.memo(function DayPane({
                         <Text style={styles.segTimeSep}> — </Text>
                         {fmtHM(seg.end, use24h)}
                       </Text>
-                      <Text style={styles.segDurText}>{fmtDur(seg.duration)}</Text>
+                      <View style={[styles.segStatusChip, { backgroundColor: status.color }]}>
+                        <Icon name={status.icon} size={11} color="#fff" />
+                        <Text style={styles.segStatusText}>{status.label}</Text>
+                      </View>
                     </View>
                     <TouchableOpacity
                       style={[
@@ -1834,6 +1849,7 @@ export const CalendarView = ({
           </View>
           {!isCurrentMonth && (
             <TouchableOpacity
+              onPressIn={() => tapHaptic()}
               onPress={goToToday}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               style={styles.todayInline}
@@ -1863,30 +1879,46 @@ export const CalendarView = ({
             const projectCount = getProjectCount(cell.tasks);
             const heat = getContributionColor(cell.tasks.length);
             return (
-              <TouchableOpacity
+              <Pressable
                 key={cell.key}
-                style={[
+                // Light tap haptic + faint press wash fire on touch-DOWN
+                // (onPressIn), so the cell feels responsive the instant the
+                // finger lands — before the selection state even commits.
+                // Pressable also drops TouchableOpacity's ~150ms opacity fade.
+                onPressIn={() => tapHaptic()}
+                onPress={() => handleDatePress(cell.date)}
+                style={({ pressed }) => [
                   styles.dayCell,
                   { height: cellH },
                   showCalendarDayTasks && styles.dayCellList,
-                  cell.isToday && styles.todayCell,
-                  cell.isSelected && styles.selectedCell,
+                  pressed && styles.dayCellPressed,
                 ]}
-                onPress={() => handleDatePress(cell.date)}
               >
-                <Text style={[
-                  styles.dayText,
-                  showCalendarDayTasks && styles.dayTextList,
-                  cell.isToday && styles.todayText,
-                  !showCalendarDayTasks && cell.tasks.length > 0 && { color: heat },
+                {/* Day number inside a circle — the new iOS Calendar
+                    treatment: a selected day gets a solid filled circle (neutral
+                    for a normal day, the green tint when it's today), instead of
+                    a rectangular border around the whole cell. */}
+                <View style={[
+                  styles.dayNumWrap,
+                  showCalendarDayTasks && styles.dayNumWrapList,
+                  cell.isSelected && (cell.isToday ? styles.dayNumWrapTodaySelected : styles.dayNumWrapSelected),
                 ]}>
-                  {cell.day}
-                </Text>
+                  <Text style={[
+                    styles.dayText,
+                    showCalendarDayTasks && styles.dayTextList,
+                    cell.isToday && !cell.isSelected && styles.todayText,
+                    cell.isSelected && (cell.isToday ? styles.todaySelectedText : styles.selectedText),
+                    !showCalendarDayTasks && !cell.isSelected && cell.tasks.length > 0 && { color: heat },
+                  ]}>
+                    {cell.day}
+                  </Text>
+                </View>
 
                 {showCalendarDayTasks ? (
-                  // iOS-Calendar-style tiny list: each task on a soft tinted
+                  // iOS-Calendar-style tiny list: each task on a solid color
                   // pill (the item's own color for events/birthdays, else its
-                  // priority color) so titles stay legible against the grid.
+                  // priority color) with white text so titles read easily
+                  // against the grid on the phone.
                   cell.tasks.length > 0 && (
                     <View style={styles.dayTaskList}>
                       {cell.tasks.slice(0, 3).map((t, idx) => {
@@ -1894,13 +1926,13 @@ export const CalendarView = ({
                         return (
                           <View
                             key={t.id || idx}
-                            style={[styles.dayTaskPill, { backgroundColor: hexToRgba(c, 0.18) }]}
+                            style={[styles.dayTaskPill, { backgroundColor: c }]}
                           >
                             <Text
                               numberOfLines={1}
                               style={[
                                 styles.dayTaskItem,
-                                { color: c },
+                                { color: '#fff' },
                                 t.completed && styles.dayTaskItemDone,
                               ]}
                             >
@@ -1929,7 +1961,7 @@ export const CalendarView = ({
                     </View>
                   )
                 )}
-              </TouchableOpacity>
+              </Pressable>
             );
           })}
         </View>
@@ -2561,15 +2593,38 @@ const createStyles = (theme) => StyleSheet.create({
     justifyContent: 'center',
     borderRadius: 8,
     position: 'relative',
-    borderWidth: 2,
-    borderColor: 'transparent',
   },
-  todayCell: {
-    backgroundColor: theme.colors.surfaceElevated,
-    borderColor: theme.colors.accentSuccess,
+  // Instant press feedback — a faint neutral wash painted on touch-down via
+  // Pressable's `pressed` state, so the tap registers immediately instead of
+  // waiting on TouchableOpacity's opacity fade.
+  dayCellPressed: {
+    backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
   },
-  selectedCell: {
-    borderColor: theme.colors.textPrimary,
+  // Selection / today live on a CIRCLE behind the DAY NUMBER — the new iOS
+  // Calendar treatment (tap a day → solid filled disc) rather than a hard
+  // rectangular border around the whole cell, which read as foreign to the
+  // platform style.
+  dayNumWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+  },
+  // List mode keeps a little air between the number disc and the task list.
+  dayNumWrapList: {
+    marginBottom: 2,
+  },
+  // Selected (not today) = a solid neutral disc; the number inverts to the
+  // background colour (selectedText), exactly like iOS Calendar's selected day.
+  dayNumWrapSelected: {
+    backgroundColor: theme.colors.textPrimary,
+  },
+  // Selected + today = the tint-filled disc (Apple fills today-selected in the
+  // accent colour; here the calendar's green).
+  dayNumWrapTodaySelected: {
+    backgroundColor: theme.colors.accentSuccess,
   },
   // Day numbers — hairthin weight matches the iOS Calendar /
   // reference-design aesthetic. RN's '100' renders inconsistently
@@ -2584,14 +2639,23 @@ const createStyles = (theme) => StyleSheet.create({
     fontVariant: ['tabular-nums'],
     letterSpacing: 0.3,
   },
-  // Today's number stays hairthin too — the visual distinction comes
-  // from `todayCell` (the border + surface fill behind it), not from
-  // a heavier glyph. Matches the reference where the selected "11"
-  // sits in a colored pill but the number itself is the same delicate
-  // weight as every other day.
+  // Today (not selected) — just the accent-coloured number, no disc, matching
+  // iOS Calendar where today's date is tinted until you tap it.
   todayText: {
     fontWeight: '300',
     color: theme.colors.accentSuccess,
+  },
+  // Selected day's number — inverted to the background colour so it reads on
+  // the solid neutral disc (iOS Calendar's selected-day treatment).
+  selectedText: {
+    color: theme.colors.background,
+    fontWeight: '600',
+  },
+  // Selected + today — dark ink on the bright green disc (legible on the
+  // accent in both light and dark mode).
+  todaySelectedText: {
+    color: '#0A0A0A',
+    fontWeight: '600',
   },
   // List mode: top-align the cell so the day number sits at the top with the
   // task titles stacked beneath it (vs centered for the dots mode).
@@ -3082,9 +3146,9 @@ const createStyles = (theme) => StyleSheet.create({
     flexDirection: 'row',
   },
   segRail: {
-    width: 18,
+    width: 34,
     alignItems: 'center',
-    paddingTop: 6,
+    paddingTop: 2,
   },
   segNode: {
     width: 10,
@@ -3098,15 +3162,42 @@ const createStyles = (theme) => StyleSheet.create({
     borderColor: theme.colors.accentSuccess,
     backgroundColor: theme.colors.accentSuccess,
   },
-  // Dashed connector down to the next node; flex:1 stretches it across the
-  // card + gap height.
+  // Solid connector down to the next node; flex:1 stretches it across the
+  // card + gap height (matches the Upcoming timeline's rail).
   segRailLine: {
     flex: 1,
-    width: 0,
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderLeftColor: theme.colors.border,
-    borderStyle: 'dashed',
+    width: 2,
+    backgroundColor: theme.colors.border,
     marginTop: 4,
+  },
+  // Activity-icon node on the rail (replaces the old dot) + its completed state.
+  segIconCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 2,
+    backgroundColor: theme.colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segIconDone: {
+    borderColor: theme.colors.accentSuccess,
+    backgroundColor: theme.colors.accentSuccess,
+  },
+  // Done / overdue / upcoming pill on the right of the time row.
+  segStatusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    marginLeft: 8,
+  },
+  segStatusText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#fff',
   },
   segBody: {
     flex: 1,
