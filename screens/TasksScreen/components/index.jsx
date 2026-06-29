@@ -12,3 +12,4 @@ export { DatePickerModal } from './DatePickerModal';
 export { WheelTimePicker } from './WheelTimePicker';
 export { AddItemFab } from './AddItemFab';
 export { TaskQuickInspector } from './TaskQuickInspector';
+export { TimelineTaskRow } from './TimelineTaskRow';

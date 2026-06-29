@@ -32,6 +32,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTaskData } from './hooks/useTaskData';
 import { useCollapsibleTasks } from './hooks/useCollapsibleTasks';
 import { advanceDueDate, itemTypeOf, taskPassesFilters } from './utils/taskHelpers';
+import { tapHaptic, impactHaptic } from '../../utils/haptics';
 
 // An event is "over" once its end is in the past — start time + duration (a
 // default hour when unset), or the end of its day for an all-day event. Used to
@@ -70,6 +71,7 @@ import {
   TaskForm,
   TaskDetail,
   TaskItem,
+  TimelineTaskRow,
   SectionHeader,
   CalendarView,
 } from './components';
@@ -835,6 +837,7 @@ export default function TasksScreen() {
             />
             <TouchableOpacity
               style={styles.viewBtn}
+              onPressIn={() => tapHaptic()}
               onPress={() => goToView('calendar')}
               activeOpacity={0.8}
               accessibilityRole="button"
@@ -851,6 +854,7 @@ export default function TasksScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.viewBtn}
+              onPressIn={() => tapHaptic()}
               onPress={() => goToView('list')}
               activeOpacity={0.8}
               accessibilityRole="button"
@@ -1029,6 +1033,45 @@ export default function TasksScreen() {
         onDelete={() => { handleDelete(selectedTask.id); setShowDetail(false); }}
         onTagPress={() => {}}
         onToggleSubtask={handleToggleSubtask}
+        onContinue={() => {
+          // "Continue today" — re-add the open task to today as a
+          // progress-carrying copy. Resolve the live task from `tasks`
+          // (the detail captures a snapshot at open). Subtasks are cloned
+          // with fresh ids but keep their completed / completedAt /
+          // completedTime via the spread ("the status it already had");
+          // the copy itself starts open and non-recurring — a fresh
+          // continuation of the still-open original.
+          const src = selectedTask
+            ? (tasks.find((t) => t.id === selectedTask.id) || selectedTask)
+            : null;
+          if (!src) return;
+          const now = Date.now();
+          const d = new Date(now);
+          const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          const clonedSubtasks = (src.subtasks || []).map((st, i) => ({
+            ...st,
+            id: `${now}-${i}-${Math.random().toString(36).slice(2, 6)}`,
+            createdAt: now,
+          }));
+          handleSaveTask({
+            id: `${now}`,
+            title: src.title,
+            description: src.description || '',
+            priority: src.priority || 'medium',
+            completed: false,
+            completedAt: null,
+            completedTime: null,
+            project: src.project || '',
+            dueDate: today,
+            time: src.time || null,
+            duration: src.duration ?? null,
+            tags: src.tags || [],
+            subtasks: clonedSubtasks,
+            recurring: 'none',
+            createdAt: now,
+          });
+          setShowDetail(false);
+        }}
         onStartPomodoro={() => {
           // Route through the Turtle chat's /pomodoro pipeline (CommandBus
           // delivers it exactly as if typed); the task title rides along as the
@@ -1247,15 +1290,30 @@ export default function TasksScreen() {
               }
             }}
             scrollEventThrottle={16}
-            renderItem={({ item, section }) => {
+            renderItem={({ item, section, index }) => {
               if (!item) return null;
               // Render tasks for the synthetic "upcoming" agenda and for expanded
               // tag groups; everything else (collapsed groups, project rows) skips.
               if (section.type !== 'tag' && section.type !== 'upcoming') return null;
               if (!section.isExpanded) return null;
 
+              // The Upcoming agenda renders as a vertical timeline (icon rail +
+              // status chips + cards); the project/tag tree keeps the standard rows.
+              if (section.type === 'upcoming') {
+                return (
+                  <TimelineTaskRow
+                    item={item}
+                    onPress={openDetail}
+                    onLongPress={openEditForm}
+                    onToggleComplete={(it) => handleToggleComplete(it.id)}
+                    isFirst={index === 0}
+                    isLast={index === (section.data ? section.data.length - 1 : 0)}
+                  />
+                );
+              }
+
               return (
-                <TaskItem 
+                <TaskItem
                   item={item} 
                   onPress={() => openDetail(item)}
                   onToggleComplete={handleToggleComplete}
@@ -1420,6 +1478,7 @@ export default function TasksScreen() {
                 </Text>
                 {!searchQuery && (
                   <TouchableOpacity
+                    onPressIn={() => impactHaptic('medium')}
                     onPress={() => {
                       setEditingTask(null);
                       setShowTaskForm(true);
