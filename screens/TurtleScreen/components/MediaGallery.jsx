@@ -1887,59 +1887,58 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   }, [ensureSparseRegion]);
 
   // ── Grid video preview (Instagram-style) ────────────────────────────
-  // Only the single centermost video auto-plays, muted + looping, and ONLY
-  // once scrolling has settled — one live decoder keeps the phone cool. The
-  // active id is read in renderItem via a ref (kept stable per the perf
-  // contract) and re-renders the two affected cells via gridSelectionExtra.
+  // A single muted, looping preview plays at a time: the centermost video in
+  // the visible region. It's driven LIVE by viewability so it keeps playing
+  // untouched while it stays on screen — only when it scrolls OUT of the
+  // visible region (or none was playing yet) do we hand the one live decoder
+  // to the next centermost video. We deliberately do NOT pause/reset on scroll:
+  // remounting the preview reloads it from frame 0, which was the "video
+  // restarts on every scroll" bug. The active id is read in renderItem via a
+  // ref and re-renders only the two affected cells via gridSelectionExtra.
   const [activeVideoId, setActiveVideoId] = useState(null);
   const activeVideoIdRef = useRef(null);
   activeVideoIdRef.current = activeVideoId;
-  // The centermost viewable video, updated continuously by viewability; only
-  // COMMITTED to activeVideoId on settle (so nothing plays mid-fling).
+  // The centermost viewable video on the last viewability pass — a backstop the
+  // settle handler can seed from if nothing is playing yet.
   const viewableVideoRef = useRef(null);
-  // One-shot: play the centermost video the moment the grid first lays out, so
-  // it feels alive on landing without waiting for a scroll. Any scroll clears
-  // it (pauseGridVideo) and settle re-commits, so this only seeds the start.
-  const didInitAutoplayRef = useRef(false);
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 65 }).current;
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
-    if (!viewableItems || viewableItems.length === 0) { viewableVideoRef.current = null; return; }
+    const items = viewableItems || [];
     // Median index of the viewable window ≈ screen centre (works regardless of
     // the scaleY(-1) flip — it's about WHICH items are on screen, not pixels).
-    const midIdx = viewableItems[Math.floor(viewableItems.length / 2)]?.index ?? null;
-    let best = null, bestDist = Infinity;
-    for (const v of viewableItems) {
+    const midIdx = items.length ? (items[Math.floor(items.length / 2)]?.index ?? null) : null;
+    const active = activeVideoIdRef.current;
+    let best = null, bestDist = Infinity, activeStillVisible = false;
+    for (const v of items) {
       const it = v.item;
       if (!it || it.isSkeleton || it.type !== 'video') continue;
+      if (it.id === active) activeStillVisible = true;
       const d = midIdx == null ? 0 : Math.abs((v.index ?? 0) - midIdx);
       if (d < bestDist) { bestDist = d; best = it.id; }
     }
     viewableVideoRef.current = best;
-    if (GRID_VIDEO_PREVIEW && !didInitAutoplayRef.current && best) {
-      didInitAutoplayRef.current = true;
-      setActiveVideoId(best);
-    }
+    if (!GRID_VIDEO_PREVIEW) return;
+    // Keep the current preview playing as long as it's STILL on screen — a
+    // scroll that leaves it visible must not remount it (remount = reload from
+    // 0). Only once the active video has scrolled out of the visible region (or
+    // none is active) do we commit the centermost visible video as the new one.
+    // Guarded so an identical commit never triggers a re-render.
+    if (active && activeStillVisible) return;
+    if (active !== best) setActiveVideoId(best);
   }).current;
-
-  // Stop any playing preview the instant scrolling starts; the centermost one
-  // re-commits on settle. Gated so it fires the state-set at most once per
-  // scroll gesture (no per-frame thrash).
-  const pauseGridVideo = useCallback(() => {
-    if (GRID_VIDEO_PREVIEW && activeVideoIdRef.current !== null) setActiveVideoId(null);
-  }, []);
 
   // Leaving the uploads grid (album swipe / tab change) must release the
   // decoder so it never plays off-screen.
   useEffect(() => {
     if (activeTab !== 'uploads' && activeVideoIdRef.current !== null) setActiveVideoId(null);
-    // Re-arm the play-on-landing one-shot so returning to uploads seeds again.
-    didInitAutoplayRef.current = false;
   }, [activeTab]);
 
   const handleGridScroll = useCallback((e) => {
     const ne = e && e.nativeEvent;
     if (!ne) return;
-    pauseGridVideo();
+    // No pause-on-scroll: viewability keeps the centermost video playing while
+    // it stays on screen and only hands off when it scrolls out (see
+    // onViewableItemsChanged), so scrolling past a visible video never reloads it.
     scrubLastY.current = (ne.contentOffset && ne.contentOffset.y) || 0;
     if (ne.contentSize && ne.contentSize.height) gridContentH.current = ne.contentSize.height;
     if (ne.layoutMeasurement && ne.layoutMeasurement.height) gridLayoutH.current = ne.layoutMeasurement.height;
@@ -1984,14 +1983,18 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       sparseRaf.current = null;
       ensureVisibleRegionNow();
     });
-  }, [ensureVisibleRegionNow, scrollYSv, maxScrollSv, pauseGridVideo]);
+  }, [ensureVisibleRegionNow, scrollYSv, maxScrollSv]);
 
   // Settle triggers: the moment a drag releases or a fling's momentum dies,
   // resolve exactly what the user is looking at — no touch required.
   const handleGridScrollSettled = useCallback(() => {
     ensureVisibleRegionNow();
-    // Play the centermost video now that the viewport is at rest.
-    if (GRID_VIDEO_PREVIEW) setActiveVideoId(viewableVideoRef.current);
+    // Hand-off happens live in onViewableItemsChanged; this is only a backstop —
+    // if nothing is previewing but a video is centred at rest, seed it. Guarded
+    // so it never restarts a preview that's already playing.
+    if (GRID_VIDEO_PREVIEW && activeVideoIdRef.current == null && viewableVideoRef.current) {
+      setActiveVideoId(viewableVideoRef.current);
+    }
   }, [ensureVisibleRegionNow]);
 
   // Scrubber drag → jump the grid to a data fraction (0 = newest … 1 = oldest)
@@ -2887,6 +2890,15 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       completedItemsRef.current = totalItemsRef.current;
       currentItemPctRef.current = 0;
       recomputeOverall();
+
+      // Make this batch's tags available INSTANTLY everywhere globalAlbums is read
+      // (the upload-modal quick-select + the tag autocomplete) without a reload — the
+      // same optimistic merge commitTags does for edits. A tag whose uploads all
+      // failed is harmless: it just filters to nothing and clears on the next load.
+      if (selectedTags.length > 0 && failureCount < totalItemsRef.current) {
+        setGlobalAlbums(prev => Array.from(new Set([...prev, ...selectedTags])).sort());
+      }
+
       await new Promise((r) => setTimeout(r, 600));
 
       setPendingAssets([]);
@@ -2913,7 +2925,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       setUploading(false);
       resetUploadProgress();
     }
-  }, [pendingAssets, selectedTags, token, getBaseUrl, fetchUploads, setUploadModalVisible, recomputeOverall, resetUploadProgress]);
+  }, [pendingAssets, selectedTags, token, getBaseUrl, fetchUploads, setUploadModalVisible, recomputeOverall, resetUploadProgress, setGlobalAlbums]);
 
   // Delete photo/video (only for uploads)
   const handleDelete = useCallback((id) => {
