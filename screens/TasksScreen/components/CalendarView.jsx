@@ -1577,53 +1577,61 @@ export const CalendarView = ({
   // actual deadlines. The toggle's "Open Tasks" mode is still
   // honoured for the day's task LIST below the calendar — see
   // `selectedDateTasks`.
-  const buildCalendarDataFor = useCallback((targetDate) => {
-    const year = targetDate.getFullYear();
-    const month = targetDate.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const startDayOfWeek = new Date(year, month, 1).getDay();
-    const todayStr = toDateString(new Date());
-    const selectedStr = toDateString(selectedDate);
-    const keyPrefix = `${year}-${month}`;
+  // Per-month calendar cells (day number + that day's matching tasks), built
+  // lazily and CACHED per month. Deliberately does NOT depend on selectedDate or
+  // "today": selection + today are highlight-only, computed at render time in
+  // renderMonth — so tapping a day no longer re-runs the per-day task filter for
+  // every visible month, it just re-paints the highlighted number. The cache
+  // resets whenever the tasks or active filters change (the useMemo deps).
+  const buildCalendarDataFor = useMemo(() => {
+    const cache = new Map();
     const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners };
+    return (targetDate) => {
+      const year = targetDate.getFullYear();
+      const month = targetDate.getMonth();
+      const keyPrefix = `${year}-${month}`;
+      const hit = cache.get(keyPrefix);
+      if (hit) return hit;
 
-    const days = new Array(CELLS_PER_MONTH);
-    let idx = 0;
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const startDayOfWeek = new Date(year, month, 1).getDay();
+      const days = new Array(CELLS_PER_MONTH);
+      let idx = 0;
 
-    // Leading empties — the cells before day 1 in the first row.
-    for (let i = 0; i < startDayOfWeek; i++) {
-      days[idx++] = { type: 'empty', key: `${keyPrefix}-lead-${i}` };
-    }
+      // Leading empties — the cells before day 1 in the first row.
+      for (let i = 0; i < startDayOfWeek; i++) {
+        days[idx++] = { type: 'empty', key: `${keyPrefix}-lead-${i}` };
+      }
 
-    // The days themselves. Note the hard-coded `true` for the
-    // dueDateOnly argument — dots on the calendar grid track real
-    // deadlines, never the full open-range fanout.
-    for (let day = 1; day <= daysInMonth; day++) {
-      const date = new Date(year, month, day);
-      const dateStr = toDateString(date);
-      const dayTasks = tasks.filter(t =>
-        taskPassesFilters(t, filters) && taskOccursOn(t, dateStr, true),
-      );
-      days[idx++] = {
-        type: 'day',
-        day,
-        date,
-        dateStr,
-        tasks: dayTasks,
-        isToday: dateStr === todayStr,
-        isSelected: dateStr === selectedStr,
-        key: `${keyPrefix}-day-${day}`,
-      };
-    }
+      // The days themselves. Note the hard-coded `true` for the
+      // dueDateOnly argument — dots on the calendar grid track real
+      // deadlines, never the full open-range fanout.
+      for (let day = 1; day <= daysInMonth; day++) {
+        const date = new Date(year, month, day);
+        const dateStr = toDateString(date);
+        const dayTasks = tasks.filter(t =>
+          taskPassesFilters(t, filters) && taskOccursOn(t, dateStr, true),
+        );
+        days[idx++] = {
+          type: 'day',
+          day,
+          date,
+          dateStr,
+          tasks: dayTasks,
+          key: `${keyPrefix}-day-${day}`,
+        };
+      }
 
-    // Trailing empties — pad to a full 6-row grid for consistent height.
-    while (idx < CELLS_PER_MONTH) {
-      days[idx] = { type: 'empty', key: `${keyPrefix}-trail-${idx}` };
-      idx++;
-    }
+      // Trailing empties — pad to a full 6-row grid for consistent height.
+      while (idx < CELLS_PER_MONTH) {
+        days[idx] = { type: 'empty', key: `${keyPrefix}-trail-${idx}` };
+        idx++;
+      }
 
-    return days;
-  }, [tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners, selectedDate]);
+      cache.set(keyPrefix, days);
+      return days;
+    };
+  }, [tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners]);
 
   // Tasks for the selected date, ordered earliest-time-first.
   // Reuses the same predicates the calendar cells use, so what lights
@@ -1822,6 +1830,10 @@ export const CalendarView = ({
   //     would just shift the work to extra cache invalidation.
   const renderMonth = useCallback(({ item: monthDate }) => {
     const data = buildCalendarDataFor(monthDate);
+    // Highlight strings recomputed per render (cheap) so today/selected stay fresh
+    // without baking a date into the cached cell data.
+    const todayStr = toDateString(new Date());
+    const selectedStr = toDateString(selectedDate);
     // Every page paints its OWN month/year title (the old, pre-gated
     // logic). Gating the title to a ±N window around `currentMonthIndex`
     // tied its visibility to scroll state — and `currentMonthIndex` only
@@ -1878,6 +1890,10 @@ export const CalendarView = ({
             }
             const projectCount = getProjectCount(cell.tasks);
             const heat = getContributionColor(cell.tasks.length);
+            // Highlight-only, computed here (cheap string compares) so selecting a
+            // day re-paints just the number — it doesn't rebuild the month data.
+            const isToday = cell.dateStr === todayStr;
+            const isSelected = cell.dateStr === selectedStr;
             return (
               <Pressable
                 key={cell.key}
@@ -1894,21 +1910,19 @@ export const CalendarView = ({
                   pressed && styles.dayCellPressed,
                 ]}
               >
-                {/* Day number inside a circle — the new iOS Calendar
-                    treatment: a selected day gets a solid filled circle (neutral
-                    for a normal day, the green tint when it's today), instead of
-                    a rectangular border around the whole cell. */}
+                {/* Day number in a fixed box. Selection is shown by highlighting
+                    the NUMBER itself (accent colour + bold) — no filled disc /
+                    backdrop behind it. */}
                 <View style={[
                   styles.dayNumWrap,
                   showCalendarDayTasks && styles.dayNumWrapList,
-                  cell.isSelected && (cell.isToday ? styles.dayNumWrapTodaySelected : styles.dayNumWrapSelected),
                 ]}>
                   <Text style={[
                     styles.dayText,
                     showCalendarDayTasks && styles.dayTextList,
-                    cell.isToday && !cell.isSelected && styles.todayText,
-                    cell.isSelected && (cell.isToday ? styles.todaySelectedText : styles.selectedText),
-                    !showCalendarDayTasks && !cell.isSelected && cell.tasks.length > 0 && { color: heat },
+                    isToday && !isSelected && styles.todayText,
+                    isSelected && (isToday ? styles.todaySelectedText : styles.selectedText),
+                    !showCalendarDayTasks && !isSelected && cell.tasks.length > 0 && { color: heat },
                   ]}>
                     {cell.day}
                   </Text>
@@ -1967,7 +1981,7 @@ export const CalendarView = ({
         </View>
       </View>
     );
-  }, [buildCalendarDataFor, handleDatePress, goToToday, theme, styles, monthH, cellH, showCalendarDayTasks]);
+  }, [buildCalendarDataFor, handleDatePress, goToToday, theme, styles, monthH, cellH, showCalendarDayTasks, selectedDate]);
 
   // Helper to get task title and subtitle for selected date
   const getTaskListTitle = () => {
@@ -2600,10 +2614,9 @@ const createStyles = (theme) => StyleSheet.create({
   dayCellPressed: {
     backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
   },
-  // Selection / today live on a CIRCLE behind the DAY NUMBER — the new iOS
-  // Calendar treatment (tap a day → solid filled disc) rather than a hard
-  // rectangular border around the whole cell, which read as foreign to the
-  // platform style.
+  // The day number sits in a fixed 30×30 box so every cell's number stays
+  // aligned regardless of selection. Selection is shown by highlighting the
+  // NUMBER itself (colour + weight), NOT a filled disc behind it.
   dayNumWrap: {
     width: 30,
     height: 30,
@@ -2612,19 +2625,9 @@ const createStyles = (theme) => StyleSheet.create({
     justifyContent: 'center',
     alignSelf: 'center',
   },
-  // List mode keeps a little air between the number disc and the task list.
+  // List mode keeps a little air between the number and the task list.
   dayNumWrapList: {
     marginBottom: 2,
-  },
-  // Selected (not today) = a solid neutral disc; the number inverts to the
-  // background colour (selectedText), exactly like iOS Calendar's selected day.
-  dayNumWrapSelected: {
-    backgroundColor: theme.colors.textPrimary,
-  },
-  // Selected + today = the tint-filled disc (Apple fills today-selected in the
-  // accent colour; here the calendar's green).
-  dayNumWrapTodaySelected: {
-    backgroundColor: theme.colors.accentSuccess,
   },
   // Day numbers — hairthin weight matches the iOS Calendar /
   // reference-design aesthetic. RN's '100' renders inconsistently
@@ -2645,17 +2648,17 @@ const createStyles = (theme) => StyleSheet.create({
     fontWeight: '300',
     color: theme.colors.accentSuccess,
   },
-  // Selected day's number — inverted to the background colour so it reads on
-  // the solid neutral disc (iOS Calendar's selected-day treatment).
+  // Selected day's number — highlighted in the accent colour + bold (no disc
+  // behind it), so the selection reads on the number itself.
   selectedText: {
-    color: theme.colors.background,
+    color: theme.colors.accentSuccess,
     fontWeight: '600',
   },
-  // Selected + today — dark ink on the bright green disc (legible on the
-  // accent in both light and dark mode).
+  // Selected + today — same accent, a touch heavier so today still stands out
+  // as the selected day.
   todaySelectedText: {
-    color: '#0A0A0A',
-    fontWeight: '600',
+    color: theme.colors.accentSuccess,
+    fontWeight: '700',
   },
   // List mode: top-align the cell so the day number sits at the top with the
   // task titles stacked beneath it (vs centered for the dots mode).
