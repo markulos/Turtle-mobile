@@ -28,6 +28,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View,
   Text,
+  Image,
   TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
@@ -657,6 +658,14 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
   const isTodo = note.type === 'todo';
   const isDone = !!note.done;
   const styles = noteRowStyles(theme, isDark);
+  const { getBaseUrl } = useServer();
+  // A shared-link note has a cached preview thumbnail (relative server path);
+  // resolve it to an absolute URI — getBaseUrl() ends in /api, strip that first.
+  const thumbUri = note.thumbUrl
+    ? (/^https?:\/\//i.test(note.thumbUrl)
+        ? note.thumbUrl
+        : `${getBaseUrl().replace('/api', '')}${note.thumbUrl}`)
+    : null;
   return (
     <TouchableOpacity
       activeOpacity={0.8}
@@ -697,6 +706,9 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
           <Text numberOfLines={2} style={styles.description}>
             {note.description}
           </Text>
+        ) : null}
+        {thumbUri ? (
+          <Image source={{ uri: thumbUri }} style={styles.linkThumb} resizeMode="cover" />
         ) : null}
         {Array.isArray(note.tags) && note.tags.length > 0 && (
           <View style={styles.tagRow}>
@@ -798,6 +810,14 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     color: theme.colors.textSecondary,
     marginTop: 4,
     lineHeight: 18,
+  },
+  // Cached link-preview thumbnail for a shared-link note.
+  linkThumb: {
+    marginTop: 6,
+    width: '100%',
+    height: 110,
+    borderRadius: 8,
+    backgroundColor: theme.colors.surfaceElevated,
   },
   tagRow: {
     flexDirection: 'row',
