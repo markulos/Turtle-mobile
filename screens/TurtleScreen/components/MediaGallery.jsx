@@ -1310,6 +1310,13 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const virtualEnabledRef = useRef(false);
   const sparseRaf = useRef(null);
   const [sparseVersion, setSparseVersion] = useState(0); // bumps when pages land
+  // Bumped whenever the sparse cache is reset (sort/album/search change) —
+  // in-flight page fetches compare against it and drop stale responses.
+  const sparseEpochRef = useRef(0);
+  // Same idea for the main gallery list: bumped by the sort/album cold-reload
+  // effects so an in-flight fetchUploads from the OLD context can't merge into
+  // (or clobber the offset of) the new list.
+  const galleryEpochRef = useRef(0);
   // Thumbnail image-prefetch: warm expo-image's memory/disk cache for the
   // pages around the viewport as they land (and as a fling decelerates onto
   // them), so each cell paints from cache the instant it mounts instead of
@@ -1381,9 +1388,13 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       sparseWantedRef.current.delete(best);
       sparseInflightRef.current.add(best);
       const startedAt = Date.now();
+      // Epoch guard: a sort/album/search change mid-flight resets the sparse
+      // cache — a stale response must NOT repopulate it (wrong photos under
+      // the new headers + duplicate FlashList keys).
+      const epoch = sparseEpochRef.current;
       api.get(`/media/gallery?limit=${SPARSE_PAGE}&offset=${best * SPARSE_PAGE}&order=desc&sortBy=${sortModeRef.current}`)
         .then((res) => {
-          if (res && res.success && Array.isArray(res.items)) {
+          if (epoch === sparseEpochRef.current && res && res.success && Array.isArray(res.items)) {
             sparsePagesRef.current.set(best, res.items);
             if (sparsePagesRef.current.size > SPARSE_MAX_PAGES) {
               const keys = Array.from(sparsePagesRef.current.keys())
@@ -1405,8 +1416,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         .catch(() => {
           // Transient failure: re-register interest so the self-pump (or the
           // next settle trigger) retries — a failed page can no longer strand
-          // skeletons forever.
-          sparseWantedRef.current.add(best);
+          // skeletons forever. (Unless the sort/album context changed — then
+          // this page number belongs to a dead result set.)
+          if (epoch === sparseEpochRef.current) sparseWantedRef.current.add(best);
         })
         .finally(() => {
           sparseInflightRef.current.delete(best);
@@ -1730,8 +1742,10 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     && (uploadTimeline.total >= 30 || uploadDisplayItems.length >= 30);
 
   // Album / search / sort-basis context change → the sparse cache describes
-  // a different result set (or a different ORDER BY); drop it.
+  // a different result set (or a different ORDER BY); drop it AND orphan any
+  // in-flight page fetches (epoch bump) so they can't repopulate it.
   useEffect(() => {
+    sparseEpochRef.current += 1;
     sparsePagesRef.current.clear();
     sparseInflightRef.current.clear();
     sparseThumbsPrefetchedRef.current.clear();
@@ -2047,6 +2061,10 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const pendingJumpClearRef = useRef(null);   // safety timer that voids a never-consumed jump
   const [jumpBusy, setJumpBusy] = useState(false);
   const handleLocateTag = useCallback(async () => {
+    // The tag×month index (and the scrubber math it feeds) is defined in
+    // ORIGINAL-date space — a jump under the "date added" basis would land in
+    // the wrong place. The button is hidden in that mode; this is the belt.
+    if (sortModeRef.current !== 'original') return;
     const q = uploadsSearchQuery.trim();
     if (!q || jumpBusy) return;
     setJumpBusy(true);
@@ -2094,12 +2112,14 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const albumEffectFirstRun = useRef(true);
   useEffect(() => {
     if (albumEffectFirstRun.current) { albumEffectFirstRun.current = false; return; }
-    // 1. Immediately trigger the premium loading skeleton
+    // 1. Orphan any in-flight fetches from the previous album context
+    galleryEpochRef.current += 1;
+    // 2. Immediately trigger the premium loading skeleton
     setLoading(true);
-    // 2. Clear the old grid
+    // 3. Clear the old grid
     setUploadItems([]);
 
-    // 3. Fetch the new album and drop the loading flag when done
+    // 4. Fetch the new album and drop the loading flag when done
     fetchUploads(true).finally(() => {
       setLoading(false);
     });
@@ -2109,10 +2129,11 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
   // Sort-basis change → the grid AND the timeline buckets describe a
   // different ordering; cold-reload both (same skeleton treatment as an
-  // album switch).
+  // album switch). Epoch bump orphans in-flight old-sort fetches.
   const sortModeFirstRun = useRef(true);
   useEffect(() => {
     if (sortModeFirstRun.current) { sortModeFirstRun.current = false; return; }
+    galleryEpochRef.current += 1;
     setLoading(true);
     setUploadItems([]);
     Promise.all([fetchUploads(true), fetchBuckets()]).finally(() => setLoading(false));
@@ -2129,13 +2150,18 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       if (!isRefresh) setIsPaginating(true);
       
       const currentOffset = isRefresh ? 0 : uploadOffset;
+      const epoch = galleryEpochRef.current;
       const tagParam = selectedAlbum !== 'All' ? `&tag=${encodeURIComponent(selectedAlbum)}` : '';
       // sortBy=original orders by the photo's TAKEN date (Google-Photos style),
       // so the month/year timeline spans the real capture history instead of
       // the upload date (which clusters at import time for a bulk-uploaded
       // library — the "everything shows 2026" symptom).
       const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}&order=desc&sortBy=${sortMode}${tagParam}`);
-      
+      // Sort/album context changed while this was in flight — its rows belong
+      // to a dead ordering; merging them would corrupt the new list and
+      // clobber uploadOffset. (finally still clears isPaginating.)
+      if (epoch !== galleryEpochRef.current) return;
+
       if (response.success) {
         // Safely capture the true total count from the server response
         setGlobalUploadsTotal(response.pagination?.total || response.total || response.items?.length || 0);
@@ -2221,7 +2247,12 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     try {
       const win = Math.max(LIMIT, Math.ceil(uploadCountRef.current / LIMIT) * LIMIT);
       const tagParam = selectedAlbum !== 'All' ? `&tag=${encodeURIComponent(selectedAlbum)}` : '';
-      const r = await api.get(`/media/gallery?limit=${win}&offset=0&order=desc&sortBy=${sortMode}${tagParam}`);
+      // Read the sort basis via the ref (a debounced timer can fire this with
+      // a stale closure right after a flip) and drop the response if the
+      // basis changed while the request was in flight.
+      const sortAtRequest = sortModeRef.current;
+      const r = await api.get(`/media/gallery?limit=${win}&offset=0&order=desc&sortBy=${sortAtRequest}${tagParam}`);
+      if (sortModeRef.current !== sortAtRequest) return;
       if (r?.success) {
         setGlobalUploadsTotal(r.pagination?.total || r.total || r.items?.length || 0);
         setUploadItems(r.items || []);
@@ -2231,7 +2262,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     } catch (e) {
       // Best-effort — the next event or a manual refresh catches up.
     }
-  }, [api, selectedAlbum, sortMode]);
+    // sortMode deliberately NOT a dep — read via sortModeRef so a pending
+    // debounce timer never runs a stale-sort closure.
+  }, [api, selectedAlbum]);
 
   // Initial load - Fetch EVERYTHING simultaneously to prepare the off-screen slider pages
   useEffect(() => {
@@ -5033,7 +5066,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             />
             {/* Jump — leave the filter and scroll the full timeline to where this
                 tag clusters in time (uploads tab only, when a tag is typed). */}
-            {activeTab === 'uploads' && uploadsSearchQuery.trim() !== '' && (
+            {activeTab === 'uploads' && sortMode === 'original' && uploadsSearchQuery.trim() !== '' && (
               <TouchableOpacity
                 onPress={handleLocateTag}
                 disabled={jumpBusy}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { io } from 'socket.io-client';
 import { serverOrigin } from '../../../context/ServerContext';
 import { getExpoPushTokenSafe } from '../../../services/vaultPush';
@@ -11,6 +12,17 @@ import { useCelebration } from '../../../context/CelebrationContext';
 // AsyncStorage under the same key (not currently wired through).
 const POMODORO_SESSION_KEY = 'pomodoroSessionId';
 const DEFAULT_POMODORO_SESSION_ID = 'turtle-default';
+
+// Persisted identity of the last ended (completed/stopped) card the user
+// dismissed. The server keeps replaying that ended state on every connect, so
+// without this the card would reappear after every app reload. Identity is the
+// server-clock start/end stamps (stable across reloads, unlike our skew-
+// corrected local copies), so a genuinely NEW completion never matches.
+const POMODORO_DISMISSED_KEY = 'pomodoroDismissedEndedId';
+const endedIdentity = (data) =>
+  data && (data.status === 'completed' || data.status === 'stopped')
+    ? `${data.mode}:${data.startedAt}:${data.endedAt}`
+    : null;
 
 /**
  * usePomodoroSocket — server-as-source-of-truth pomodoro timer.
@@ -27,7 +39,8 @@ const DEFAULT_POMODORO_SESSION_ID = 'turtle-default';
  *          | { status:'completed'|'stopped', mode, startedAt, endedAt, totalDuration },
  *     start: (mode) => void,
  *     stop: () => void,
- *     dismiss: () => void,    // local-only: hides the ended card
+ *     dismiss: () => void,    // hides the ended card + persists so the server's
+ *                             // replay of it stays dismissed across reloads
  *     durations: { focus, break },  // minutes
  *     updateDurations: (focusMinutes, breakMinutes) => void,
  *     sessionId: string,
@@ -41,6 +54,11 @@ export function usePomodoroSocket(serverIP) {
   const { celebrate } = useCelebration();
   const socketRef = useRef(null);
   const sessionIdRef = useRef(DEFAULT_POMODORO_SESSION_ID);
+  // Identity of the ended card the user has already dismissed (loaded from
+  // AsyncStorage on mount) + the identity of the ended state currently coming
+  // off the socket (so `dismiss` knows what to persist).
+  const dismissedEndedIdRef = useRef(null);
+  const lastEndedIdRef = useRef(null);
   // This device's Expo push token, prefetched so `start` can tag the timer
   // synchronously — the server pings only THIS device when the run ends.
   const pushTokenRef = useRef(null);
@@ -67,6 +85,14 @@ export function usePomodoroSocket(serverIP) {
     socket.on('disconnect', () => setIsSocketConnected(false));
 
     socket.on('pomodoro-state', (data) => {
+      const id = endedIdentity(data);
+      lastEndedIdRef.current = id;
+      // An ended card the user already dismissed on a prior run — the server
+      // is just replaying it. Stay hidden instead of popping back up.
+      if (id && id === dismissedEndedIdRef.current) {
+        setState(null);
+        return;
+      }
       setState(translateServerState(data));
     });
 
@@ -82,6 +108,21 @@ export function usePomodoroSocket(serverIP) {
       socketRef.current = null;
     };
   }, [serverIP]);
+
+  // Restore the "already dismissed" ended-card identity. If the socket's
+  // replay of that ended state raced ahead of this read, it's on screen now —
+  // clear it the moment we learn it was dismissed.
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(POMODORO_DISMISSED_KEY)
+      .then((v) => {
+        if (!alive || !v) return;
+        dismissedEndedIdRef.current = v;
+        if (lastEndedIdRef.current === v) setState(null);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Resolve this device's push token once (cached in vaultPush after the first
   // hit). Best-effort — null before the dev rebuild / without permission.
@@ -146,6 +187,13 @@ export function usePomodoroSocket(serverIP) {
 
   const dismiss = useCallback(() => {
     setState(null);
+    // Remember this exact ended card so the server's replay of it after a
+    // reload stays dismissed. Nothing to persist if it wasn't an ended card.
+    const id = lastEndedIdRef.current;
+    if (id) {
+      dismissedEndedIdRef.current = id;
+      AsyncStorage.setItem(POMODORO_DISMISSED_KEY, id).catch(() => {});
+    }
   }, []);
 
   const updateDurations = useCallback((focusMinutes, breakMinutes) => {

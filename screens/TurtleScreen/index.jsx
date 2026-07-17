@@ -2588,8 +2588,8 @@ export default function TurtleScreen() {
           >
             <Icon
               name="robot-outline"
-              size={26}
-              color={claudeUiMode === 'session' ? theme.colors.accentInfo : theme.colors.textMuted}
+              size={17}
+              color={claudeUiMode === 'session' ? (theme.mode === 'dark' ? '#FACC15' : '#CA8A04') : theme.colors.textMuted}
             />
           </TouchableOpacity>
         </View>
@@ -2632,7 +2632,7 @@ export default function TurtleScreen() {
               accessibilityRole="button"
               accessibilityLabel="Attach an image to send to Claude"
             >
-              <Icon name="image-outline" size={22} color={claudeImage ? '#4ADE80' : theme.colors.textPrimary} />
+              <Icon name="image-outline" size={14} color={claudeImage ? '#4ADE80' : theme.colors.textPrimary} />
             </TouchableOpacity>
           )}
           {/* Keyboard chooser — coding contexts only (Code = no autocorrect). */}
@@ -2645,7 +2645,7 @@ export default function TurtleScreen() {
             >
               <Icon
                 name={keyboardMode === 'code' ? 'code-tags' : 'keyboard-outline'}
-                size={20}
+                size={13}
                 color={keyboardMode === 'code' ? '#4ADE80' : theme.colors.textPrimary}
               />
             </TouchableOpacity>
@@ -2658,7 +2658,7 @@ export default function TurtleScreen() {
             accessibilityRole="button"
             accessibilityLabel="Open board conversations"
           >
-            <Icon name="at" size={22} color={theme.colors.textPrimary} />
+            <Icon name="at" size={14} color={theme.colors.textPrimary} />
           </TouchableOpacity>
           {/* # — slash-commands: prefill "/" so the autocomplete opens. */}
           <TouchableOpacity
@@ -2671,7 +2671,7 @@ export default function TurtleScreen() {
             accessibilityRole="button"
             accessibilityLabel="Show commands"
           >
-            <Icon name="pound" size={22} color={theme.colors.textPrimary} />
+            <Icon name="pound" size={14} color={theme.colors.textPrimary} />
           </TouchableOpacity>
           <View style={{ flex: 1 }} />
           <TouchableOpacity
@@ -2687,7 +2687,7 @@ export default function TurtleScreen() {
           >
             <Icon
               name="arrow-up"
-              size={26}
+              size={17}
               color={
                 (inputText.trim() || (claudeUiMode === 'session' && claudeImage)) && isConnected
                   // Armed = inverse ink on the filled circle.
@@ -3371,9 +3371,9 @@ const createStyles = (theme, insets) =>
     // The dashed "add a bot" circle — IS the Claude session toggle. Dashed
     // while idle, solid + tinted while a session is live.
     botSlot: {
-      width: 56,
-      height: 56,
-      borderRadius: 28,
+      width: 36,
+      height: 36,
+      borderRadius: 18,
       alignItems: 'center',
       justifyContent: 'center',
       borderWidth: 1.5,
@@ -3382,33 +3382,50 @@ const createStyles = (theme, insets) =>
     },
     botSlotActive: {
       borderStyle: 'solid',
-      borderColor: theme.colors.accentInfo,
-      backgroundColor: theme.mode === 'dark' ? 'rgba(96,165,250,0.12)' : 'rgba(59,130,246,0.08)',
+      // Active Claude session = yellow highlight. Vivid gold (yellow-400) pops
+      // on the dark/black surface; a muted deeper gold (yellow-600) stays
+      // readable on white without being harsh on the eyes.
+      borderColor: theme.mode === 'dark' ? '#FACC15' : '#CA8A04',
+      backgroundColor: theme.mode === 'dark' ? 'rgba(250,204,21,0.14)' : 'rgba(202,138,4,0.10)',
     },
     // Bottom action row: circular buttons left, round send right.
     composerActions: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 10,
+      gap: 7,
       paddingHorizontal: 12,
       paddingTop: 8,
       paddingBottom: 12,
     },
     actionCircle: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
+      width: 29,
+      height: 29,
+      borderRadius: 14.5,
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
+      // Opaque so the buttons pop off the translucent frosted card behind them.
+      backgroundColor: theme.colors.surfaceElevated,
+      // Soft drop shadow.
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: theme.mode === 'dark' ? 0.35 : 0.18,
+      shadowRadius: 6,
+      elevation: 4,
     },
     sendCircle: {
-      width: 52,
-      height: 52,
-      borderRadius: 26,
+      width: 34,
+      height: 34,
+      borderRadius: 17,
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)',
+      // Opaque so the button pops off the translucent frosted card behind it.
+      backgroundColor: theme.colors.surfaceElevated,
+      // Soft drop shadow.
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: theme.mode === 'dark' ? 0.35 : 0.18,
+      shadowRadius: 6,
+      elevation: 4,
     },
     sendCircleArmed: {
       backgroundColor: theme.mode === 'dark' ? '#FFFFFF' : '#111111',
@@ -3416,29 +3433,25 @@ const createStyles = (theme, insets) =>
     // The big bare input — large light type straight on the card (no pill),
     // like the reference's "Put me in a selfie with".
     input: {
-      fontSize: 24,
+      fontSize: 16,
       fontWeight: '600',
-      lineHeight: 30,
+      lineHeight: 20,
       color: theme.colors.textPrimary,
       paddingHorizontal: 18,
       paddingTop: 12,
       paddingBottom: 4,
-      maxHeight: 130,
+      maxHeight: 85,
       backgroundColor: 'transparent',
     },
+    // Slash-command list — NOT a separate inset card. Transparent so the
+    // composer's frosted glass shows straight through it, making the list read
+    // as part of the chatbox. A hairline frost border underneath divides it
+    // from the input row below.
     autocompleteContainer: {
-      marginHorizontal: 12,
-      marginBottom: 8,
-      backgroundColor: theme.colors.surfaceElevated,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
+      backgroundColor: 'transparent',
       maxHeight: 200,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: -2 },
-      shadowOpacity: 0.2,
-      shadowRadius: 4,
-      elevation: 5,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: frostBorderColor(theme),
     },
     autocompleteScroll: {
       maxHeight: 200,
@@ -3449,8 +3462,8 @@ const createStyles = (theme, insets) =>
       justifyContent: 'space-between',
       paddingHorizontal: 16,
       paddingVertical: 12,
-      borderBottomWidth: 0.5,
-      borderBottomColor: theme.colors.border,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: frostBorderColor(theme),
     },
     autocompleteCommand: {
       fontSize: 15,

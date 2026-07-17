@@ -472,8 +472,9 @@ const createStyles = (theme) => StyleSheet.create({
     // absolute layers inside) provide the glassy surface. overflow:hidden clips
     // those layers to the (now square) card edges.
     backgroundColor: 'transparent',
-    // Square — no rounded corners on the larger Claude message window.
-    borderRadius: 0,
+    // Rounded to match the chatbox composer card (inputArea borderRadius: 28)
+    // so the log window and the input read as the same family of glass cards.
+    borderRadius: 28,
     borderWidth: 1,
     borderColor: theme.colors.border,
     overflow: 'hidden',

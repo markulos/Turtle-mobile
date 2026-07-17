@@ -194,6 +194,10 @@ export function ShareUploadProvider({ children }) {
             board: bodyBoard(job.board),
             groupId: job.groupId,
             imageTotal: job.total,
+            // Stable per-image index → the server derives a deterministic
+            // media id from groupId+imageIndex, so a retry after a LOST
+            // response lands on the same row instead of duplicating it.
+            imageIndex: i,
             payload: {
               text: carryText ? (job.text || undefined) : undefined,
               url: carryText ? (job.url || undefined) : undefined,
@@ -202,7 +206,12 @@ export function ShareUploadProvider({ children }) {
             channel: channelForPlatform(),
           });
           dataBase64 = null; // release the base64 string ASAP for GC
-          if (!res?.success) throw new Error(res?.error || 'Server rejected the share.');
+          // Require the persisted-row ECHO, not just success — the server used
+          // to return success even when the media insert failed, and marking
+          // `sent` on that is silent photo loss with no retry.
+          if (!res?.success || !(Array.isArray(res.mediaIds) && res.mediaIds.length >= 1)) {
+            throw new Error(res?.error || 'Image did not persist on the server.');
+          }
 
           img.sent = true;
           if (carryText) job.textConfirmed = true;

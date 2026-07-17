@@ -323,17 +323,17 @@ export default function BoardTimeline({ visible, board, onClose }) {
         {/* Composer — board-scoped chat. Turtle AI answers with this board's
             items as its working context. */}
         <View style={{
-          flexDirection: 'row', alignItems: 'flex-end', gap: 8,
-          paddingHorizontal: 12, paddingTop: 8,
-          paddingBottom: Math.max(insets.bottom, 10),
+          flexDirection: 'row', alignItems: 'flex-end', gap: 6,
+          paddingHorizontal: 10, paddingTop: 6,
+          paddingBottom: Math.max(insets.bottom, 8),
           borderTopWidth: 1, borderTopColor: c.border,
           backgroundColor: c.surface,
         }}>
           <TextInput
             style={{
-              flex: 1, minHeight: 38, maxHeight: 110,
-              paddingHorizontal: 14, paddingVertical: 9,
-              borderRadius: 19, fontSize: 15,
+              flex: 1, minHeight: 32, maxHeight: 96,
+              paddingHorizontal: 12, paddingVertical: 6,
+              borderRadius: 16, fontSize: 13,
               backgroundColor: c.surfaceElevated, color: c.textPrimary,
             }}
             placeholder={`Message ${board || 'board'}…`}
@@ -348,7 +348,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
             onPress={() => sendBoardMessage(draft)}
             disabled={!canSend}
             style={{
-              width: 38, height: 38, borderRadius: 19,
+              width: 32, height: 32, borderRadius: 16,
               alignItems: 'center', justifyContent: 'center',
               backgroundColor: canSend ? c.accentInfo : c.surfaceElevated,
             }}
@@ -357,7 +357,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
           >
             {sending
               ? <ActivityIndicator size="small" color={canSend ? '#fff' : c.textTertiary} />
-              : <Icon name="send" size={18} color={canSend ? '#fff' : c.textTertiary} />}
+              : <Icon name="send" size={15} color={canSend ? '#fff' : c.textTertiary} />}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
