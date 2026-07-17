@@ -77,7 +77,7 @@ const TYPE_COPY = {
   },
 };
 
-// Reminder lead-time presets (minutes before due). Multi-select; tasks only.
+// Reminder lead-time presets (minutes before due). Multi-select; tasks + events.
 const REMINDER_PRESETS = [
   { min: 0, label: 'At time' },
   { min: 15, label: '15 min' },
@@ -85,6 +85,19 @@ const REMINDER_PRESETS = [
   { min: 120, label: '2 hours' },
   { min: 1440, label: '1 day' },
 ];
+const REMINDER_PRESET_MINS = new Set(REMINDER_PRESETS.map((p) => p.min));
+
+// Human label for any lead (minutes before due) — used for CUSTOM reminder
+// chips (times the user entered that aren't a preset). Whole days/hours read
+// naturally; everything else stays in minutes. `min` is a lead already stored
+// in the same units the notification pipeline consumes, so custom values need
+// no conversion beyond this display formatting.
+const formatLead = (min) => {
+  if (min <= 0) return 'At time';
+  if (min % 1440 === 0) { const d = min / 1440; return `${d} day${d === 1 ? '' : 's'} before`; }
+  if (min % 60 === 0) { const h = min / 60; return `${h} hour${h === 1 ? '' : 's'} before`; }
+  return `${min} min before`;
+};
 
 // End time is stored as a `duration` (minutes from `time`), matching the web
 // app + the server's `duration` column. The form derives the wall-clock end
@@ -223,6 +236,10 @@ export const TaskForm = ({
   // Inline "name a new board" input under the board row (opened from the
   // board list's "New board…" chip).
   const [newBoardOpen, setNewBoardOpen] = useState(false);
+  // Custom reminder lead-time entry (tasks/events): the "+ Custom" row.
+  const [customReminderOpen, setCustomReminderOpen] = useState(false);
+  const [customReminderValue, setCustomReminderValue] = useState('');
+  const [customReminderUnit, setCustomReminderUnit] = useState('min'); // 'min' | 'hour' | 'day'
   // True while a save is committing — blocks double-taps (see handleSave).
   const savingRef = useRef(false);
 
@@ -651,6 +668,23 @@ export const TaskForm = ({
 
   const updateField = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  // Add a custom reminder lead time (tasks/events). The picked value+unit is
+  // converted to minutes-before-due — the exact unit the notification pipeline
+  // already consumes — deduped, clamped to 4 weeks so a typo can't schedule a
+  // reminder years out, then merged into the sorted leads list.
+  const addCustomReminder = () => {
+    const n = parseInt(customReminderValue, 10);
+    if (!Number.isFinite(n) || n <= 0) return;
+    const factor = customReminderUnit === 'day' ? 1440 : customReminderUnit === 'hour' ? 60 : 1;
+    const mins = Math.min(n * factor, 40320); // 40320 min = 4 weeks
+    const cur = (formData.taskReminders && formData.taskReminders.leads) || [];
+    if (!cur.includes(mins)) {
+      updateField('taskReminders', { ...(formData.taskReminders || {}), leads: [...cur, mins].sort((a, b) => a - b) });
+    }
+    setCustomReminderValue('');
+    setCustomReminderOpen(false);
   };
 
   // Switch the item kind in-place, keeping the title/date the user already
@@ -1228,7 +1262,94 @@ export const TaskForm = ({
                       </TouchableOpacity>
                     );
                   })}
+                  {/* Custom lead-time chips — any active lead that isn't a
+                      preset. Always "on"; tapping removes it. */}
+                  {((formData.taskReminders && formData.taskReminders.leads) || [])
+                    .filter((m) => !REMINDER_PRESET_MINS.has(m))
+                    .map((m) => (
+                      <TouchableOpacity
+                        key={`custom-${m}`}
+                        onPress={() => {
+                          const cur = (formData.taskReminders && formData.taskReminders.leads) || [];
+                          updateField('taskReminders', { ...(formData.taskReminders || {}), leads: cur.filter((x) => x !== m) });
+                        }}
+                        style={{
+                          flexDirection: 'row', alignItems: 'center', gap: 5,
+                          paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8,
+                          borderWidth: 1, borderColor: theme.colors.accentInfo,
+                          backgroundColor: theme.colors.accentInfo + '22',
+                        }}
+                      >
+                        <Text style={{ fontSize: 13, color: theme.colors.accentInfo }}>{formatLead(m)}</Text>
+                        <Icon name="close" size={13} color={theme.colors.accentInfo} />
+                      </TouchableOpacity>
+                    ))}
+                  {/* + Custom — reveal the value + unit entry row. */}
+                  <TouchableOpacity
+                    onPress={() => setCustomReminderOpen((o) => !o)}
+                    style={{
+                      flexDirection: 'row', alignItems: 'center', gap: 4,
+                      paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8,
+                      borderWidth: 1, borderStyle: 'dashed',
+                      borderColor: customReminderOpen ? theme.colors.accentInfo : theme.colors.border,
+                      backgroundColor: theme.colors.surfaceElevated,
+                    }}
+                  >
+                    <Icon name="plus" size={14} color={customReminderOpen ? theme.colors.accentInfo : theme.colors.textSecondary} />
+                    <Text style={{ fontSize: 13, color: customReminderOpen ? theme.colors.accentInfo : theme.colors.textSecondary }}>Custom</Text>
+                  </TouchableOpacity>
                 </View>
+
+                {/* Custom entry row: number + unit selector + Add. */}
+                {customReminderOpen && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
+                    <TextInput
+                      value={customReminderValue}
+                      onChangeText={(t) => setCustomReminderValue(t.replace(/[^0-9]/g, ''))}
+                      keyboardType="number-pad"
+                      placeholder="30"
+                      placeholderTextColor={theme.colors.textPlaceholder}
+                      returnKeyType="done"
+                      onSubmitEditing={addCustomReminder}
+                      style={{
+                        width: 64, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8,
+                        borderWidth: 1, borderColor: theme.colors.border,
+                        backgroundColor: theme.colors.surfaceElevated,
+                        color: theme.colors.textPrimary, fontSize: 14, textAlign: 'center',
+                      }}
+                    />
+                    <View style={{ flexDirection: 'row', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: theme.colors.border }}>
+                      {['min', 'hour', 'day'].map((u) => {
+                        const active = customReminderUnit === u;
+                        return (
+                          <TouchableOpacity
+                            key={u}
+                            onPress={() => setCustomReminderUnit(u)}
+                            style={{
+                              paddingVertical: 8, paddingHorizontal: 12,
+                              backgroundColor: active ? theme.colors.accentInfo + '22' : theme.colors.surfaceElevated,
+                            }}
+                          >
+                            <Text style={{ fontSize: 13, color: active ? theme.colors.accentInfo : theme.colors.textSecondary }}>
+                              {u === 'min' ? 'min' : u === 'hour' ? 'hr' : 'day'}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    <TouchableOpacity
+                      onPress={addCustomReminder}
+                      disabled={!customReminderValue}
+                      style={{
+                        paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8,
+                        backgroundColor: customReminderValue ? theme.colors.accentInfo : theme.colors.surfaceElevated,
+                        opacity: customReminderValue ? 1 : 0.5,
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: customReminderValue ? '#fff' : theme.colors.textMuted }}>Add</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
                 {((formData.taskReminders && formData.taskReminders.leads) || []).length > 0 && (
                   <View style={{ marginTop: 10 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8 }}>
