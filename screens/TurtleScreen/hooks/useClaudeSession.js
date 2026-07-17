@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { AppState } from 'react-native';
 import { io } from 'socket.io-client';
-import { serverOrigin } from '../../../context/ServerContext';
+import { serverOrigin, getApiAuthToken } from '../../../context/ServerContext';
 
 // Same room the rest of the turtle app uses, so the server streams Claude
 // output back to this client. Single-user app → one shared session id.
@@ -184,6 +184,7 @@ export function useClaudeSession(serverIP, token) {
 
     const socket = io(serverOrigin(serverIP), {
       query: { sessionId: DEFAULT_SESSION_ID },
+      auth: { token: getApiAuthToken() || undefined },
       transports: ['websocket'],
       reconnection: true,
       // BATTERY: cap reconnect backoff at 30 s (default tops out at 5 s and

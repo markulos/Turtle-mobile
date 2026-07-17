@@ -14,7 +14,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { AppState } from 'react-native';
 import { io } from 'socket.io-client';
-import { useServer, serverOrigin } from './ServerContext';
+import { useServer, serverOrigin, getApiAuthToken } from './ServerContext';
 
 const DownloadsContext = createContext({
   jobs: [], active: 0, mediaVersion: 0,
@@ -56,6 +56,9 @@ export function DownloadsProvider({ children }) {
   useEffect(() => {
     if (!serverIP) return undefined;
     const socket = io(serverOrigin(serverIP), {
+      // Same JWT the HTTP api attaches — server verifies it in the handshake
+      // (observe mode today; ready for SOCKET_AUTH_ENFORCE=1).
+      auth: { token: getApiAuthToken() || undefined },
       transports: ['websocket'],
       reconnection: true,
       reconnectionDelay: 2000,

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { io } from 'socket.io-client';
-import { serverOrigin } from '../../../context/ServerContext';
+import { serverOrigin, getApiAuthToken } from '../../../context/ServerContext';
 import { getExpoPushTokenSafe } from '../../../services/vaultPush';
 import * as liveActivity from '../../../services/liveActivity';
 import { useCelebration } from '../../../context/CelebrationContext';
@@ -68,6 +68,7 @@ export function usePomodoroSocket(serverIP) {
 
     const socket = io(serverOrigin(serverIP), {
       query: { sessionId: sessionIdRef.current },
+      auth: { token: getApiAuthToken() || undefined },
       transports: ['websocket'],
       reconnection: true,
       // BATTERY: socket.io defaults retry every 1–5 s FOREVER when the server

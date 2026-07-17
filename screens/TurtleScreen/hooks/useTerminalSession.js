@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
-import { serverOrigin } from '../../../context/ServerContext';
+import { serverOrigin, getApiAuthToken } from '../../../context/ServerContext';
 
 const DEFAULT_SESSION_ID = 'turtle-default';
 
@@ -70,6 +70,7 @@ export function useTerminalSession(serverIP, token) {
 
     const socket = io(serverOrigin(serverIP), {
       query: { sessionId: DEFAULT_SESSION_ID },
+      auth: { token: getApiAuthToken() || undefined },
       transports: ['websocket'],
       reconnection: true,
       // BATTERY: cap reconnect backoff at 30 s (default retries every 1–5 s
