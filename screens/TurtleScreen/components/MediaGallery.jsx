@@ -2900,7 +2900,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
     setPendingAssets([]);
     setUploadModalVisible(false);
-  }, [pendingAssets, selectedTags, vaultUpload, setUploadModalVisible, setGlobalAlbums]);
+  }, [pendingAssets, selectedTags, vaultActions, setUploadModalVisible, setGlobalAlbums]);
 
   // Delete photo/video (only for uploads)
   const handleDelete = useCallback((id) => {
