@@ -593,7 +593,11 @@ const LocalAssetCell = React.memo(function LocalAssetCell({ item, isSelected, on
  * - onClose: () => void - Called when user wants to close the gallery (optional for tab usage)
  * - autoUpload: boolean - If true, immediately opens image picker on mount (for /photos upload command)
  */
-export default function MediaGallery({ onClose, autoUpload = false }) {
+export default function MediaGallery({ onClose, autoUpload = false, kind = null }) {
+  // Media-kind scope for the Media Vault split. null = all (back-compat with
+  // the chat /photos usage). The Photos & Video view passes 'visual' so audio
+  // rows never appear in the photo grid.
+  const kindParam = kind ? `&kind=${kind}` : '';
   const { theme } = useTheme();
   const { api, getBaseUrl, getMediaBaseUrl } = useServer();
   const insets = useSafeAreaInsets();
@@ -1432,7 +1436,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       // cache — a stale response must NOT repopulate it (wrong photos under
       // the new headers + duplicate FlashList keys).
       const epoch = sparseEpochRef.current;
-      api.get(`/media/gallery?limit=${SPARSE_PAGE}&offset=${best * SPARSE_PAGE}&order=desc&sortBy=${sortModeRef.current}`)
+      api.get(`/media/gallery?limit=${SPARSE_PAGE}&offset=${best * SPARSE_PAGE}&order=desc&sortBy=${sortModeRef.current}${kindParam}`)
         .then((res) => {
           if (epoch === sparseEpochRef.current && res && res.success && Array.isArray(res.items)) {
             sparsePagesRef.current.set(best, res.items);
@@ -2207,7 +2211,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       // so the month/year timeline spans the real capture history instead of
       // the upload date (which clusters at import time for a bulk-uploaded
       // library — the "everything shows 2026" symptom).
-      const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}&order=desc&sortBy=${sortMode}${tagParam}`);
+      const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}&order=desc&sortBy=${sortMode}${tagParam}${kindParam}`);
       // Sort/album context changed while this was in flight — its rows belong
       // to a dead ordering; merging them would corrupt the new list and
       // clobber uploadOffset. (finally still clears isPaginating.)
@@ -2257,7 +2261,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // label AND an item index for scrollToIndex.
   const fetchBuckets = useCallback(async () => {
     try {
-      const res = await api.get(`/media/buckets?sortBy=${sortMode}`);
+      const res = await api.get(`/media/buckets?sortBy=${sortMode}${kindParam}`);
       if (!res || !res.success || !Array.isArray(res.buckets)) return;
       let cum = 0;
       const months = res.buckets.map((b) => {
@@ -2302,7 +2306,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       // a stale closure right after a flip) and drop the response if the
       // basis changed while the request was in flight.
       const sortAtRequest = sortModeRef.current;
-      const r = await api.get(`/media/gallery?limit=${win}&offset=0&order=desc&sortBy=${sortAtRequest}${tagParam}`);
+      const r = await api.get(`/media/gallery?limit=${win}&offset=0&order=desc&sortBy=${sortAtRequest}${tagParam}${kindParam}`);
       if (sortModeRef.current !== sortAtRequest) return;
       if (r?.success) {
         setGlobalUploadsTotal(r.pagination?.total || r.total || r.items?.length || 0);
