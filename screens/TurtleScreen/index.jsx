@@ -2514,7 +2514,7 @@ export default function TurtleScreen() {
             2) frost tint — a translucent colour so it reads as a real surface
           Both are absolute layers behind the content; overflow:hidden +
           the rounded top corners clip them to the bar shape. */}
-      <View style={[styles.inputArea, { paddingBottom: COMPOSER_MARGIN }]}>
+      <View style={[styles.inputArea, { marginBottom: COMPOSER_MARGIN }]}>
         <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
         {/* Autocomplete Dropdown */}
@@ -2538,38 +2538,37 @@ export default function TurtleScreen() {
           </View>
         )}
 
-        {/* Attached-image preview — the picture queued for the next Claude
-            message, with a tap-to-remove. */}
-        {claudeImage && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingBottom: 8 }}>
+        {/* ── Composer card, reference-style ─────────────────────────────
+            Three stacked zones inside the frosted card:
+              1. top zone    — attached-image thumb (X badge) + the dashed
+                               "bot slot" circle (= the Claude session toggle,
+                               solid + tinted while a session is live)
+              2. big input   — large bare text, no pill, like the reference
+              3. actions row — circular buttons (attach / keyboard / boards /
+                               commands) + the round send button on the right */}
+        <View style={styles.composerTopZone}>
+          {claudeImage && (
             <View style={{ position: 'relative' }}>
               <Image
                 source={{ uri: claudeImage.uri }}
-                style={{ width: 52, height: 52, borderRadius: 8, backgroundColor: theme.colors.surfaceElevated }}
+                style={styles.composerThumb}
                 contentFit="cover"
               />
               <TouchableOpacity
                 onPress={() => setClaudeImage(null)}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                style={{ position: 'absolute', top: -7, right: -7, backgroundColor: theme.colors.background, borderRadius: 11 }}
+                style={styles.composerThumbX}
                 accessibilityLabel="Remove attached image"
               >
-                <Icon name="close-circle" size={22} color={theme.colors.textSecondary} />
+                <Icon name="close" size={14} color={theme.colors.textPrimary} />
               </TouchableOpacity>
             </View>
-            <Text style={{ marginLeft: 10, fontSize: 12, color: theme.colors.textMuted, flex: 1 }}>
-              Image attached — it'll go to Claude with your next message.
-            </Text>
-          </View>
-        )}
-
-        {/* Input Row — sits directly on the solid input bar. */}
-        <View style={styles.inputContainer}>
-          {/* Claude button — opens (or hides) the Claude session. While it's
-              open, the composer types straight to Claude (no need to type
-              /claude). Highlights when a session is active. */}
+          )}
+          {/* The bot slot — opens (or hides) the Claude session. While it's
+              open, the composer types straight to Claude. Long-press → the
+              Claude model picker (Opus / Sonnet / Haiku / Default). */}
           <TouchableOpacity
-            style={styles.claudeButton}
+            style={[styles.botSlot, claudeUiMode === 'session' && styles.botSlotActive]}
             onPressIn={() => tapHaptic()}
             onPress={() => {
               if (claudeUiMode === 'session') {
@@ -2580,8 +2579,6 @@ export default function TurtleScreen() {
                 setTimeout(() => inputRef.current?.focus(), 60);
               }
             }}
-            // Long-press → reveal the Claude model picker (Opus / Sonnet /
-            // Haiku / Default), applied to the next session start.
             onLongPress={() => setShowModelPicker(true)}
             delayLongPress={350}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -2591,89 +2588,110 @@ export default function TurtleScreen() {
           >
             <Icon
               name="robot-outline"
-              size={24}
+              size={26}
               color={claudeUiMode === 'session' ? theme.colors.accentInfo : theme.colors.textMuted}
             />
           </TouchableOpacity>
-          {/* Keyboard chooser — only while messaging Claude or the terminal,
-              where typing commands/code benefits from a "Code" keyboard
-              (no autocorrect/autocapitalize). Tap to switch between Code and
-              the everyday Normal keyboard. */}
+        </View>
+
+        <TextInput
+          ref={inputRef}
+          style={styles.input}
+          value={inputText}
+          onChangeText={handleInputChange}
+          placeholder={terminalOpen ? 'Run a command…' : claudeUiMode === 'login' ? 'Paste sign-in code…' : claudeUiMode === 'session' ? 'Message Claude…' : 'Message...'}
+          placeholderTextColor={theme.colors.textMuted}
+          multiline
+          maxLength={500}
+          editable={isConnected}
+          autoComplete="off"
+          textContentType="none"
+          // Keyboard mode — only the coding contexts opt into the "Code"
+          // keyboard; everyday chat keeps the OS defaults. Changing these
+          // takes effect on the input's next focus.
+          autoCapitalize={
+            (claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && keyboardMode === 'code'
+              ? 'none'
+              : 'sentences'
+          }
+          // Predictive/QuickType bar OFF: it slid in as a second keyboard
+          // frame and made the composer jump up at the END of the open
+          // animation. Disabling it gives a single-height keyboard that
+          // opens in one smooth motion. (Code mode already had it off.)
+          autoCorrect={false}
+          spellCheck={false}
+        />
+
+        <View style={styles.composerActions}>
+          {/* Attach image — only while a Claude session is open. */}
+          {claudeUiMode === 'session' && (
+            <TouchableOpacity
+              style={styles.actionCircle}
+              onPressIn={() => tapHaptic()}
+              onPress={pickClaudeImage}
+              accessibilityRole="button"
+              accessibilityLabel="Attach an image to send to Claude"
+            >
+              <Icon name="image-outline" size={22} color={claudeImage ? '#4ADE80' : theme.colors.textPrimary} />
+            </TouchableOpacity>
+          )}
+          {/* Keyboard chooser — coding contexts only (Code = no autocorrect). */}
           {(claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && (
             <TouchableOpacity
-              style={styles.keyboardToggle}
+              style={styles.actionCircle}
               onPress={() => setKeyboardMode((m) => (m === 'code' ? 'normal' : 'code'))}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               accessibilityRole="button"
               accessibilityLabel={`Keyboard: ${keyboardMode === 'code' ? 'Code' : 'Normal'}. Tap to switch.`}
             >
               <Icon
                 name={keyboardMode === 'code' ? 'code-tags' : 'keyboard-outline'}
-                size={18}
-                color={keyboardMode === 'code' ? '#4ADE80' : theme.colors.textMuted}
+                size={20}
+                color={keyboardMode === 'code' ? '#4ADE80' : theme.colors.textPrimary}
               />
-              <Text style={[styles.keyboardToggleText, keyboardMode === 'code' && { color: '#4ADE80' }]}>
-                {keyboardMode === 'code' ? 'Code' : 'ABC'}
-              </Text>
             </TouchableOpacity>
           )}
-          {/* Attach image — only while a Claude session is open. Picks +
-              compresses an image to send into the session. */}
-          {claudeUiMode === 'session' && (
-            <TouchableOpacity
-              onPress={pickClaudeImage}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityRole="button"
-              accessibilityLabel="Attach an image to send to Claude"
-              style={{ paddingHorizontal: 4, justifyContent: 'center' }}
-            >
-              <Icon name="image-plus" size={24} color={claudeImage ? '#4ADE80' : theme.colors.textMuted} />
-            </TouchableOpacity>
-          )}
-<View style={styles.inputWrapper}>
-            <TextInput
-              ref={inputRef}
-              style={styles.input}
-              value={inputText}
-              onChangeText={handleInputChange}
-              placeholder={terminalOpen ? 'Run a command…' : claudeUiMode === 'login' ? 'Paste sign-in code…' : claudeUiMode === 'session' ? 'Message Claude…' : 'Message...'}
-              placeholderTextColor={theme.colors.textMuted}
-              multiline
-              maxLength={500}
-              editable={isConnected}
-              autoComplete="off"
-              textContentType="none"
-              // Keyboard mode — only the coding contexts opt into the "Code"
-              // keyboard; everyday chat keeps the OS defaults. Changing these
-              // takes effect on the input's next focus.
-              autoCapitalize={
-                (claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && keyboardMode === 'code'
-                  ? 'none'
-                  : 'sentences'
-              }
-              // Predictive/QuickType bar OFF: it slid in as a second keyboard
-              // frame and made the composer jump up at the END of the open
-              // animation. Disabling it gives a single-height keyboard that
-              // opens in one smooth motion. (Code mode already had it off.)
-              autoCorrect={false}
-              spellCheck={false}
-            />
-          </View>
+          {/* @ — the board conversations inbox (the app's "mentions"). */}
           <TouchableOpacity
-            style={styles.sendButton}
+            style={styles.actionCircle}
+            onPressIn={() => tapHaptic()}
+            onPress={() => setShowConversations(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Open board conversations"
+          >
+            <Icon name="at" size={22} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+          {/* # — slash-commands: prefill "/" so the autocomplete opens. */}
+          <TouchableOpacity
+            style={styles.actionCircle}
+            onPressIn={() => tapHaptic()}
+            onPress={() => {
+              handleInputChange('/');
+              setTimeout(() => inputRef.current?.focus(), 0);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Show commands"
+          >
+            <Icon name="pound" size={22} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity
+            style={[
+              styles.sendCircle,
+              ((inputText.trim() || (claudeUiMode === 'session' && claudeImage)) && isConnected) && styles.sendCircleArmed,
+            ]}
             onPressIn={() => impactHaptic('medium')}
             onPress={sendMessage}
             disabled={(!inputText.trim() && !(claudeUiMode === 'session' && claudeImage)) || !isConnected}
+            accessibilityRole="button"
+            accessibilityLabel="Send"
           >
             <Icon
-              name="send-circle"
-              size={32}
+              name="arrow-up"
+              size={26}
               color={
                 (inputText.trim() || (claudeUiMode === 'session' && claudeImage)) && isConnected
-                  // Ready-to-send = monochrome ink (black in light mode; white in
-                  // dark so it stays visible on the frosted composer) instead of
-                  // the old green.
-                  ? (theme.mode === 'dark' ? '#FFFFFF' : '#000000')
+                  // Armed = inverse ink on the filled circle.
+                  ? (theme.mode === 'dark' ? '#111111' : '#FFFFFF')
                   : theme.colors.textMuted
               }
             />
@@ -3308,82 +3326,105 @@ const createStyles = (theme, insets) =>
       // screen bg + has no top border, so the frost contrast + this curve are
       // what separate the two).
       backgroundColor: 'transparent',
-      borderTopLeftRadius: 20,
-      borderTopRightRadius: 20,
-      // Hairline around the frosted top edge — the seam with the chat above,
-      // curving around the rounded corners.
+      // Reference-style FLOATING CARD: fully rounded (not an edge-to-edge
+      // bar), lifted off the screen edges so the chat reads around it.
+      marginHorizontal: 10,
+      borderRadius: 28,
       borderWidth: StyleSheet.hairlineWidth,
-      borderBottomWidth: 0,
       borderColor: frostBorderColor(theme),
       paddingTop: 6,
-      // Clip the BlurView + tint to the rounded-top bar shape.
+      // Clip the BlurView + tint to the rounded card shape.
       overflow: 'hidden',
-      // paddingBottom is applied inline as COMPOSER_MARGIN at the render site;
-      // it's part of this same frosted bar, bridging down to the navbar.
+      // The gap down to the navbar is applied inline at the render site as
+      // COMPOSER_MARGIN (now a margin — it's OUTSIDE the floating card).
     },
-    inputContainer: {
+    // ── Composer card zones (reference aesthetic) ─────────────────────
+    // Top zone: attached-image thumb + the dashed bot slot, mirroring the
+    // reference's header row.
+    composerTopZone: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: theme.spacing.sm,
-      paddingTop: 4,
-      // No bottom padding here — the below-chatbox gap is owned entirely by
-      // the container's animated COMPOSER_MARGIN, so it stays identical
-      // whether the keyboard is open or closed.
-      paddingBottom: 0,
-      backgroundColor: 'transparent',
+      gap: 14,
+      paddingHorizontal: 16,
+      paddingTop: 10,
     },
-    // Keyboard chooser sitting left of the composer pill (coding sessions
-    // only). A compact icon + label so it reads as a mode switch, not a
-    // send action.
-    claudeButton: {
+    composerThumb: {
+      width: 64,
+      height: 64,
+      borderRadius: 18,
+      backgroundColor: theme.colors.surfaceElevated,
+    },
+    // X badge on the thumb — its own dark disc, like the reference.
+    composerThumbX: {
+      position: 'absolute',
+      top: -6,
+      right: -6,
+      width: 24,
+      height: 24,
+      borderRadius: 12,
       alignItems: 'center',
       justifyContent: 'center',
-      marginRight: theme.spacing.xs,
-      paddingHorizontal: 2,
-    },
-    keyboardToggle: {
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginRight: theme.spacing.xs,
-      paddingHorizontal: 4,
-    },
-    keyboardToggleText: {
-      fontSize: 9,
-      fontWeight: '700',
-      marginTop: 1,
-      color: theme.colors.textMuted,
-    },
-    inputWrapper: {
-      flex: 1,
-      flexDirection: 'row',
-      alignItems: 'center',
-      // Telegram rounded input pill: a distinct rounded field floating INSIDE
-      // the frosted bar. A subtle translucent fill (a touch more present than
-      // the bar's frost) + a hairline border make it read as its own surface
-      // against the blur, while staying see-through. Radius ~20 matches
-      // Telegram's soft-cornered field.
-      borderRadius: 20,
-      backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.022)',
+      backgroundColor: theme.mode === 'dark' ? 'rgba(20,21,24,0.95)' : 'rgba(255,255,255,0.97)',
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: frostBorderColor(theme),
-      paddingHorizontal: 14,
-      minHeight: 38,
-      maxHeight: 100,
     },
-    input: {
-      flex: 1,
-      fontSize: 15,
-      color: theme.colors.textPrimary,
-      maxHeight: 100,
-      paddingTop: 8,
-      paddingBottom: 8,
-      paddingHorizontal: 2,
-      backgroundColor: 'transparent',
-    },
-    sendButton: {
-      marginLeft: theme.spacing.xs,
+    // The dashed "add a bot" circle — IS the Claude session toggle. Dashed
+    // while idle, solid + tinted while a session is live.
+    botSlot: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
       alignItems: 'center',
       justifyContent: 'center',
+      borderWidth: 1.5,
+      borderStyle: 'dashed',
+      borderColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.22)',
+    },
+    botSlotActive: {
+      borderStyle: 'solid',
+      borderColor: theme.colors.accentInfo,
+      backgroundColor: theme.mode === 'dark' ? 'rgba(96,165,250,0.12)' : 'rgba(59,130,246,0.08)',
+    },
+    // Bottom action row: circular buttons left, round send right.
+    composerActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingHorizontal: 12,
+      paddingTop: 8,
+      paddingBottom: 12,
+    },
+    actionCircle: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
+    },
+    sendCircle: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)',
+    },
+    sendCircleArmed: {
+      backgroundColor: theme.mode === 'dark' ? '#FFFFFF' : '#111111',
+    },
+    // The big bare input — large light type straight on the card (no pill),
+    // like the reference's "Put me in a selfie with".
+    input: {
+      fontSize: 24,
+      fontWeight: '600',
+      lineHeight: 30,
+      color: theme.colors.textPrimary,
+      paddingHorizontal: 18,
+      paddingTop: 12,
+      paddingBottom: 4,
+      maxHeight: 130,
+      backgroundColor: 'transparent',
     },
     autocompleteContainer: {
       marginHorizontal: 12,

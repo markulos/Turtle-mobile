@@ -24,7 +24,8 @@ const photoWord = (n) => (n === 1 ? 'photo' : 'photos');
 
 function JobCard({ job, theme, onRetry, onDismiss }) {
   const { board, status, total, done, error } = job;
-  const boardName = board?.name || 'Turtle';
+  // Null board = the default "save as-is" share straight into the photo vault.
+  const boardName = board?.name || 'Photo vault';
 
   let icon, iconColor, title, subtitle;
   if (status === 'success') {

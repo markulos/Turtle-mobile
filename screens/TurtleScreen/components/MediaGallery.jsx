@@ -792,6 +792,13 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // imperatively (autoFocus only fires on mount, and this input stays mounted).
   const searchInputRef = useRef(null);
   const [uploadsSearchQuery, setUploadsSearchQuery] = useState(''); // Uploads/All Photos search filter
+  // Grid date basis: 'original' = when the photo was TAKEN (capture date,
+  // Google-Photos style, the default) | 'upload' = when it was ADDED to
+  // Turtle (shared/uploaded/ingested). Both dates live on every media row —
+  // this only switches which one drives the ORDER BY + timeline buckets.
+  const [sortMode, setSortMode] = useState('original');
+  const sortModeRef = useRef(sortMode);
+  sortModeRef.current = sortMode;
   const [isUploadsSearchVisible, setIsUploadsSearchVisible] = useState(false);
   const uploadsSearchAnim = useRef(new Animated.Value(0)).current;
 
@@ -1374,7 +1381,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       sparseWantedRef.current.delete(best);
       sparseInflightRef.current.add(best);
       const startedAt = Date.now();
-      api.get(`/media/gallery?limit=${SPARSE_PAGE}&offset=${best * SPARSE_PAGE}&order=desc&sortBy=original`)
+      api.get(`/media/gallery?limit=${SPARSE_PAGE}&offset=${best * SPARSE_PAGE}&order=desc&sortBy=${sortModeRef.current}`)
         .then((res) => {
           if (res && res.success && Array.isArray(res.items)) {
             sparsePagesRef.current.set(best, res.items);
@@ -1722,14 +1729,14 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     && !isSelectMode
     && (uploadTimeline.total >= 30 || uploadDisplayItems.length >= 30);
 
-  // Album / search context change → the sparse cache describes a different
-  // result set; drop it.
+  // Album / search / sort-basis context change → the sparse cache describes
+  // a different result set (or a different ORDER BY); drop it.
   useEffect(() => {
     sparsePagesRef.current.clear();
     sparseInflightRef.current.clear();
     sparseThumbsPrefetchedRef.current.clear();
     setSparseVersion((v) => v + 1);
-  }, [selectedAlbum, uploadsSearchQuery]);
+  }, [selectedAlbum, uploadsSearchQuery, sortMode]);
 
   // Scrubber data: cumulative month starts + labels + per-month counts + year
   // marks, from the full-library buckets — falling back to the loaded items
@@ -2100,6 +2107,18 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAlbum]);
 
+  // Sort-basis change → the grid AND the timeline buckets describe a
+  // different ordering; cold-reload both (same skeleton treatment as an
+  // album switch).
+  const sortModeFirstRun = useRef(true);
+  useEffect(() => {
+    if (sortModeFirstRun.current) { sortModeFirstRun.current = false; return; }
+    setLoading(true);
+    setUploadItems([]);
+    Promise.all([fetchUploads(true), fetchBuckets()]).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortMode]);
+
   // === API CALLS ===
   // Fetch uploads from database with strict deduplication
   const fetchUploads = useCallback(async (isRefresh = false) => {
@@ -2115,7 +2134,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       // so the month/year timeline spans the real capture history instead of
       // the upload date (which clusters at import time for a bulk-uploaded
       // library — the "everything shows 2026" symptom).
-      const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}&order=desc&sortBy=original${tagParam}`);
+      const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}&order=desc&sortBy=${sortMode}${tagParam}`);
       
       if (response.success) {
         // Safely capture the true total count from the server response
@@ -2135,13 +2154,15 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               if (item && item.id) uniqueMap.set(item.id, item);
             });
             
-            // Convert back to array and maintain chronological sort (newest first
-            // for inverted list). Sort by TAKEN date (originalDate, falling back
-            // to uploadDate) so it matches the server's sortBy=original order and
-            // the scrubber's month/year timeline.
-            return Array.from(uniqueMap.values()).sort((a, b) =>
-              new Date(b.originalDate || b.uploadDate) - new Date(a.originalDate || a.uploadDate)
-            );
+            // Convert back to array and maintain chronological sort (newest
+            // first for inverted list), by whichever date basis is active so
+            // it matches the server's ORDER BY and the scrubber's timeline:
+            // 'original' = TAKEN date (originalDate, uploadDate fallback),
+            // 'upload' = date ADDED to Turtle.
+            const dateOf = sortMode === 'upload'
+              ? (m) => new Date(m.uploadDate)
+              : (m) => new Date(m.originalDate || m.uploadDate);
+            return Array.from(uniqueMap.values()).sort((a, b) => dateOf(b) - dateOf(a));
           });
           setUploadOffset(currentOffset + LIMIT);
         }
@@ -2152,14 +2173,14 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     } finally {
       if (!isRefresh) setIsPaginating(false);
     }
-  }, [api, uploadOffset, selectedAlbum, isPaginating]);
+  }, [api, uploadOffset, selectedAlbum, isPaginating, sortMode]);
 
   // Fetch the month/year timeline for the scrubber (full library, by taken
   // date). Builds cumulative start indices so a scrub fraction maps to a month
   // label AND an item index for scrollToIndex.
   const fetchBuckets = useCallback(async () => {
     try {
-      const res = await api.get('/media/buckets?sortBy=original');
+      const res = await api.get(`/media/buckets?sortBy=${sortMode}`);
       if (!res || !res.success || !Array.isArray(res.buckets)) return;
       let cum = 0;
       const months = res.buckets.map((b) => {
@@ -2173,7 +2194,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     } catch (e) {
       // Non-fatal — the scrubber just falls back to loaded-items labels.
     }
-  }, [api]);
+  }, [api, sortMode]);
 
   // Load the Photos (uploads) grid. The PC/server-files tab was removed, so
   // there's no server-files fetch to branch on anymore. (Albums refresh is
@@ -2200,7 +2221,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     try {
       const win = Math.max(LIMIT, Math.ceil(uploadCountRef.current / LIMIT) * LIMIT);
       const tagParam = selectedAlbum !== 'All' ? `&tag=${encodeURIComponent(selectedAlbum)}` : '';
-      const r = await api.get(`/media/gallery?limit=${win}&offset=0&order=desc&sortBy=original${tagParam}`);
+      const r = await api.get(`/media/gallery?limit=${win}&offset=0&order=desc&sortBy=${sortMode}${tagParam}`);
       if (r?.success) {
         setGlobalUploadsTotal(r.pagination?.total || r.total || r.items?.length || 0);
         setUploadItems(r.items || []);
@@ -2210,7 +2231,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     } catch (e) {
       // Best-effort — the next event or a manual refresh catches up.
     }
-  }, [api, selectedAlbum]);
+  }, [api, selectedAlbum, sortMode]);
 
   // Initial load - Fetch EVERYTHING simultaneously to prepare the off-screen slider pages
   useEffect(() => {
@@ -4928,7 +4949,25 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               opacity: pageScrollX.interpolate({ inputRange: [0, width], outputRange: [1, 0], extrapolate: 'clamp' }),
               pointerEvents: activeTab === 'uploads' ? 'auto' : 'none'
             }}>
-              <TouchableOpacity 
+              {/* Date-basis toggle: camera = grid ordered by CAPTURE date
+                  (default), clock-plus = ordered by when items were ADDED to
+                  Turtle. Both dates are logged on every row — this only
+                  switches which one drives the timeline. */}
+              <TouchableOpacity
+                onPress={() => setSortMode((m) => (m === 'original' ? 'upload' : 'original'))}
+                hitSlop={HIT_SLOP_10}
+                accessibilityRole="button"
+                accessibilityLabel={sortMode === 'original'
+                  ? 'Sorted by capture date. Switch to date added to Turtle.'
+                  : 'Sorted by date added to Turtle. Switch to capture date.'}
+              >
+                <Icon
+                  name={sortMode === 'original' ? 'camera-outline' : 'clock-plus-outline'}
+                  size={24}
+                  color={sortMode === 'upload' ? theme.colors.primary : theme.colors.textPrimary}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
                 onPress={() => setIsUploadsSearchVisible(!isUploadsSearchVisible)}
                 hitSlop={HIT_SLOP_10}
               >

@@ -92,10 +92,16 @@ export default function BoardTimeline({ visible, board, onClose }) {
     }
   }, [api, board]);
 
+  // Tracks whether THIS open produced server-side activity (a chat send) —
+  // the inbox only needs its expensive overview refresh when something
+  // actually changed; a silent back-out shouldn't cost a full board scan.
+  const dirtyRef = useRef(false);
+
   // (Re)load whenever the page opens onto a board. Clearing here (not on close)
   // keeps the previous board's rows from flashing under the new title.
   useEffect(() => {
     if (visible && board) {
+      dirtyRef.current = false;
       setItems([]);
       setNextBefore(null);
       setDraft('');
@@ -128,6 +134,9 @@ export default function BoardTimeline({ visible, board, onClose }) {
       return [{ id: localId, kind: 'chat', role: 'user', content: body, ts: Date.now(), local: true }, ...rest];
     });
     try {
+      // Mark on ATTEMPT, not success — the POST can land server-side even if
+      // reading the reply fails client-side, so conservative is correct.
+      dirtyRef.current = true;
       const r = await api.post('/turtle/chat', { message: body, history: recentChatHistory, board });
       const reply = r?.reply;
       setItems((prev) => {
@@ -232,8 +241,13 @@ export default function BoardTimeline({ visible, board, onClose }) {
 
   const canSend = draft.trim().length > 0 && !sending;
 
+  // Explicit wrapper so EdgeSwipePage / button press event args can't leak
+  // through as a truthy "did activity" flag — the parent inbox only refreshes
+  // its (expensive) overview when this open actually sent something.
+  const handleClose = useCallback(() => onClose(dirtyRef.current), [onClose]);
+
   return (
-    <EdgeSwipePage overlay visible={visible} onClose={onClose}>
+    <EdgeSwipePage overlay visible={visible} onClose={handleClose}>
       <KeyboardAvoidingView
         style={{ flex: 1, backgroundColor: c.background }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -245,7 +259,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
           borderBottomWidth: 1, borderBottomColor: c.border,
         }}>
           <TouchableOpacity
-            onPress={onClose}
+            onPress={handleClose}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }}
             accessibilityLabel="Back"

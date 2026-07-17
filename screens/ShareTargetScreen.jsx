@@ -301,6 +301,39 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           theme={theme}
         />
 
+        {/* DEFAULT destination for photo shares: straight into the photo
+            vault, as-is, no board tag. Pinned above every board so sharing
+            from the iOS Photos app is one tap. board:null → the server files
+            the images untagged (uploadDate = now, originalDate = EXIF). */}
+        {imageFiles.length > 0 && (
+          <TouchableOpacity
+            key="__photo_vault__"
+            activeOpacity={0.75}
+            onPressIn={() => impactHaptic('medium')}
+            onPress={() => pickBoard(null)}
+            style={[
+              styles.boardRow,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.accentInfo,
+              },
+            ]}
+          >
+            <View style={[styles.boardIcon, { backgroundColor: theme.colors.surfaceElevated || theme.colors.surface }]}>
+              <Icon name="image-multiple" size={18} color={theme.colors.accentInfo} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.boardName, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+                Photo vault
+              </Text>
+              <Text style={[styles.boardKind, { color: theme.colors.textMuted }]}>
+                Save as-is · no board
+              </Text>
+            </View>
+            <Icon name="chevron-right" size={22} color={theme.colors.accentInfo} />
+          </TouchableOpacity>
+        )}
+
         {/* Search box — find any board (even unpinned) OR name a new one to
             create. Shown as soon as we have anything to show (cached list paints
             instantly); hidden only while the FIRST load is running with nothing

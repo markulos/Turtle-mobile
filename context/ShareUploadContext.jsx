@@ -55,12 +55,14 @@ const extFromPathOrMime = (p, mime) => {
   return '.jpg';
 };
 
-// Board shape the /api/share endpoint expects, preserving a create-on-demand flag.
-const bodyBoard = (board) => ({
+// Board shape the /api/share endpoint expects, preserving a create-on-demand
+// flag. A null board is the "photo vault as-is" share — the field is omitted
+// from the request body entirely and the server files the images untagged.
+const bodyBoard = (board) => (board ? {
   kind: board.kind,
   name: board.name,
   ...(board.create ? { create: true } : {}),
-});
+} : undefined);
 
 export function ShareUploadProvider({ children }) {
   const { api } = useServer();

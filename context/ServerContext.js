@@ -195,13 +195,17 @@ export const ServerProvider = ({ children }) => {
     return response.json();
   };
 
-  const api = {
-    get: apiGet,
-    post: apiPost,
-    put: apiPut,
-    patch: apiPatch,
-    delete: apiDelete,
-  };
+  // Referentially stable per server — the methods close over serverIP only
+  // (the auth token is module-level). Without this memo, every provider
+  // commit (isConnected/loading/mediaOrigin flips during startup) minted a
+  // NEW api identity, and any consumer keying an effect on `api` refired its
+  // fetches mid-open (ConversationsOverlay re-ran its full 3s overview + 1.3s
+  // avatars pipeline up to 2 extra times per cold launch).
+  const api = useMemo(
+    () => ({ get: apiGet, post: apiPost, put: apiPut, patch: apiPatch, delete: apiDelete }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [serverIP],
+  );
 
   const loadSavedIP = async () => {
     try {

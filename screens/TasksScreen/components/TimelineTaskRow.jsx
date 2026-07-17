@@ -73,12 +73,15 @@ export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, 
   const cRail = railColor || cBorder;
 
   // Completion-toggle palette. Done = a filled disc — black on light, white on
-  // dark — with a contrasting checkmark; not-done = a small circle with a WHITE
-  // centre and a grey ring, so it reads as an empty checkbox on the dark card.
+  // dark — with a contrasting checkmark. Not-done on light = a white centre with
+  // a grey ring; on dark = a BLACK centre with a WHITE ring, so the empty box
+  // reads crisply against the dark card.
   const isDark = theme.mode === 'dark';
   const cCheckFill = isDark ? '#FFFFFF' : '#000000';
   const cCheckMark = isDark ? '#000000' : '#FFFFFF';
   const cCheckOutline = cSub;
+  const cCheckEmptyBg = isDark ? '#000000' : '#FFFFFF';
+  const cCheckEmptyBorder = isDark ? '#FFFFFF' : cCheckOutline;
 
   // `done` (optional) overrides the raw boolean — recurring tasks track
   // per-occurrence completion in meta.completedDates, so the CALLER decides
@@ -136,9 +139,9 @@ export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, 
               borderRadius: DOT / 2,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: completed ? cCheckFill : '#FFFFFF',
+              backgroundColor: completed ? cCheckFill : cCheckEmptyBg,
               borderWidth: completed ? 0 : 1.5,
-              borderColor: cCheckOutline,
+              borderColor: cCheckEmptyBorder,
             }}
           >
             {completed && <Icon name="check" size={DOT - 5} color={cCheckMark} />}

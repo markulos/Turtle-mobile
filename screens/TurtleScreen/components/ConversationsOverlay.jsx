@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Image } from 'expo-image';
 import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
 import { tapHaptic } from '../../../utils/haptics';
@@ -41,6 +42,88 @@ const previewOf = (latest) => {
   return oneLine(latest.title || latest.content || '');
 };
 
+// Instagram-style collage avatar: a board with photos shows up to 4 of its
+// most recent thumbnails packed into the 44px disc (1 = full, 2 = side-by-side
+// columns, 3 = big left + two stacked right, 4 = 2×2 grid). Boards without
+// photos keep the tinted-initial disc. Thumbs hydrate lazily AFTER the names
+// list renders, so this only ever upgrades a row in place.
+const AVATAR_SIZE = 44;
+const AvatarCell = ({ uri, style, onError }) => (
+  <Image
+    source={{ uri }}
+    style={style}
+    contentFit="cover"
+    transition={150}
+    recyclingKey={uri}
+    cachePolicy="memory-disk"
+    onError={onError}
+  />
+);
+const BoardAvatar = React.memo(function BoardAvatar({ name, thumbs, base, tint }) {
+  // Thumbs whose fetch failed (deleted media, missing file) drop out so the
+  // collage degrades naturally — 4 cells → 3-cell layout → … → initial disc —
+  // instead of rendering blank squares.
+  const [failed, setFailed] = useState(() => new Set());
+  const markFailed = (u) => setFailed((prev) => (prev.has(u) ? prev : new Set(prev).add(u)));
+  const urls = (thumbs || [])
+    .map((t) => (typeof t === 'string' && t ? (t.startsWith('http') ? t : base + t) : null))
+    .filter(Boolean)
+    .filter((u) => !failed.has(u))
+    .slice(0, 4);
+  if (!urls.length) {
+    return (
+      <View style={{
+        width: AVATAR_SIZE, height: AVATAR_SIZE, borderRadius: AVATAR_SIZE / 2,
+        alignItems: 'center', justifyContent: 'center',
+        backgroundColor: tint + '2A',
+      }}>
+        <Text style={{ fontSize: 18, fontWeight: '700', color: tint }}>
+          {name.charAt(0).toUpperCase()}
+        </Text>
+      </View>
+    );
+  }
+  const cell = (i, style) => (
+    <AvatarCell uri={urls[i]} style={style} onError={() => markFailed(urls[i])} />
+  );
+  return (
+    <View style={{
+      width: AVATAR_SIZE, height: AVATAR_SIZE, borderRadius: AVATAR_SIZE / 2,
+      overflow: 'hidden', flexDirection: 'row',
+      backgroundColor: tint + '2A',
+    }}>
+      {urls.length === 1 && cell(0, { flex: 1 })}
+      {urls.length === 2 && (
+        <>
+          {cell(0, { flex: 1, marginRight: 0.5 })}
+          {cell(1, { flex: 1, marginLeft: 0.5 })}
+        </>
+      )}
+      {urls.length === 3 && (
+        <>
+          {cell(0, { flex: 1, marginRight: 0.5 })}
+          <View style={{ flex: 1, marginLeft: 0.5 }}>
+            {cell(1, { flex: 1, marginBottom: 0.5 })}
+            {cell(2, { flex: 1, marginTop: 0.5 })}
+          </View>
+        </>
+      )}
+      {urls.length === 4 && (
+        <>
+          <View style={{ flex: 1, marginRight: 0.5 }}>
+            {cell(0, { flex: 1, marginBottom: 0.5 })}
+            {cell(2, { flex: 1, marginTop: 0.5 })}
+          </View>
+          <View style={{ flex: 1, marginLeft: 0.5 }}>
+            {cell(1, { flex: 1, marginBottom: 0.5 })}
+            {cell(3, { flex: 1, marginTop: 0.5 })}
+          </View>
+        </>
+      )}
+    </View>
+  );
+});
+
 // Relative last-activity stamp for the row's trailing edge.
 const timeAgo = (ts) => {
   if (!ts) return '';
@@ -61,48 +144,106 @@ export default function ConversationsOverlay({ visible, onClose }) {
   const { theme } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
-  const { api } = useServer();
+  const { api, getBaseUrl, getMediaBaseUrl } = useServer();
+  // Same origin selection as MediaGallery's getFullUrl: prefer the HTTP/2
+  // media origin when the probe succeeded (shared expo-image cache, faster
+  // multiplexed loads), fall back to the http origin. thumbnailUrl paths
+  // already start with /api/, so strip the base's own /api suffix.
+  const mediaBase = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '');
 
   // Rows are { name, lastTs, latest } — latest/lastTs null when only the plain
-  // names list was available (fallback path).
+  // names list was available (fast path / fallback).
   const [boards, setBoards] = useState([]);
+  // { [boardName]: [thumbnailUrl, ...] } — lazily hydrated collage avatars.
+  const [avatars, setAvatars] = useState({});
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // True when BOTH tiers failed while we had nothing to show — drives the
+  // "couldn't reach the server" + Retry state instead of the misleading
+  // "No boards yet" empty state.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [query, setQuery] = useState('');
   const [openBoard, setOpenBoard] = useState(null);
 
+  // Instagram-style loading: the names list is INSTANT, everything else
+  // hydrates in place. Three tiers —
+  //   0. stale-while-revalidate: whatever list we already have stays visible;
+  //   1. GET /projects (cheap names query) paints rows within ~1 round-trip;
+  //   2. GET /projects-overview (latest item per board, the expensive merge)
+  //      replaces the list with previews + activity ordering when it lands.
+  // A generation counter + an overview-applied flag keep the merges ordered:
+  // a slow names response can never overwrite a newer overview.
+  const loadGen = useRef(0);
+  const boardsLenRef = useRef(0);
+  boardsLenRef.current = boards.length;
+
   const load = useCallback(async ({ isRefresh } = {}) => {
+    const gen = ++loadGen.current;
+    let overviewApplied = false;
     isRefresh ? setRefreshing(true) : setLoading(true);
-    try {
-      // The overview endpoint is the inbox: every visible board (own + shared
-      // with the caller — same isolation as /projects) with its latest item for
-      // the preview line, already sorted by most recent activity.
-      const r = await api.get('/projects-overview');
-      if (r?.success && Array.isArray(r.boards)) {
-        setBoards(r.boards.map((b) => ({ name: b.name, lastTs: b.lastTs || 0, latest: b.latest || null })));
-      } else {
-        throw new Error('no overview');
-      }
-    } catch {
-      // Older server: fall back to the plain names list so the inbox still opens.
-      try {
-        const r = await api.get('/projects');
+
+    // Tier 1 — instant names (only fills an EMPTY list; never downgrades
+    // previews already on screen).
+    if (boardsLenRef.current === 0) {
+      api.get('/projects').then((r) => {
+        if (gen !== loadGen.current || overviewApplied) return;
         const names = (Array.isArray(r) ? r : [])
           .filter((n) => typeof n === 'string' && n.trim())
           .sort((a, b) => a.localeCompare(b));
-        setBoards(names.map((name) => ({ name, lastTs: 0, latest: null })));
-      } catch {
-        setBoards([]);
+        if (names.length) {
+          setBoards((prev) => (prev.length ? prev : names.map((name) => ({ name, lastTs: 0, latest: null }))));
+          setLoadFailed(false);
+          setLoading(false);
+        }
+      }).catch(() => { /* overview below is the authoritative path */ });
+    }
+
+    // Tier 3 — lazy avatar hydration, riding the same trigger as the list
+    // (open / pull-to-refresh / board-close) so collages track renames,
+    // deletions, and new photos. Non-blocking; failure keeps initial discs.
+    api.get('/boards/avatars')
+      .then((r) => { if (gen === loadGen.current && r?.success && r.avatars) setAvatars(r.avatars); })
+      .catch(() => { /* initial discs stay */ });
+
+    // Tier 2 — the full inbox (own + shared boards, latest item per board,
+    // sorted by most recent activity).
+    try {
+      const r = await api.get('/projects-overview');
+      if (gen !== loadGen.current) return;
+      if (r?.success && Array.isArray(r.boards)) {
+        overviewApplied = true;
+        setBoards(r.boards.map((b) => ({ name: b.name, lastTs: b.lastTs || 0, latest: b.latest || null })));
+        setLoadFailed(false);
       }
+    } catch {
+      // The names tier (or the previous list) stays on screen when we have
+      // one; with NOTHING on screen this is a real failure — say so instead
+      // of pretending the user has no boards.
+      if (gen === loadGen.current && boardsLenRef.current === 0) setLoadFailed(true);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (gen === loadGen.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [api]);
 
   useEffect(() => {
     if (visible) load();
   }, [visible, load]);
+
+  // A different server is a different pond — the tier-0 stale cache must not
+  // carry across origins. Wipe it and orphan any in-flight old-server fetches.
+  const prevOriginRef = useRef(mediaBase);
+  useEffect(() => {
+    if (prevOriginRef.current === mediaBase) return;
+    prevOriginRef.current = mediaBase;
+    loadGen.current += 1;
+    setBoards([]);
+    setAvatars({});
+    if (visible) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaBase]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -119,15 +260,7 @@ export default function ConversationsOverlay({ visible, onClose }) {
         accessibilityRole="button"
         accessibilityLabel={`Open ${item.name} board`}
       >
-        <View style={{
-          width: 44, height: 44, borderRadius: 22,
-          alignItems: 'center', justifyContent: 'center',
-          backgroundColor: tint + '2A',
-        }}>
-          <Text style={{ fontSize: 18, fontWeight: '700', color: tint }}>
-            {item.name.charAt(0).toUpperCase()}
-          </Text>
-        </View>
+        <BoardAvatar name={item.name} thumbs={avatars[item.name]} base={mediaBase} tint={tint} />
         <View style={{ flex: 1 }}>
           <Text style={{ fontSize: 16, fontWeight: '600', color: c.textPrimary }} numberOfLines={1}>{item.name}</Text>
           <Text style={{ fontSize: 13, color: c.textTertiary, marginTop: 1 }} numberOfLines={1}>
@@ -141,7 +274,7 @@ export default function ConversationsOverlay({ visible, onClose }) {
         )}
       </TouchableOpacity>
     );
-  }, [c]);
+  }, [c, avatars, mediaBase]);
 
   return (
     <EdgeSwipePage visible={visible} onClose={onClose}>
@@ -189,16 +322,35 @@ export default function ConversationsOverlay({ visible, onClose }) {
           </View>
         </View>
 
-        {loading ? (
+        {loading && boards.length === 0 ? (
+          // Spinner ONLY when we have nothing at all — once any list (names
+          // fast-path or a previous open) is on screen, refreshes happen
+          // behind it without blanking the inbox.
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             <ActivityIndicator color={c.textSecondary} />
           </View>
         ) : filtered.length === 0 ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
-            <Icon name="forum-outline" size={40} color={c.textTertiary} />
+            <Icon name={loadFailed ? 'wifi-off' : 'forum-outline'} size={40} color={c.textTertiary} />
             <Text style={{ color: c.textSecondary, marginTop: 12, textAlign: 'center' }}>
-              {query ? 'No boards match your search.' : 'No boards yet — create one from Tasks.'}
+              {loadFailed
+                ? "Couldn't reach the server."
+                : query ? 'No boards match your search.' : 'No boards yet — create one from Tasks.'}
             </Text>
+            {loadFailed && (
+              <TouchableOpacity
+                onPress={() => { tapHaptic(); load(); }}
+                style={{
+                  marginTop: 16, paddingHorizontal: 20, paddingVertical: 9,
+                  borderRadius: 10, backgroundColor: c.surfaceElevated,
+                  borderWidth: 1, borderColor: c.border,
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading boards"
+              >
+                <Text style={{ color: c.textPrimary, fontWeight: '600' }}>Retry</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <FlatList
@@ -216,12 +368,13 @@ export default function ConversationsOverlay({ visible, onClose }) {
         )}
 
         {/* Board conversation — nested overlay so it stacks over this page on
-            iOS. Closing it refreshes the inbox so the preview/time reflect the
-            messages just sent. */}
+            iOS. Closing it refreshes the inbox ONLY when the visit actually
+            sent something (didActivity), so a silent back-out doesn't cost a
+            full overview scan. */}
         <BoardTimeline
           visible={!!openBoard}
           board={openBoard}
-          onClose={() => { setOpenBoard(null); load({ isRefresh: true }); }}
+          onClose={(didActivity) => { setOpenBoard(null); if (didActivity) load({ isRefresh: true }); }}
         />
       </View>
     </EdgeSwipePage>
