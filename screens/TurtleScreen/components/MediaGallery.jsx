@@ -70,7 +70,7 @@ import { useServer } from '../../../context/ServerContext';
 import { FlashList } from '@shopify/flash-list';
 import { useSharedValue } from 'react-native-reanimated';
 import TimelineScrubber from './TimelineScrubber';
-import { useVaultUpload } from '../../../context/VaultUploadContext';
+import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
 import { useMediaVersion } from '../../../context/DownloadsContext';
 import { useTheme } from '../../../context/ThemeContext';
 
@@ -549,9 +549,46 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
   );
 };
 
+// Static overlay styles for the local-sync picker cell (no theme dependency).
+const localCellStyles = StyleSheet.create({
+  relative: { position: 'relative' },
+  check: {
+    position: 'absolute', bottom: 4, right: 4, width: 24, height: 24, borderRadius: 12,
+    backgroundColor: '#000', justifyContent: 'center', alignItems: 'center',
+  },
+  videoBadge: { position: 'absolute', top: 4, left: 4 },
+});
+
+// One cell of the device-photo sync picker. React.memo so a selection tap only
+// re-renders (and re-decodes) the ONE cell whose isSelected changed — the
+// FlatList's extraData={selectedLocalAssets} + a stable renderItem make the
+// memo effective. cachePolicy="memory" (not "none"): device-local ph:// URIs
+// shouldn't be disk-cached, but the in-memory cache makes remounts instant.
+const LocalAssetCell = React.memo(function LocalAssetCell({ item, isSelected, onToggle, styles, themeColors }) {
+  return (
+    <TouchableOpacity
+      style={[styles.thumbnailContainer, localCellStyles.relative]}
+      onPress={() => onToggle(item.id)}
+      activeOpacity={0.8}
+    >
+      <Image source={{ uri: item.uri }} style={styles.thumbnail} contentFit="cover" cachePolicy="memory" />
+      {isSelected && (
+        <View style={localCellStyles.check}>
+          <Icon name="check" size={16} color="#fff" />
+        </View>
+      )}
+      {item.mediaType === 'video' && (
+        <View style={localCellStyles.videoBadge}>
+          <Icon name="video" size={16} color={themeColors.background} style={{ textShadowColor: '#000', textShadowRadius: 4 }} />
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+});
+
 /**
  * MediaGallery - Photo/Video vault gallery grid with Phone Uploads / Turtle Base toggle
- * 
+ *
  * Props:
  * - onClose: () => void - Called when user wants to close the gallery (optional for tab usage)
  * - autoUpload: boolean - If true, immediately opens image picker on mount (for /photos upload command)
@@ -591,8 +628,11 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // queue persists across app restarts, and duplicates are skipped up front.
   // `uploadBusy` mirrors "a batch is in flight" for buttons that must not
   // double-fire (one batch at a time keeps the percentage meaningful).
-  const vaultUpload = useVaultUpload();
-  const uploadBusy = !!vaultUpload.state && vaultUpload.state.status !== 'done';
+  // Actions (stable) + lifecycle (status/finishedAt only) — NOT the full state,
+  // so the per-% upload ticks no longer re-render this screen.
+  const vaultActions = useVaultUploadActions();
+  const vaultLifecycle = useVaultUploadLifecycle();
+  const uploadBusy = !!vaultLifecycle.status && vaultLifecycle.status !== 'done';
   const [refreshing, setRefreshing] = useState(false);
   
   // === LOCAL SYNC GALLERY STATE ===
@@ -1222,13 +1262,13 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // finishes (whether it finished while this screen was open or not).
   const lastFinishedAtRef = useRef(null);
   useEffect(() => {
-    const finishedAt = vaultUpload.state?.finishedAt || null;
+    const finishedAt = vaultLifecycle.finishedAt || null;
     if (finishedAt && finishedAt !== lastFinishedAtRef.current) {
       lastFinishedAtRef.current = finishedAt;
       fetchUploads(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vaultUpload.state?.finishedAt]);
+  }, [vaultLifecycle.finishedAt]);
 
   // Tag editor state
   // === TAG EDITOR STATE & ANIMATION ===
@@ -2769,6 +2809,18 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     });
   }, []);
 
+  // Stable renderItem for the local-sync grid — pairs with extraData +
+  // LocalAssetCell's React.memo so a tap re-renders only the toggled cell.
+  const renderLocalAsset = useCallback(({ item }) => (
+    <LocalAssetCell
+      item={item}
+      isSelected={selectedLocalAssets.has(item.id)}
+      onToggle={toggleLocalAssetSelection}
+      styles={styles}
+      themeColors={theme.colors}
+    />
+  ), [selectedLocalAssets, toggleLocalAssetSelection, styles, theme.colors]);
+
   const handleSelectAllLocal = useCallback(() => {
     if (selectedLocalAssets.size === localAssets.length) {
       setSelectedLocalAssets(new Set()); 
@@ -2808,7 +2860,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     if (pendingAssets.length === 0) return;
 
     const tags = selectedTags.length > 0 ? selectedTags : ['Phone Uploads'];
-    const started = vaultUpload.enqueue({
+    const started = vaultActions.enqueue({
       assets: pendingAssets.map((asset) => ({
         assetId: asset.assetId || null,
         uri: asset.uri || null,
@@ -3360,32 +3412,8 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
           numColumns={3}
           onEndReached={() => fetchLocalMedia(true)}
           onEndReachedThreshold={0.5}
-          renderItem={({ item }) => {
-            const isSelected = selectedLocalAssets.has(item.id);
-            return (
-              <TouchableOpacity 
-                style={[styles.thumbnailContainer, { position: 'relative' }]}
-                onPress={() => toggleLocalAssetSelection(item.id)}
-                activeOpacity={0.8}
-              >
-                <Image source={{ uri: item.uri }} style={styles.thumbnail} contentFit="cover" cachePolicy="none" />
-                {isSelected && (
-                  <View style={{
-                    position: 'absolute', bottom: 4, right: 4, width: 24, height: 24, borderRadius: 12,
-                    backgroundColor: '#000',
-                    justifyContent: 'center', alignItems: 'center'
-                  }}>
-                    <Icon name="check" size={16} color="#fff" />
-                  </View>
-                )}
-                {item.mediaType === 'video' && (
-                  <View style={{ position: 'absolute', top: 4, left: 4 }}>
-                    <Icon name="video" size={16} color={theme.colors.background} style={{ textShadowColor: '#000', textShadowRadius: 4 }} />
-                  </View>
-                )}
-              </TouchableOpacity>
-            );
-          }}
+          extraData={selectedLocalAssets}
+          renderItem={renderLocalAsset}
         />
 
         <View style={[styles.bottomContainer, { paddingBottom: insets.bottom + 16, paddingTop: 16, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border }]}>

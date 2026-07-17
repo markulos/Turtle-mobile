@@ -22,7 +22,7 @@
  * The streaming uploader (createUploadTask + two-phase watchdog + retries)
  * moved here VERBATIM from MediaGallery — see the comment on it below.
  */
-import React, { createContext, useContext, useRef, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -33,7 +33,16 @@ import { useServer, getApiAuthToken } from './ServerContext';
 import { notifyUploadComplete, updateUploadProgress, clearUploadProgress } from '../services/uploadNotify';
 import { notifyHaptic } from '../utils/haptics';
 
-const VaultUploadContext = createContext(null);
+// Split into three contexts so a consumer only re-renders on the slice it
+// cares about. The `state` snapshot churns on EVERY upload % tick; before the
+// split MediaGallery (which only needs status/finishedAt + enqueue) re-rendered
+// on every tick through the single combined value.
+//   • Actions   — the stable callbacks. Created once.
+//   • State     — { state: snapshot, hidden }. Ticks. Only VaultUploadPill.
+//   • Lifecycle — { status, finishedAt }. Changes only at batch boundaries.
+const VaultUploadActionsContext = createContext(null);
+const VaultUploadStateContext = createContext(null);
+const VaultUploadLifecycleContext = createContext(null);
 
 // One in-flight batch, checkpointed here after every item so a killed app
 // resumes instead of restarting. v1 of the shape — bump the key on breaking
@@ -645,12 +654,38 @@ export function VaultUploadProvider({ children }) {
   const hide = useCallback(() => setHidden(true), []);
   const show = useCallback(() => setHidden(false), []);
 
-  const value = { state: snapshot, hidden, hide, show, enqueue, resume, deleteOriginals, dismiss };
-  return <VaultUploadContext.Provider value={value}>{children}</VaultUploadContext.Provider>;
+  const actions = useMemo(
+    () => ({ enqueue, resume, deleteOriginals, dismiss, hide, show }),
+    [enqueue, resume, deleteOriginals, dismiss, hide, show],
+  );
+  const stateValue = useMemo(() => ({ state: snapshot, hidden }), [snapshot, hidden]);
+  const lifecycle = useMemo(
+    () => ({ status: snapshot?.status ?? null, finishedAt: snapshot?.finishedAt ?? null }),
+    [snapshot?.status, snapshot?.finishedAt],
+  );
+  return (
+    <VaultUploadActionsContext.Provider value={actions}>
+      <VaultUploadLifecycleContext.Provider value={lifecycle}>
+        <VaultUploadStateContext.Provider value={stateValue}>
+          {children}
+        </VaultUploadStateContext.Provider>
+      </VaultUploadLifecycleContext.Provider>
+    </VaultUploadActionsContext.Provider>
+  );
 }
 
-export const useVaultUpload = () => {
-  const ctx = useContext(VaultUploadContext);
-  if (!ctx) throw new Error('useVaultUpload must be used within a VaultUploadProvider');
+export const useVaultUploadActions = () => {
+  const ctx = useContext(VaultUploadActionsContext);
+  if (!ctx) throw new Error('useVaultUploadActions must be used within a VaultUploadProvider');
+  return ctx;
+};
+export const useVaultUploadState = () => {
+  const ctx = useContext(VaultUploadStateContext);
+  if (!ctx) throw new Error('useVaultUploadState must be used within a VaultUploadProvider');
+  return ctx;
+};
+export const useVaultUploadLifecycle = () => {
+  const ctx = useContext(VaultUploadLifecycleContext);
+  if (!ctx) throw new Error('useVaultUploadLifecycle must be used within a VaultUploadProvider');
   return ctx;
 };

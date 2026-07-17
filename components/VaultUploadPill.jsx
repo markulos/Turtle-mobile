@@ -21,7 +21,7 @@ import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'rea
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
-import { useVaultUpload } from '../context/VaultUploadContext';
+import { useVaultUploadState, useVaultUploadActions } from '../context/VaultUploadContext';
 import { tapHaptic, notifyHaptic } from '../utils/haptics';
 
 // Height of the bottom tab bar's content (App.js uses 49 + bottom inset).
@@ -29,7 +29,8 @@ const TAB_BAR_H = 49;
 
 export default function VaultUploadPill() {
   const { theme } = useTheme();
-  const { state, hidden, hide, show, resume, deleteOriginals, dismiss } = useVaultUpload();
+  const { state, hidden } = useVaultUploadState();
+  const { hide, show, resume, deleteOriginals, dismiss } = useVaultUploadActions();
   const insets = useSafeAreaInsets();
 
   if (!state) return null;
