@@ -71,7 +71,7 @@ import { FlashList } from '@shopify/flash-list';
 import { useSharedValue } from 'react-native-reanimated';
 import TimelineScrubber from './TimelineScrubber';
 import { useVaultUpload } from '../../../context/VaultUploadContext';
-import { useDownloads } from '../../../context/DownloadsContext';
+import { useMediaVersion } from '../../../context/DownloadsContext';
 import { useTheme } from '../../../context/ThemeContext';
 
 // Create an animated version of FlashList to match our existing architecture
@@ -2325,7 +2325,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // ghost-download finished, broadcast as media:added). A burst of media:added
   // (a playlist ingest) is DEBOUNCED into one reload; if we're not on the
   // uploads tab the reload is deferred until we return.
-  const { mediaVersion } = useDownloads();
+  // Narrow context: only bumps when the vault actually changes — the jobs
+  // list (which churns per progress tick) no longer re-renders this screen.
+  const { mediaVersion } = useMediaVersion();
   const mediaVersionFirst = useRef(true);
   const mediaRefreshTimer = useRef(null);
   const pendingMediaRefresh = useRef(false);

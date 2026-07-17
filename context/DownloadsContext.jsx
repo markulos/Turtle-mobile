@@ -12,6 +12,7 @@
  *                        can live-refresh (downloads land in the vault).
  */
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { AppState } from 'react-native';
 import { io } from 'socket.io-client';
 import { useServer, serverOrigin } from './ServerContext';
 
@@ -21,6 +22,12 @@ const DownloadsContext = createContext({
 });
 
 export const useDownloads = () => useContext(DownloadsContext);
+
+// mediaVersion lives in its OWN context: the jobs value churns on every
+// download:progress tick, and MediaGallery (which only cares about "did the
+// vault change") was re-rendering per tick through useDownloads.
+const MediaVersionContext = createContext({ mediaVersion: 0 });
+export const useMediaVersion = () => useContext(MediaVersionContext);
 
 const pctOf = (j) =>
   typeof j.percent === 'number'
@@ -95,6 +102,31 @@ export function DownloadsProvider({ children }) {
     return () => { socket.removeAllListeners(); socket.disconnect(); socketRef.current = null; };
   }, [serverIP]);
 
+  // Battery: drop the socket while backgrounded, reconnect on return (same
+  // pattern as the Claude session socket). Only the stable 'background' /
+  // 'active' states — 'inactive' (app-switcher peek) is ignored so a quick
+  // peek doesn't churn the connection. On reconnect the 'connect' handler
+  // already re-pulls /downloads; bump mediaVersion too so media added while
+  // backgrounded triggers the gallery's windowed soft reload.
+  useEffect(() => {
+    let wasBackgrounded = false;
+    const sub = AppState.addEventListener('change', (s) => {
+      const sock = socketRef.current;
+      if (!sock) return;
+      if (s === 'background') {
+        wasBackgrounded = true;
+        sock.disconnect();
+      } else if (s === 'active' && !sock.connected) {
+        sock.connect();
+        if (wasBackgrounded) {
+          wasBackgrounded = false;
+          setMediaVersion((v) => v + 1);
+        }
+      }
+    });
+    return () => sub?.remove();
+  }, []);
+
   const control = useCallback(async (id, action) => {
     try { await api.post(`/downloads/${id}/${action}`, {}); await refresh(); } catch { /* ignore */ }
   }, [api, refresh]);
@@ -112,5 +144,10 @@ export function DownloadsProvider({ children }) {
     () => ({ jobs, active, mediaVersion, control, remove, enqueue, refresh }),
     [jobs, active, mediaVersion, control, remove, enqueue, refresh],
   );
-  return <DownloadsContext.Provider value={value}>{children}</DownloadsContext.Provider>;
+  const mediaValue = useMemo(() => ({ mediaVersion }), [mediaVersion]);
+  return (
+    <DownloadsContext.Provider value={value}>
+      <MediaVersionContext.Provider value={mediaValue}>{children}</MediaVersionContext.Provider>
+    </DownloadsContext.Provider>
+  );
 }
