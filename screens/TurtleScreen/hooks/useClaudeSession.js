@@ -114,8 +114,14 @@ export function useClaudeSession(serverIP, token) {
     }
   }, [token]);
 
+  // Cap the transcript (mirrors useTerminalSession) so a long live session
+  // can't grow the array without bound — keep the most recent MAX_LINES.
+  const MAX_LINES = 1000;
   const push = useCallback((line) => {
-    setTranscript((prev) => [...prev, { id: `cl_${idRef.current++}`, ...line }]);
+    setTranscript((prev) => {
+      const next = [...prev, { id: `cl_${idRef.current++}`, ...line }];
+      return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
+    });
   }, []);
 
   // Show the ASCII boot banner exactly once per session start (reset when the

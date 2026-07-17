@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ParticipantPicker from './TasksScreen/components/ParticipantPicker';
 import CalendarPartners from './TasksScreen/components/CalendarPartners';
 import {
@@ -8,12 +8,13 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
-  Platform,
   Keyboard,
   TouchableWithoutFeedback,
   Switch,
   AppState,
   ActivityIndicator,
+  Animated,
+  useWindowDimensions,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
@@ -25,15 +26,17 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import * as SecureStore from 'expo-secure-store';
 import { clearAllCaches, getCacheSizeBytes, formatBytes } from '../utils/cacheManager';
+import { tapHaptic, impactHaptic, notifyHaptic } from '../utils/haptics';
 
 const MASTER_KEY_STORE = 'vault_master_key';
 const SALT_STORE = 'vault_salt';
 
 export default function SettingsScreen({ active = true }) {
-  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks } = useTheme();
+  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll } = useTheme();
   const { serverIP, isConnected, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
   const [isHealing, setIsHealing] = useState(false);
   const [isClearingCache, setIsClearingCache] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
   // null = not yet measured / measuring; number = bytes currently cached.
   const [cacheBytes, setCacheBytes] = useState(null);
   const [measuringCache, setMeasuringCache] = useState(false);
@@ -44,6 +47,32 @@ export default function SettingsScreen({ active = true }) {
     { key: 'connection', label: 'Connection', icon: 'server-network' },
     { key: 'security', label: 'Security', icon: 'shield-key' },
   ];
+
+  // ── Swipeable tabs ──────────────────────────────────────────
+  // Same mechanism as Notes / the photo vault: a horizontal paging ScrollView
+  // whose scroll offset (pageScrollX) drives BOTH the pages and the pill
+  // indicator 1:1, so swiping and the pill slide stay perfectly in sync.
+  const { width: screenW } = useWindowDimensions();
+  const pageScrollX = useRef(new Animated.Value(0)).current;
+  const pagerRef = useRef(null);
+  const TAB_TRACK_INSET = 12; // marginHorizontal on the pill track
+  const segW = (screenW - TAB_TRACK_INSET * 2) / SETTINGS_TABS.length;
+  // Pill translation: 1:1 with the page offset, mapped onto segment widths.
+  const tabIndicatorX = pageScrollX.interpolate({
+    inputRange: SETTINGS_TABS.map((_, i) => i * screenW),
+    outputRange: SETTINGS_TABS.map((_, i) => i * segW),
+    extrapolate: 'clamp',
+  });
+  const goToPage = useCallback((index) => {
+    pagerRef.current?.scrollTo({ x: index * screenW, animated: true });
+    const t = SETTINGS_TABS[index];
+    if (t) setActiveTab(t.key);
+  }, [screenW]);
+  const onPagerEnd = useCallback((e) => {
+    const idx = Math.round(e.nativeEvent.contentOffset.x / screenW);
+    const t = SETTINGS_TABS[idx];
+    if (t && t.key !== activeTab) setActiveTab(t.key);
+  }, [screenW, activeTab]);
   const { logout, getAuthHeaders } = useAuth();
   const [ipInput, setIpInput] = useState(serverIP);
   const [hasVault, setHasVault] = useState(false);
@@ -344,6 +373,39 @@ export default function SettingsScreen({ active = true }) {
     }
   }, [isClearingCache, measureCache]);
 
+  // Fire a test reminder at myself (push + SMS) and report what the server
+  // actually managed to send, so a "no notifications" problem is diagnosable
+  // right here: 0 devices → token/permission issue; muted → preference off;
+  // SMS dev/skipped/failed → the texting half.
+  const handleTestNotification = useCallback(async () => {
+    if (sendingTest) return;
+    setSendingTest(true);
+    try {
+      const res = await api.post('/notifications/test', {});
+      const pushN = res?.push?.sent ?? 0;
+      const sms = res?.sms || {};
+      const pushLine = pushN > 0
+        ? `Push: sent to ${pushN} device${pushN > 1 ? 's' : ''} ✓`
+        : (res?.push?.muted
+            ? 'Push: muted by your notification settings'
+            : 'Push: no registered devices — open the app on this phone and allow notifications');
+      const smsLine = sms.ok
+        ? (sms.dev ? 'SMS: dev mode (logged, not actually sent)' : 'SMS: sent ✓')
+        : sms.reason === 'no-phone-on-file'
+          ? 'SMS: skipped — no phone on your account'
+          : sms.skipped
+            ? 'SMS: skipped'
+            : `SMS: failed${sms.error ? ` — ${String(sms.error).slice(0, 90)}` : ''}`;
+      notifyHaptic(pushN > 0 || sms.ok ? 'success' : 'warning');
+      Alert.alert('Test notification', `${pushLine}\n${smsLine}`);
+    } catch (e) {
+      notifyHaptic('error');
+      Alert.alert('Could not send', e?.message || 'Request failed. Check your connection and try again.');
+    } finally {
+      setSendingTest(false);
+    }
+  }, [api, sendingTest]);
+
   const handleResetVault = async () => {
     Alert.alert(
       '⚠️ Reset Password Vault',
@@ -399,38 +461,70 @@ export default function SettingsScreen({ active = true }) {
         <Text style={styles.headerTitle}>Settings</Text>
       </View>
 
-      {/* Fixed tab bar — equal-width tabs so nothing squishes or jumps */}
-      <View style={styles.tabBar}>
-        {SETTINGS_TABS.map((t) => {
-          const tabActive = activeTab === t.key;
+      {/* Swipeable segmented control — the pill slides 1:1 with the pager, and
+          each label/icon crossfades from muted to primary as its page arrives.
+          Tapping a segment animates the pager to that page. */}
+      <View style={styles.tabTrack}>
+        <Animated.View
+          style={[styles.tabPill, { width: segW - 4, transform: [{ translateX: tabIndicatorX }] }]}
+        />
+        {SETTINGS_TABS.map((t, index) => {
+          const inputRange = [(index - 1) * screenW, index * screenW, (index + 1) * screenW];
+          const activeOp = pageScrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
+          const inactiveOp = pageScrollX.interpolate({ inputRange, outputRange: [1, 0, 1], extrapolate: 'clamp' });
           return (
             <TouchableOpacity
               key={t.key}
-              style={[styles.tab, tabActive && styles.tabActive]}
-              onPress={() => setActiveTab(t.key)}
-              activeOpacity={0.7}
+              style={styles.tabSeg}
+              onPressIn={() => tapHaptic()}
+              onPress={() => goToPage(index)}
+              activeOpacity={0.8}
             >
-              <Icon
-                name={t.icon}
-                size={16}
-                color={tabActive ? theme.colors.textPrimary : theme.colors.textTertiary}
-              />
-              <Text
-                style={[styles.tabLabel, { color: tabActive ? theme.colors.textPrimary : theme.colors.textTertiary }]}
-                numberOfLines={1}
-              >
-                {t.label}
-              </Text>
+              {/* Inactive (muted) layer */}
+              <Animated.View style={[styles.tabSegContent, { opacity: inactiveOp }]}>
+                <Icon name={t.icon} size={16} color={theme.colors.textTertiary} />
+                <Text style={[styles.tabLabel, { color: theme.colors.textTertiary }]} numberOfLines={1}>
+                  {t.label}
+                </Text>
+              </Animated.View>
+              {/* Active (primary) layer — stacked on top, fades in for this page */}
+              <Animated.View style={[styles.tabSegContent, { opacity: activeOp }]}>
+                <Icon name={t.icon} size={16} color={theme.colors.textPrimary} />
+                <Text style={[styles.tabLabel, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+                  {t.label}
+                </Text>
+              </Animated.View>
             </TouchableOpacity>
           );
         })}
       </View>
 
-      <KeyboardSafeScreen>
+      {/* Swipeable pager — one page per tab. The scroll offset feeds pageScrollX
+          (native driver) which drives the pill above 1:1. Each page holds only
+          its own tab's sections (the others render null via the tabKey gates),
+          inside its own keyboard-aware vertical scroll. */}
+      <Animated.ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        scrollEventThrottle={16}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { x: pageScrollX } } }],
+          { useNativeDriver: true },
+        )}
+        onMomentumScrollEnd={onPagerEnd}
+        style={{ flex: 1 }}
+      >
+        {SETTINGS_TABS.map((tabItem) => {
+          const tabKey = tabItem.key;
+          return (
+          <View key={tabKey} style={{ width: screenW }}>
+          <KeyboardSafeScreen>
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={styles.inner}>
             {/* Profile Section — avatar + alias used across the app */}
-            {activeTab === 'general' && (
+            {tabKey === 'general' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -440,7 +534,7 @@ export default function SettingsScreen({ active = true }) {
               </View>
 
               <View style={styles.profileRow}>
-                <TouchableOpacity onPress={handlePickAvatar} activeOpacity={0.8} disabled={uploadingAvatar}>
+                <TouchableOpacity onPressIn={() => tapHaptic()} onPress={handlePickAvatar} activeOpacity={0.8} disabled={uploadingAvatar}>
                   <View style={[styles.avatarCircle, { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.border }]}>
                     {avatarFullUrl ? (
                       <Image
@@ -508,6 +602,7 @@ export default function SettingsScreen({ active = true }) {
               {nameInput.trim() !== (profile?.displayName || '') && (
                 <TouchableOpacity
                   style={[styles.primaryButton, savingName && styles.buttonDisabled, { marginBottom: 0 }]}
+                  onPressIn={() => impactHaptic('medium')}
                   onPress={handleSaveName}
                   disabled={savingName}
                 >
@@ -519,7 +614,7 @@ export default function SettingsScreen({ active = true }) {
             )}
 
             {/* Appearance Section */}
-            {activeTab === 'general' && (
+            {tabKey === 'general' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -545,7 +640,7 @@ export default function SettingsScreen({ active = true }) {
             )}
 
             {/* Navigation Section — control what shows in the bottom navbar. */}
-            {activeTab === 'general' && (
+            {tabKey === 'general' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -573,7 +668,7 @@ export default function SettingsScreen({ active = true }) {
 
             {/* Storage Section — manual cache control. The app auto-trims the
                 cache on background, but this gives an instant manual wipe. */}
-            {activeTab === 'general' && (
+            {tabKey === 'general' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -607,6 +702,7 @@ export default function SettingsScreen({ active = true }) {
 
               <TouchableOpacity
                 style={[styles.secondaryButton, { marginBottom: 0 }, isClearingCache && styles.buttonDisabled]}
+                onPressIn={() => notifyHaptic('warning')}
                 onPress={handleClearCache}
                 disabled={isClearingCache}
                 activeOpacity={0.7}
@@ -623,8 +719,42 @@ export default function SettingsScreen({ active = true }) {
             </View>
             )}
 
+            {/* Notifications Section — verify the reminder pipeline end-to-end. */}
+            {tabKey === 'general' && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+                  <Icon name="bell-ring" size={20} color={theme.colors.textPrimary} />
+                </View>
+                <Text style={styles.sectionTitle}>Notifications</Text>
+              </View>
+
+              <Text style={[styles.hint, { marginTop: 0 }]}>
+                Task and event reminders are pushed to this phone (and texted too if you turn on
+                SMS for the item). Send a test to confirm they reach you.
+              </Text>
+
+              <TouchableOpacity
+                style={[styles.secondaryButton, { marginBottom: 0 }, (sendingTest || !isConnected) && styles.buttonDisabled]}
+                onPressIn={() => impactHaptic('medium')}
+                onPress={handleTestNotification}
+                disabled={sendingTest || !isConnected}
+                activeOpacity={0.7}
+              >
+                {sendingTest ? (
+                  <ActivityIndicator size="small" color={theme.colors.textPrimary} style={styles.buttonIcon} />
+                ) : (
+                  <Icon name="bell-ring-outline" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
+                )}
+                <Text style={styles.secondaryButtonText}>
+                  {sendingTest ? 'Sending…' : 'Send test notification'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            )}
+
             {/* Calendar — time format */}
-            {activeTab === 'calendar' && (
+            {tabKey === 'calendar' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -658,6 +788,20 @@ export default function SettingsScreen({ active = true }) {
                   thumbColor={showCalendarDayTasks ? theme.colors.textPrimary : theme.colors.textTertiary}
                 />
               </View>
+              {/* Calendar scroll style — free-form continuous scrolling (iOS
+                  Calendar style) vs. the default paged one-month-per-swipe. */}
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Free-scroll calendar</Text>
+                  <Text style={styles.settingDescription}>Scroll months continuously like iOS Calendar instead of snapping one month per swipe</Text>
+                </View>
+                <Switch
+                  value={calendarFreeScroll}
+                  onValueChange={(v) => setCalendarFreeScroll(v)}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
+                  thumbColor={calendarFreeScroll ? theme.colors.textPrimary : theme.colors.textTertiary}
+                />
+              </View>
               {/* Default participants — pond members auto-added to tasks you create */}
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
@@ -685,7 +829,7 @@ export default function SettingsScreen({ active = true }) {
             )}
 
             {/* Server Connection Section */}
-            {activeTab === 'connection' && (
+            {tabKey === 'connection' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -722,14 +866,15 @@ export default function SettingsScreen({ active = true }) {
                 Your phone and computer must be on the same WiFi network
               </Text>
 
-              <TouchableOpacity style={styles.primaryButton} onPress={handleSave}>
+              <TouchableOpacity style={styles.primaryButton} onPressIn={() => impactHaptic('medium')} onPress={handleSave}>
                 <Icon name="content-save" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
                 <Text style={styles.primaryButtonText}>Save & Connect</Text>
               </TouchableOpacity>
 
               {serverIP && (
-                <TouchableOpacity 
-                  style={styles.secondaryButton} 
+                <TouchableOpacity
+                  style={styles.secondaryButton}
+                  onPressIn={() => tapHaptic()}
                   onPress={handleTest}
                 >
                   <Icon name="connection" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
@@ -748,7 +893,8 @@ export default function SettingsScreen({ active = true }) {
                     backgroundColor: theme.colors.surfaceElevated,
                     borderRadius: 12,
                     marginTop: 12,
-                  }} 
+                  }}
+                  onPressIn={() => tapHaptic()}
                   onPress={triggerMediaHeal}
                   disabled={isHealing}
                   activeOpacity={0.7}
@@ -778,10 +924,10 @@ export default function SettingsScreen({ active = true }) {
             )}
 
             {/* AI Sidecar — live status, library progress & inference stats */}
-            {activeTab === 'connection' && <SidecarStatusCard active={active} />}
+            {tabKey === 'connection' && <SidecarStatusCard active={active} />}
 
             {/* Password Vault Section */}
-            {activeTab === 'security' && hasVault && (
+            {tabKey === 'security' && hasVault && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -840,6 +986,7 @@ export default function SettingsScreen({ active = true }) {
                     />
                     <TouchableOpacity 
                       style={[styles.primaryButton, isChanging && styles.buttonDisabled]}
+                      onPressIn={() => impactHaptic('medium')}
                       onPress={handleChangePassword}
                       disabled={isChanging}
                     >
@@ -850,8 +997,9 @@ export default function SettingsScreen({ active = true }) {
                   </View>
                 )}
 
-                <TouchableOpacity 
-                  style={styles.dangerButton} 
+                <TouchableOpacity
+                  style={styles.dangerButton}
+                  onPressIn={() => notifyHaptic('warning')}
                   onPress={handleResetVault}
                 >
                   <Icon name="delete-forever" size={16} color={theme.colors.accentError} style={styles.buttonIcon} />
@@ -860,7 +1008,7 @@ export default function SettingsScreen({ active = true }) {
               </View>
             )}
 
-            {activeTab === 'security' && !hasVault && (
+            {tabKey === 'security' && !hasVault && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <View style={[styles.iconContainer, { backgroundColor: 'rgba(244, 67, 54, 0.15)' }]}>
@@ -879,7 +1027,7 @@ export default function SettingsScreen({ active = true }) {
             )}
 
             {/* Account Section */}
-            {activeTab === 'general' && (
+            {tabKey === 'general' && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
@@ -888,8 +1036,9 @@ export default function SettingsScreen({ active = true }) {
                 <Text style={styles.sectionTitle}>Account</Text>
               </View>
               
-              <TouchableOpacity 
-                style={styles.dangerButton} 
+              <TouchableOpacity
+                style={styles.dangerButton}
+                onPressIn={() => notifyHaptic('warning')}
                 onPress={() => {
                   Alert.alert(
                     'Sign Out',
@@ -915,7 +1064,7 @@ export default function SettingsScreen({ active = true }) {
             )}
 
             {/* Info Section */}
-            {activeTab === 'security' && (
+            {tabKey === 'security' && (
             <View style={styles.infoBox}>
               <Icon name="information" size={18} color={theme.colors.textPrimary} style={styles.infoIcon} />
               <View style={styles.infoContent}>
@@ -932,6 +1081,10 @@ export default function SettingsScreen({ active = true }) {
           </View>
         </TouchableWithoutFeedback>
       </KeyboardSafeScreen>
+          </View>
+          );
+        })}
+      </Animated.ScrollView>
     </View>
   );
 }
@@ -955,25 +1108,50 @@ const createStyles = (theme) => StyleSheet.create({
     fontWeight: '700',
     color: theme.colors.textPrimary,
   },
-  tabBar: {
+  // Segmented control track — a faint rounded bar holding the 4 tab segments
+  // with the sliding pill behind them. Mirrors the Notes/vault switcher.
+  tabTrack: {
     flexDirection: 'row',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 6,
-    borderBottomWidth: 0.5,
-    borderBottomColor: theme.colors.border,
+    position: 'relative',
+    marginHorizontal: 12,
+    marginVertical: 8,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
   },
-  tab: {
+  // The sliding pill — an elevated rounded rectangle that translateX-tracks the
+  // pager offset. Inset 3px top/bottom + 2px start so it floats inside the track.
+  tabPill: {
+    position: 'absolute',
+    top: 3,
+    bottom: 3,
+    left: 2,
+    borderRadius: 9,
+    backgroundColor: theme.colors.surfaceElevated,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  // One tab segment — full track height, holds the two crossfading label layers.
+  tabSeg: {
     flex: 1,
+    height: '100%',
+    zIndex: 1,
+  },
+  // Both label layers (muted + primary) use this: absolutely fill the segment
+  // and centre their icon+label, so they stack pixel-perfectly for the crossfade.
+  tabSegContent: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 5,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  tabActive: {
-    backgroundColor: theme.colors.surfaceElevated,
   },
   tabLabel: {
     fontSize: 11,

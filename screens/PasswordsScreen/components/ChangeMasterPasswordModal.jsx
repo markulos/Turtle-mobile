@@ -15,6 +15,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useTheme } from '../../../context/ThemeContext';
 import { unlockVault } from '../utils/crypto';
+import { impactHaptic } from '../../../utils/haptics';
 
 /**
  * Change Master Password.
@@ -159,11 +160,11 @@ export const ChangeMasterPasswordModal = ({ visible, onClose, onChangePassword, 
                     />
                   </View>
                   {!!authError && <Text style={styles.error}>{authError}</Text>}
-                  <TouchableOpacity style={styles.button} onPress={verifyFallback}>
+                  <TouchableOpacity style={styles.button} onPressIn={() => impactHaptic('medium')} onPress={verifyFallback}>
                     <Text style={styles.buttonText}>Continue</Text>
                   </TouchableOpacity>
                   {biometricAvailable && (
-                    <TouchableOpacity style={styles.linkBtn} onPress={runBiometric}>
+                    <TouchableOpacity style={styles.linkBtn} onPressIn={() => impactHaptic('medium')} onPress={runBiometric}>
                       <Icon name="face-recognition" size={18} color={theme.colors.accentInfo} />
                       <Text style={styles.linkText}>Use biometrics instead</Text>
                     </TouchableOpacity>
@@ -205,6 +206,7 @@ export const ChangeMasterPasswordModal = ({ visible, onClose, onChangePassword, 
               {!!formError && <Text style={styles.error}>{formError}</Text>}
               <TouchableOpacity
                 style={[styles.button, isProcessing && styles.buttonDisabled]}
+                onPressIn={() => impactHaptic('medium')}
                 onPress={submitNew}
                 disabled={isProcessing}
               >

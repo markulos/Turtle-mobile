@@ -29,6 +29,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useServer, serverOrigin } from '../../context/ServerContext';
 import { DismissKeyboardView } from '../../components/KeyboardSafeView';
 import { scanForPonds, scanFunnels, confirmServerForPhone, SEED_FUNNELS } from '../../services/pondDiscovery';
+import { tapHaptic, impactHaptic } from '../../utils/haptics';
 
 // Brand turtle, rendered to a 1024px PNG. Was a 6.4 MB auto-traced SVG
 // (7,069 hyper-precise paths) bundled into the app for a logo shown at ~120px
@@ -411,6 +412,7 @@ export default function LoginScreen() {
                       opacity: isLoading ? 0.7 : 1,
                     },
                   ]}
+                  onPressIn={() => impactHaptic('medium')}
                   onPress={handleLogin}
                   disabled={isLoading}
                   activeOpacity={0.8}
@@ -423,6 +425,7 @@ export default function LoginScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
+                  onPressIn={() => tapHaptic()}
                   onPress={() => switchMode('phone')}
                   style={styles.modeToggle}
                   disabled={isLoading}
@@ -564,6 +567,7 @@ export default function LoginScreen() {
                         opacity: busy ? 0.7 : 1,
                       },
                     ]}
+                    onPressIn={() => impactHaptic('medium')}
                     onPress={handleSendCode}
                     disabled={busy}
                     activeOpacity={0.8}
@@ -583,6 +587,7 @@ export default function LoginScreen() {
                         opacity: isLoading ? 0.7 : 1,
                       },
                     ]}
+                    onPressIn={() => impactHaptic('medium')}
                     onPress={handleVerifyCode}
                     disabled={isLoading}
                     activeOpacity={0.8}
@@ -606,7 +611,7 @@ export default function LoginScreen() {
                   ) : (
                     <View />
                   )}
-                  <TouchableOpacity onPress={() => switchMode('password')} disabled={busy || isLoading}>
+                  <TouchableOpacity onPressIn={() => tapHaptic()} onPress={() => switchMode('password')} disabled={busy || isLoading}>
                     <Text style={[styles.linkText, { color: theme.colors.textSecondary }]}>Use master password</Text>
                   </TouchableOpacity>
                 </View>
@@ -640,6 +645,7 @@ export default function LoginScreen() {
                   </View>
                   <TouchableOpacity
                     style={[styles.serverSaveBtn, { backgroundColor: theme.colors.primary, opacity: serverBusy ? 0.7 : 1 }]}
+                    onPressIn={() => tapHaptic()}
                     onPress={handleSaveServer}
                     disabled={serverBusy}
                   >
@@ -665,6 +671,7 @@ export default function LoginScreen() {
                             backgroundColor: active ? theme.colors.primaryMuted : 'transparent',
                           },
                         ]}
+                        onPressIn={() => tapHaptic()}
                         onPress={() => { setServerInput(p.host); handleSaveServer(p.host); }}
                         disabled={serverBusy}
                         activeOpacity={0.8}
@@ -705,6 +712,7 @@ export default function LoginScreen() {
                         <TouchableOpacity
                           key={p.host}
                           style={[styles.pondRow, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.border }]}
+                          onPressIn={() => tapHaptic()}
                           onPress={() => handleSaveServer(p.host)}
                           disabled={serverBusy}
                           activeOpacity={0.7}
@@ -740,7 +748,7 @@ export default function LoginScreen() {
                                   ? 'Tip: type your phone number above, then rescan to see private ponds you\'re invited to.'
                                   : `${ponds.length} pond${ponds.length === 1 ? '' : 's'} found.`}
                             </Text>
-                            <TouchableOpacity onPress={() => startPondScan(phone.trim())} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <TouchableOpacity onPressIn={() => tapHaptic()} onPress={() => startPondScan(phone.trim())} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                               <Text style={[styles.pondSub, { color: theme.colors.textSecondary, textDecorationLine: 'underline' }]}>Rescan</Text>
                             </TouchableOpacity>
                           </>
@@ -930,11 +938,6 @@ const styles = StyleSheet.create({
   },
   linkText: {
     fontSize: 13,
-  },
-  hint: {
-    fontSize: 12,
-    textAlign: 'center',
-    marginTop: 16,
   },
   serverRow: {
     flexDirection: 'row',

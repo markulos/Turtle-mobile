@@ -7,6 +7,7 @@ import {
 } from 'react-native';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { tapHaptic } from '../../../utils/haptics';
 
 export const SearchBar = ({ value, onChangeText, onClear, onLock }) => {
   const { theme } = useTheme();
@@ -29,7 +30,7 @@ export const SearchBar = ({ value, onChangeText, onClear, onLock }) => {
           </TouchableOpacity>
         ) : null}
       </View>
-      <TouchableOpacity style={styles.lockBtn} onPress={onLock}>
+      <TouchableOpacity style={styles.lockBtn} onPressIn={() => tapHaptic()} onPress={onLock}>
         <Icon name="lock" size={22} color={theme.colors.textPrimary} />
       </TouchableOpacity>
     </View>

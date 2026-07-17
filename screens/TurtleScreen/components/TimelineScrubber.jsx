@@ -36,7 +36,6 @@ import React, { memo, useState } from 'react';
 import { Platform, StyleSheet, Text, TextInput, Vibration, View } from 'react-native';
 import Reanimated, {
   useSharedValue,
-  useDerivedValue,
   useAnimatedStyle,
   useAnimatedProps,
   useAnimatedReaction,

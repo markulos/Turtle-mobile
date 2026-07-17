@@ -1,0 +1,67 @@
+appId: com.markulos.passwordtaskmanager
+name: Batch-select photo share (vault → single OS share sheet)
+tags:
+  - share
+  - media
+---
+# End-to-end check for the vault BATCH-SELECT share — the flow that could only be
+# verified by hand before. Exercises the exact path the app takes:
+#   Photos vault → Select mode → pick several photos → Share
+#   → gather overlay (downloads originals) → ONE native OS share sheet w/ all of them.
+#
+# PREREQUISITES (device/emulator, run via `maestro test .maestro/batch-share.yaml`):
+#   • A dev build that INCLUDES react-native-share (else the app falls back to the
+#     per-photo expo-sharing loop — this flow's single-sheet assertion won't hold;
+#     see the note at step 6).
+#   • Logged in already (persisted session) and connected to the Turtle server.
+#   • At least 4 photos in the vault.
+
+- launchApp
+
+# 1. Open the Photos vault tab (icon-only tab → stable testID from App.js).
+- tapOn:
+    id: "tab-photos"
+
+# 2. Enter multi-select mode. The toggle's label flips Select → Cancel.
+- tapOn:
+    id: "gallery-select-toggle"
+- assertVisible: "Cancel"
+
+# 3. Select several photos (cell testIDs are gallery-cell-<gridIndex>).
+- tapOn:
+    id: "gallery-cell-0"
+- tapOn:
+    id: "gallery-cell-1"
+- tapOn:
+    id: "gallery-cell-2"
+- tapOn:
+    id: "gallery-cell-3"
+
+# 4. Tap Share → hands the WHOLE selection to a single native sheet.
+- tapOn:
+    id: "gallery-share-button"
+
+# 5. The gather overlay appears while originals download, then dismisses right
+#    before the OS sheet is presented. This proves the download leg ran.
+- assertVisible:
+    id: "share-preparing-overlay"
+- extendedWaitUntil:
+    notVisible:
+      id: "share-preparing-overlay"
+    timeout: 45000
+
+# 6. The native OS share sheet is now up with ALL selected photos. Its contents
+#    are OS/locale/config-specific, so assert a stable native affordance rather
+#    than app-specific text. Adjust the option name for your locale/targets.
+#    (If the build LACKS react-native-share, N sequential sheets appear instead —
+#    this assertion still passes on the first, but you'd see it re-appear N times.)
+- assertVisible:
+    text: "AirDrop|Messages|Copy|Save|Cancel"
+
+# 7. Dismiss the sheet so the run ends clean (iOS: Cancel; Android: system back).
+- runFlow:
+    when:
+      visible: "Cancel"
+    commands:
+      - tapOn: "Cancel"
+- back

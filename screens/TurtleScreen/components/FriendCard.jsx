@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { formatDueDate } from '../../TasksScreen/utils/taskHelpers';
+import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import EdgeSwipePage from './EdgeSwipePage';
 
 // "3:45 PM" from "HH:MM" (24h); '' when unset.
@@ -193,6 +194,7 @@ export default function FriendCard({
                   style={[styles.devRevokeBtn, devBusy && { opacity: 0.6 }]}
                   disabled={devBusy}
                   activeOpacity={0.85}
+                  onPressIn={() => notifyHaptic('warning')}
                   onPress={async () => {
                     if (!onRemoveDev) return;
                     setDevBusy(true);
@@ -209,6 +211,7 @@ export default function FriendCard({
                     style={[styles.devBtn, devBusy && { opacity: 0.6 }]}
                     disabled={devBusy}
                     activeOpacity={0.85}
+                    onPressIn={() => impactHaptic('medium')}
                     onPress={async () => {
                       if (!onAssignDev) return;
                       setDevBusy(true);
@@ -280,11 +283,12 @@ export default function FriendCard({
             <TouchableOpacity
               style={styles.shareBtn}
               activeOpacity={0.85}
+              onPressIn={() => tapHaptic()}
               onPress={() => onShare(friend)}
-              accessibilityLabel={`Share a project with ${name}`}
+              accessibilityLabel={`Share a board with ${name}`}
             >
               <Icon name="share-variant-outline" size={18} color="#fff" />
-              <Text style={styles.shareBtnText}>Share a project</Text>
+              <Text style={styles.shareBtnText}>Share a board</Text>
             </TouchableOpacity>
           ) : null}
         </ScrollView>

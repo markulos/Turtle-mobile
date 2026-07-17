@@ -41,7 +41,16 @@ import {
   ActivityIndicator,
   Alert,
   Keyboard,
+  Linking,
+  Modal,
 } from 'react-native';
+// expo-image for the link card's remote thumbnail (disk+memory cache + a soft
+// fade-in), aliased so it doesn't clash with the RN <Image> used by NoteRow.
+import { Image as ExpoImage } from 'expo-image';
+// expo-video powers WhatsApp-style inline playback for shared DIRECT video links
+// (.mp4/.mov/.webm). Embed-only sources (YouTube/Vimeo/TikTok) can't be streamed
+// straight, so those open in their native app on tap instead.
+import { useVideoPlayer, VideoView } from 'expo-video';
 // Reanimated drives the composer's keyboard-synced lift the SAME way the Turtle
 // Claude session dock does (useAnimatedKeyboard → a compositor-only translateY
 // worklet). This is why the composer is an in-tree overlay and NOT a <Modal>:
@@ -52,11 +61,15 @@ import Reanimated, {
   useAnimatedStyle,
   useSharedValue,
   withTiming,
+  withSpring,
   runOnJS,
   Easing as REasing,
 } from 'react-native-reanimated';
+// Composer pull-down-to-dismiss. The composer is IN-TREE (not a Modal), so the
+// app's root GestureHandlerRootView already feeds this detector.
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../context/ThemeContext';
@@ -103,6 +116,140 @@ function buildTopics(notes) {
   return { topics, untagged };
 }
 
+// The searchable board/topic universe: every tag PREFIX level gets its own
+// entry ('a/b/c' yields 'a', 'a/b', 'a/b/c' — a note counts once per level it
+// touches), then boards from the server's projects list that no note carries
+// yet are merged in at count 0 (board = project = topic — interchangeable, so
+// a brand-new board is still findable and selectable from Notes).
+function buildSearchEntries(notes, boards) {
+  const counts = new Map(); // full topic path -> notes touching it
+  for (const n of notes) {
+    const tags = Array.isArray(n.tags) ? n.tags : [];
+    const seen = new Set();
+    for (const tag of tags) {
+      const parts = String(tag).split('/').map((s) => s.trim()).filter(Boolean);
+      let path = '';
+      for (const p of parts) {
+        path = path ? `${path}/${p}` : p;
+        if (seen.has(path)) continue;
+        seen.add(path);
+        counts.set(path, (counts.get(path) || 0) + 1);
+      }
+    }
+  }
+  const entries = Array.from(counts.entries())
+    .map(([topic, count]) => ({ topic, count, sub: topic.includes('/') }));
+  const have = new Set(entries.map((e) => e.topic.toLowerCase()));
+  for (const b of Array.isArray(boards) ? boards : []) {
+    const name = String(b || '').trim();
+    if (name && !have.has(name.toLowerCase())) {
+      have.add(name.toLowerCase());
+      entries.push({ topic: name, count: 0, board: true });
+    }
+  }
+  entries.sort((a, b) => a.topic.toLowerCase().localeCompare(b.topic.toLowerCase()));
+  return entries;
+}
+
+// ── Shared-link note helpers ────────────────────────────────
+// A share-to-Turtle of a URL lands as a note whose `content` IS the bare URL
+// (the server unfurls it asynchronously into title/description/thumbnail). We
+// detect that shape here to render a rich media card instead of a plain row.
+const URL_RE = /^https?:\/\/\S+$/i;
+function isSingleUrl(s) {
+  const t = String(s || '').trim();
+  return URL_RE.test(t) && !/\s/.test(t);
+}
+// A note is a "link card" when it's a plain note (not a to-do — those keep their
+// checkbox row) whose whole body is a single URL.
+function isLinkNote(note) {
+  return note && (note.type || 'note') !== 'todo' && isSingleUrl(note.content);
+}
+function hostOf(url) {
+  try { return new URL(String(url)).hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+// Classify the media behind a URL so the card knows whether to show a play
+// affordance, and whether it can play inline (direct file) or must hand off to
+// the source app (embed-only platforms).
+function classifyMedia(url) {
+  const u = String(url || '').toLowerCase();
+  if (/\.(mp4|mov|webm|m4v)(\?|#|$)/.test(u)) return 'video-direct';
+  if (/(youtube\.com\/(watch|shorts|embed)|youtu\.be\/)/.test(u)) return 'video';
+  if (/vimeo\.com\/\d/.test(u)) return 'video';
+  if (/(tiktok\.com\/|instagram\.com\/(reel|p|tv)\/)/.test(u)) return 'video';
+  if (/(facebook\.com\/(reel|watch|share\/r|[^/]+\/videos)|fb\.watch\/)/.test(u)) return 'video';
+  return 'link';
+}
+// A recognisable glyph for the source (drawn on the host chip).
+function sourceIcon(url) {
+  const u = String(url || '').toLowerCase();
+  if (/youtube\.com|youtu\.be/.test(u)) return 'youtube';
+  if (/vimeo\.com/.test(u)) return 'vimeo';
+  if (/tiktok\.com/.test(u)) return 'music-note';
+  if (/instagram\.com/.test(u)) return 'instagram';
+  if (/(facebook\.com|fb\.watch)/.test(u)) return 'facebook';
+  if (/(twitter\.com|x\.com)/.test(u)) return 'twitter';
+  if (/spotify\.com/.test(u)) return 'spotify';
+  return 'web';
+}
+
+// ── Sharer byline ───────────────────────────────────────────
+// Avatar + name of who shared/created a note, shown automatically at the top
+// of every card (the server stamps notes.user_id at creation and owner-
+// backfills legacy rows, so every note carries a sharer). No avatar → the
+// user's initial on their stable per-user colour (the same userId→hue hash the
+// tasks calendar and FilterMenu swatches use, so a person's colour matches
+// across surfaces).
+const sharerColor = (userId) => {
+  if (!userId) return '#888888';
+  let h = 0;
+  for (let i = 0; i < userId.length; i++) h = (h * 31 + userId.charCodeAt(i)) % 360;
+  return `hsl(${h}, 60%, 52%)`;
+};
+function SharedByLine({ note, style }) {
+  const { theme } = useTheme();
+  const { getBaseUrl } = useServer();
+  const sharer = note && note.sharedBy;
+  if (!sharer || (!sharer.name && !sharer.avatarUrl)) return null;
+  // avatar_url is a relative server path (/api/avatars/<id>.jpg?v=…) — resolve
+  // it to an absolute URI the same way the link thumbnails do.
+  const avatarUri = sharer.avatarUrl
+    ? (/^https?:\/\//i.test(sharer.avatarUrl)
+        ? sharer.avatarUrl
+        : `${getBaseUrl().replace('/api', '')}${sharer.avatarUrl}`)
+    : null;
+  return (
+    <View style={[{ flexDirection: 'row', alignItems: 'center', gap: 6 }, style]}>
+      {avatarUri ? (
+        <ExpoImage
+          source={{ uri: avatarUri }}
+          style={{ width: 18, height: 18, borderRadius: 9 }}
+          contentFit="cover"
+          transition={120}
+        />
+      ) : (
+        <View
+          style={{
+            width: 18, height: 18, borderRadius: 9,
+            backgroundColor: sharerColor(sharer.userId),
+            alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>
+            {String(sharer.name || '?').trim().charAt(0).toUpperCase()}
+          </Text>
+        </View>
+      )}
+      <Text
+        numberOfLines={1}
+        style={{ flexShrink: 1, fontSize: 11.5, fontWeight: '600', color: theme.colors.textSecondary }}
+      >
+        {sharer.name || 'Member'}
+      </Text>
+    </View>
+  );
+}
+
 export default function NotesScreen() {
   const { theme, isDark } = useTheme();
   const { api, isConnected } = useServer();
@@ -119,6 +266,11 @@ export default function NotesScreen() {
   // Topic browsing — null = all topics. Mirrors the web Topics sidebar; ANDs with
   // the type filter above. A topic = the parent segment of a `parent/child` tag.
   const [selectedTopic, setSelectedTopic] = useState(null);
+  // Board/topic search sheet (magnify chip at the head of the topic rail).
+  const [topicSearchOpen, setTopicSearchOpen] = useState(false);
+  // Boards from the server's projects list (board = project = topic), merged
+  // into the search sheet so boards with no notes yet are still selectable.
+  const [boards, setBoards] = useState([]);
   const [composerOpen, setComposerOpen] = useState(false);
   // The note currently being edited (null = the composer is in "create" mode).
   const [editingNote, setEditingNote] = useState(null);
@@ -255,6 +407,57 @@ export default function NotesScreen() {
   // Topics derived from tags (parent of `parent/child`); drives the topic rail.
   const topicTree = useMemo(() => buildTopics(notes), [notes]);
 
+  // Boards fetch — on connect, because the rail now mirrors the tasks tab's
+  // board list 1:1 (not just note-derived topics). Kept in the deps:
+  // topicSearchOpen, so opening the sheet refreshes it; it's one tiny GET.
+  useEffect(() => {
+    if (!isConnected) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api.get('/projects');
+        if (!cancelled && Array.isArray(r)) {
+          setBoards(r.filter((n) => typeof n === 'string' && n.trim()));
+        }
+      } catch { /* rail + sheet still work from note tags alone */ }
+    })();
+    return () => { cancelled = true; };
+  }, [topicSearchOpen, isConnected, api]);
+
+  // Rail chips = note-derived topics MERGED with every server board (count 0
+  // while no note carries it yet) — so the Notes rail lists the same boards
+  // the tasks tab does, browsable before their first note.
+  const railTopics = useMemo(() => {
+    const have = new Set(topicTree.topics.map((t) => t.topic));
+    const extras = boards
+      .filter((b) => !have.has(b))
+      .map((b) => ({ topic: b, count: 0 }));
+    if (extras.length === 0) return topicTree.topics;
+    return [...topicTree.topics, ...extras]
+      .sort((a, b) => a.topic.toLowerCase().localeCompare(b.topic.toLowerCase()));
+  }, [topicTree, boards]);
+
+  // Create a board (project) from the topic search sheet. Optimistic: the
+  // chip appears + filters immediately; the POST persists in the background
+  // and rolls back on failure. '/' is refused — it's the sub-topic separator.
+  const createBoardFromSearch = useCallback((name) => {
+    const trimmed = String(name || '').trim();
+    if (!trimmed || trimmed.includes('/')) return;
+    setTopicSearchOpen(false);
+    setBoards((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+    setSelectedTopic(trimmed);
+    api.post('/projects/add', { name: trimmed }).catch(() => {
+      setBoards((prev) => prev.filter((b) => b !== trimmed));
+      setSelectedTopic((cur) => (cur === trimmed ? null : cur));
+    });
+  }, [api]);
+
+  // Full searchable universe for the sheet: tag prefixes + server boards.
+  const searchEntries = useMemo(
+    () => (topicSearchOpen ? buildSearchEntries(notes, boards) : []),
+    [topicSearchOpen, notes, boards],
+  );
+
   // Visible list ANDs the type filter (All/Notes/Todos) with the topic filter.
   // Topic match is "exact topic OR a sub-topic of it" (e.g. selecting `moodboard`
   // also shows `moodboard/wedding`) — same predicate as the web NotesScreen.
@@ -360,15 +563,28 @@ export default function NotesScreen() {
         onRefresh={refresh}
         {...keyboardScrollProps}
         renderItem={({ item }) => (
-          <NoteRow
-            note={item}
-            onPress={openEditNote}
-            onToggleDone={toggleDone}
-            onLongPress={showNoteActions}
-            onSendToClaude={sendTodoToClaude}
-            theme={theme}
-            isDark={isDark}
-          />
+          isLinkNote(item) ? (
+            // Shared-link / media note → the rich WhatsApp-style card. Tapping the
+            // card opens the original; a pencil opens the composer to edit the
+            // (auto-unfurled) description.
+            <LinkNoteCard
+              note={item}
+              onEdit={openEditNote}
+              onLongPress={showNoteActions}
+              theme={theme}
+              isDark={isDark}
+            />
+          ) : (
+            <NoteRow
+              note={item}
+              onPress={openEditNote}
+              onToggleDone={toggleDone}
+              onLongPress={showNoteActions}
+              onSendToClaude={sendTodoToClaude}
+              theme={theme}
+              isDark={isDark}
+            />
+          )
         )}
       />
     );
@@ -392,6 +608,13 @@ export default function NotesScreen() {
 
       <View style={styles.header}>
         <Text style={styles.title}>Notes</Text>
+        {/* Breadcrumb: when a topic is selected, "Notes / <topic>" with the
+            topic name in a hairline-thin weight next to the bold "Notes". */}
+        {selectedTopic && (
+          <Text style={styles.titleTopic} numberOfLines={1}>
+            / {selectedTopic === UNTAGGED ? 'Untagged' : selectedTopic}
+          </Text>
+        )}
         <Text style={styles.titleCount}>{counts.all}</Text>
       </View>
 
@@ -426,8 +649,9 @@ export default function NotesScreen() {
 
       {/* Topic rail — browse by topic (parent tag). Horizontally scrollable so a
           long tag list never crowds the type filter. Hidden when there are no
-          tagged or untagged notes to browse. Tapping the active chip clears it. */}
-      {(topicTree.topics.length > 0 || topicTree.untagged > 0) && (
+          tagged or untagged notes to browse. Tapping the active chip clears it.
+          The magnify chip at the head opens the searchable board/topic picker. */}
+      {(railTopics.length > 0 || topicTree.untagged > 0) && (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -435,6 +659,15 @@ export default function NotesScreen() {
           contentContainerStyle={styles.topicRail}
           keyboardShouldPersistTaps="handled"
         >
+          <TouchableOpacity
+            onPressIn={() => tapHaptic()}
+            onPress={() => setTopicSearchOpen(true)}
+            style={styles.topicSearchChip}
+            accessibilityLabel="Search boards and topics"
+            accessibilityRole="button"
+          >
+            <Icon name="magnify" size={16} color={theme.colors.accentInfo} />
+          </TouchableOpacity>
           <TopicChip
             label="All Topics"
             active={selectedTopic === null}
@@ -442,12 +675,27 @@ export default function NotesScreen() {
             theme={theme}
             isDark={isDark}
           />
-          {topicTree.topics.map(({ topic, count }) => (
+          {/* A picked sub-topic ('a/b') or notes-less board isn't a rail parent —
+              surface the selection as its own clearable chip so it's never
+              invisible. Parents highlight for their sub-topics too. */}
+          {selectedTopic && selectedTopic !== UNTAGGED
+            && !railTopics.some(({ topic }) => topic === selectedTopic) && (
+            <TopicChip
+              label={selectedTopic}
+              active
+              onPress={() => setSelectedTopic(null)}
+              theme={theme}
+              isDark={isDark}
+            />
+          )}
+          {railTopics.map(({ topic, count }) => (
             <TopicChip
               key={topic}
               label={topic}
-              count={count}
-              active={selectedTopic === topic}
+              // Hide the badge on note-less boards — the chip reads as just
+              // the board name instead of a noisy "0".
+              count={count || undefined}
+              active={selectedTopic === topic || (selectedTopic || '').startsWith(topic + '/')}
               onPress={() => setSelectedTopic((cur) => (cur === topic ? null : topic))}
               theme={theme}
               isDark={isDark}
@@ -512,10 +760,29 @@ export default function NotesScreen() {
         <Icon name="plus" size={28} color={isDark ? '#000' : '#fff'} />
       </TouchableOpacity>
 
-      {/* Composer — create OR edit (initialNote drives which). */}
+      {/* Board/topic search — full-screen picker over every topic, sub-topic
+          and server board; selecting filters the list like a rail chip tap. */}
+      <TopicSearchSheet
+        visible={topicSearchOpen}
+        entries={searchEntries}
+        totalNotes={notes.length}
+        untagged={topicTree.untagged}
+        selectedTopic={selectedTopic}
+        onSelect={(topic) => { setSelectedTopic(topic); setTopicSearchOpen(false); }}
+        onCreate={createBoardFromSearch}
+        onClose={() => setTopicSearchOpen(false)}
+        theme={theme}
+        isDark={isDark}
+      />
+
+      {/* Composer — create OR edit (initialNote drives which). A new capture
+          inherits the ACTIVE topic (board) as a pre-seeded, removable tag chip
+          — app-wide rule: sub-elements created under an active board belong
+          to it. */}
       <ComposerModal
         visible={composerOpen}
         initialNote={editingNote}
+        activeTopic={selectedTopic && selectedTopic !== UNTAGGED ? selectedTopic : null}
         allTags={allTags}
         onClose={() => { setComposerOpen(false); setEditingNote(null); }}
         onSubmit={async (payload) => {
@@ -554,56 +821,6 @@ function FilterPill({ label, active, count, onPress, theme, isDark }) {
 }
 
 const pillStyles = (theme, isDark) => StyleSheet.create({
-  pill: {
-    // Equal-width fixed segments (1/3 each) so the row never overflows or
-    // reflows: large counts / the active bold weight can't squish neighbours
-    // or shift them around. Mirrors the web PillToggle's equal-slot idiom.
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 100,
-    backgroundColor: theme.colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-  },
-  pillActive: {
-    backgroundColor: theme.colors.surfaceHighlight,
-    borderColor: theme.colors.borderStrong,
-  },
-  pillLabel: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: theme.colors.textSecondary,
-  },
-  pillLabelActive: {
-    color: theme.colors.textPrimary,
-    fontWeight: '600',
-  },
-  pillCount: {
-    minWidth: 18,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 9,
-    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pillCountActive: {
-    backgroundColor: theme.colors.accentSuccess,
-  },
-  pillCountText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: theme.colors.textMuted,
-    fontVariant: ['tabular-nums'],
-  },
-  pillCountTextActive: {
-    color: isDark ? '#0a0a0a' : '#fff',
-  },
 });
 
 // ── Topic chip (horizontal rail) ────────────────────────────
@@ -620,37 +837,251 @@ function TopicChip({ label, count, active, onPress, theme, isDark }) {
 }
 
 const topicChipStyles = (theme, isDark) => StyleSheet.create({
+  // Active = a soft accentInfo tint (mobile has NO accentPrimary; accentInfo is
+  // the blue we use, kept distinct from the green accentSuccess on the type pills).
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 11,
-    paddingVertical: 5,
-    borderRadius: 100,
+    gap: 6,
+    paddingHorizontal: 12,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: theme.colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
   },
-  // Active = a soft accentInfo tint (mobile has NO accentPrimary; accentInfo is
-  // the blue we use, kept distinct from the green accentSuccess on the type pills).
   chipActive: {
-    backgroundColor: isDark ? 'rgba(96,165,250,0.16)' : 'rgba(59,130,246,0.12)',
-    borderColor: theme.colors.accentInfo,
+    backgroundColor: theme.colors.accentInfo + (isDark ? '2E' : '1F'),
+    borderColor: theme.colors.accentInfo + '66',
   },
   label: {
-    fontSize: 12.5,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '500',
     color: theme.colors.textSecondary,
-    maxWidth: 150,
+    maxWidth: 160,
   },
-  labelActive: { color: theme.colors.accentInfo },
+  labelActive: {
+    color: theme.colors.accentInfo,
+    fontWeight: '600',
+  },
   count: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '600',
     color: theme.colors.textMuted,
-    fontVariant: ['tabular-nums'],
   },
-  countActive: { color: theme.colors.accentInfo },
+  countActive: {
+    color: theme.colors.accentInfo,
+  },
+});
+
+// ── Board/topic search sheet ────────────────────────────────
+// Full-screen searchable picker over the whole board/topic universe: every
+// tag prefix level (topics AND sub-topics, with live note counts) plus server
+// boards that carry no notes yet. Top-anchored input, so the keyboard never
+// covers it — no keyboard-sync machinery needed. Selecting behaves exactly
+// like tapping a rail chip (prefix-matching filter), then the sheet closes.
+function TopicSearchSheet({ visible, entries, totalNotes, untagged, selectedTopic, onSelect, onCreate, onClose, theme, isDark }) {
+  const [q, setQ] = useState('');
+  const s = useMemo(() => topicSearchStyles(theme, isDark), [theme, isDark]);
+  // Inset via the hook, NOT <SafeAreaView>: the native SafeAreaView measures
+  // the Modal's own window and resolves to 0 there, putting the search bar
+  // under the notch. The hook reads the root provider through the React tree,
+  // which stays correct inside Modals (same pattern as ConversationsOverlay).
+  const insets = useSafeAreaInsets();
+
+  // Fresh query every open — reopening shouldn't resurrect a stale filter.
+  useEffect(() => { if (visible) setQ(''); }, [visible]);
+
+  const needle = q.trim().toLowerCase();
+  const matches = needle
+    ? entries.filter((e) => e.topic.toLowerCase().includes(needle))
+    : entries;
+  const showAll = !needle || 'all topics'.includes(needle);
+  const showUntagged = untagged > 0 && (!needle || 'untagged'.includes(needle));
+
+  // "Create board" appears whenever the typed name isn't already a board or
+  // topic (and is a legal board name — no '/', that's the sub-topic
+  // separator). Selecting it creates the project optimistically upstream.
+  const createName = q.trim();
+  const canCreate = !!createName
+    && !createName.includes('/')
+    && !entries.some((e) => e.topic.toLowerCase() === createName.toLowerCase());
+
+  const rows = [
+    ...(showAll ? [{ key: '__all__', label: 'All Topics', icon: 'asterisk', count: totalNotes, value: null }] : []),
+    ...matches.map((e) => ({
+      key: e.topic,
+      label: e.topic,
+      icon: e.board ? 'folder-outline' : e.sub ? 'subdirectory-arrow-right' : 'pound',
+      count: e.count,
+      value: e.topic,
+    })),
+    ...(showUntagged ? [{ key: UNTAGGED, label: 'Untagged', icon: 'tag-off-outline', count: untagged, value: UNTAGGED }] : []),
+    ...(canCreate ? [{ key: '__create__', label: `Create board "${createName}"`, icon: 'plus-circle-outline', count: '', create: true, name: createName }] : []),
+  ];
+
+  return (
+    // pageSheet = native iOS card presentation: swipe the sheet down to close
+    // (fires onRequestClose), exactly like every stock iOS modal. Android
+    // renders it full-screen, so it keeps the real status-bar inset.
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <View style={s.root}>
+        <View style={[s.searchRow, { paddingTop: Platform.OS === 'android' ? insets.top + 14 : 14 }]}>
+          <View style={s.searchBox}>
+            <Icon name="magnify" size={20} color={theme.colors.accentInfo} />
+            <TextInput
+              style={s.searchInput}
+              placeholder="Search boards & topics"
+              placeholderTextColor={theme.colors.textMuted}
+              value={q}
+              onChangeText={setQ}
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {q.length > 0 && (
+              <TouchableOpacity onPress={() => setQ('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Icon name="close-circle" size={18} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}>
+            <Text style={s.cancel}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+
+        {rows.length === 0 ? (
+          <View style={s.empty}>
+            <Icon name="tag-search-outline" size={36} color={theme.colors.textMuted} />
+            <Text style={s.emptyText}>No boards or topics match "{q.trim()}".</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={rows}
+            keyExtractor={(r) => r.key}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            contentContainerStyle={{ paddingBottom: 32 }}
+            renderItem={({ item }) => {
+              const active = !item.create && selectedTopic === item.value;
+              return (
+                <TouchableOpacity
+                  onPressIn={() => tapHaptic()}
+                  onPress={() => (item.create ? onCreate?.(item.name) : onSelect(item.value))}
+                  style={[s.row, active && s.rowActive]}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.create ? item.label : `Filter by ${item.label}`}
+                >
+                  <View style={[s.rowIcon, active && s.rowIconActive]}>
+                    <Icon
+                      name={item.icon}
+                      size={16}
+                      color={item.create ? theme.colors.accentInfo : active ? theme.colors.accentInfo : theme.colors.textSecondary}
+                    />
+                  </View>
+                  <Text
+                    style={[s.rowLabel, (active || item.create) && s.rowLabelActive]}
+                    numberOfLines={1}
+                  >
+                    {item.label}
+                  </Text>
+                  <Text style={s.rowCount}>{item.count}</Text>
+                  {active && <Icon name="check" size={18} color={theme.colors.accentInfo} />}
+                </TouchableOpacity>
+              );
+            }}
+          />
+        )}
+      </View>
+    </Modal>
+  );
+}
+
+const topicSearchStyles = (theme, isDark) => StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+  },
+  // paddingTop comes inline: insets.top (notch clearance) + breathing room.
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+  },
+  searchBox: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1.5,
+    borderColor: theme.colors.accentInfo + '55',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: theme.colors.textPrimary,
+    paddingVertical: 0,
+  },
+  cancel: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: theme.colors.accentInfo,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+  },
+  rowActive: {
+    backgroundColor: theme.colors.accentInfo + (isDark ? '14' : '0D'),
+  },
+  rowIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surface,
+  },
+  rowIconActive: {
+    backgroundColor: theme.colors.accentInfo + '22',
+  },
+  rowLabel: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    color: theme.colors.textPrimary,
+  },
+  rowLabelActive: {
+    color: theme.colors.accentInfo,
+    fontWeight: '600',
+  },
+  rowCount: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: theme.colors.textMuted,
+  },
+  empty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    padding: 32,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+  },
 });
 
 // ── Note row ────────────────────────────────────────────────
@@ -693,6 +1124,8 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
       )}
 
       <View style={styles.body}>
+        {/* Who shared it — automatic avatar + name at the top of the card. */}
+        <SharedByLine note={note} style={{ marginBottom: 4 }} />
         <Text
           numberOfLines={2}
           style={[
@@ -850,8 +1283,309 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
   },
 });
 
+// ── Link / media card ───────────────────────────────────────
+// The "special card" for a shared-link note: a big thumbnail (with a play
+// overlay for video sources), the unfurled headline + description, the source
+// host, and two actions — open the original, or edit the description. This is
+// the mobile answer to WhatsApp's rich link preview.
+//
+// Inline playback rules (best-effort, honest about platform limits):
+//   • DIRECT video files (.mp4/.mov/.webm) → play right in the card via
+//     expo-video when the play button is tapped.
+//   • Embed-only sources (YouTube/Vimeo/TikTok/Instagram) can't be streamed
+//     from their page URL, so tapping opens them in their native app — exactly
+//     what WhatsApp does for a YouTube link.
+function InlineVideo({ uri, style }) {
+  // A dedicated component so useVideoPlayer only ever instantiates a decoder for
+  // a card the user actually pressed play on (mounted on demand), never for the
+  // whole list. Native controls give scrub / pause / fullscreen for free.
+  const player = useVideoPlayer(uri, (p) => {
+    try { p.loop = false; p.play(); } catch (_) { /* player may not be ready */ }
+  });
+  return (
+    <VideoView style={style} player={player} contentFit="contain" nativeControls />
+  );
+}
+
+function LinkNoteCardImpl({ note, onEdit, onLongPress, theme, isDark }) {
+  const styles = linkCardStyles(theme, isDark);
+  const { getBaseUrl } = useServer();
+  const url = String(note.content || '').trim();
+  const media = classifyMedia(url);
+  // The backend resolves a shared link to a directly-playable video FILE
+  // (note.videoUrl) whenever it can — that's what plays inline via expo-video.
+  // An embed-only source (YouTube/Facebook, note.embedUrl) can't be streamed
+  // without a WebView, so those hand off to the source app (as WhatsApp does on
+  // mobile). A URL that merely *looks* like a video keeps the ▶ until the async
+  // unfurl lands (or fails to find) a playable file.
+  const playableFile = note.videoUrl || (media === 'video-direct' ? url : null);
+  const isVideo = !!playableFile || note.mediaType === 'video' || media === 'video' || media === 'video-direct';
+  const host = hostOf(url) || note.siteName || '';
+  // Headline: prefer the unfurled og:title, then the site name, then the bare
+  // host — never leave the card showing a naked URL as its title.
+  const title = (note.title && note.title.trim())
+    || (note.siteName && note.siteName.trim())
+    || host
+    || url;
+  // Resolve the cached thumbnail (relative server path) to an absolute URI, the
+  // same way NoteRow does — getBaseUrl() ends in /api, strip that first.
+  const thumbUri = note.thumbUrl
+    ? (/^https?:\/\//i.test(note.thumbUrl)
+        ? note.thumbUrl
+        : `${getBaseUrl().replace('/api', '')}${note.thumbUrl}`)
+    : null;
+
+  const [playing, setPlaying] = useState(false);
+
+  const openOriginal = useCallback(() => {
+    impactHaptic('light');
+    Linking.openURL(url).catch(() => Alert.alert('Could not open link', url));
+  }, [url]);
+
+  // Tap the media: a playable file plays inline; anything else (embed-only video
+  // or a plain link) opens the source app.
+  const onMediaPress = useCallback(() => {
+    if (playableFile) { impactHaptic('light'); setPlaying(true); return; }
+    openOriginal();
+  }, [playableFile, openOriginal]);
+
+  return (
+    <View style={styles.card}>
+      {/* Who shared it — automatic avatar + name strip at the top of the card
+          (above the media, like a social post header). */}
+      <SharedByLine note={note} style={{ paddingHorizontal: 12, paddingTop: 10, paddingBottom: 8 }} />
+      {/* Media region — thumbnail, inline player, or a graceful fallback while
+          the unfurl is still pending (no thumb yet). */}
+      <TouchableOpacity
+        activeOpacity={0.92}
+        onPress={onMediaPress}
+        onLongPress={() => onLongPress(note)}
+        delayLongPress={350}
+      >
+        <View style={styles.mediaWrap}>
+          {playing && playableFile ? (
+            <InlineVideo uri={playableFile} style={styles.media} />
+          ) : thumbUri ? (
+            <ExpoImage
+              source={{ uri: thumbUri }}
+              style={styles.media}
+              contentFit="cover"
+              transition={160}
+            />
+          ) : (
+            <View style={[styles.media, styles.mediaFallback]}>
+              <Icon
+                name={isVideo ? 'play-circle-outline' : 'link-variant'}
+                size={34}
+                color={theme.colors.textMuted}
+              />
+            </View>
+          )}
+
+          {/* Play overlay — shown for any video source until it's playing. */}
+          {isVideo && !playing && (
+            <View pointerEvents="none" style={styles.playOverlay}>
+              <View style={styles.playBtn}>
+                <Icon name="play" size={26} color="#fff" style={{ marginLeft: 2 }} />
+              </View>
+            </View>
+          )}
+
+          {/* Source chip — sits on the media, bottom-left, like a platform badge. */}
+          {!!host && (
+            <View pointerEvents="none" style={styles.hostChip}>
+              <Icon name={sourceIcon(url)} size={11} color="#fff" />
+              <Text style={styles.hostChipText} numberOfLines={1}>{host}</Text>
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+
+      {/* Text region — headline + description; tapping opens the original. */}
+      <TouchableOpacity
+        activeOpacity={0.8}
+        onPress={openOriginal}
+        onLongPress={() => onLongPress(note)}
+        delayLongPress={350}
+        style={styles.textWrap}
+      >
+        <Text style={styles.title} numberOfLines={2}>{title}</Text>
+        {note.description ? (
+          <Text style={styles.desc} numberOfLines={3}>{note.description}</Text>
+        ) : null}
+
+        {Array.isArray(note.tags) && note.tags.length > 0 && (
+          <View style={styles.tagRow}>
+            {note.tags.slice(0, 4).map((t) => (
+              <View key={t} style={styles.tag}>
+                <Text style={styles.tagText} numberOfLines={1}>{t}</Text>
+              </View>
+            ))}
+            {note.tags.length > 4 && (
+              <Text style={styles.moreTags}>+{note.tags.length - 4}</Text>
+            )}
+          </View>
+        )}
+
+        <View style={styles.footer}>
+          <Text style={styles.timestamp}>{formatRelativeTime(note.createdAt)}</Text>
+          <View style={styles.actions}>
+            {/* Edit — opens the composer to add to / rewrite the description that
+                was auto-created from the link's metadata. */}
+            <TouchableOpacity
+              onPressIn={() => tapHaptic()}
+              onPress={() => onEdit(note)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.actionBtn}
+              accessibilityLabel="Edit description"
+            >
+              <Icon name="pencil-outline" size={17} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+            {/* Open the original link. */}
+            <TouchableOpacity
+              onPressIn={() => tapHaptic()}
+              onPress={openOriginal}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.actionBtn}
+              accessibilityLabel="Open original"
+            >
+              <Icon name="open-in-new" size={17} color={theme.colors.accentInfo} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// Memoized on the same terms as NoteRow — re-render only when the note object or
+// the colour scheme changes, not on every screen re-render.
+const LinkNoteCard = React.memo(LinkNoteCardImpl, (prev, next) =>
+  prev.note === next.note && prev.isDark === next.isDark,
+);
+
+const linkCardStyles = (theme, isDark) => StyleSheet.create({
+  card: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 12,
+    marginBottom: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    overflow: 'hidden',
+  },
+  mediaWrap: {
+    width: '100%',
+    aspectRatio: 16 / 9,
+    backgroundColor: theme.colors.surfaceElevated,
+    position: 'relative',
+  },
+  media: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  mediaFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  playOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  playBtn: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hostChip: {
+    position: 'absolute',
+    left: 8,
+    bottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    maxWidth: '80%',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  hostChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#fff',
+    letterSpacing: 0.2,
+  },
+  textWrap: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 12,
+  },
+  title: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: theme.colors.textPrimary,
+    lineHeight: 20,
+  },
+  desc: {
+    fontSize: 13,
+    color: theme.colors.textSecondary,
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  tagRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  tag: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: isDark ? 'rgba(96,165,250,0.12)' : 'rgba(59,130,246,0.10)',
+  },
+  tagText: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: isDark ? '#93c5fd' : '#1d4ed8',
+    letterSpacing: 0.2,
+  },
+  moreTags: {
+    fontSize: 10,
+    color: theme.colors.textMuted,
+    alignSelf: 'center',
+  },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  timestamp: {
+    fontSize: 10,
+    color: theme.colors.textMuted,
+    letterSpacing: 0.2,
+  },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  actionBtn: {
+    padding: 6,
+    borderRadius: 8,
+  },
+});
+
 // ── Composer modal ──────────────────────────────────────────
-function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, theme, isDark }) {
+function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [], onClose, onSubmit, theme, isDark }) {
   const [content, setContent] = useState('');
   const [description, setDescription] = useState('');
   // Composer mode: 'note' | 'todo' | 'feedback'. To-do is the default for a new
@@ -907,11 +1641,15 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
       setMode(initialNote ? (initialNote.type === 'todo' ? 'todo' : 'note') : 'todo');
       setApp('turtle-app');
       setPlatform('web');
-      setTags(Array.isArray(initialNote?.tags) ? initialNote.tags.filter(Boolean) : []);
+      // A fresh capture inherits the active topic (board) as a pre-selected
+      // chip — visible and removable, so the inheritance is never silent.
+      setTags(Array.isArray(initialNote?.tags)
+        ? initialNote.tags.filter(Boolean)
+        : (activeTopic ? [activeTopic] : []));
       setTagDraft('');
       setBusy(false);
     }
-  }, [visible, initialNote]);
+  }, [visible, initialNote, activeTopic]);
 
   // Open/close animation. Uses the iOS sheet-presentation curve
   // (cubic-bezier 0.32, 0.72, 0, 1) — the same deceleration the keyboard rises
@@ -922,6 +1660,7 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
     if (visible) {
       setMounted(true);
       reveal.value = 0;
+      dragY.value = 0; // a previous pull-down must not offset the fresh open
       reveal.value = withTiming(1, { duration: 340, easing: OPEN_EASING });
       // Auto-focus ONLY for a fresh capture — a new note is a "start typing now"
       // action, so the keyboard rising in step with the slide is the right feel.
@@ -941,14 +1680,81 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
+  // Live pull-down offset (0 while parked). Folded into the same translateY as
+  // the reveal + keyboard lift so all three motions share one compositor value.
+  const dragY = useSharedValue(0);
+  // Latest-close ref + stable trampoline so the (once-built) pan worklet never
+  // captures a stale onClose.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const runComposerClose = useCallback(() => {
+    Keyboard.dismiss();
+    onCloseRef.current?.();
+  }, []);
+  // Pull the handle/header down to dismiss, iOS-sheet style. Commit past 100px
+  // or a downward flick — the reveal close then takes over FROM the dragged
+  // position (dragY deliberately isn't reset here; the open effect zeroes it).
+  const handlePan = useMemo(() => Gesture.Pan()
+    .activeOffsetY([-8, 8])
+    .onUpdate((e) => {
+      dragY.value = Math.max(0, e.translationY);
+    })
+    .onEnd((e) => {
+      // RNGH velocity is px/SECOND (PanResponder's vy is px/ms) — 600 here
+      // ≈ the 0.6 px/ms flick threshold the PanResponder sheets use.
+      if (e.translationY > 100 || e.velocityY > 600) {
+        runOnJS(runComposerClose)();
+      } else {
+        dragY.value = withSpring(0, { damping: 22, stiffness: 220, mass: 0.9 });
+      }
+    }), [dragY, runComposerClose]);
+
+  // Settled keyboard state on the JS thread — used ONLY to bound the scroll
+  // area's height (below) so a long note can't shove the card's top (title,
+  // mode toggles) off-screen with no way back. The smooth frame-for-frame lift
+  // still rides the UI-thread shared value; this is just a height cap. iOS reads
+  // the will* events so the cap is already in place as the sheet rises.
+  const [kb, setKb] = useState({ visible: false, height: 0 });
+  const kbVisibleRef = useRef(false);
+  kbVisibleRef.current = kb.visible;
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const s = Keyboard.addListener(showEvt, (e) => setKb({ visible: true, height: e.endCoordinates?.height || 0 }));
+    const h = Keyboard.addListener(hideEvt, () => setKb({ visible: false, height: 0 }));
+    return () => { s.remove(); h.remove(); };
+  }, []);
+  // Cap the scrollable body to the space left above the keyboard (minus a top
+  // breathing gap and the fixed handle+header chrome). The body then SCROLLS its
+  // full length inside that window instead of overflowing the card.
+  const SHEET_CHROME = 96; // handle + header + sheet top padding, approx
+  const TOP_GAP = 48;      // status bar + a little air above the card
+  const scrollMaxHeight = Math.max(
+    200,
+    screenHeight - (kb.visible ? kb.height : 0) - TOP_GAP - SHEET_CHROME,
+  );
+  // Double-tap the card to TOGGLE the keyboard — closed → focus the note body,
+  // open → dismiss. A quick, low-effort open/close that coexists with scrolling
+  // (a scroll moves; a double-tap is stationary) and with the buttons (they
+  // only need a single tap).
+  const toggleKeyboard = useCallback(() => {
+    if (kbVisibleRef.current) Keyboard.dismiss();
+    else contentRef.current?.focus();
+  }, []);
+  const doubleTap = useMemo(() => Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDuration(260)
+    .onEnd(() => { 'worklet'; runOnJS(toggleKeyboard)(); }), [toggleKeyboard]);
+
   // The sheet's transform: closed slides it fully below the screen
   // ((1−reveal)·sheetHeight), and the keyboard lift raises it so its bottom edge
   // pins to the keyboard's top — both folded into ONE compositor-only translateY,
-  // recomputed every keyboard frame on the UI thread.
+  // recomputed every keyboard frame on the UI thread. The live pull-down offset
+  // rides on top.
   const sheetStyle = useAnimatedStyle(() => {
     'worklet';
     const lift = Math.max(keyboard.height.value - tabBarHeight, 0);
-    return { transform: [{ translateY: (1 - reveal.value) * sheetH.value - lift }] };
+    return { transform: [{ translateY: (1 - reveal.value) * sheetH.value - lift + dragY.value }] };
   });
   // Backdrop dim deepens exactly as the sheet rises (reads the same shared value).
   const dimStyle = useAnimatedStyle(() => {
@@ -1012,22 +1818,37 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
         }}
         style={[styles.sheet, sheetStyle]}
       >
-        {/* Tapping anywhere on the sheet that isn't an input dismisses the
-            keyboard. The sheet stays open; only the dim backdrop closes it. */}
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        {/* Fixed drag zone: handle + title stay put (pull down here to close)
+            while the body below scrolls independently. */}
+        <GestureDetector gesture={handlePan}>
           <View>
             <View style={styles.handle} />
-          <View style={styles.headerRow}>
-            <Text style={styles.title}>
-              {isEditing
-                ? (mode === 'note' ? 'Edit note' : 'Edit todo')
-                : (mode === 'feedback' ? 'New feedback' : mode === 'todo' ? 'New todo' : 'New note')}
-            </Text>
-            <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Icon name="close" size={22} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
+            <View style={styles.headerRow}>
+              <Text style={styles.title}>
+                {isEditing
+                  ? (mode === 'note' ? 'Edit note' : 'Edit todo')
+                  : (mode === 'feedback' ? 'New feedback' : mode === 'todo' ? 'New todo' : 'New note')}
+              </Text>
+              <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Icon name="close" size={22} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
           </View>
+        </GestureDetector>
 
+        {/* Scrollable body — a long note scrolls its FULL length here instead of
+            overflowing the card. Quick-scroll-down dismisses the keyboard
+            (keyboardDismissMode); a double-tap toggles it; tapping empty space
+            dismisses while still letting button taps through
+            (keyboardShouldPersistTaps). */}
+        <GestureDetector gesture={doubleTap}>
+          <ScrollView
+            style={{ maxHeight: scrollMaxHeight }}
+            contentContainerStyle={styles.scrollBody}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            showsVerticalScrollIndicator={false}
+          >
           {/* Mode toggle — note / todo / feedback */}
           <View style={styles.typeToggle}>
             {[
@@ -1157,6 +1978,7 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
                 <Text style={styles.tagSuggestLabel}>Existing tags</Text>
                 <ScrollView
                   horizontal
+                  nestedScrollEnabled
                   showsHorizontalScrollIndicator={false}
                   keyboardShouldPersistTaps="handled"
                   contentContainerStyle={styles.tagSuggestRow}
@@ -1209,8 +2031,8 @@ function ComposerModal({ visible, initialNote, allTags = [], onClose, onSubmit, 
               )}
             </TouchableOpacity>
           </View>
-            </View>
-          </TouchableWithoutFeedback>
+          </ScrollView>
+        </GestureDetector>
         </Reanimated.View>
       </View>
   );
@@ -1300,6 +2122,9 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     minHeight: 44,
   },
   inputDescription: { minHeight: 60 },
+  // Scrollable body content — a hair of bottom padding so the Save row doesn't
+  // sit flush against the sheet's bottom edge when the note is short.
+  scrollBody: { paddingBottom: 4 },
   // Tag editor — a bordered box holding the selected-tag chips + the inline
   // new-tag input, with the existing-tag suggestions scrolling underneath.
   tagBox: {
@@ -1438,17 +2263,21 @@ const createStyles = (theme, isDark) => StyleSheet.create({
     color: theme.colors.textPrimary,
     letterSpacing: 0.2,
   },
+  // Selected-topic breadcrumb next to the bold "Notes" — same size, hairline-
+  // thin weight, softer colour; shrinks/ellipsizes so a long topic can't shove
+  // the count off-screen.
+  titleTopic: {
+    flexShrink: 1,
+    fontSize: 26,
+    fontWeight: '200',
+    color: theme.colors.textSecondary,
+    letterSpacing: 0.2,
+  },
   titleCount: {
     fontSize: 14,
     fontWeight: '500',
     color: theme.colors.textMuted,
     fontVariant: ['tabular-nums'],
-  },
-  filterRow: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 20,
-    paddingBottom: 12,
   },
   // Swipeable segmented control — same look as the photo vault's tab switcher.
   tabTrack: {
@@ -1501,6 +2330,18 @@ const createStyles = (theme, isDark) => StyleSheet.create({
     gap: 8,
     paddingHorizontal: 16,
     paddingBottom: 12,
+  },
+  // Round magnify chip at the head of the rail — opens the board/topic search
+  // sheet. Same height as the topic chips so the rail reads as one row.
+  topicSearchChip: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.accentInfo + (isDark ? '24' : '16'),
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.accentInfo + '55',
   },
   list: {
     paddingHorizontal: 16,

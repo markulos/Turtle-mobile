@@ -29,7 +29,7 @@ export function formatTaskForClaude(task) {
   lines.push('Please work on this to-do task from my Turtle list:');
   lines.push('');
   lines.push(`Title: ${task.title || '(untitled)'}`);
-  if (task.project) lines.push(`Project: ${task.project}`);
+  if (task.project) lines.push(`Board: ${task.project}`);
   if (task.priority) lines.push(`Priority: ${task.priority}`);
   if (task.dueDate) lines.push(`Due: ${task.dueDate}${task.time ? ` at ${task.time}` : ''}`);
   const tags = Array.isArray(task.tags) ? task.tags : [];

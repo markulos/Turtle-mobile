@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { 
   View, 
   Text, 
@@ -10,18 +10,14 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
-import { getPriorityColor, areAllSubtasksCompleted, formatDueDate, isOverdue, formatTime12h } from '../utils/taskHelpers';
+import { getPriorityColor, areAllSubtasksCompleted, formatDueDate, isOverdue, formatTime12h, isTaskDoneNow, lastCompletedDate } from '../utils/taskHelpers';
 import { WheelTimePicker } from './WheelTimePicker';
 import TaskCountdownBadge from './TaskCountdownBadge';
 
 // Instant tactile confirmation on tap — fires immediately so the action feels
 // done the moment you touch it (the actual save is optimistic + background).
-// Defensive require: a silent no-op if expo-haptics isn't in the dev build.
-let _Haptics = null;
-try { _Haptics = require('expo-haptics'); } catch (e) { _Haptics = null; }
-const tapHaptic = () => {
-  try { _Haptics?.selectionAsync?.(); } catch (e) { /* haptics are garnish */ }
-};
+// Now sourced from the shared util so every screen buzzes identically.
+import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 
 const TaskItemImpl = ({
   item,
@@ -37,10 +33,14 @@ const TaskItemImpl = ({
   listRef,
   scrollY,
   scrollToItem,
-  keyboardVisible
+  keyboardVisible,
+  // Accordion: expansion is OWNED BY THE PARENT so only ONE task row is open at
+  // a time. `expanded` arrives as a prop; tapping the chevron asks the parent to
+  // toggle THIS id, which collapses whatever other row was open.
+  expanded = false,
+  onToggleExpand,
 }) => {
   const { theme, timeFormat } = useTheme();
-  const [expanded, setExpanded] = useState(false);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [editingSubtaskId, setEditingSubtaskId] = useState(null);
   const [editSubtaskTitle, setEditSubtaskTitle] = useState('');
@@ -49,18 +49,9 @@ const TaskItemImpl = ({
   // Ref for scrolling a subtask edit row into view above the keyboard.
   const editSubtaskRef = useRef(null);
 
-  const animation = useRef(new Animated.Value(0)).current;
-
-  const toggleExpand = () => {
-    const toValue = expanded ? 0 : 1;
-    Animated.timing(animation, {
-      toValue,
-      duration: 200,
-      easing: Easing.ease,
-      useNativeDriver: false,
-    }).start();
-    setExpanded(!expanded);
-  };
+  // Expansion is parent-owned (accordion — one row open at a time): ask the
+  // parent to toggle this id; it collapses whatever else was open.
+  const toggleExpand = () => onToggleExpand?.(item.id);
 
   const handleAddSubtask = () => {
     if (!newSubtaskTitle.trim()) return;
@@ -92,14 +83,24 @@ const TaskItemImpl = ({
   const allSubtasksDone = areAllSubtasksCompleted(subtasks);
   const progress = subtasks.length > 0 ? completedSubtasks / subtasks.length : 0;
 
+  // Single-row view: a recurring task reads ✓ while its latest ticked
+  // occurrence is still current (done-now) — the global `completed` bool never
+  // flips for a live series. Tapping a checked row unticks that occurrence.
+  const done = isTaskDoneNow(item);
+  // While checked, show the TICKED date ("Today"), not the already-advanced
+  // next dueDate — otherwise completing reads as "now due tomorrow?!".
+  const shownDue = (done && !item.completed && lastCompletedDate(item)) || item.dueDate;
+
   // Overdue = a due date in the past on an incomplete task. Drives the
   // red tint on the due-date badge below.
-  const dueOverdue = !item.completed && isOverdue(item.dueDate);
+  const dueOverdue = !done && isOverdue(item.dueDate);
 
-  const styles = createStyles(theme);
+  // Memoized: this is the hot list row — unmemoized StyleSheet.create ran on
+  // every render and re-registered a large style object per keystroke/scroll.
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   return (
-    <View style={[styles.container, item.completed && styles.completed]}>
+    <View style={[styles.container, done && styles.completed]}>
       {/* Main task row — tap opens the detail; long-press opens the edit form */}
       <TouchableOpacity
           style={styles.mainRow}
@@ -111,22 +112,22 @@ const TaskItemImpl = ({
             style={styles.checkbox}
             activeOpacity={0.6}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            onPressIn={() => tapHaptic()}
             onPress={(e) => {
               e.stopPropagation();
-              tapHaptic();
               onToggleComplete(item.id);
             }}
           >
-            <Icon 
-              name={item.completed ? "checkbox-marked" : "checkbox-blank-circle-outline"} 
-              size={22} 
-              color={item.completed ? theme.colors.accentSuccess : theme.colors.textTertiary} 
+            <Icon
+              name={done ? "checkbox-marked" : "checkbox-blank-circle-outline"}
+              size={22}
+              color={done ? theme.colors.accentSuccess : theme.colors.textTertiary}
             />
           </TouchableOpacity>
-          
+
           <View style={styles.content}>
             {/* Title on its own line for a consistent card layout. */}
-            <Text style={[styles.title, item.completed && styles.completedText]}>
+            <Text style={[styles.title, done && styles.completedText]}>
               {item.title}
             </Text>
 
@@ -142,24 +143,27 @@ const TaskItemImpl = ({
                     </Text>
                   </View>
                 )}
-                {item.dueDate && (
+                {shownDue && (
                   <View style={[styles.dueBadge, dueOverdue && styles.dueBadgeOverdue]}>
                     <Icon name="calendar" size={11} color={dueOverdue ? theme.colors.accentError : theme.colors.accentInfo} />
                     <Text
                       style={[styles.dueText, dueOverdue && { color: theme.colors.accentError }]}
                       numberOfLines={1}
                     >
-                      {formatDueDate(item.dueDate)}
+                      {formatDueDate(shownDue)}
                     </Text>
                   </View>
                 )}
-                <TaskCountdownBadge task={item} />
+                {/* Countdown hidden while checked — post-tick it would count to
+                    the NEXT occurrence, reading as "it didn't complete". */}
+                {!done && <TaskCountdownBadge task={item} />}
                 {item.recurring && item.recurring !== 'none' && (
                   <View style={styles.recurringBadge}>
                     <Icon
                       name={
                         item.recurring === 'daily' ? 'calendar-today' :
                         item.recurring === 'weekly' ? 'calendar-week' :
+                        item.recurring === 'monthly' ? 'calendar-month' :
                         'calendar-range'
                       }
                       size={10}
@@ -168,6 +172,7 @@ const TaskItemImpl = ({
                     <Text style={styles.recurringText}>
                       {item.recurring === 'daily' ? 'Daily' :
                        item.recurring === 'weekly' ? 'Weekly' :
+                       item.recurring === 'monthly' ? 'Monthly' :
                        'Biweekly'}
                     </Text>
                   </View>
@@ -220,8 +225,9 @@ const TaskItemImpl = ({
                 index === subtasks.length - 1 && styles.subtaskLast
               ]}
             >
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.subtaskCheckbox}
+                onPressIn={() => tapHaptic()}
                 onPress={() => onToggleSubtask(item.id, subtask.id)}
               >
                 <Icon 
@@ -242,7 +248,7 @@ const TaskItemImpl = ({
                       autoFocus
                       placeholderTextColor={theme.colors.textPlaceholder}
                     />
-                    <TouchableOpacity onPress={saveEditSubtask}>
+                    <TouchableOpacity onPressIn={() => impactHaptic('medium')} onPress={saveEditSubtask}>
                       <Icon name="check" size={18} color={theme.colors.accentSuccess} />
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => setShowSubtaskTimePicker(true)}>
@@ -293,8 +299,9 @@ const TaskItemImpl = ({
                     >
                       <Icon name="pencil" size={16} color={theme.colors.textTertiary} />
                     </TouchableOpacity>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.subtaskAction}
+                      onPressIn={() => notifyHaptic('warning')}
                       onPress={() => onDeleteSubtask(item.id, subtask.id)}
                     >
                       <Icon name="delete" size={16} color={theme.colors.accentError} />
@@ -326,7 +333,7 @@ const TaskItemImpl = ({
               onChangeText={setNewSubtaskTitle}
               onSubmitEditing={handleAddSubtask}
             />
-            <TouchableOpacity style={styles.addSubtaskBtn} onPress={handleAddSubtask}>
+            <TouchableOpacity style={styles.addSubtaskBtn} onPressIn={() => impactHaptic('medium')} onPress={handleAddSubtask}>
               <Icon name="check" size={18} color={theme.colors.textPrimary} />
             </TouchableOpacity>
             <TouchableOpacity 
@@ -378,6 +385,7 @@ const TaskItemImpl = ({
 // handlers read the latest tasks via a ref (so an "old" handler is still correct).
 export const TaskItem = React.memo(TaskItemImpl, (prev, next) =>
   prev.item === next.item &&
+  prev.expanded === next.expanded &&
   prev.keyboardVisible === next.keyboardVisible &&
   prev.listRef === next.listRef &&
   prev.scrollY === next.scrollY,

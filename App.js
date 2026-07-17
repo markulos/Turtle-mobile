@@ -10,7 +10,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { View, ActivityIndicator, Image } from 'react-native';
+import { View, ActivityIndicator, Image, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 // Same turtle artwork the web app uses for its Chat nav icon
@@ -24,6 +24,7 @@ import { ShareIntentProvider, useShareIntent } from 'expo-share-intent';
 // (SettingsScreen lives inside TurtleScreen now — accessed via the
 // gear icon in the top-right corner of the Turtle page — so it no
 // longer ships as a tab.)
+import { installGlobalTouchFeedback } from './utils/globalTouchFeedback';
 import TasksScreen from './screens/TasksScreen';
 import TurtleScreen from './screens/TurtleScreen';
 import LoginScreen from './screens/LoginScreen';
@@ -32,14 +33,27 @@ import NotesScreen from './screens/NotesScreen';
 import PasswordsScreen from './screens/PasswordsScreen';
 import ShareTargetScreen from './screens/ShareTargetScreen';
 import { ServerProvider } from './context/ServerContext';
+import { ShareUploadProvider } from './context/ShareUploadContext';
+import ShareUploadToast from './components/ShareUploadToast';
+import { VaultUploadProvider } from './context/VaultUploadContext';
+import VaultUploadPill from './components/VaultUploadPill';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { VaultProvider } from './context/VaultContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ClaudeQueueProvider } from './context/ClaudeQueueContext';
 import { CommandBusProvider } from './context/CommandBusContext';
+import { CelebrationProvider } from './context/CelebrationContext';
+import { DownloadsProvider } from './context/DownloadsContext';
+import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
+import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
+import { tapHaptic } from './utils/haptics';
+
+// App-wide snappy touch feel: every TouchableOpacity gets a light press-in
+// haptic + a crisper press fade. Installed once, before the tree renders.
+installGlobalTouchFeedback();
 
 const Tab = createBottomTabNavigator();
 
@@ -51,6 +65,9 @@ function TabNavigator() {
   return (
     <>
     <Tab.Navigator
+      // Instant selection tick the moment a tab is tapped — the switch feels
+      // tactile rather than silent. Fires for every tab via one listener.
+      screenListeners={{ tabPress: () => tapHaptic() }}
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
           // Turtle tab uses the web app's custom PNG mark so the
@@ -92,10 +109,12 @@ function TabNavigator() {
         tabBarShowLabel: false,
         tabBarStyle: {
           backgroundColor: theme.colors.background,
-          // No top border: the navbar shares the screen background colour, so
-          // it flows seamlessly out of the Turtle chat's solid input bar above
-          // it (and reads as a clean edgeless bar on the other tabs too).
-          borderTopWidth: 0,
+          // A hairline along the TOP edge of the bottom nav — the device's
+          // thinnest renderable line (StyleSheet.hairlineWidth, ~0.5px) in the
+          // faint theme border colour, so the bar reads as its own surface,
+          // just barely separated from the content above it.
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderTopColor: theme.colors.border,
           height: 49 + insets.bottom, // Standard iOS tab bar 49pt + safe area
           paddingBottom: insets.bottom,
           paddingTop: 6,
@@ -122,7 +141,9 @@ function TabNavigator() {
       <Tab.Screen
         name="Photos"
         component={PhotosScreen}
-        options={{ title: 'Photos' }}
+        // tabBarButtonTestID gives the batch-share E2E flow a stable handle on
+        // the icon-only Photos tab (.maestro/batch-share.yaml).
+        options={{ title: 'Photos', tabBarButtonTestID: 'tab-photos' }}
       />
       {/* Vault tab can be hidden from the navbar via Settings; when hidden,
           the vault is still reachable through the /vault command in chat or
@@ -244,18 +265,56 @@ export default function App() {
         <SafeAreaProvider>
           <ThemeProvider>
             <ServerProvider>
-              <AuthProvider>
-                <VaultProvider>
-                  <ClaudeQueueProvider>
-                    <CommandBusProvider>
-                      <AppContent />
-                      {/* Cross-device biometric vault unlock: surfaces an approval
-                          sheet when the web vault requests an unlock push. */}
-                      <VaultUnlockApproval />
-                    </CommandBusProvider>
-                  </ClaudeQueueProvider>
-                </VaultProvider>
-              </AuthProvider>
+              {/* Owns "Send to Turtle" uploads at the app level so they outlive
+                  the share sheet (ShareTargetScreen) unmounting. Inside
+                  ServerProvider (needs the api client), around the rest. */}
+              <ShareUploadProvider>
+              {/* Owns photo-VAULT upload batches app-level: streams in the
+                  background with a global progress pill, checkpoints to
+                  AsyncStorage after every item, and RESUMES an interrupted
+                  batch on the next launch. Inside ServerProvider (needs the
+                  base URL); outside AppContent so no screen unmount stops it. */}
+              <VaultUploadProvider>
+                <AuthProvider>
+                  <VaultProvider>
+                    <ClaudeQueueProvider>
+                      <CommandBusProvider>
+                       {/* Confetti + "+N pts" flourish on task / pomodoro
+                           completion, mirroring the desktop HUD. Wraps the app
+                           so the overlay floats above every screen. */}
+                       <CelebrationProvider>
+                       {/* Owns the ghost-download queue socket + REST app-wide, so
+                           the floating DownloadsPill and live gallery refresh work
+                           on every screen. */}
+                       <DownloadsProvider>
+                        <AppContent />
+                        {/* Floating share-upload progress / outcome toast. Rendered
+                            here (NOT inside ShareTargetScreen) so it persists after
+                            the share sheet dismisses and overlays the main app. */}
+                        <ShareUploadToast />
+                        {/* Floating vault-upload widget: live percentage while a
+                            batch runs in the background (any screen), then the
+                            finish stats + delete-originals offer. Bottom-anchored
+                            so it never collides with the share toast above. */}
+                        <VaultUploadPill />
+                        {/* Floating ghost-download progress (links shared into the
+                            Download album / enqueued): live % + cancel/retry, sits
+                            just above the vault-upload pill. */}
+                        <DownloadsPill />
+                        {/* Cross-device biometric vault unlock: surfaces an approval
+                            sheet when the web vault requests an unlock push. */}
+                        <VaultUnlockApproval />
+                        {/* Interactive pomodoro end notifications (Start break /
+                            Start focus buttons). Renders nothing. */}
+                        <PomodoroNotifications />
+                       </DownloadsProvider>
+                       </CelebrationProvider>
+                      </CommandBusProvider>
+                    </ClaudeQueueProvider>
+                  </VaultProvider>
+                </AuthProvider>
+              </VaultUploadProvider>
+              </ShareUploadProvider>
             </ServerProvider>
           </ThemeProvider>
         </SafeAreaProvider>

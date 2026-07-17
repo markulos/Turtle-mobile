@@ -18,9 +18,14 @@
         "NSBiometricUsageDescription": "This app uses biometric authentication to protect your passwords.",
         "NSContactsUsageDescription": "Turtle uses your contacts so you can invite friends to your pond by picking them from your phone.",
         "NSLocalNetworkUsageDescription": "Turtle connects to your own Turtle server (and, in development, the Metro bundler) on your local network or private VPN.",
-        "NSBonjourServices": ["_http._tcp", "_exp._tcp", "_expo._tcp"],
+        "NSBonjourServices": [
+          "_http._tcp",
+          "_exp._tcp",
+          "_expo._tcp"
+        ],
         "ITSAppUsesNonExemptEncryption": false,
-        "CADisableMinimumFrameDurationOnPhone": true
+        "CADisableMinimumFrameDurationOnPhone": true,
+        "NSSupportsLiveActivities": true
       }
     },
     "android": {
@@ -47,7 +52,6 @@
         "expo-image-picker",
         {
           "photosPermission": "Turtle needs access to your photos so you can pick and upload them to your vault.",
-          "cameraPermission": false,
           "microphonePermission": false
         }
       ],
@@ -65,13 +69,19 @@
         }
       ],
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Turtle needs the camera to scan a desktop sign-in QR code."
+        }
+      ],
+      [
         "expo-share-intent",
         {
           "iosActivationRules": {
             "NSExtensionActivationSupportsText": true,
             "NSExtensionActivationSupportsWebURLWithMaxCount": 1,
             "NSExtensionActivationSupportsWebPageWithMaxCount": 1,
-            "NSExtensionActivationSupportsImageWithMaxCount": 10,
+            "NSExtensionActivationSupportsImageWithMaxCount": 30,
             "NSExtensionActivationSupportsFileWithMaxCount": 5
           },
           "androidIntentFilters": [
@@ -79,9 +89,14 @@
             "image/*",
             "video/*"
           ],
+          "androidMultiIntentFilters": [
+            "image/*",
+            "video/*"
+          ],
           "iosShareExtensionName": "Send to Turtle"
         }
-      ]
+      ],
+      "expo-live-activity"
     ],
     "extra": {
       "eas": {

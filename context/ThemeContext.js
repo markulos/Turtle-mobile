@@ -5,6 +5,7 @@ const THEME_STORAGE_KEY = '@connected_pass_theme';
 const TIME_FORMAT_STORAGE_KEY = '@connected_pass_time_format';
 const HIDE_VAULT_BUTTON_KEY = '@connected_pass_hide_vault_button';
 const CALENDAR_DAY_TASKS_KEY = '@connected_pass_calendar_day_tasks';
+const CALENDAR_FREE_SCROLL_KEY = '@connected_pass_calendar_free_scroll';
 
 // Golden Ratio - 1.618
 const PHI = 1.618;
@@ -201,6 +202,11 @@ const ThemeContext = createContext({
   // (false) so the grid stays uncluttered until the user opts in.
   showCalendarDayTasks: false,
   setShowCalendarDayTasks: () => {},
+  // Calendar scroll style. false (default) = paged: the month list snaps one
+  // whole month per swipe. true = free-form continuous scroll (iOS Calendar
+  // style) where months flow past without snapping to a boundary.
+  calendarFreeScroll: false,
+  setCalendarFreeScroll: () => {},
 });
 
 export const ThemeProvider = ({ children }) => {
@@ -208,6 +214,7 @@ export const ThemeProvider = ({ children }) => {
   const [timeFormat, setTimeFormatState] = useState('12h');
   const [hideVaultButton, setHideVaultButtonState] = useState(false);
   const [showCalendarDayTasks, setShowCalendarDayTasksState] = useState(false);
+  const [calendarFreeScroll, setCalendarFreeScrollState] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -231,6 +238,10 @@ export const ThemeProvider = ({ children }) => {
       const savedDayTasks = await AsyncStorage.getItem(CALENDAR_DAY_TASKS_KEY);
       if (savedDayTasks !== null) {
         setShowCalendarDayTasksState(savedDayTasks === 'true');
+      }
+      const savedFreeScroll = await AsyncStorage.getItem(CALENDAR_FREE_SCROLL_KEY);
+      if (savedFreeScroll !== null) {
+        setCalendarFreeScrollState(savedFreeScroll === 'true');
       }
     } catch (error) {
       console.error('Error loading theme:', error);
@@ -269,6 +280,16 @@ export const ThemeProvider = ({ children }) => {
     }
   };
 
+  const setCalendarFreeScroll = async (free) => {
+    const next = !!free;
+    setCalendarFreeScrollState(next);
+    try {
+      await AsyncStorage.setItem(CALENDAR_FREE_SCROLL_KEY, next ? 'true' : 'false');
+    } catch (error) {
+      console.error('Error saving calendar-free-scroll setting:', error);
+    }
+  };
+
   const toggleTheme = async () => {
     const newIsDark = !isDark;
     setIsDark(newIsDark);
@@ -291,8 +312,9 @@ export const ThemeProvider = ({ children }) => {
       theme, isDark, toggleTheme, timeFormat, setTimeFormat,
       hideVaultButton, setHideVaultButton,
       showCalendarDayTasks, setShowCalendarDayTasks,
+      calendarFreeScroll, setCalendarFreeScroll,
     }),
-    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks],
+    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll],
   );
 
   if (isLoading) {

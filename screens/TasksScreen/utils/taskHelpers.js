@@ -102,6 +102,134 @@ export const advanceDueDate = (currentDueDate, recurring) => {
   return `${ny}-${nm}-${nd}`;
 };
 
+// Has THIS occurrence date (YYYY-MM-DD) been ticked? Per-occurrence completion
+// for recurring tasks lives in meta.completedDates (mirrors the web app), so a
+// checked occurrence renders ticked on its own day while the task keeps
+// repeating — instead of the completed occurrence vanishing.
+export const isOccurrenceCompleted = (task, dateStr) => {
+  const cd = task && task.meta && task.meta.completedDates;
+  return Array.isArray(cd) && cd.includes(dateStr);
+};
+
+// Lexical min of two YYYY-MM-DD strings (= chronological, null-safe). Used to
+// pull dueDate back to a re-opened occurrence when a completion tick is undone,
+// so the series re-exposes that day without a fragile inverse-advance.
+export const minDate = (a, b) => {
+  if (!a) return b;
+  if (!b) return a;
+  return a <= b ? a : b;
+};
+
+// Lexical max of two YYYY-MM-DD strings (null-safe). Guards the tick advance
+// (max(dueDate, advance(occ))) so back-filling a PAST occurrence never drags
+// the series' anchor backwards.
+export const maxDate = (a, b) => {
+  if (!a) return b;
+  if (!b) return a;
+  return a >= b ? a : b;
+};
+
+// First ON-PATTERN occurrence of the series (anchored at baseDueDate) strictly
+// AFTER `afterStr`. Used when an OFF-pattern day is ticked (an overdue
+// weekly/monthly completed from a single-row view records TODAY) so the cadence
+// anchor (weekday / day-of-month) is preserved instead of re-anchoring the
+// whole series to the tick day. Mirrors web utils/recurrence.ts.
+export const nextOccurrenceAfter = (baseDueDate, recurring, afterStr) => {
+  if (!baseDueDate) return null;
+  let d = baseDueDate;
+  let i = 0;
+  while (d && d <= afterStr && i < 1000) {
+    d = advanceDueDate(d, recurring);
+    i++;
+  }
+  return d;
+};
+
+// Today as a local YYYY-MM-DD string (mirrors the web recurrence util; never
+// `new Date(str)` UTC pitfalls).
+export const localTodayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// The most recent ticked occurrence date (lexical max of meta.completedDates),
+// or null when none.
+export const lastCompletedDate = (task) => {
+  const cd = task && task.meta && task.meta.completedDates;
+  if (!Array.isArray(cd) || cd.length === 0) return null;
+  let max = null;
+  for (const d of cd) if (typeof d === 'string' && (!max || d > max)) max = d;
+  return max;
+};
+
+// Is this task "done right now" from a SINGLE-ROW view's perspective (Upcoming
+// agenda, project/tag tree — one row per task, no day context)? Non-recurring:
+// the plain boolean. Recurring: done-now while its most recent ticked
+// occurrence is today or later — so completing shows a satisfying checkmark
+// that naturally un-checks when the next occurrence's day arrives, instead of
+// the row instantly morphing into "next due date, unchecked". Mirrors web.
+export const isTaskDoneNow = (task, todayStr) => {
+  if (task.completed) return true;
+  const rec = task.recurring || task.recurrence || 'none';
+  if (rec === 'none') return false;
+  const last = lastCompletedDate(task);
+  return !!last && last >= (todayStr || localTodayStr());
+};
+
+// Parse "YYYY-MM-DD" → a LOCAL midnight Date (never `new Date(str)`, which
+// treats date-only strings as UTC and shifts the day west of UTC).
+// Exported: the calendar's single-pass month builder expands recurrences
+// arithmetically and must parse (and overflow-normalize) exactly like
+// matchesRecurrence does — one shared parser keeps the two in lock-step.
+export const parseLocalYMD = (s) => {
+  if (typeof s !== 'string') return null;
+  const parts = s.split('-').map(Number);
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+  const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+};
+
+const MS_PER_DAY = 86400000;
+
+// Does `targetDateStr` fall on one of the FUTURE recurrence points of
+// `baseDateStr` under `recurring`? The base date itself returns false (callers
+// match that with a direct `dueDate === dateStr` check); past dates always
+// return false. Mirrors the web app's utils/recurrence.ts `matchesRecurrence`
+// so the calendar fans a repeating task out onto every occurrence date
+// identically on both clients.
+//
+// This is what keeps a repeating task VISIBLE on the calendar after an
+// occurrence is checked off: completing a recurring task advances its base
+// dueDate one period forward (advanceDueDate), and the calendar still renders
+// it on every upcoming occurrence instead of it vanishing to a single far-off
+// day. Completed tasks intentionally stop fanning out (the advanced dueDate
+// becomes the new anchor for future instances).
+export const matchesRecurrence = (baseDateStr, recurring, targetDateStr) => {
+  if (!recurring || recurring === 'none') return false;
+  const base = parseLocalYMD(baseDateStr);
+  const target = parseLocalYMD(targetDateStr);
+  if (!base || !target) return false;
+  if (target.getTime() <= base.getTime()) return false;
+  switch (recurring) {
+    case 'daily':
+      return true;
+    case 'weekly': {
+      const days = Math.round((target.getTime() - base.getTime()) / MS_PER_DAY);
+      return days % 7 === 0;
+    }
+    case 'biweekly': {
+      const days = Math.round((target.getTime() - base.getTime()) / MS_PER_DAY);
+      return days % 14 === 0;
+    }
+    case 'monthly':
+      // Same day-of-month, any later month (Jan 31 monthly skips short
+      // months — matches "the 31st of every month").
+      return base.getDate() === target.getDate();
+    default:
+      return false;
+  }
+};
+
 // ── Calendar item-type helpers ────────────────────────────────────────
 // Birthdays/events ride on the same task object as ordinary tasks (see
 // ITEM_TYPES in constants). These helpers centralise the "what kind is this"
@@ -109,6 +237,12 @@ export const advanceDueDate = (currentDueDate, recurring) => {
 
 // The item's kind, defaulting to 'task' for every legacy row.
 export const itemTypeOf = (item) => (item && item.itemType) || 'task';
+
+// Display label for a board value. The app-wide UI word is "Board", but the
+// STORAGE sentinel stays 'No Project' (grouping keys, filter values, API path
+// segments all use it) — so map it, and the empty value, at render time only.
+// Never store this label.
+export const boardLabel = (v) => (!v || v === 'No Project' ? 'No Board' : v);
 
 // Per-type default colours (kept here to avoid a constants import cycle with
 // rendering code that already imports taskHelpers).

@@ -1,0 +1,116 @@
+/**
+ * DownloadsContext (mobile) — a single app-level Socket.IO connection to watch
+ * the server's ghost-download queue. The mobile app has no global socket (the
+ * pomodoro/claude sockets live inside TurtleScreen), so this owns one, modeled
+ * on usePomodoroSocket: connect on serverIP, subscribe, clean up on change.
+ *
+ * Server broadcasts (io.emit, no room):
+ *   download:job       — a download_jobs row (media_id stripped server-side:
+ *                        unauthenticated surface, and media ids are capabilities)
+ *   download:progress  — { id, percent } (yt-dlp) OR { id, downloaded, total }
+ *   media:added        — a media row landed → bump mediaVersion so the gallery
+ *                        can live-refresh (downloads land in the vault).
+ */
+import React, { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { io } from 'socket.io-client';
+import { useServer, serverOrigin } from './ServerContext';
+
+const DownloadsContext = createContext({
+  jobs: [], active: 0, mediaVersion: 0,
+  control: async () => {}, remove: async () => {}, enqueue: async () => {}, refresh: async () => {},
+});
+
+export const useDownloads = () => useContext(DownloadsContext);
+
+const pctOf = (j) =>
+  typeof j.percent === 'number'
+    ? j.percent
+    : (j.total_bytes && j.downloaded_bytes != null)
+      ? Math.min(100, Math.round((j.downloaded_bytes / j.total_bytes) * 100))
+      : null;
+
+export function DownloadsProvider({ children }) {
+  const { serverIP, isConnected, api } = useServer();
+  const [jobs, setJobs] = useState([]);
+  const [mediaVersion, setMediaVersion] = useState(0);
+  const socketRef = useRef(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await api.get('/downloads');
+      if (r?.jobs) setJobs(r.jobs.map((j) => ({ ...j, percent: pctOf(j) })));
+    } catch { /* offline / unauthorized */ }
+  }, [api]);
+
+  const refreshRef = useRef(refresh);
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
+  useEffect(() => { if (isConnected) refresh(); }, [isConnected, refresh]);
+
+  useEffect(() => {
+    if (!serverIP) return undefined;
+    const socket = io(serverOrigin(serverIP), {
+      transports: ['websocket'],
+      reconnection: true,
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 30000,
+      randomizationFactor: 0.5,
+    });
+    socketRef.current = socket;
+    socket.on('connect', () => { refreshRef.current(); }); // re-pull /downloads after a (re)connect
+
+    socket.on('download:job', (job) => {
+      setJobs((prev) => {
+        const i = prev.findIndex((j) => j.id === job.id);
+        const merged = i === -1 ? { ...job } : { ...prev[i], ...job };
+        merged.percent = pctOf(merged);
+        if (i === -1) return [merged, ...prev];
+        const next = prev.slice(); next[i] = merged; return next;
+      });
+    });
+    socket.on('download:progress', (p) => {
+      setJobs((prev) => prev.map((j) => {
+        if (j.id !== p.id) return j;
+        const m = {
+          ...j,
+          downloaded_bytes: p.downloaded ?? j.downloaded_bytes,
+          total_bytes: p.total ?? j.total_bytes,
+          // Byte-style events carry no percent — clear the stale one so pctOf
+          // recomputes from fresh bytes (else the bar freezes at first value).
+          percent: typeof p.percent === 'number' ? p.percent : null,
+        };
+        m.percent = pctOf(m);
+        return m;
+      }));
+    });
+    // Any vault change → let the gallery reload: additions (ghost download,
+    // upload from another device, folder-watcher ingest), deletions, and
+    // in-place updates (JIT compress, AI re-understanding). The payload is
+    // deliberately empty (unauthenticated surface) — the reload goes through
+    // the authenticated list endpoints.
+    const bumpMedia = () => setMediaVersion((v) => v + 1);
+    socket.on('media:added', bumpMedia);
+    socket.on('media:removed', bumpMedia);
+    socket.on('media:updated', bumpMedia);
+
+    return () => { socket.removeAllListeners(); socket.disconnect(); socketRef.current = null; };
+  }, [serverIP]);
+
+  const control = useCallback(async (id, action) => {
+    try { await api.post(`/downloads/${id}/${action}`, {}); await refresh(); } catch { /* ignore */ }
+  }, [api, refresh]);
+  const remove = useCallback(async (id) => {
+    try { await api.delete(`/downloads/${id}`); } catch { /* ignore */ }
+    setJobs((prev) => prev.filter((j) => j.id !== id));
+  }, [api]);
+  const enqueue = useCallback(async (url) => {
+    try { await api.post('/downloads', { url }); await refresh(); } catch { /* ignore */ }
+  }, [api, refresh]);
+
+  const active = jobs.filter((j) => ['queued', 'downloading', 'ingesting'].includes(j.status)).length;
+
+  const value = useMemo(
+    () => ({ jobs, active, mediaVersion, control, remove, enqueue, refresh }),
+    [jobs, active, mediaVersion, control, remove, enqueue, refresh],
+  );
+  return <DownloadsContext.Provider value={value}>{children}</DownloadsContext.Provider>;
+}

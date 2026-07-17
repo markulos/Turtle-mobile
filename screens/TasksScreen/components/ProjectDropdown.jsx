@@ -16,6 +16,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
+import { tapHaptic, impactHaptic } from '../../../utils/haptics';
 
 /**
  * ProjectDropdown — inline accordion-style picker.
@@ -88,8 +89,12 @@ export const ProjectDropdown = ({
   onSelect,
   onManage,
   onAddProject,
+  // Maps a board key → its palette colour (same mapping the calendar/tree use),
+  // so each row's colour square matches everywhere. 'All'/'No Board' fall back
+  // to a neutral grey. Optional so the picker still renders if it's omitted.
+  getProjectColor,
   // Board name → display name of whoever shared it WITH me. Such rows get a
-  // "shared in" people glyph + a folder-account icon so they read as not-mine.
+  // "shared in" people glyph so they read as not-mine.
   incomingShareLabels = {},
 }) => {
   const { theme } = useTheme();
@@ -149,10 +154,14 @@ export const ProjectDropdown = ({
   };
 
   const items = [
-    { key: 'All', icon: 'folder-open', label: 'All' },
-    { key: 'No Project', icon: 'folder-off', label: 'No Project' },
-    ...projects.map(p => ({ key: p, icon: 'folder', label: p })),
+    { key: 'All', label: 'All' },
+    { key: 'No Project', label: 'No Board' },
+    ...projects.map(p => ({ key: p, label: p })),
   ];
+
+  // Neutral grey square for the special rows / when no colour resolver is given.
+  const squareColorFor = (key) =>
+    (getProjectColor ? getProjectColor(key) : null) || theme.colors.textSecondary;
 
   const styles = createStyles(theme);
 
@@ -177,21 +186,21 @@ export const ProjectDropdown = ({
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {items.map(({ key, icon, label }) => {
+        {items.map(({ key, label }) => {
           const isActive = selected === key;
           const sharedBy = incomingShareLabels[key];
           return (
             <TouchableOpacity
               key={key}
               style={[styles.item, isActive && styles.itemActive]}
+              onPressIn={() => tapHaptic()}
               onPress={() => handleSelect(key)}
               activeOpacity={0.6}
             >
-              <Icon
-                name={sharedBy ? 'folder-account' : icon}
-                size={20}
-                color={isActive ? theme.colors.textPrimary : theme.colors.textSecondary}
-              />
+              {/* Board colour swatch — a rounded square with a very light bezel
+                  edge, replacing the old folder icon. Colour matches the
+                  calendar/tree via getProjectColor. */}
+              <View style={[styles.colorSquare, { backgroundColor: squareColorFor(key) }]} />
               <Text
                 style={[styles.text, isActive && styles.textActive]}
                 numberOfLines={1}
@@ -218,7 +227,7 @@ export const ProjectDropdown = ({
           <View style={styles.addInputRow}>
             <TextInput
               style={styles.addInput}
-              placeholder="New project name…"
+              placeholder="New board name…"
               placeholderTextColor={theme.colors.textPlaceholder}
               value={newProjectName}
               onChangeText={setNewProjectName}
@@ -226,7 +235,7 @@ export const ProjectDropdown = ({
               returnKeyType="done"
               autoFocus
             />
-            <TouchableOpacity style={styles.addBtn} onPress={handleAddProject}>
+            <TouchableOpacity style={styles.addBtn} onPressIn={() => impactHaptic('medium')} onPress={handleAddProject}>
               <Icon name="check" size={18} color={theme.colors.textPrimary} />
             </TouchableOpacity>
             <TouchableOpacity
@@ -246,7 +255,7 @@ export const ProjectDropdown = ({
             activeOpacity={0.6}
           >
             <Icon name="plus-circle" size={20} color={theme.colors.textPrimary} />
-            <Text style={[styles.text, styles.metaText]}>Add New Project</Text>
+            <Text style={[styles.text, styles.metaText]}>Add New Board</Text>
           </TouchableOpacity>
         )}
 
@@ -259,7 +268,7 @@ export const ProjectDropdown = ({
           activeOpacity={0.6}
         >
           <Icon name="playlist-edit" size={20} color={theme.colors.textSecondary} />
-          <Text style={[styles.text, styles.metaSecondary]}>Edit Projects</Text>
+          <Text style={[styles.text, styles.metaSecondary]}>Edit Boards</Text>
         </TouchableOpacity>
       </ScrollView>
       </Animated.View>
@@ -314,6 +323,15 @@ const createStyles = (theme) => StyleSheet.create({
   },
   itemActive: {
     backgroundColor: theme.colors.surfaceElevated,
+  },
+  // Board colour swatch — a rounded square with a very light bezel edge. Same
+  // 20px footprint the folder icon had, so row alignment is unchanged.
+  colorSquare: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.22)',
   },
   text: {
     flex: 1,

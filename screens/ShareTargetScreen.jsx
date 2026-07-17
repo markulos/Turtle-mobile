@@ -3,7 +3,15 @@
  *
  * Rendered when the OS launches the app via the iOS / Android Share
  * sheet. Receives a payload from expo-share-intent (text, URL, or
- * image files) and lets the user pick a pinned Board destination.
+ * image files) and lets the user pick a Board destination.
+ *
+ * Destinations:
+ *   - Pinned boards surface first under "Suggested" as quick-send rows
+ *     (one tap → sent), so the common case stays a single tap.
+ *   - The full universe of boards (every project / tag / album) is listed
+ *     below under "All boards", with a search box so a destination that
+ *     isn't pinned is still a couple of keystrokes away — no need to go
+ *     pin it on the web first.
  *
  *   text/url → creates a note tagged with the board name (server-side
  *              routing handles project vs tag — both look the same in
@@ -39,12 +47,20 @@ import {
   ActivityIndicator,
   StyleSheet,
   Image,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import * as FileSystem from 'expo-file-system/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
+import { useShareUpload } from '../context/ShareUploadContext';
+import { impactHaptic, notifyHaptic } from '../utils/haptics';
+
+// Local cache of the boards list so the picker renders INSTANTLY on open
+// instead of waiting on the network — we show the cached list immediately and
+// refresh /boards in the background. Bumped suffix if the row shape changes.
+const BOARDS_CACHE_KEY = 'shareBoardsCache:v1';
 
 /** Which icon to show for each board kind. Keeps the per-kind config
  *  in one place so a future "folder" or "saved-search" kind only
@@ -57,7 +73,7 @@ const KIND_ICONS = {
 
 /** What the user-visible label looks like next to each kind. */
 const KIND_LABELS = {
-  project: 'Project',
+  project: 'Board',
   tag: 'Tag',
   album: 'Album',
 };
@@ -65,16 +81,13 @@ const KIND_LABELS = {
 export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const { theme, isDark } = useTheme();
   const { api, serverIP, isConnected } = useServer();
+  const { enqueueShare } = useShareUpload();
 
   // ── State ────────────────────────────────────────────────────
   const [boards, setBoards] = useState([]);
   const [loadingBoards, setLoadingBoards] = useState(false);
   const [boardsError, setBoardsError] = useState(null);
-  // 'idle' | 'sending' | 'success' | 'error'  — drives the visual state
-  // of the screen after the user picks a board.
-  const [phase, setPhase] = useState('idle');
-  const [phaseError, setPhaseError] = useState(null);
-  const [selectedBoardKey, setSelectedBoardKey] = useState(null);
+  const [query, setQuery] = useState('');
 
   // ── Derived: what is actually being shared? ─────────────────
   // expo-share-intent normalizes the payload across iOS/Android into
@@ -86,91 +99,170 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const imageFiles = files.filter((f) => (f?.mimeType || '').startsWith('image/'));
   const totalImages = imageFiles.length;
 
-  // ── Fetch pinned boards on mount ────────────────────────────
-  // Use ?pinned=1 so the picker shows the curated subset rather than
-  // every tag in the database (potentially 100+).
-  const loadPinned = useCallback(async () => {
+  // ── Fetch ALL boards on mount ───────────────────────────────
+  // We pull the full universe (not ?pinned=1) so the search box can find
+  // any project / tag / album. Each row carries an `isPinned` flag, which
+  // we use to surface the curated subset first under "Suggested". The list
+  // is alphabetised server-side (pinned-first when unfiltered).
+  const loadBoards = useCallback(async () => {
     if (!isConnected) {
-      setBoardsError('Not connected to the Turtle server.');
+      // Only surface a hard error if we have nothing cached to show.
+      setBoards((prev) => {
+        if (prev.length === 0) setBoardsError('Not connected to the Turtle server.');
+        return prev;
+      });
       return;
     }
     setLoadingBoards(true);
     setBoardsError(null);
     try {
-      const res = await api.get('/boards?pinned=1');
-      setBoards(Array.isArray(res?.boards) ? res.boards : []);
+      const res = await api.get('/boards');
+      const list = Array.isArray(res?.boards) ? res.boards : [];
+      setBoards(list);
+      // Write-through so the next share opens instantly on this list.
+      AsyncStorage.setItem(BOARDS_CACHE_KEY, JSON.stringify(list)).catch(() => {});
     } catch (e) {
       console.error('[Share] Failed to load boards:', e);
-      setBoardsError(e.message || 'Failed to load destinations.');
+      // Keep any cached list visible; only show the error if we have nothing.
+      setBoards((prev) => {
+        if (prev.length === 0) setBoardsError(e.message || 'Failed to load destinations.');
+        return prev;
+      });
     } finally {
       setLoadingBoards(false);
     }
   }, [api, isConnected]);
 
+  // Hydrate from the local cache the moment the sheet opens, so the picker
+  // paints immediately — the network refresh below then reconciles. We never
+  // touch image data here (only on pick), keeping the open instant.
   useEffect(() => {
-    loadPinned();
-  }, [loadPinned]);
-
-  // ── Build the share payload + POST ──────────────────────────
-  // Reads every image file as base64 and bundles them into the JSON
-  // body /api/share expects. We do this lazily (on board-tap) rather
-  // than on mount because reading + base64-encoding 10MB photos
-  // shouldn't happen for users who cancel.
-  const sendToBoard = async (board) => {
-    const key = `${board.kind}::${board.name}`;
-    setSelectedBoardKey(key);
-    setPhase('sending');
-    setPhaseError(null);
-
-    try {
-      // 1. Convert any image files to base64. Each file is read
-      //    independently so a single bad file doesn't kill the others
-      //    (we log + skip rather than abort the whole share).
-      const encodedImages = [];
-      for (const f of imageFiles) {
-        try {
-          const data = await FileSystem.readAsStringAsync(f.path, { encoding: 'base64' });
-          encodedImages.push({
-            filename: f.fileName || `share-${Date.now()}.jpg`,
-            mimeType: f.mimeType,
-            dataBase64: data,
-          });
-        } catch (e) {
-          console.warn('[Share] Failed to read', f.path, e.message);
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(BOARDS_CACHE_KEY);
+        if (cancelled || !raw) return;
+        const cached = JSON.parse(raw);
+        if (Array.isArray(cached) && cached.length > 0) {
+          // Don't clobber a fresh network result that may have already landed.
+          setBoards((prev) => (prev.length > 0 ? prev : cached));
         }
-      }
+      } catch (e) { /* ignore a corrupt cache — the fetch will repopulate it */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-      // 2. POST. The server endpoint returns { success, chatLogId,
-      //    noteId?, mediaIds, imageUrls } on success.
-      const body = {
-        board: { kind: board.kind, name: board.name },
-        payload: {
-          text: text || undefined,
-          url: url || undefined,
-          images: encodedImages.length > 0 ? encodedImages : undefined,
-        },
-        channel: 'ios-share',
-      };
-      const res = await api.post('/share', body);
-      if (!res?.success) {
-        throw new Error(res?.error || 'Server rejected the share.');
-      }
+  useEffect(() => {
+    loadBoards();
+  }, [loadBoards]);
 
-      // 3. Brief success affordance, then dismiss. The auto-dismiss
-      //    keeps the share extension feeling lightweight — the user
-      //    doesn't have to tap "done" themselves.
-      setPhase('success');
-      setTimeout(() => {
-        onDismiss?.();
-      }, 900);
-    } catch (e) {
-      console.error('[Share] POST failed:', e);
-      setPhase('error');
-      setPhaseError(e.message || 'Send failed.');
-      // Leave the screen on error so the user can retry — they'll tap
-      // a board again (or cancel).
-      setSelectedBoardKey(null);
-    }
+  // ── Derived: search + sections ──────────────────────────────
+  // When the user is searching we collapse to one flat result list across
+  // every board. Otherwise we split into Suggested (pinned, quick-send)
+  // and All boards (the rest).
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? boards.filter((b) => b.name.toLowerCase().includes(q))
+    : null;
+  const pinned = boards.filter((b) => b.isPinned);
+  const unpinned = boards.filter((b) => !b.isPinned);
+  // Offer "create a new board" whenever the typed name doesn't already match an
+  // existing board exactly (case-insensitive) — so a brand-new topic is one tap
+  // away without leaving the share sheet. New boards are created as tags.
+  const exactMatch = q ? boards.some((b) => b.name.toLowerCase() === q) : false;
+  const canCreate = q.length > 0 && !exactMatch;
+  // Only block the UI on the network when we have NOTHING cached to paint. Once
+  // the cache (or a fetch) has populated boards, refreshes happen silently.
+  const busyEmpty = loadingBoards && boards.length === 0;
+
+  // ── Pick a board → hand off + dismiss ───────────────────────
+  // Optimistic-by-default: we do NOT read or encode any image here. We hand the
+  // board + the raw file refs to the app-level ShareUploadProvider, fire a
+  // confirmation haptic, and dismiss IMMEDIATELY. The encode + upload run in the
+  // background (owned by something that outlives this modal) and their progress /
+  // outcome surface in the floating ShareUploadToast — so 10–30 large photos no
+  // longer block the sheet.
+  const pickBoard = (board) => {
+    notifyHaptic('success');
+    enqueueShare({ board, text, url, imageFiles });
+    onDismiss?.();
+  };
+
+  // ── A single tappable destination row ───────────────────────
+  // Tapping sends immediately (quick-send) — there's no confirm step.
+  // Shared across the Suggested / All boards / search-results sections.
+  const renderBoard = (b) => {
+    const key = `${b.kind}::${b.name}`;
+    return (
+      <TouchableOpacity
+        key={key}
+        activeOpacity={0.75}
+        onPressIn={() => impactHaptic('medium')}
+        onPress={() => pickBoard(b)}
+        style={[
+          styles.boardRow,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: theme.colors.border,
+          },
+        ]}
+      >
+        <View style={[styles.boardIcon, { backgroundColor: theme.colors.surfaceElevated || theme.colors.surface }]}>
+          <Icon
+            name={KIND_ICONS[b.kind] || 'circle-outline'}
+            size={18}
+            color={theme.colors.textSecondary}
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.boardName, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+            {b.name}
+          </Text>
+          <Text style={[styles.boardKind, { color: theme.colors.textMuted }]}>
+            {KIND_LABELS[b.kind] || b.kind}
+          </Text>
+        </View>
+        {/* Tapping hands off to the background uploader + dismisses instantly,
+            so a static chevron is the only affordance needed here. */}
+        <Icon name="chevron-right" size={22} color={theme.colors.textMuted} />
+      </TouchableOpacity>
+    );
+  };
+
+  // ── The "create a new board" row ────────────────────────────
+  // Reuses the search box as the name field: type a destination that doesn't
+  // exist, then tap this to create it (as a tag) AND send the share to it in one
+  // shot. Same trailing spinner / checkmark states as a normal board row.
+  const renderCreateRow = (name) => {
+    return (
+      <TouchableOpacity
+        key="__create_new_board__"
+        activeOpacity={0.75}
+        onPressIn={() => impactHaptic('medium')}
+        onPress={() => pickBoard({ kind: 'tag', name, create: true })}
+        style={[
+          styles.boardRow,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: theme.colors.accentSuccess,
+            borderStyle: 'dashed',
+          },
+        ]}
+      >
+        <View style={[styles.boardIcon, { backgroundColor: theme.colors.surfaceElevated || theme.colors.surface }]}>
+          <Icon name="plus" size={18} color={theme.colors.accentSuccess} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.boardName, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+            Create “{name}”
+          </Text>
+          <Text style={[styles.boardKind, { color: theme.colors.textMuted }]}>
+            New board · sends here
+          </Text>
+        </View>
+        <Icon name="plus-circle-outline" size={22} color={theme.colors.accentSuccess} />
+      </TouchableOpacity>
+    );
   };
 
   // ── Render: status states ────────────────────────────────────
@@ -209,97 +301,103 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           theme={theme}
         />
 
-        {/* Status banner during error phase */}
-        {phase === 'error' && phaseError && (
-          <View style={[styles.errorBanner, { backgroundColor: 'rgba(248,113,113,0.10)', borderColor: 'rgba(248,113,113,0.3)' }]}>
-            <Icon name="alert-circle-outline" size={16} color={theme.colors.accentError} />
-            <Text style={{ color: theme.colors.accentError, flex: 1, fontSize: 13 }}>{phaseError}</Text>
+        {/* Search box — find any board (even unpinned) OR name a new one to
+            create. Shown as soon as we have anything to show (cached list paints
+            instantly); hidden only while the FIRST load is running with nothing
+            cached, or on a hard error. */}
+        {!busyEmpty && !boardsError && (
+          <View style={[styles.searchBox, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+            <Icon name="magnify" size={18} color={theme.colors.textMuted} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search or name a new board"
+              placeholderTextColor={theme.colors.textMuted}
+              style={[styles.searchInput, { color: theme.colors.textPrimary }]}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {query.length > 0 && (
+              <TouchableOpacity onPress={() => setQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Icon name="close-circle" size={18} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
-        {/* Boards picker */}
-        <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>
-          Send to
-        </Text>
-
-        {loadingBoards && (
+        {busyEmpty && (
           <View style={styles.centerState}>
             <ActivityIndicator color={theme.colors.primary} />
           </View>
         )}
 
-        {boardsError && !loadingBoards && (
+        {boardsError && (
           <View style={[styles.errorBanner, { backgroundColor: 'rgba(248,113,113,0.10)', borderColor: 'rgba(248,113,113,0.3)' }]}>
             <Icon name="cloud-off-outline" size={16} color={theme.colors.accentError} />
             <Text style={{ color: theme.colors.accentError, flex: 1, fontSize: 13 }}>{boardsError}</Text>
-            <TouchableOpacity onPress={loadPinned}>
+            <TouchableOpacity onPress={loadBoards}>
               <Text style={{ color: theme.colors.accentError, fontWeight: '600', fontSize: 13 }}>Retry</Text>
             </TouchableOpacity>
           </View>
         )}
 
-        {!loadingBoards && !boardsError && boards.length === 0 && (
+        {!busyEmpty && !boardsError && boards.length === 0 && !q && (
           <View style={styles.centerState}>
-            <Icon name="pin-outline" size={36} color={theme.colors.textMuted} />
+            <Icon name="folder-off-outline" size={36} color={theme.colors.textMuted} />
             <Text style={[styles.centerTitle, { color: theme.colors.textPrimary, fontSize: 15 }]}>
-              No pinned boards yet
+              No boards yet
             </Text>
             <Text style={[styles.centerBody, { color: theme.colors.textMuted, fontSize: 12 }]}>
-              Open Turtle on the web, go to Settings → Share boards, and pin some projects, tags, or albums.
+              Type a name in the box above to create your first board and send this straight to it.
             </Text>
           </View>
         )}
 
-        {!loadingBoards && boards.map((b) => {
-          const key = `${b.kind}::${b.name}`;
-          const isMe = selectedBoardKey === key;
-          const sending = isMe && phase === 'sending';
-          const succeeded = isMe && phase === 'success';
-          // Disable other rows while a send is in flight so the user
-          // can't double-tap two destinations.
-          const disabled = phase === 'sending' && !isMe;
-          return (
-            <TouchableOpacity
-              key={key}
-              activeOpacity={0.75}
-              onPress={() => sendToBoard(b)}
-              disabled={disabled || sending || succeeded}
-              style={[
-                styles.boardRow,
-                {
-                  backgroundColor: theme.colors.surface,
-                  borderColor: theme.colors.border,
-                  opacity: disabled ? 0.4 : 1,
-                },
-              ]}
-            >
-              <View style={[styles.boardIcon, { backgroundColor: theme.colors.surfaceElevated || theme.colors.surface }]}>
-                <Icon
-                  name={KIND_ICONS[b.kind] || 'circle-outline'}
-                  size={18}
-                  color={theme.colors.textSecondary}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.boardName, { color: theme.colors.textPrimary }]} numberOfLines={1}>
-                  {b.name}
+        {/* Searching → the "create new board" row (when the name is new) on top,
+            then a flat result list across every board. */}
+        {!busyEmpty && !boardsError && matches && (
+          <>
+            {canCreate && renderCreateRow(query.trim())}
+            {matches.length > 0 ? (
+              <>
+                <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary, marginTop: canCreate ? 18 : 0 }]}>
+                  {matches.length} result{matches.length === 1 ? '' : 's'}
                 </Text>
-                <Text style={[styles.boardKind, { color: theme.colors.textMuted }]}>
-                  {KIND_LABELS[b.kind] || b.kind}
+                {matches.map(renderBoard)}
+              </>
+            ) : !canCreate ? (
+              <View style={styles.centerState}>
+                <Icon name="magnify-close" size={32} color={theme.colors.textMuted} />
+                <Text style={[styles.centerBody, { color: theme.colors.textMuted, fontSize: 13 }]}>
+                  No boards match “{query.trim()}”.
                 </Text>
               </View>
-              {/* Trailing affordance: arrow at rest, spinner during
-                  send, checkmark on success. */}
-              {sending ? (
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-              ) : succeeded ? (
-                <Icon name="check-circle" size={22} color={theme.colors.accentSuccess} />
-              ) : (
-                <Icon name="chevron-right" size={22} color={theme.colors.textMuted} />
-              )}
-            </TouchableOpacity>
-          );
-        })}
+            ) : null}
+          </>
+        )}
+
+        {/* Not searching → Suggested (pinned, quick-send) then All boards. */}
+        {!busyEmpty && !boardsError && !matches && boards.length > 0 && (
+          <>
+            {pinned.length > 0 && (
+              <>
+                <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>
+                  Suggested
+                </Text>
+                {pinned.map(renderBoard)}
+              </>
+            )}
+            {unpinned.length > 0 && (
+              <>
+                <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary, marginTop: pinned.length > 0 ? 18 : 0 }]}>
+                  All boards
+                </Text>
+                {unpinned.map(renderBoard)}
+              </>
+            )}
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -336,20 +434,30 @@ function SharePreview({ text, url, imageFiles, theme }) {
       ]}
     >
       {hasImages && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8, paddingVertical: 4 }}
-        >
-          {imageFiles.map((f, i) => (
-            <Image
-              key={i}
-              source={{ uri: f.path }}
-              style={styles.previewThumb}
-              resizeMode="cover"
-            />
-          ))}
-        </ScrollView>
+        <>
+          {/* Count header so a big multi-select reads at a glance — tapping a
+              board below sends all of them ("Send 8 photos"). */}
+          <View style={styles.previewCountRow}>
+            <Icon name="image-multiple" size={16} color={theme.colors.textSecondary} />
+            <Text style={[styles.previewCount, { color: theme.colors.textPrimary }]}>
+              {imageFiles.length === 1 ? 'Send 1 photo' : `Send ${imageFiles.length} photos`}
+            </Text>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 8, paddingVertical: 4 }}
+          >
+            {imageFiles.map((f, i) => (
+              <Image
+                key={i}
+                source={{ uri: f.path }}
+                style={styles.previewThumb}
+                resizeMode="cover"
+              />
+            ))}
+          </ScrollView>
+        </>
       )}
       {hasUrl && (
         <View style={styles.previewRow}>
@@ -403,7 +511,24 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   previewRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  previewCountRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  previewCount: { fontSize: 13, fontWeight: '600' },
   previewThumb: { width: 88, height: 88, borderRadius: 8, backgroundColor: '#222' },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginBottom: 16,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    padding: 0,
+  },
   sectionLabel: {
     fontSize: 11,
     fontWeight: '600',

@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
+import { tapHaptic } from '../../../utils/haptics';
 
 // Pastel colors for tags
 const tagColors = [
@@ -148,8 +149,9 @@ export const SectionHeader = ({ section, expanded, editMode = false, onToggleExp
                       autoFocus
                       selectTextOnFocus
                     />
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.tagChipBtn}
+                      onPressIn={() => tapHaptic()}
                       onPress={handleSaveTag}
                       hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
                     >
@@ -209,8 +211,9 @@ export const SectionHeader = ({ section, expanded, editMode = false, onToggleExp
                   }}
                   autoFocus
                 />
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.untaggedBtn}
+                  onPressIn={() => tapHaptic()}
                   onPress={handleSaveNewTag}
                   hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
                 >
@@ -385,9 +388,6 @@ const createStyles = (theme) => StyleSheet.create({
     fontSize: theme.typography.body, 
     fontWeight: '600', 
     color: theme.colors.textSecondary, 
-  },
-  tagTextCompleted: { 
-    color: theme.colors.accentSuccess 
   },
   count: { 
     fontSize: theme.typography.body, 

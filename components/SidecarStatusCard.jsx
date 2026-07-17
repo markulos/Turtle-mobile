@@ -30,6 +30,7 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
+import { tapHaptic, impactHaptic } from '../utils/haptics';
 
 // Match the web panel's cadence. The server probes the sidecar's
 // /health with a 2 s timeout on each call, so worst-case staleness is
@@ -202,6 +203,7 @@ export default function SidecarStatusCard({ active = true }) {
           <Text style={styles.statusPillText}>{dotLabel}</Text>
         </View>
         <TouchableOpacity
+          onPressIn={() => tapHaptic()}
           onPress={onRefresh}
           style={styles.refreshBtn}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -261,6 +263,7 @@ export default function SidecarStatusCard({ active = true }) {
                 </Text>
               </View>
               <TouchableOpacity
+                onPressIn={() => tapHaptic()}
                 onPress={toggleEnabled}
                 disabled={!settings || busy}
                 style={[
@@ -306,6 +309,7 @@ export default function SidecarStatusCard({ active = true }) {
               </>
             ) : (
               <TouchableOpacity
+                onPressIn={() => impactHaptic('medium')}
                 onPress={runUnderstanding}
                 disabled={runDisabled}
                 style={[styles.runBtn, { opacity: runDisabled ? 0.5 : 1 }]}

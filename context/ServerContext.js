@@ -52,6 +52,9 @@ export const h2MediaCandidate = (raw) => {
 // the server flips to AUTH_ENFORCE=1.
 let _apiAuthToken = null;
 export const setApiAuthToken = (t) => { _apiAuthToken = t || null; };
+// Read-only accessor so callers (e.g. the task cache) can scope per-user data
+// to the current session's token without reaching into AuthContext/SecureStore.
+export const getApiAuthToken = () => _apiAuthToken;
 const authHeader = () => (_apiAuthToken ? { Authorization: `Bearer ${_apiAuthToken}` } : {});
 
 // ── Global fetch auth interceptor ────────────────────────────────────────

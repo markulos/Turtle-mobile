@@ -13,6 +13,7 @@ import {
   Easing,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
 
 /**
  * TerminalConsole — a vintage green-phosphor terminal for the `/terminal`
@@ -166,7 +167,7 @@ export default function TerminalConsole({
       </View>
       <View style={[styles.dot, { backgroundColor: busy ? VT.amber : (active ? VT.green : VT.greenDim) }]} />
       {fullscreen && onStop ? (
-        <TouchableOpacity onPress={onStop} hitSlop={HIT} style={styles.hbtn} accessibilityLabel="Kill shell">
+        <TouchableOpacity onPressIn={() => notifyHaptic('warning')} onPress={onStop} hitSlop={HIT} style={styles.hbtn} accessibilityLabel="Kill shell">
           <Icon name="flash-off" size={16} color={VT.amber} />
         </TouchableOpacity>
       ) : null}
@@ -205,7 +206,7 @@ export default function TerminalConsole({
                 cursorColor={VT.green}
                 selectionColor={VT.glow}
               />
-              <TouchableOpacity onPress={submit} hitSlop={HIT} style={styles.runBtn}>
+              <TouchableOpacity onPressIn={() => impactHaptic('medium')} onPress={submit} hitSlop={HIT} style={styles.runBtn}>
                 <Icon name="play" size={18} color={VT.bg} />
               </TouchableOpacity>
             </View>

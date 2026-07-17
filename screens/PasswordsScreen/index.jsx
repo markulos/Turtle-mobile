@@ -13,6 +13,7 @@ import { useServer } from '../../context/ServerContext';
 import { useTheme } from '../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useVault } from './hooks/useVault';
+import { tapHaptic, notifyHaptic } from '../../utils/haptics';
 import {
   SetupScreen,
   UnlockScreen,
@@ -131,13 +132,14 @@ export default function PasswordsScreen() {
         <Text style={styles.headerTitle}>Passwords</Text>
         <View style={styles.headerActions}>
           <TouchableOpacity
+            onPressIn={() => tapHaptic()}
             onPress={() => setShowChangePw(true)}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             accessibilityLabel="Change master password"
           >
             <Icon name="key-change" size={20} color={theme.colors.textSecondary} />
           </TouchableOpacity>
-          <TouchableOpacity onPress={clearAll}>
+          <TouchableOpacity onPressIn={() => notifyHaptic('warning')} onPress={clearAll}>
             <Text style={styles.resetText}>Reset</Text>
           </TouchableOpacity>
         </View>
@@ -200,6 +202,7 @@ export default function PasswordsScreen() {
       {!showNewForm && (
         <TouchableOpacity
           style={styles.fab}
+          onPressIn={() => tapHaptic()}
           onPress={() => setShowNewForm(true)}
         >
           <Icon name="plus" size={28} color={theme.colors.textPrimary} />

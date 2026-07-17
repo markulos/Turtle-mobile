@@ -16,8 +16,10 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
+import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
+import { useSheetDismiss } from '../../../utils/useSheetDismiss';
 
-export const ProjectManager = ({ 
+export const ProjectManager = ({
   visible, 
   onClose, 
   projects, 
@@ -85,11 +87,11 @@ export const ProjectManager = ({
       const subtaskFragment = subtaskCount > 0
         ? ` and ${subtaskCount} subtask${subtaskCount === 1 ? '' : 's'}`
         : '';
-      message = `"${name}" contains ${taskCount} ${taskWord}${subtaskFragment}. Deleting this project will permanently delete them. This cannot be undone.`;
+      message = `"${name}" contains ${taskCount} ${taskWord}${subtaskFragment}. Deleting this board will permanently delete them. This cannot be undone.`;
     }
 
     Alert.alert(
-      'Delete Project',
+      'Delete Board',
       message,
       [
         { text: 'Cancel', style: 'cancel' },
@@ -103,6 +105,9 @@ export const ProjectManager = ({
   };
 
   const styles = createStyles(theme);
+  // iOS-style pull-down on the handle/title zone; keyboard is dismissed by the
+  // drag ending in a close anyway (handleClose does it).
+  const { panHandlers, sheetDragStyle } = useSheetDismiss(handleClose, visible);
 
   return (
     <Modal
@@ -121,16 +126,20 @@ export const ProjectManager = ({
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           pointerEvents="box-none"
         >
-          <View style={styles.content}>
-            <View style={styles.header}>
-              <Text style={styles.title}>Edit Projects</Text>
+          <Animated.View style={[styles.content, sheetDragStyle]}>
+            {/* Handle + title = the pull-down zone. */}
+            <View {...panHandlers}>
+              <View style={styles.handleBar} />
+              <View style={styles.header}>
+                <Text style={styles.title}>Edit Boards</Text>
+              </View>
             </View>
 
             <View style={styles.addRow}>
               <TextInput
                 ref={inputRef}
                 style={styles.input}
-                placeholder="New project name..."
+                placeholder="New board name..."
                 placeholderTextColor={theme.colors.textPlaceholder}
                 value={newName}
                 onChangeText={setNewName}
@@ -138,7 +147,7 @@ export const ProjectManager = ({
                 returnKeyType="done"
                 blurOnSubmit={false}
               />
-              <TouchableOpacity style={styles.addBtn} onPress={handleAdd}>
+              <TouchableOpacity style={styles.addBtn} onPressIn={() => impactHaptic('medium')} onPress={handleAdd}>
                 <Icon name="plus" size={22} color={theme.colors.textPrimary} />
               </TouchableOpacity>
             </View>
@@ -156,6 +165,7 @@ export const ProjectManager = ({
                   <Icon name="folder" size={20} color={theme.colors.textPrimary} style={styles.folderIcon} />
                   <Text style={styles.name} numberOfLines={1}>{item}</Text>
                   <TouchableOpacity
+                    onPressIn={() => notifyHaptic('warning')}
                     onPress={() => confirmDelete(item)}
                     style={styles.deleteBtn}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -165,14 +175,14 @@ export const ProjectManager = ({
                 </View>
               ))}
               {projects.length === 0 && (
-                <Text style={styles.empty}>No projects yet. Create one above!</Text>
+                <Text style={styles.empty}>No boards yet. Create one above!</Text>
               )}
             </ScrollView>
 
             <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
               <Text style={styles.closeBtnText}>Close Edit</Text>
             </TouchableOpacity>
-          </View>
+          </Animated.View>
         </KeyboardAvoidingView>
       </Animated.View>
     </Modal>
@@ -200,11 +210,20 @@ const createStyles = (theme) => StyleSheet.create({
     maxHeight: '85%',
     minHeight: 400,
   },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    marginBottom: 16 
+  // Grab-handle pill — the visible cue for the pull-down-to-close zone.
+  handleBar: {
+    alignSelf: 'center',
+    width: 44,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: theme.colors.borderStrong || theme.colors.border,
+    marginBottom: 10,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16
   },
   title: { 
     fontSize: theme.typography.body, 

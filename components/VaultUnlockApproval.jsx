@@ -9,6 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { sealTo } from '../screens/PasswordsScreen/utils/bioRelay';
 import { registerForVaultPush } from '../services/vaultPush';
+import { impactHaptic, notifyHaptic } from '../utils/haptics';
 
 // Must match the key useVault.js writes the biometric master password under.
 const BIO_PW_KEY = 'turtleVaultMasterPwBio';
@@ -151,6 +152,7 @@ export default function VaultUnlockApproval() {
           <View style={styles.row}>
             <TouchableOpacity
               style={[styles.btn, { borderColor: theme.colors.border, borderWidth: 1 }]}
+              onPressIn={() => notifyHaptic('warning')}
               onPress={deny}
               disabled={busy}
             >
@@ -158,6 +160,7 @@ export default function VaultUnlockApproval() {
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.btn, styles.approve, { backgroundColor: theme.colors.accentSuccess || theme.colors.primary }]}
+              onPressIn={() => impactHaptic('medium')}
               onPress={approve}
               disabled={busy}
             >

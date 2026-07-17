@@ -9,7 +9,6 @@ import {
   Animated,
   Platform,
   Keyboard,
-  Switch,
   Modal,
   LayoutAnimation,
   UIManager,
@@ -32,7 +31,9 @@ import * as Haptics from 'expo-haptics';
 // was added, so a static top-level import crashes older binaries on load.
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FlashList } from '@shopify/flash-list';
-import { frostBorderColor, FROST_OVERLAP } from '../../utils/frostedChat';
+import { BlurView } from 'expo-blur';
+import { frostBorderColor, FROST_OVERLAP, blurProps, frostOverlayColor } from '../../utils/frostedChat';
+import { tapHaptic, impactHaptic, notifyHaptic } from '../../utils/haptics';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
@@ -52,6 +53,8 @@ import ClaudeConsole from './components/ClaudeConsole';
 import TerminalConsole from './components/TerminalConsole';
 import FriendCard from './components/FriendCard';
 import EdgeSwipePage from './components/EdgeSwipePage';
+import ConversationsOverlay from './components/ConversationsOverlay';
+import LinkDesktop from './components/LinkDesktop';
 // SettingsScreen used to be its own tab. We surface it from inside
 // the Turtle page now via the top-right gear icon — the tab bar
 // shed a slot, and Settings reads more like a "preferences sheet"
@@ -521,6 +524,12 @@ export default function TurtleScreen() {
   // Friends (org members) overlay — list + lookup, reached from the chat's
   // top-left people icon. Loaded once on open; the search box filters locally.
   const [showFriends, setShowFriends] = useState(false);
+  // Conversation boards — messenger-style inbox of per-board threads, reached
+  // from the forum icon next to Friends. Sibling of the Friends page (only one
+  // of the two Modals is ever open at a time).
+  const [showConversations, setShowConversations] = useState(false);
+  // "Link a desktop" QR scanner (approve a Turtle desktop app to sign in as you).
+  const [showLinkDesktop, setShowLinkDesktop] = useState(false);
   const [friends, setFriends] = useState([]);
   // Tapped member → their profile card (avatar, name, number, stats). Stacks
   // over the Friends sheet; null = closed.
@@ -763,7 +772,6 @@ export default function TurtleScreen() {
     if (clip?.setStringAsync) {
       try {
         await clip.setStringAsync(inviteResult.joinUrl);
-        Haptics.selectionAsync().catch(() => {});
         setInviteCopied(true);
         setTimeout(() => setInviteCopied(false), 1800);
         return;
@@ -886,8 +894,8 @@ export default function TurtleScreen() {
         console.log('[Turtle] Failed to fetch slash commands:', error);
         // Fallback commands if server fails
         setSlashCommands([
-          { command: '/note ', description: 'Save a quick note (#tag for project)' },
-          { command: '/todo ', description: 'Add a todo (#tag for project)' },
+          { command: '/note ', description: 'Save a quick note (#tag for board)' },
+          { command: '/todo ', description: 'Add a todo (#tag for board)' },
           { command: '/pomodoro focus', description: 'Start 25m focus timer' },
           { command: '/pomodoro break', description: 'Start 5m break timer' },
           { command: '/pomodoro stop', description: 'Stop active timer' },
@@ -916,18 +924,27 @@ export default function TurtleScreen() {
       
       if (res && res.success) {
         // DO NOT .reverse() - Keep newest messages first for inverted list
-        const formattedMessages = res.messages.map(msg => ({
+        const formattedMessages = res.messages
+          // Board-scoped conversation turns (source 'app' + a board) live in
+          // their board thread (ConversationsOverlay), not the main chat.
+          // Inbound SHARES keep their board and still show here — they're
+          // notifications ("shared X to BoardY"), and their source is the
+          // share channel, never 'app'.
+          .filter(msg => !(msg.board && msg.source === 'app'))
+          .map(msg => ({
           id: msg._id,
           text: msg.text,
-          timestamp: msg.createdAt, 
-          sender: msg.user._id === 1 ? 'user' : 'assistant', 
-          isTelegram: msg.source === 'telegram' 
-        })); 
+          timestamp: msg.createdAt,
+          sender: msg.user._id === 1 ? 'user' : 'assistant',
+          isTelegram: msg.source === 'telegram'
+        }));
 
-        // APPEND older messages to the end of the array (visually the top of the screen)
+        // APPEND older messages to the end of the array (visually the top of
+        // the screen). Offset/hasMore track RAW server rows (pre-filter) so
+        // paging never skips or stalls.
         setMessages(prev => isLoadMore ? [...prev, ...formattedMessages] : formattedMessages);
         setHistoryOffset(currentOffset + 50);
-        setHasMoreHistory(res.messages.length === 50); 
+        setHasMoreHistory(res.messages.length === 50);
       }
     } catch (error) {
       console.error('[TurtleChat] Failed to load history:', error);
@@ -1624,15 +1641,29 @@ export default function TurtleScreen() {
           visible message clears the bar. zIndex stays 101 (below the vault
           overlay at 200, so the vault still covers the header). */}
       <Reanimated.View style={[styles.chatHeader, { paddingTop: insets.top }, headerCounterStyle]}>
-        <TouchableOpacity
-          onPress={openFriends}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          style={styles.headerIconButton}
-          accessibilityLabel="Open friends"
-          accessibilityRole="button"
-        >
-          <Icon name="account-multiple-outline" size={22} color={theme.colors.textSecondary} />
-        </TouchableOpacity>
+        {/* Left cluster: Friends + Conversations. Both side clusters share a
+            fixed width (styles.headerSideWrap) so the flex:1 title between
+            them stays dead-centre despite the uneven icon counts. */}
+        <View style={[styles.headerSideWrap, { justifyContent: 'flex-start' }]}>
+          <TouchableOpacity
+            onPress={openFriends}
+            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+            style={styles.headerIconButton}
+            accessibilityLabel="Open friends"
+            accessibilityRole="button"
+          >
+            <Icon name="account-multiple-outline" size={22} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => { tapHaptic(); setShowConversations(true); }}
+            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+            style={styles.headerIconButton}
+            accessibilityLabel="Open board conversations"
+            accessibilityRole="button"
+          >
+            <Icon name="forum-outline" size={21} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity
           style={styles.headerTitleWrap}
@@ -1659,15 +1690,26 @@ export default function TurtleScreen() {
           <Text style={styles.headerTitle}>Turtle</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          onPress={() => setShowAppSettings(true)}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          style={styles.headerIconButton}
-          accessibilityLabel="Open settings"
-          accessibilityRole="button"
-        >
-          <Icon name="cog-outline" size={22} color={theme.colors.textSecondary} />
-        </TouchableOpacity>
+        <View style={[styles.headerSideWrap, { justifyContent: 'flex-end' }]}>
+          <TouchableOpacity
+            onPress={() => { tapHaptic(); setShowLinkDesktop(true); }}
+            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+            style={styles.headerIconButton}
+            accessibilityLabel="Link a desktop"
+            accessibilityRole="button"
+          >
+            <Icon name="monitor-cellphone" size={21} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setShowAppSettings(true)}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            style={styles.headerIconButton}
+            accessibilityLabel="Open settings"
+            accessibilityRole="button"
+          >
+            <Icon name="cog-outline" size={22} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
       </Reanimated.View>
 
       {/* Friends — a pushed PAGE (slides in from the right; swipe the left edge
@@ -1730,6 +1772,7 @@ export default function TurtleScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.inviteManualBtn, inviteLinkBusy && { opacity: 0.5 }]}
+                onPressIn={() => tapHaptic()}
                 onPress={shareInviteLink}
                 disabled={inviteLinkBusy}
                 activeOpacity={0.7}
@@ -1758,6 +1801,7 @@ export default function TurtleScreen() {
                 <TouchableOpacity
                   style={[styles.inviteSendBtn, inviteBusy && { opacity: 0.6 }]}
                   disabled={inviteBusy}
+                  onPressIn={() => impactHaptic('medium')}
                   onPress={() => inviteByPhone(invitePhone)}
                   activeOpacity={0.85}
                 >
@@ -1802,6 +1846,7 @@ export default function TurtleScreen() {
                 <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
                   <TouchableOpacity
                     style={[styles.inviteSendBtn, { flex: 1, flexDirection: 'row', justifyContent: 'center', gap: 6 }, inviteCopied && { backgroundColor: '#34c759' }]}
+                    onPressIn={() => tapHaptic()}
                     onPress={copyInviteLink}
                     activeOpacity={0.85}
                   >
@@ -1907,6 +1952,7 @@ export default function TurtleScreen() {
                   <TouchableOpacity
                     style={[styles.inviteSendBtn, devBusy && { opacity: 0.6 }]}
                     disabled={devBusy}
+                    onPressIn={() => impactHaptic('medium')}
                     onPress={() => addDevAccount(devPhone)}
                     activeOpacity={0.85}
                   >
@@ -1949,6 +1995,7 @@ export default function TurtleScreen() {
                         </Text>
                       </View>
                       <TouchableOpacity
+                        onPressIn={() => notifyHaptic('warning')}
                         onPress={() => removeDevAccount(d.phone)}
                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                         accessibilityLabel={`Remove developer account ${d.phone}`}
@@ -1994,11 +2041,11 @@ export default function TurtleScreen() {
                 </Text>
               </View>
               <Text style={[styles.friendSub, { paddingHorizontal: 20, marginBottom: 8 }]}>
-                Pick a project to share, view-only. They'll see its tasks in their planner.
+                Pick a board to share, view-only. They'll see its tasks in their planner.
               </Text>
               <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
                 {myProjects.length === 0 ? (
-                  <Text style={styles.friendEmpty}>{shareBusy ? 'Loading…' : 'You have no projects to share yet.'}</Text>
+                  <Text style={styles.friendEmpty}>{shareBusy ? 'Loading…' : 'You have no boards to share yet.'}</Text>
                 ) : (
                   myProjects.map((proj) => {
                     const shared = sharedWithTarget.find((s) => s.project === proj);
@@ -2009,12 +2056,12 @@ export default function TurtleScreen() {
                         </View>
                         <Text style={[styles.friendName, { flex: 1 }]} numberOfLines={1}>{proj}</Text>
                         {shared ? (
-                          <TouchableOpacity disabled={shareBusy} onPress={() => unShare(shared.id)} style={[styles.shareChip, { backgroundColor: theme.colors.surfaceElevated }]}>
+                          <TouchableOpacity disabled={shareBusy} onPressIn={() => notifyHaptic('warning')} onPress={() => unShare(shared.id)} style={[styles.shareChip, { backgroundColor: theme.colors.surfaceElevated }]}>
                             <Icon name="check" size={15} color="#34c759" />
                             <Text style={[styles.shareChipText, { color: theme.colors.textSecondary }]}>Shared</Text>
                           </TouchableOpacity>
                         ) : (
-                          <TouchableOpacity disabled={shareBusy} onPress={() => doShare(proj)} style={[styles.shareChip, { backgroundColor: theme.colors.primary || '#0a84ff' }]}>
+                          <TouchableOpacity disabled={shareBusy} onPressIn={() => tapHaptic()} onPress={() => doShare(proj)} style={[styles.shareChip, { backgroundColor: theme.colors.primary || '#0a84ff' }]}>
                             <Icon name="account-plus-outline" size={15} color="#fff" />
                             <Text style={[styles.shareChipText, { color: '#fff' }]}>Share</Text>
                           </TouchableOpacity>
@@ -2028,6 +2075,14 @@ export default function TurtleScreen() {
           </EdgeSwipePage>
         </View>
       </EdgeSwipePage>
+
+      {/* Conversation boards — messenger inbox of per-board threads (list +
+          board conversation with board-scoped Turtle AI). Sibling Modal of the
+          Friends page; never open at the same time as it. */}
+      <ConversationsOverlay visible={showConversations} onClose={() => setShowConversations(false)} />
+
+      {/* Link a desktop — scan the QR the Turtle desktop app shows to sign it in. */}
+      <LinkDesktop visible={showLinkDesktop} onClose={() => setShowLinkDesktop(false)} />
 
       {/* Full-screen Settings sheet — slides up from the bottom on
           tap of the gear above. Wrapping the screen in a Modal keeps
@@ -2391,6 +2446,7 @@ export default function TurtleScreen() {
           {!claudeActive && (
             <>
               <TouchableOpacity
+                onPressIn={() => tapHaptic()}
                 onPress={() => claudeStart()}
                 style={styles.claudeQueueStartBtn}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -2415,6 +2471,7 @@ export default function TurtleScreen() {
             </>
           )}
           <TouchableOpacity
+            onPressIn={() => tapHaptic()}
             onPress={clearClaudeQueue}
             style={styles.claudeQueueClearBtn}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -2446,17 +2503,20 @@ export default function TurtleScreen() {
         </View>
       )}
 
-      {/* Input Area - moves with keyboard. A Telegram-style frosted bar:
-          the chat messages slide UNDER it (FROST_OVERLAP) and read through
-          the blur. Shares its look with the Claude console via
-          ../../utils/frostedChat so the two boxes match exactly. */}
-      {/* The message input box — a SOLID bar in the theme background colour
-          (pure white on light, pure black on dark) rather than the old
-          translucent frosted blur (which read as grey). The tab navbar below
-          uses the same background colour and has no top border, so the two
-          surfaces flow together seamlessly. The resting gap below the input
-          (COMPOSER_MARGIN) is part of this same solid bar. */}
+      {/* Input Area — a Telegram-style frosted composer bar. It's a translucent
+          blurred SURFACE (not the old solid bar): the chat messages slide UNDER
+          it (FROST_OVERLAP) and read softly through the blur. Its rounded top
+          corners lift it off the flat tab navbar below as a distinct bar, and
+          the actual text field is a rounded pill floating inside it (inputWrapper).
+          Shares its blur look with the Claude console via ../../utils/frostedChat
+          so the two boxes match exactly.
+            1) BlurView   — the frosted glass (blurs the chat behind it)
+            2) frost tint — a translucent colour so it reads as a real surface
+          Both are absolute layers behind the content; overflow:hidden +
+          the rounded top corners clip them to the bar shape. */}
       <View style={[styles.inputArea, { paddingBottom: COMPOSER_MARGIN }]}>
+        <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
         {/* Autocomplete Dropdown */}
         {showAutocomplete && (
           <View style={styles.autocompleteContainer}>
@@ -2510,6 +2570,7 @@ export default function TurtleScreen() {
               /claude). Highlights when a session is active. */}
           <TouchableOpacity
             style={styles.claudeButton}
+            onPressIn={() => tapHaptic()}
             onPress={() => {
               if (claudeUiMode === 'session') {
                 claudeClose();              // toggle off (keeps the session alive)
@@ -2600,6 +2661,7 @@ export default function TurtleScreen() {
           </View>
           <TouchableOpacity
             style={styles.sendButton}
+            onPressIn={() => impactHaptic('medium')}
             onPress={sendMessage}
             disabled={(!inputText.trim() && !(claudeUiMode === 'session' && claudeImage)) || !isConnected}
           >
@@ -2608,7 +2670,10 @@ export default function TurtleScreen() {
               size={32}
               color={
                 (inputText.trim() || (claudeUiMode === 'session' && claudeImage)) && isConnected
-                  ? '#4ADE80'
+                  // Ready-to-send = monochrome ink (black in light mode; white in
+                  // dark so it stays visible on the frosted composer) instead of
+                  // the old green.
+                  ? (theme.mode === 'dark' ? '#FFFFFF' : '#000000')
                   : theme.colors.textMuted
               }
             />
@@ -2618,13 +2683,25 @@ export default function TurtleScreen() {
       </View>{/* /below-console measuring wrapper */}
       </Reanimated.View>{/* /bottom dock */}
 
-      {/* Vault Overlay */}
-      {isVaultOpen && (
-        <VaultOverlay
-          initialPassword={vaultPassword}
-          onClose={handleCloseVault}
-        />
-      )}
+      {/* Vault Overlay — wrapped in EdgeSwipePage (overlay form: it's in-tree
+          over the chat, and a sibling Modal wouldn't present on iOS anyway) so
+          the standard left-edge back-swipe closes it like every pushed page.
+          Closing this way only navigates back; the lock state is untouched.
+          The zIndex-200 shell restores the vault's stacking: its own root's
+          zIndex now lives INSIDE the wrapper subtree, so without this the
+          chat header (zIndex 101) would paint (and steal touches) on top.
+          box-none keeps the always-mounted shell from intercepting anything
+          while the vault is closed. */}
+      <View style={[StyleSheet.absoluteFill, { zIndex: 200, elevation: 200 }]} pointerEvents="box-none">
+        <EdgeSwipePage overlay visible={isVaultOpen} onClose={handleCloseVault}>
+          {isVaultOpen && (
+            <VaultOverlay
+              initialPassword={vaultPassword}
+              onClose={handleCloseVault}
+            />
+          )}
+        </EdgeSwipePage>
+      </View>
 
       {/* Pomodoro Settings Modal */}
       <PomodoroSettings
@@ -2692,38 +2769,8 @@ export default function TurtleScreen() {
 
 const createStyles = (theme, insets) =>
   StyleSheet.create({
-    premiumBezel: {
-      backgroundColor: 'rgba(30, 30, 32, 0.85)',
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: 'rgba(255, 255, 255, 0.15)',
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.3,
-      shadowRadius: 8,
-      elevation: 5,
-    },
     // Light mode premium bezel override - ONLY for light mode
-    lightPremiumBezel: {
-      backgroundColor: 'rgba(252, 252, 255, 0.92)',
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: 'rgba(0, 0, 0, 0.15)',
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.08,
-      shadowRadius: 8,
-      elevation: 5,
-    },
     // Dark mode premium bezel override - matches MediaGallery like/share container
-    darkPremiumBezel: {
-      backgroundColor: 'rgba(30, 30, 32, 0.85)',
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: 'rgba(255, 255, 255, 0.15)',
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.3,
-      shadowRadius: 8,
-      elevation: 5,
-    },
     container: {
       flex: 1,
       // Chat surface: pure white on light, pure black on dark (rather than the
@@ -2819,6 +2866,14 @@ const createStyles = (theme, insets) =>
       backgroundColor: theme.colors.surface,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: theme.colors.border,
+    },
+    // Equal-width side clusters flanking the flex:1 title, so the brand stays
+    // dead-centre even though the left holds two icons and the right one.
+    headerSideWrap: {
+      width: 80,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
     },
     // Soft translucent disc behind each header icon so it reads against either
     // theme — same treatment the old floating corner buttons used.
@@ -3016,12 +3071,6 @@ const createStyles = (theme, insets) =>
       height: 200,
       opacity: 0.55,
     },
-    inlineHeader: {
-      backgroundColor: theme.colors.surface,
-      borderBottomWidth: 0.5,
-      borderBottomColor: theme.colors.border,
-      marginHorizontal: -theme.spacing.sm,
-    },
     header: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -3038,22 +3087,6 @@ const createStyles = (theme, insets) =>
       fontWeight: '600',
       color: theme.colors.textPrimary,
       marginLeft: theme.spacing.xs,
-    },
-    connectionStatus: {
-      position: 'absolute',
-      right: theme.spacing.lg,
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    statusDot: {
-      width: 8,
-      height: 8,
-      borderRadius: 4,
-      marginRight: 6,
-    },
-    statusText: {
-      fontSize: 12,
-      color: theme.colors.textSecondary,
     },
     messagesContainer: {
       flex: 1,
@@ -3267,19 +3300,26 @@ const createStyles = (theme, insets) =>
       color: theme.colors.textSecondary,
     },
     inputArea: {
-      // SOLID bar in the theme background colour (pure white on light, pure
-      // black on dark) so the composer blends seamlessly into the tab navbar
-      // below it — they share this colour and the navbar's top border is
-      // removed. (Was a translucent frosted blur, which looked grey.)
-      backgroundColor: theme.colors.background,
-      // Hairline only at the TOP — separates the input box from the chat
-      // messages above. No bottom border, so it flows straight into the navbar.
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: frostBorderColor(theme),
-      paddingTop: 4,
+      // Telegram-style frosted composer: a TRANSPARENT container whose surface
+      // is the BlurView + frost tint rendered behind it (absolute layers). The
+      // chat scrolls under it and reads softly through the blur — the "see-
+      // through" look. Rounded TOP corners lift it off the flat, opaque tab
+      // navbar below so it reads as a distinct bar (the navbar shares the
+      // screen bg + has no top border, so the frost contrast + this curve are
+      // what separate the two).
+      backgroundColor: 'transparent',
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      // Hairline around the frosted top edge — the seam with the chat above,
+      // curving around the rounded corners.
+      borderWidth: StyleSheet.hairlineWidth,
+      borderBottomWidth: 0,
+      borderColor: frostBorderColor(theme),
+      paddingTop: 6,
+      // Clip the BlurView + tint to the rounded-top bar shape.
       overflow: 'hidden',
       // paddingBottom is applied inline as COMPOSER_MARGIN at the render site;
-      // it's part of this same solid bar, bridging down to the navbar.
+      // it's part of this same frosted bar, bridging down to the navbar.
     },
     inputContainer: {
       flexDirection: 'row',
@@ -3317,14 +3357,17 @@ const createStyles = (theme, insets) =>
       flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
-      // The composer is one flat, full-width frosted bar (the user wants the
-      // whole input row to read as a single bar, not a rounded pill floating
-      // inside it). So the wrapper is fully transparent with NO border and NO
-      // border-radius — the BlurView + tint behind it IS the input's surface.
-      backgroundColor: 'transparent',
-      paddingHorizontal: theme.spacing.sm,
-      minHeight: 36,
+      // Telegram rounded input pill: a distinct rounded field floating INSIDE
+      // the frosted bar. A subtle translucent fill (a touch more present than
+      // the bar's frost) + a hairline border make it read as its own surface
+      // against the blur, while staying see-through. Radius ~20 matches
+      // Telegram's soft-cornered field.
+      borderRadius: 20,
+      backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.022)',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: frostBorderColor(theme),
+      paddingHorizontal: 14,
+      minHeight: 38,
       maxHeight: 100,
     },
     input: {
@@ -3334,47 +3377,13 @@ const createStyles = (theme, insets) =>
       maxHeight: 100,
       paddingTop: 8,
       paddingBottom: 8,
-      paddingHorizontal: 4,
+      paddingHorizontal: 2,
       backgroundColor: 'transparent',
     },
     sendButton: {
       marginLeft: theme.spacing.xs,
       alignItems: 'center',
       justifyContent: 'center',
-    },
-    debugToggleContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: 8,
-      backgroundColor: theme.colors.surface,
-      borderBottomWidth: 0.5,
-      borderBottomColor: theme.colors.border,
-      height: DEBUG_TOGGLE_HEIGHT,
-    },
-    debugToggle: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-    },
-    debugToggleText: {
-      fontSize: 13,
-      color: theme.colors.textSecondary,
-    },
-    debugToggleTextActive: {
-      color: '#4ADE80',
-      fontWeight: '600',
-    },
-    clearDebugBtn: {
-      paddingHorizontal: 12,
-      paddingVertical: 4,
-      backgroundColor: theme.colors.surfaceElevated,
-      borderRadius: 4,
-    },
-    clearDebugText: {
-      fontSize: 12,
-      color: theme.colors.textSecondary,
     },
     autocompleteContainer: {
       marginHorizontal: 12,

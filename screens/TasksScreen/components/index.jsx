@@ -12,4 +12,4 @@ export { DatePickerModal } from './DatePickerModal';
 export { WheelTimePicker } from './WheelTimePicker';
 export { AddItemFab } from './AddItemFab';
 export { TaskQuickInspector } from './TaskQuickInspector';
-export { TimelineTaskRow } from './TimelineTaskRow';
+export { TimelineTaskRow, UNIFORM_ROW_H, UNIFORM_CARD_H } from './TimelineTaskRow';

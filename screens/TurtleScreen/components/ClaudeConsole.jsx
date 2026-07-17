@@ -24,6 +24,7 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../../context/ThemeContext';
 import { blurProps, frostOverlayColor } from '../../../utils/frostedChat';
+import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
 
 // Glossy top sheen laid over the frosted blur — a soft light highlight that
 // fades out, giving the glass a polished, lit look. Subtler in dark mode.
@@ -102,6 +103,7 @@ function PermissionCard({ perm, onRespond, theme, styles }) {
       <View style={styles.permActions}>
         <TouchableOpacity
           style={[styles.permBtn, styles.permDenyBtn]}
+          onPressIn={() => notifyHaptic('warning')}
           onPress={() => respond('deny')}
           activeOpacity={0.85}
         >
@@ -109,6 +111,7 @@ function PermissionCard({ perm, onRespond, theme, styles }) {
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.permBtn, styles.permAllowBtn]}
+          onPressIn={() => impactHaptic('medium')}
           onPress={() => respond('allow')}
           activeOpacity={0.85}
         >
@@ -197,6 +200,7 @@ function QuestionCard({ q, onRespond, theme, styles }) {
       })}
       <TouchableOpacity
         style={[styles.permBtn, styles.qSubmitBtn, !ready && styles.qSubmitDisabled]}
+        onPressIn={() => impactHaptic('medium')}
         onPress={() => ready && onRespond?.(q.requestId, answers)}
         disabled={!ready}
         activeOpacity={0.85}
@@ -346,7 +350,7 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
             </Text>
           </TouchableOpacity>
         )}
-        <TouchableOpacity onPress={onStop} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.stopBtn}>
+        <TouchableOpacity onPressIn={() => notifyHaptic('warning')} onPress={onStop} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.stopBtn}>
           <Text style={styles.stopText}>{isLogin ? 'Cancel' : 'Stop'}</Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -466,9 +470,10 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 8,
     // Transparent: the BlurView + frost tint + gloss gradient (rendered as
     // absolute layers inside) provide the glassy surface. overflow:hidden clips
-    // those layers to the rounded card.
+    // those layers to the (now square) card edges.
     backgroundColor: 'transparent',
-    borderRadius: 12,
+    // Square — no rounded corners on the larger Claude message window.
+    borderRadius: 0,
     borderWidth: 1,
     borderColor: theme.colors.border,
     overflow: 'hidden',

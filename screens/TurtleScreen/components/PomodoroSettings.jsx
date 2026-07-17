@@ -4,10 +4,12 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
 } from 'react-native';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { tapHaptic, impactHaptic } from '../../../utils/haptics';
 
 /**
  * PomodoroSettings - Modal to adjust focus and break durations
@@ -53,6 +55,9 @@ export default function PomodoroSettings({
   
   return (
     <View style={styles.overlay}>
+      {/* Tap anywhere outside the card to close — this was the app's only
+          surface with a single close affordance (the X). */}
+      <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
       <View style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
@@ -108,6 +113,7 @@ export default function PomodoroSettings({
           <View style={styles.presetButtons}>
             <TouchableOpacity
               style={styles.presetButton}
+              onPressIn={() => tapHaptic()}
               onPress={() => {
                 setFocusMinutes('25');
                 setBreakMinutes('5');
@@ -117,6 +123,7 @@ export default function PomodoroSettings({
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.presetButton}
+              onPressIn={() => tapHaptic()}
               onPress={() => {
                 setFocusMinutes('50');
                 setBreakMinutes('10');
@@ -126,6 +133,7 @@ export default function PomodoroSettings({
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.presetButton}
+              onPressIn={() => tapHaptic()}
               onPress={() => {
                 setFocusMinutes('15');
                 setBreakMinutes('3');
@@ -137,7 +145,7 @@ export default function PomodoroSettings({
         </View>
         
         {/* Save Button */}
-        <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
+        <TouchableOpacity style={styles.saveButton} onPressIn={() => impactHaptic('medium')} onPress={handleSave}>
           <Text style={styles.saveButtonText}>Save Settings</Text>
         </TouchableOpacity>
       </View>

@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
+import { useSheetDismiss } from '../../../utils/useSheetDismiss';
 
 // Same stable per-owner colour as the calendar badges (hash userId → hue) so
 // the filter swatch matches the badge a task carries on the grid.
@@ -33,6 +34,9 @@ export const FilterMenu = ({
   const { theme } = useTheme();
   const translateY = animation.interpolate({ inputRange: [0, 1], outputRange: [100, 0] });
   const opacity = animation.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+  // iOS-style pull-down on the new grab-handle zone; composes with the rise
+  // entrance above (two translateY entries add).
+  const { panHandlers, sheetDragStyle } = useSheetDismiss(onClose, visible);
 
   const styles = createStyles(theme);
   
@@ -65,8 +69,12 @@ export const FilterMenu = ({
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
       </Animated.View>
       <Animated.View
-        style={[styles.container, { transform: [{ translateY }], opacity }]}
+        style={[styles.container, { transform: [{ translateY }, ...sheetDragStyle.transform], opacity }]}
       >
+        {/* Grab handle — the pull-down-to-close zone. */}
+        <View {...panHandlers} style={styles.handleZone}>
+          <View style={styles.handleBar} />
+        </View>
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
@@ -156,7 +164,7 @@ export const FilterMenu = ({
             <View style={styles.tagsGrid}>
               {relevantTags.length === 0 ? (
                 <Text style={styles.noTags}>
-                  {selectedProject === 'All' ? 'No tags yet' : 'No tags in this project'}
+                  {selectedProject === 'All' ? 'No tags yet' : 'No tags in this board'}
                 </Text>
               ) : (
                 relevantTags.map(tag => {
@@ -203,6 +211,18 @@ const createStyles = (theme) => StyleSheet.create({
     borderTopRightRadius: 20,
     maxHeight: '70%',
     overflow: 'hidden',
+  },
+  // Pull-down zone at the top of the sheet (grab handle pill).
+  handleZone: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  handleBar: {
+    width: 44,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: theme.colors.borderStrong || theme.colors.border,
   },
   scroll: {
     flexGrow: 0,

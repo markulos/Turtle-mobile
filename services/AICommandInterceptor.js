@@ -15,7 +15,6 @@
 
 import CryptoJS from 'crypto-js';
 import * as Crypto from 'expo-crypto';
-import { Buffer } from 'buffer'; // You may need to: npm install buffer
 
 // ============================================================================
 // CRYPTOGRAPHIC UTILITIES

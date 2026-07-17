@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { Platform } from 'react-native';
 import { io } from 'socket.io-client';
 import { serverOrigin } from '../../../context/ServerContext';
+import { getExpoPushTokenSafe } from '../../../services/vaultPush';
+import * as liveActivity from '../../../services/liveActivity';
+import { useCelebration } from '../../../context/CelebrationContext';
 
 // Shared default sessionId so web and mobile clients land in the same server
 // room out of the box. Single-user app — power users can override this in
@@ -34,8 +38,12 @@ export function usePomodoroSocket(serverIP) {
   const [state, setState] = useState(null);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [durations, setDurations] = useState({ focus: 25, break: 5 });
+  const { celebrate } = useCelebration();
   const socketRef = useRef(null);
   const sessionIdRef = useRef(DEFAULT_POMODORO_SESSION_ID);
+  // This device's Expo push token, prefetched so `start` can tag the timer
+  // synchronously — the server pings only THIS device when the run ends.
+  const pushTokenRef = useRef(null);
 
   useEffect(() => {
     if (!serverIP) return undefined;
@@ -75,8 +83,61 @@ export function usePomodoroSocket(serverIP) {
     };
   }, [serverIP]);
 
+  // Resolve this device's push token once (cached in vaultPush after the first
+  // hit). Best-effort — null before the dev rebuild / without permission.
+  useEffect(() => {
+    let alive = true;
+    getExpoPushTokenSafe().then((t) => { if (alive) pushTokenRef.current = t; });
+    return () => { alive = false; };
+  }, []);
+
+  // Drive the iOS Live Activity (Dynamic Island / lock screen) off the server
+  // timer state — a live countdown while running, a persistent "done" card on
+  // natural completion, gone on manual stop. Server state is the single source,
+  // so this stays correct no matter which device started the run.
+  const prevStatusRef = useRef(null);
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    const status = state?.status || 'idle';
+    const prev = prevStatusRef.current;
+    if (status === 'active') {
+      liveActivity.showRunning(state.mode, state.endsAt);
+    } else if (status === 'completed') {
+      // A real completion transition, or a still-fresh completion the app just
+      // reconnected to — never a stale 'completed' replayed on connect.
+      const fresh = typeof state.endedAt === 'number' && Date.now() - state.endedAt < 120000;
+      if (prev === 'active' || fresh) liveActivity.showCompleted(state.mode);
+      else liveActivity.clear();
+    } else {
+      liveActivity.clear();
+    }
+    prevStatusRef.current = status;
+  }, [state]);
+
+  // Confetti + "+25 pts" when a FOCUS pomodoro reaches zero. Platform-agnostic
+  // (unlike the iOS-only Live Activity effect above). Fires only for a real,
+  // RECENT active→completed focus transition:
+  //   • prev === 'active'  — we actually witnessed it running (not a cold replay)
+  //   • endedAt < 120s ago — a warm reconnect after backgrounding replays a
+  //     stale 'completed' with prevCelebRef still 'active'; the freshness gate
+  //     stops confetti popping for an hours-old pomodoro.
+  //   • mode !== 'break'   — breaks earn nothing.
+  const prevCelebRef = useRef(null);
+  useEffect(() => {
+    const status = state?.status || 'idle';
+    const fresh = typeof state?.endedAt !== 'number' || (Date.now() - state.endedAt < 120000);
+    if (status === 'completed' && prevCelebRef.current === 'active' && fresh && state?.mode !== 'break') {
+      celebrate({ points: 25, kind: 'pomodoro' });
+    }
+    prevCelebRef.current = status;
+  }, [state, celebrate]);
+
   const start = useCallback((mode) => {
-    socketRef.current?.emit('pomodoro-start', { mode });
+    socketRef.current?.emit('pomodoro-start', {
+      mode,
+      // Only this device gets the "timer done" push; omitted if unavailable.
+      pushToken: pushTokenRef.current || undefined,
+    });
   }, []);
 
   const stop = useCallback(() => {

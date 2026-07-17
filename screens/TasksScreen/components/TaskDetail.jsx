@@ -13,8 +13,9 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
-import { normalizeTags, getPriorityColor, areAllSubtasksCompleted, itemTypeOf, itemColorOf } from '../utils/taskHelpers';
+import { normalizeTags, getPriorityColor, areAllSubtasksCompleted, itemTypeOf, itemColorOf, isTaskDoneNow, lastCompletedDate } from '../utils/taskHelpers';
 import { REMINDER_OPTIONS } from '../utils/constants';
+import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 
 // iPhone-style edge-swipe-to-back. Touch must start within the first
 // ~24px of the screen's left edge and drag rightward fast enough or
@@ -46,6 +47,7 @@ export const TaskDetail = ({
   onToggleSubtask,
   onQueueForClaude,
   onStartPomodoro,
+  onContinue,
 }) => {
   const { theme } = useTheme();
   const { api } = useServer();
@@ -226,23 +228,29 @@ export const TaskDetail = ({
                 (fills green w/ a check when done), and the title itself is
                 tappable to expand into the editor. */}
             <View style={styles.titleRow}>
+              {/* done-now, not the raw bool: a recurring task's `completed`
+                  never flips (the series stays live), so keying off it left the
+                  circle unchecked right after ticking — and a confused second
+                  tap silently unticked it. */}
               <TouchableOpacity
+                onPressIn={() => tapHaptic()}
                 onPress={onToggleComplete}
                 activeOpacity={0.7}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                style={[styles.completeCircle, task.completed && styles.completeCircleDone]}
-                accessibilityLabel={task.completed ? 'Mark incomplete' : 'Mark complete'}
+                style={[styles.completeCircle, isTaskDoneNow(task) && styles.completeCircleDone]}
+                accessibilityLabel={isTaskDoneNow(task) ? 'Mark incomplete' : 'Mark complete'}
               >
-                {task.completed && (
+                {isTaskDoneNow(task) && (
                   <Icon name="check" size={16} color={theme.colors.background} />
                 )}
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.titleTextWrap}
+                onPressIn={() => tapHaptic()}
                 onPress={onEdit}
                 activeOpacity={0.6}
               >
-                <Text style={[styles.title, task.completed && styles.titleCompleted]}>
+                <Text style={[styles.title, isTaskDoneNow(task) && styles.titleCompleted]}>
                   {task.title}
                 </Text>
                 <View style={styles.editHintRow}>
@@ -301,7 +309,12 @@ export const TaskDetail = ({
               {task.dueDate && (
                 <View style={styles.metaItem}>
                   <Icon name="calendar" size={16} color={theme.colors.textSecondary} />
-                  <Text style={styles.metaText}>{isOccasion ? 'Date' : 'Due'}: {task.dueDate}</Text>
+                  {/* While a recurring task is checked (done-now), show the
+                      TICKED date — not the already-advanced next dueDate, which
+                      read as "completed it, now it says due tomorrow?!". */}
+                  <Text style={styles.metaText}>
+                    {isOccasion ? 'Date' : (isTaskDoneNow(task) && !task.completed ? 'Done' : 'Due')}: {(isTaskDoneNow(task) && !task.completed && lastCompletedDate(task)) || task.dueDate}
+                  </Text>
                 </View>
               )}
 
@@ -425,6 +438,23 @@ export const TaskDetail = ({
               </View>
             )}
 
+            {/* "Continue today" — re-add this task to today as a
+                progress-carrying copy. Subtasks and their done state ride
+                along (the "status it already had"); the copy itself is an
+                open continuation of this still-open task. Tasks only —
+                occasions (events/birthdays) aren't continued this way. */}
+            {onContinue && !isOccasion && (
+              <TouchableOpacity
+                style={styles.continueBtn}
+                onPressIn={() => notifyHaptic('success')}
+                onPress={onContinue}
+                activeOpacity={0.85}
+              >
+                <Icon name="calendar-plus" size={20} color={theme.colors.textPrimary} />
+                <Text style={styles.continueText}>Continue today</Text>
+              </TouchableOpacity>
+            )}
+
             {/* Start a focus timer for this task. Routes through the Turtle
                 chat's /pomodoro pipeline (the task title rides along as the
                 session label), then jumps to the Turtle tab where the timer
@@ -432,6 +462,7 @@ export const TaskDetail = ({
             {onStartPomodoro && (
               <TouchableOpacity
                 style={styles.pomodoroBtn}
+                onPressIn={() => impactHaptic('medium')}
                 onPress={onStartPomodoro}
                 activeOpacity={0.85}
               >
@@ -459,7 +490,7 @@ export const TaskDetail = ({
                 <Text style={styles.actionText}>Edit</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={onDelete}>
+              <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPressIn={() => notifyHaptic('warning')} onPress={onDelete}>
                 <Icon name="delete" size={20} color={theme.colors.textPrimary} />
                 <Text style={styles.actionText}>Delete</Text>
               </TouchableOpacity>
@@ -504,6 +535,7 @@ export const TaskDetail = ({
                   multiline
                 />
                 <TouchableOpacity
+                  onPressIn={() => impactHaptic('medium')}
                   onPress={postComment}
                   disabled={!commentDraft.trim() || postingComment}
                   style={{ width: 44, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.accentInfo || '#0a84ff', opacity: commentDraft.trim() && !postingComment ? 1 : 0.5 }}
@@ -724,6 +756,24 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textMuted,
   },
   
+  continueBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 20,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: 1,
+    // accentSuccess reads as "carry this forward / add"; accentPrimary is a
+    // web-only token (undefined here) so we fall back through valid mobile tokens.
+    borderColor: theme.colors.accentSuccess || theme.colors.accentInfo || theme.colors.border,
+  },
+  continueText: {
+    color: theme.colors.textPrimary,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
   pomodoroBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -779,12 +829,6 @@ const createStyles = (theme) => StyleSheet.create({
   },
   editBtn: { 
     backgroundColor: theme.colors.surfaceElevated 
-  },
-  completeBtn: { 
-    backgroundColor: theme.colors.surfaceElevated 
-  },
-  uncompleteBtn: { 
-    backgroundColor: theme.colors.surfaceHighlight 
   },
   deleteBtn: { 
     backgroundColor: theme.colors.surfaceElevated 

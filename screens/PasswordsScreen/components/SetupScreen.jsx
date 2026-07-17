@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { impactHaptic } from '../../../utils/haptics';
 
 export const SetupScreen = ({ onSetup, isProcessing }) => {
   const { theme } = useTheme();
@@ -73,6 +74,7 @@ export const SetupScreen = ({ onSetup, isProcessing }) => {
 
         <TouchableOpacity
           style={[styles.button, isProcessing && styles.buttonDisabled]}
+          onPressIn={() => impactHaptic('medium')}
           onPress={handleSubmit}
           disabled={isProcessing}
         >

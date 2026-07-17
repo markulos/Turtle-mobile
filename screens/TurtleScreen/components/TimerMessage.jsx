@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { notifyHaptic } from '../../../utils/haptics';
 
 /**
  * TimerMessage — driven by the server-as-source-of-truth pomodoro socket.
@@ -104,7 +105,7 @@ export default function TimerMessage({ state, onStop, onDismiss, theme, minimize
 
         <View style={styles.timerRow}>
           <Text style={styles.timerText}>{display}</Text>
-          <TouchableOpacity onPress={onStop} style={styles.stopButton}>
+          <TouchableOpacity onPressIn={() => notifyHaptic('warning')} onPress={onStop} style={styles.stopButton}>
             <Icon name="stop-circle-outline" size={26} color={theme.colors.textMuted} />
           </TouchableOpacity>
         </View>

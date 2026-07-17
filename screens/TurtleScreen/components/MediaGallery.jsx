@@ -24,132 +24,66 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import * as ImageManipulator from 'expo-image-manipulator';
 import * as MediaLibrary from 'expo-media-library';
-import * as VideoThumbnails from 'expo-video-thumbnails';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { sweepTransientCaches } from '../../../utils/cacheManager';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { tapHaptic as hapticTick, impactHaptic, notifyHaptic } from '../../../utils/haptics';
+import { tapHaptic as hapticTick, impactHaptic } from '../../../utils/haptics';
+
+// react-native-share (unlike expo-sharing) can hand the OS a whole ARRAY of
+// files in ONE share sheet — so sharing many vault photos matches the native
+// iOS Photos experience (one sheet, all photos) instead of one sheet per photo.
+// Loaded LAZILY + defensively (like utils/haptics): its native module only
+// exists in a build that bundled it, so a dev build made BEFORE it was added
+// would crash the whole runtime on a top-level import. Absent → we fall back to
+// the sequential expo-sharing path below, which still works (just one sheet per
+// photo) until the app is rebuilt.
+let _rnShareChecked = false;
+let _RNShare = null;
+const getRNShare = () => {
+  if (_rnShareChecked) return _RNShare;
+  _rnShareChecked = true;
+  try {
+    // react-native-share's codegen spec runs `TurboModuleRegistry.getEnforcing`
+    // at module load, so `require('react-native-share')` itself THROWS in a
+    // binary that lacks the native module — this try/catch turns that into a
+    // clean null (→ per-photo fallback) instead of a crash. When the native side
+    // IS present (after a build that bundled it), require succeeds and we return
+    // the class; the call site still guards `.open()` in its own try/catch as
+    // defense-in-depth. NOTE: installing the npm package is NOT enough — the app
+    // must be natively rebuilt (EAS build / expo prebuild) for require to succeed.
+    const mod = require('react-native-share');
+    _RNShare = mod?.default || mod || null;
+    if (_RNShare && typeof _RNShare.open !== 'function') _RNShare = null;
+  } catch (e) {
+    _RNShare = null;
+  }
+  return _RNShare;
+};
 // Context hooks — these used to live mid-file (lines 41 + 137 historical),
 // which triggered an `import/first` warning on every Fast Refresh and
 // was the recurring console noise the user was seeing. Consolidated here.
 import { useServer } from '../../../context/ServerContext';
-import { useAuth } from '../../../context/AuthContext';
 import { FlashList } from '@shopify/flash-list';
 import { useSharedValue } from 'react-native-reanimated';
 import TimelineScrubber from './TimelineScrubber';
-import { notifyUploadComplete } from '../../../services/uploadNotify';
+import { useVaultUpload } from '../../../context/VaultUploadContext';
+import { useDownloads } from '../../../context/DownloadsContext';
 import { useTheme } from '../../../context/ThemeContext';
 
 // Create an animated version of FlashList to match our existing architecture
 const AnimatedFlashList = Animated.createAnimatedComponent(FlashList);
 
-// ── Streaming media upload (the large-file fix) ──────────────────────────────
-// The old path appended { uri } to a FormData and sent it via XMLHttpRequest.
-// React Native's FormData reads the whole file into a single in-memory blob
-// before sending, so a large video (hundreds of MB) blew the JS heap and the
-// upload "broke consistently". expo-file-system's createUploadTask STREAMS the
-// file from disk in native code (constant memory), which is the real fix.
-//
-// On top of streaming this adds the failsafes the to-do asked for:
-//   • up to 3 attempts with linear backoff (transient network / 5xx / stall),
-//   • a TWO-PHASE stall watchdog — see below,
-//   • verbose, greppable [Upload] logging of size, status, elapsed, attempt.
-// Returns the FileSystemUploadResult on 2xx; throws after exhausting retries.
-//
-// TWO-PHASE WATCHDOG (the real large-file fix):
-//   Phase 1 — transfer: while bytes are still moving up the wire, cancel +
-//     retry if NOTHING moves for UPLOAD_STALL_MS (a dead tunnel socket).
-//   Phase 2 — processing: the instant the last byte is sent, progress
-//     callbacks STOP firing while the server runs sharp / ExifTool / ffmpeg
-//     remux on the file (seconds→minutes for a large video). That expected
-//     silence is NOT a dead socket. The old single-phase watchdog mistook it
-//     for one: big files took >60s to process server-side, it cancelled mid-
-//     processing, and every retry re-uploaded and re-failed identically —
-//     i.e. "large files break consistently". So once all bytes are sent we
-//     switch to the much longer UPLOAD_PROCESSING_MS grace before giving up.
-const UPLOAD_MAX_ATTEMPTS = 3;
-const UPLOAD_STALL_MS = 60000;        // transfer phase: no bytes for 60s → dead socket
-const UPLOAD_PROCESSING_MS = 300000;  // processing phase: server may transcode for up to 5 min
-async function streamUploadWithRetry({ url, fileUri, mimeType, parameters, token, label, onProgress }) {
-  let lastErr = null;
-  for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt++) {
-    const startedAt = Date.now();
-    let lastProgressAt = Date.now();
-    // Set to the timestamp the final byte hit the wire — flips the watchdog
-    // from transfer-phase to processing-phase. Reset per attempt.
-    let allSentAt = null;
-    let stallTimer = null;
-    try {
-      const task = FileSystem.createUploadTask(
-        url,
-        fileUri,
-        {
-          httpMethod: 'POST',
-          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-          fieldName: 'media',
-          mimeType,
-          parameters,
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        },
-        (p) => {
-          lastProgressAt = Date.now();
-          const total = p.totalBytesExpectedToSend || 0;
-          const sent = p.totalBytesSent || 0;
-          if (total > 0 && onProgress) {
-            onProgress(Math.min(99, Math.round((sent / total) * 100)));
-          }
-          // Last byte on the wire → enter processing phase (once).
-          if (total > 0 && sent >= total && allSentAt === null) {
-            allSentAt = Date.now();
-            const secs = ((allSentAt - startedAt) / 1000).toFixed(1);
-            console.log(`[Upload] ⏳ ${label} · ${(total / (1024 * 1024)).toFixed(1)}MB sent in ${secs}s · awaiting server processing…`);
-          }
-        },
-      );
-
-      const result = await new Promise((resolve, reject) => {
-        stallTimer = setInterval(() => {
-          const idleMs = Date.now() - lastProgressAt;
-          const threshold = allSentAt ? UPLOAD_PROCESSING_MS : UPLOAD_STALL_MS;
-          if (idleMs > threshold) {
-            const phase = allSentAt ? 'server processing' : 'transfer';
-            console.warn(`[Upload] ⏱ ${label} · watchdog tripped during ${phase} (idle ${Math.round(idleMs / 1000)}s)`);
-            task.cancelAsync().catch(() => {});
-            reject(new Error(`stalled during ${phase} — no progress for ${Math.round(threshold / 1000)}s`));
-          }
-        }, 5000);
-        task.uploadAsync().then(resolve, reject);
-      });
-      if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
-
-      const status = result?.status ?? 0;
-      const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
-      if (status >= 200 && status < 300) {
-        if (onProgress) onProgress(100);
-        console.log(`[Upload] ✓ ${label} · ${secs}s · HTTP ${status} (attempt ${attempt})`);
-        return result;
-      }
-      lastErr = new Error(`HTTP ${status}: ${String(result?.body || '').slice(0, 300)}`);
-      console.warn(`[Upload] ✗ ${label} · HTTP ${status} (attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS})`);
-      // Client errors (bad request, auth) won't fix themselves on retry — stop.
-      if (status < 500 && status !== 408 && status !== 429) throw lastErr;
-    } catch (e) {
-      if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
-      lastErr = e;
-      console.warn(`[Upload] ✗ ${label} (attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS}): ${e.message}`);
-      if (/HTTP 4\d\d/.test(e.message) && !/HTTP (408|429)/.test(e.message)) break;
-    }
-    if (attempt < UPLOAD_MAX_ATTEMPTS) {
-      await new Promise((r) => setTimeout(r, attempt * 1500)); // 1.5s, 3s backoff
-    }
-  }
-  throw lastErr || new Error('upload failed');
-}
+// ── Streaming media upload ───────────────────────────────────────────────────
+// The whole upload pipeline (streaming uploader + two-phase watchdog + retries
+// + duplicate skipping + cross-session persistence) lives in
+// context/VaultUploadContext.jsx now — app-level, so batches keep running with
+// a global progress pill while the user leaves this screen, and resume on the
+// next launch if the app is killed mid-batch. This screen only PICKS the
+// assets and enqueues them (see executeUpload).
 
 // Master kill-switch for the Instagram-style grid video autoplay preview.
 // Flip to false to fully disable (cells fall back to the static thumbnail).
@@ -175,6 +109,15 @@ const HIT_SLOP_20 = { top: 20, bottom: 20, left: 20, right: 20 };
 // matching how iCloud / Google Photos grids sit while content streams in.
 const SLOT_CACHE = [];
 const slotAt = (i) => SLOT_CACHE[i] || (SLOT_CACHE[i] = { id: `vskel-${i}`, isSkeleton: true });
+
+// Format seconds to MM:SS (null when no duration). Module-level so the video
+// cell + the detail view share one copy.
+const formatDuration = (seconds) => {
+  if (!seconds) return null;
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
+};
 
 const { width, height } = Dimensions.get('window');
 // hapticTick is the shared selection-tick (imported above, aliased from
@@ -616,7 +559,6 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
 export default function MediaGallery({ onClose, autoUpload = false }) {
   const { theme } = useTheme();
   const { api, getBaseUrl, getMediaBaseUrl } = useServer();
-  const { token } = useAuth();
   const insets = useSafeAreaInsets();
   
   // === TAB & DATA STATE ===
@@ -644,7 +586,13 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const [uploadItems, setUploadItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isPaginating, setIsPaginating] = useState(false); // Prevents overlapping fetch calls
-  const [uploading, setUploading] = useState(false);
+  // Vault uploads run APP-LEVEL (VaultUploadContext): this screen only picks
+  // assets and enqueues; the global pill shows live progress everywhere, the
+  // queue persists across app restarts, and duplicates are skipped up front.
+  // `uploadBusy` mirrors "a batch is in flight" for buttons that must not
+  // double-fire (one batch at a time keeps the percentage meaningful).
+  const vaultUpload = useVaultUpload();
+  const uploadBusy = !!vaultUpload.state && vaultUpload.state.status !== 'done';
   const [refreshing, setRefreshing] = useState(false);
   
   // === LOCAL SYNC GALLERY STATE ===
@@ -928,6 +876,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const selectedGridItemsRef = useRef(selectedGridItems);
   selectedGridItemsRef.current = selectedGridItems;
   const uploadItemsForDragRef = useRef([]); // synced after uploadDisplayItems memo
+  const bulkShareBusyRef = useRef(false);   // re-entrancy guard for the batch share
   const dragTouchRef = useRef(null);  // { index, x, y } — last touch-down on a cell
   const dragBaseRef = useRef(null);   // selection Set snapshot at drag start
   const dragLastIdxRef = useRef(-1);
@@ -951,6 +900,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const autoScrollRaf = useRef(null);
   const autoScrollSpeedRef = useRef(0);  // signed px/frame applied to the offset
   const lastDragRef = useRef({ x: 0, y: 0 });
+  // Cancel any in-flight drag-select auto-scroll rAF on unmount so the loop
+  // can't keep rescheduling / calling setState after the gallery is gone.
+  useEffect(() => () => { if (autoScrollRaf.current != null) cancelAnimationFrame(autoScrollRaf.current); }, []);
 
   const onCellTouchDown = useCallback((index, pageX, pageY) => {
     if (!isSelectModeRef.current || typeof index !== 'number') return;
@@ -1257,52 +1209,20 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     Animated.timing(tagFadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
   }, [selectedGridItems, uploadItems, tagFadeAnim]);
   
-  // Upload progress tracking.
-  //   `uploadPercentage` is the rounded integer shown in the "65%" label.
-  //   `progressAnim` is an Animated.Value (0–100) that smoothly drives the bar's width.
-  //   The refs are the source of truth, updated synchronously inside the XHR callbacks.
-  //   Overall = ((completed_items + current_item_fraction) / total_items) * 100.
-  const [uploadPercentage, setUploadPercentage] = useState(0);
-  const [uploadingItemIndex, setUploadingItemIndex] = useState(0);
-  // Background upload: when true, the progress modal is hidden behind a compact
-  // pill so the user can keep using the app while the upload runs.
-  const [uploadMinimized, setUploadMinimized] = useState(false);
-  // After an upload, the camera-roll asset IDs we OFFER to delete (+ how many
-  // failed); null when there's no pending offer. Replaces the old auto-delete.
-  const [pendingDelete, setPendingDelete] = useState(null);
-  const totalItemsRef = useRef(0);
-  const completedItemsRef = useRef(0);
-  const currentItemPctRef = useRef(0);
-  const progressAnim = useRef(new Animated.Value(0)).current;
-
-  const recomputeOverall = useCallback(({ snap = false } = {}) => {
-    const total = totalItemsRef.current;
-    if (!total) return;
-    const overall = Math.min(
-      100,
-      ((completedItemsRef.current + currentItemPctRef.current / 100) / total) * 100
-    );
-    setUploadPercentage(Math.round(overall));
-    if (snap) {
-      progressAnim.setValue(overall);
-    } else {
-      Animated.timing(progressAnim, {
-        toValue: overall,
-        duration: 180,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: false, // width is a layout prop; native driver can't drive it
-      }).start();
+  // Progress/percentage/minimize/delete-offer UI all moved to the global
+  // VaultUploadContext + VaultUploadPill. The gallery's remaining job on
+  // completion: pull the fresh uploads into the grid the moment a batch
+  // finishes (whether it finished while this screen was open or not).
+  const lastFinishedAtRef = useRef(null);
+  useEffect(() => {
+    const finishedAt = vaultUpload.state?.finishedAt || null;
+    if (finishedAt && finishedAt !== lastFinishedAtRef.current) {
+      lastFinishedAtRef.current = finishedAt;
+      fetchUploads(true);
     }
-  }, [progressAnim]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vaultUpload.state?.finishedAt]);
 
-  const resetUploadProgress = useCallback(() => {
-    totalItemsRef.current = 0;
-    completedItemsRef.current = 0;
-    currentItemPctRef.current = 0;
-    setUploadPercentage(0);
-    progressAnim.setValue(0);
-  }, [progressAnim]);
-  
   // Tag editor state
   // === TAG EDITOR STATE & ANIMATION ===
   const [editTagsVisible, setEditTagsVisible] = useState(false);
@@ -2265,6 +2185,33 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     setLoading(false);
   }, [fetchUploads, isPaginating]);
 
+  // Windowed soft reload for socket-driven refreshes (mediaVersion bumps on
+  // media:added/removed/updated). loadData(true) TRUNCATES the loaded pages
+  // back to page 0 (items = first LIMIT, offset reset) — right for a manual
+  // pull-to-refresh, but a remote upload batch would collapse a deep-scrolled
+  // grid once per event and yank the open viewer's pager out from under it.
+  // This instead refetches the user's ENTIRE loaded window in one request:
+  // scroll position, pagination depth, and viewer indices survive, while
+  // additions, deletions, and in-place updates are all reflected. No loading
+  // flag — no skeleton flash.
+  const uploadCountRef = useRef(0);
+  uploadCountRef.current = uploadItems.length;
+  const softReloadGallery = useCallback(async () => {
+    try {
+      const win = Math.max(LIMIT, Math.ceil(uploadCountRef.current / LIMIT) * LIMIT);
+      const tagParam = selectedAlbum !== 'All' ? `&tag=${encodeURIComponent(selectedAlbum)}` : '';
+      const r = await api.get(`/media/gallery?limit=${win}&offset=0&order=desc&sortBy=original${tagParam}`);
+      if (r?.success) {
+        setGlobalUploadsTotal(r.pagination?.total || r.total || r.items?.length || 0);
+        setUploadItems(r.items || []);
+        setUploadOffset(win);
+        setHasMoreUploads(r.pagination?.hasMore || false);
+      }
+    } catch (e) {
+      // Best-effort — the next event or a manual refresh catches up.
+    }
+  }, [api, selectedAlbum]);
+
   // Initial load - Fetch EVERYTHING simultaneously to prepare the off-screen slider pages
   useEffect(() => {
     setLoading(true);
@@ -2319,6 +2266,30 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
       fetchUploads(false);
     }
   }, [currentHasMore, loading, refreshing, isPaginating, activeTab, fetchUploads]);
+
+  // Live-refresh the grid when a media item lands in the vault (e.g. a
+  // ghost-download finished, broadcast as media:added). A burst of media:added
+  // (a playlist ingest) is DEBOUNCED into one reload; if we're not on the
+  // uploads tab the reload is deferred until we return.
+  const { mediaVersion } = useDownloads();
+  const mediaVersionFirst = useRef(true);
+  const mediaRefreshTimer = useRef(null);
+  const pendingMediaRefresh = useRef(false);
+  useEffect(() => {
+    if (mediaVersionFirst.current) { mediaVersionFirst.current = false; return; }
+    if (activeTab !== 'uploads') { pendingMediaRefresh.current = true; return undefined; }
+    if (mediaRefreshTimer.current) clearTimeout(mediaRefreshTimer.current);
+    mediaRefreshTimer.current = setTimeout(() => { softReloadGallery(); }, 600);
+    return () => { if (mediaRefreshTimer.current) clearTimeout(mediaRefreshTimer.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaVersion]);
+  useEffect(() => {
+    if (activeTab === 'uploads' && pendingMediaRefresh.current) {
+      pendingMediaRefresh.current = false;
+      softReloadGallery();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   // Open full-screen viewer with animation and large file warning
   const openViewer = useCallback((item) => {
@@ -2671,6 +2642,15 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         selectionLimit: 0, // 0 = UNLIMITED SELECTION
         orderedSelection: true,
         quality: 0.8,
+        // Hand over the ORIGINAL asset file instead of an iOS export. Without
+        // this, PHPicker RE-ENCODES every selected video (HEVC→H.264) before
+        // returning: a silent, minutes-long export with no progress that
+        // failed/hung on anything longer than ~a minute — the "can't upload
+        // videos over 1 minute" wall — plus bloated files and lost quality.
+        // Passthrough returns instantly; the uploader then STREAMS the file
+        // from disk as-is (no size limit). Android ignores this flag.
+        preferredAssetRepresentationMode:
+          ImagePicker.UIImagePickerPreferredAssetRepresentationMode?.Current ?? 'current',
       });
 
       if (result.canceled || !result.assets || result.assets.length === 0) {
@@ -2761,171 +2741,47 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     setUploadModalVisible(true); 
   }, [localAssets, selectedLocalAssets, selectedAlbum]);
 
-  // Execute upload after modal confirmation
-  // Execute upload after modal confirmation
-  const executeUpload = useCallback(async () => {
+  // Execute upload after modal confirmation: hand the confirmed batch to the
+  // app-level queue and get out of the way. The modal closes INSTANTLY; from
+  // here the global pill carries the live percentage anywhere in the app, the
+  // queue checkpoints itself after every item (an interrupted batch resumes on
+  // the next launch), duplicates are fingerprint-checked and skipped before
+  // any bytes move, and the finish stats + delete-originals offer (uploaded +
+  // duplicates) surface in the pill.
+  const executeUpload = useCallback(() => {
     if (pendingAssets.length === 0) return;
 
-    setUploading(true);
-    setUploadMinimized(false);
-    setUploadingItemIndex(1);
-    resetUploadProgress();
-    totalItemsRef.current = pendingAssets.length;
-    recomputeOverall({ snap: true }); // start cleanly at 0%
-
-    const serverUrl = getBaseUrl();
-    const successfulAssetIds = [];
-    let failureCount = 0;
-
-    try {
-      const { status: mediaStatus } = await MediaLibrary.requestPermissionsAsync();
-      
-      for (let i = 0; i < pendingAssets.length; i++) {
-        setUploadingItemIndex(i + 1);
-        const asset = pendingAssets[i];
-        
-        let tempThumbnailUri = null;
-        let tempManipulatedUri = null;
-        
-        try {
-          // Multipart TEXT fields go as a flat string map (the streaming uploader
-          // takes `parameters`, not a FormData/blob). The media bytes are streamed
-          // separately from disk by URI — see streamUploadWithRetry.
-          const parameters = {};
-          let assetInfo = null;
-
-          if (asset.assetId) {
-            try { assetInfo = await MediaLibrary.getAssetInfoAsync(asset.assetId); } catch (e) {}
-          }
-
-          const originalDate = assetInfo?.creationTime || null;
-          if (originalDate) parameters.originalDate = originalDate.toString();
-          if (assetInfo?.width) parameters.width = assetInfo.width.toString();
-          if (assetInfo?.height) parameters.height = assetInfo.height.toString();
-          parameters.tags = JSON.stringify(selectedTags.length > 0 ? selectedTags : ['Phone Uploads']);
-
-          const originalFilename = asset.fileName || asset.uri.split('/').pop() || 'file';
-          const isVideo = asset.mediaType === 'video' || /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|3gp)$/i.test(originalFilename);
-          const isHeic = /\.heic$/i.test(originalFilename) || /\.heif$/i.test(originalFilename);
-
-          let safeLocalUri = assetInfo?.localUri || asset.uri;
-          let mediaUri = safeLocalUri;
-          let mediaName = originalFilename;
-          let mediaType = isVideo ? 'video/mp4' : 'image/jpeg';
-
-          if (isVideo) {
-            const { uri } = await VideoThumbnails.getThumbnailAsync(safeLocalUri, { time: 1000, quality: 0.8 });
-            tempThumbnailUri = uri;
-            // A streamed upload carries ONE file; the small captured-frame
-            // thumbnail rides along as a base64 parameter (server decodes it).
-            try {
-              parameters.thumbnailBase64 = await FileSystem.readAsStringAsync(
-                tempThumbnailUri, { encoding: FileSystem.EncodingType.Base64 },
-              );
-            } catch (e) { /* server falls back to a placeholder thumbnail */ }
-            if (asset.duration) parameters.duration = Math.round(asset.duration / 1000).toString();
-          } else if (isHeic) {
-            const manipulated = await ImageManipulator.manipulateAsync(
-              safeLocalUri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
-            );
-            tempManipulatedUri = manipulated.uri;
-            mediaUri = tempManipulatedUri;
-            mediaName = originalFilename.replace(/\.heic$/i, '.jpg').replace(/\.heif$/i, '.jpg');
-            mediaType = 'image/jpeg';
-          }
-          // The streamed part's filename is the cache URI's basename (a UUID), so
-          // send the real name explicitly to preserve it + its extension server-side.
-          parameters.originalName = mediaName;
-
-          // Ensure we don't accidentally create an /api/api/ route.
-          const uploadEndpoint = serverUrl.endsWith('/api')
-            ? `${serverUrl}/media/upload`
-            : `${serverUrl}/api/media/upload`;
-
-          // FAILSAFE: confirm the source exists and isn't empty before we try — a
-          // missing/zero-byte URI is a common silent failure, and we log the size
-          // so the server/client logs can be correlated.
-          const info = await FileSystem.getInfoAsync(mediaUri, { size: true });
-          if (!info.exists) throw new Error(`source file missing: ${mediaUri}`);
-          const sizeMB = (info.size || 0) / (1024 * 1024);
-          console.log(`[Upload] ▶ ${mediaName} · ${sizeMB.toFixed(1)}MB · ${mediaType}${isVideo ? ' (video)' : ''}`);
-
-          // Monotonic per-item progress, fed by the native streaming callback.
-          let itemPct = 0;
-          const onProgress = (pct) => {
-            if (pct <= itemPct) return;
-            itemPct = pct;
-            currentItemPctRef.current = pct;
-            recomputeOverall();
-          };
-
-          await streamUploadWithRetry({
-            url: uploadEndpoint,
-            fileUri: mediaUri,
-            mimeType: mediaType,
-            parameters,
-            token,
-            label: mediaName,
-            onProgress,
-          });
-
-          if (asset.assetId) successfulAssetIds.push(asset.assetId);
-
-        } catch (error) {
-          console.error(`[Upload] Failed asset ${i}:`, error.message);
-          failureCount++;
-        } finally {
-          if (tempThumbnailUri) FileSystem.deleteAsync(tempThumbnailUri, { idempotent: true }).catch(()=>{});
-          if (tempManipulatedUri) FileSystem.deleteAsync(tempManipulatedUri, { idempotent: true }).catch(()=>{});
-          // Batch advances per-item regardless of success — user cares about "x of y done".
-          completedItemsRef.current += 1;
-          currentItemPctRef.current = 0;
-          recomputeOverall();
-        }
-      }
-      
-      // Make sure the bar reaches a clean 100% (the loop's recompute may have landed
-      // a hair under from rounding). Then hold so the user actually sees "100%" — the
-      // pattern every polished upload UI uses.
-      completedItemsRef.current = totalItemsRef.current;
-      currentItemPctRef.current = 0;
-      recomputeOverall();
-
-      // Make this batch's tags available INSTANTLY everywhere globalAlbums is read
-      // (the upload-modal quick-select + the tag autocomplete) without a reload — the
-      // same optimistic merge commitTags does for edits. A tag whose uploads all
-      // failed is harmless: it just filters to nothing and clears on the next load.
-      if (selectedTags.length > 0 && failureCount < totalItemsRef.current) {
-        setGlobalAlbums(prev => Array.from(new Set([...prev, ...selectedTags])).sort());
-      }
-
-      await new Promise((r) => setTimeout(r, 600));
-
-      setPendingAssets([]);
-      setUploadModalVisible(false);
-      setUploadMinimized(false);
-      await fetchUploads(true);
-      
-      // Instead of auto-deleting the originals, OFFER it: fire a (best-effort)
-      // system notification AND surface the in-app prompt. The delete only
-      // happens once the user says yes — see the pendingDelete modal below.
-      if (successfulAssetIds.length > 0 && mediaStatus === 'granted') {
-        setPendingDelete({ ids: successfulAssetIds, failed: failureCount });
-        notifyUploadComplete(successfulAssetIds.length); // guarded; silent no-op if unavailable
-      } else if (failureCount > 0) {
-        Alert.alert('Upload Complete', `${successfulAssetIds.length} uploaded, ${failureCount} failed.`);
-      } else {
-        Alert.alert('Success', `All ${successfulAssetIds.length} items uploaded!`);
-      }
-
-    } catch (error) {
-      console.error('[Upload] Error:', error);
-      Alert.alert('Upload Failed', error.message);
-    } finally {
-      setUploading(false);
-      resetUploadProgress();
+    const tags = selectedTags.length > 0 ? selectedTags : ['Phone Uploads'];
+    const started = vaultUpload.enqueue({
+      assets: pendingAssets.map((asset) => ({
+        assetId: asset.assetId || null,
+        uri: asset.uri || null,
+        fileName: asset.fileName || (asset.uri ? String(asset.uri).split('/').pop() : null),
+        mimeType: asset.mimeType || null,
+        type: asset.mediaType === 'video' || asset.type === 'video' ? 'video' : 'image',
+        duration: asset.duration || null,
+        width: asset.width || null,
+        height: asset.height || null,
+      })),
+      tags,
+    });
+    if (!started) {
+      Alert.alert('Upload in progress', 'Another vault upload is still running — let it finish (or dismiss it from the pill) first.');
+      return;
     }
-  }, [pendingAssets, selectedTags, token, getBaseUrl, fetchUploads, setUploadModalVisible, recomputeOverall, resetUploadProgress, setGlobalAlbums]);
+
+    // Make this batch's tags available INSTANTLY everywhere globalAlbums is
+    // read (the upload-modal quick-select + the tag autocomplete) without a
+    // reload — the same optimistic merge commitTags does for edits. A tag
+    // whose uploads all failed is harmless: it just filters to nothing and
+    // clears on the next load.
+    if (selectedTags.length > 0) {
+      setGlobalAlbums(prev => Array.from(new Set([...prev, ...selectedTags])).sort());
+    }
+
+    setPendingAssets([]);
+    setUploadModalVisible(false);
+  }, [pendingAssets, selectedTags, vaultUpload, setUploadModalVisible, setGlobalAlbums]);
 
   // Delete photo/video (only for uploads)
   const handleDelete = useCallback((id) => {
@@ -3093,6 +2949,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   // the "gathering full-resolution data" overlay while the original downloads.
   const [shareChooser, setShareChooser] = useState(null);
   const [sharePreparing, setSharePreparing] = useState(false);
+  // Label for the gather overlay — the single full-res share and the bulk share
+  // want different copy ("full-resolution image" vs "8 photos"). null = default.
+  const [sharePrepLabel, setSharePrepLabel] = useState(null);
 
   // Download a media item at the chosen quality and hand it to the OS share
   // sheet. 'regular' uses the compressed tier the viewer already shows (small,
@@ -3148,13 +3007,6 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     }
   }, [selectedMedia, doShare]);
 
-  // Format seconds to MM:SS
-  const formatDuration = (seconds) => {
-    if (!seconds) return null;
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
 
   // === GARBAGE COLLECTION ===
   // Leaving the gallery sweeps the throwaway temp dirs, leaked share files and
@@ -3425,9 +3277,12 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
   // === SMART SYNC GALLERY RENDERER ===
   const renderLocalSyncGallery = () => (
-    <Modal visible={localPickerVisible} animationType="slide" onRequestClose={() => setLocalPickerVisible(false)}>
+    // pageSheet = native iOS card presentation with swipe-down-to-close (fires
+    // onRequestClose). Android renders full-screen, so only it keeps the
+    // status-bar inset (the iOS card already starts below the status bar).
+    <Modal visible={localPickerVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setLocalPickerVisible(false)}>
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-        <View style={[styles.header, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border, paddingTop: insets.top, paddingBottom: 12 }]}>
+        <View style={[styles.header, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border, paddingTop: Platform.OS === 'android' ? insets.top : 0, paddingBottom: 12 }]}>
           <TouchableOpacity onPress={() => setLocalPickerVisible(false)} style={styles.closeButton}>
             <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
           </TouchableOpacity>
@@ -3758,10 +3613,10 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             {/* "Gathering data" overlay while the full-resolution original
                 downloads. Dismissed just before the OS share sheet appears. */}
             <Modal visible={sharePreparing} transparent animationType="fade">
-              <View style={styles.sharePreparingBackdrop}>
+              <View style={styles.sharePreparingBackdrop} testID="share-preparing-overlay">
                 <View style={styles.sharePreparingCard}>
                   <ActivityIndicator size="large" color={theme.colors.primary} />
-                  <Text style={styles.sharePreparingText}>Preparing full-resolution image…</Text>
+                  <Text style={styles.sharePreparingText}>{sharePrepLabel || 'Preparing full-resolution image…'}</Text>
                 </View>
               </View>
             </Modal>
@@ -4155,6 +4010,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             <View style={{ alignItems: 'center', gap: 10 }}>
             {/* Section Select toggle — tap first photo, tap last, fill between */}
             <TouchableOpacity
+              testID="gallery-section-select"
               onPress={toggleRangeSelect}
               activeOpacity={0.8}
               style={[styles.selectBezel, {
@@ -4176,58 +4032,138 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               alignSelf: 'center', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 30, gap: 8,
             }]}>
               <TouchableOpacity
+                testID="gallery-share-button"
+                accessibilityLabel="Share selected photos"
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
                 disabled={selectedGridItems.size === 0}
                 onPress={async () => {
-                  // Share the selected items. Two bugs in the old version:
-                  // it handed REMOTE http URLs to expo-sharing (which only
-                  // shares local file URIs — the share silently failed), and
-                  // for >1 item it just offered "share the first one".
-                  // Now: download originals to cache (4 at a time), then
-                  // present a share sheet per item sequentially — expo-sharing
-                  // has no multi-item API, so each sheet awaits the last.
-                  const _disp = uploadItemsForDragRef.current || [];
-                  const _byId = new Map();
-                  for (const di of _disp) if (di && di.id && !di.isSkeleton) _byId.set(di.id, di);
-                  const items = Array.from(selectedGridItems).map(id =>
-                    _byId.get(id)
-                  ).filter(Boolean);
-
-                  if (items.length === 0) return;
+                  // Match native iOS Photos multi-share: download the selected
+                  // originals to cache, then present ONE share sheet with ALL of
+                  // them. expo-sharing can only take a single file (which forced
+                  // an N-sheet slog — one sheet per photo); react-native-share's
+                  // `urls` array hands the whole selection to a single OS sheet.
+                  if (bulkShareBusyRef.current) return; // ignore double-taps
+                  const selectedIds = Array.from(selectedGridItems);
+                  if (selectedIds.length === 0) return;
+                  bulkShareBusyRef.current = true;
 
                   const local = []; // cached copies to clean up after sharing
+                  // Gather overlay while the originals download — the sheet only
+                  // appears once everything's ready, so it opens fully populated.
+                  setSharePrepLabel(selectedIds.length > 1 ? `Preparing ${selectedIds.length} photos…` : null);
+                  setSharePreparing(true);
                   try {
-                    if (!(await Sharing.isAvailableAsync())) {
-                      Alert.alert('Error', 'Sharing is not available on this device');
+                    // Resolve each selected id → its media object. Start with what's
+                    // resident in the virtualized grid, then backfill anything the
+                    // LRU page cache has evicted (a photo selected, then scrolled
+                    // far past) from the server — so nothing silently drops.
+                    const _disp = uploadItemsForDragRef.current || [];
+                    const _byId = new Map();
+                    for (const di of _disp) if (di && di.id && !di.isSkeleton) _byId.set(di.id, di);
+                    let items = selectedIds.map((id) => _byId.get(id)).filter(Boolean);
+                    if (items.length < selectedIds.length) {
+                      const haveIds = new Set(items.map((it) => it.id));
+                      const missing = selectedIds.filter((id) => !haveIds.has(id));
+                      try {
+                        const resp = await api.post('/media/by-ids', { ids: missing });
+                        if (Array.isArray(resp?.items)) items = items.concat(resp.items);
+                      } catch (e) {
+                        console.warn('[MediaGallery] by-ids backfill failed:', e?.message || e);
+                      }
+                    }
+                    if (items.length === 0) {
+                      Alert.alert('Error', 'Could not prepare the selected items');
                       return;
                     }
+
+                    // Download originals in parallel batches of 4 → local file URIs.
+                    // Each download retries ONCE so a transient network blip on one
+                    // photo doesn't silently drop it from the batch.
+                    const downloadOne = async (item) => {
+                      const url = getFullUrl(item.rawUrl || item.url);
+                      // Default the extension by media TYPE so a video with no stored
+                      // filename isn't saved as ".jpg" — that makes iOS infer an image
+                      // UTI and share the wrong thing (or silently drop the video).
+                      const fallbackName = `shared_${item.id}${item.type === 'video' ? '.mp4' : '.jpg'}`;
+                      const safeName = (item.filename || fallbackName).replace(/[^\w.\-]/g, '_');
+                      // 'shared_' prefix + id: leaked copies get swept by the
+                      // cacheManager background sweep, and two items with the
+                      // same filename can't clobber each other's download.
+                      const dest = `${FileSystem.cacheDirectory}shared_${item.id}_${safeName}`;
+                      for (let attempt = 0; attempt < 2; attempt++) {
+                        try {
+                          const { uri } = await FileSystem.downloadAsync(url, dest);
+                          return { uri, item };
+                        } catch (e) {
+                          if (attempt === 1) {
+                            console.warn('[MediaGallery] download failed for', item.id, e?.message || e);
+                            return null;
+                          }
+                        }
+                      }
+                      return null;
+                    };
                     for (let i = 0; i < items.length; i += 4) {
                       const chunk = items.slice(i, i + 4);
-                      const got = await Promise.all(chunk.map(async (item) => {
-                        const url = getFullUrl(item.rawUrl || item.url);
-                        const safeName = (item.filename || `shared_${item.id}.jpg`).replace(/[^\w.\-]/g, '_');
-                        try {
-                          const { uri } = await FileSystem.downloadAsync(url, `${FileSystem.cacheDirectory}${safeName}`);
-                          return { uri, item };
-                        } catch (e) { return null; }
-                      }));
+                      const got = await Promise.all(chunk.map(downloadOne));
                       local.push(...got.filter(Boolean));
                     }
+                    // Drop the overlay BEFORE presenting the sheet so the spinner
+                    // doesn't sit under the native share UI.
+                    setSharePreparing(false);
+
                     if (local.length === 0) {
                       Alert.alert('Error', 'Could not prepare the selected items');
                       return;
                     }
-                    for (const entry of local) {
-                      await Sharing.shareAsync(entry.uri, {
-                        UTI: entry.item.type === 'video' ? 'public.movie' : 'public.image',
-                        mimeType: entry.item.type === 'video' ? 'video/mp4' : 'image/jpeg',
-                        dialogTitle: local.length > 1 ? `Share (${local.indexOf(entry) + 1} of ${local.length})` : 'Share',
-                      });
+
+                    // Prefer ONE native share sheet for the whole selection via
+                    // react-native-share. We TRY it and only fall back to the
+                    // per-photo path if the native module is genuinely missing
+                    // (build predates the lib) — so a wrong native-probe can't
+                    // strand us on the slow path when the single sheet is usable.
+                    let singleSheetDone = false;
+                    const RNShare = getRNShare();
+                    if (RNShare) {
+                      try {
+                        // failOnCancel false → a user dismiss resolves quietly
+                        // (no throw), so cancelling does NOT trigger the fallback.
+                        // Multiple local file:// URIs → ONE OS sheet with all of them.
+                        await RNShare.open({
+                          urls: local.map((entry) => entry.uri),
+                          failOnCancel: false,
+                        });
+                        singleSheetDone = true;
+                      } catch (e) {
+                        // Native side unavailable at call time (getEnforcing throw)
+                        // or the sheet failed — fall through to per-photo below.
+                        console.warn('[MediaGallery] single-sheet share failed, falling back to per-photo:', e?.message || e);
+                      }
+                    } else if (local.length > 1) {
+                      // The ONLY reason a multi-select still prompts once-per-photo:
+                      // react-native-share's native module isn't in THIS build. It's
+                      // in package.json + autolinkable, so a fresh dev-client build
+                      // (EAS) enables the single sheet. Logged so the cause is obvious.
+                      console.warn('[MediaGallery] react-native-share native module missing from this build → per-photo fallback. Rebuild the dev client (eas build -p ios --profile development) to enable single-sheet multi-share.');
+                    }
+                    if (!singleSheetDone) {
+                      // Fallback: one expo-sharing sheet per photo. Works, just not
+                      // seamless. Present until a build includes react-native-share.
+                      for (const entry of local) {
+                        await Sharing.shareAsync(entry.uri, {
+                          UTI: entry.item.type === 'video' ? 'public.movie' : 'public.image',
+                          mimeType: entry.item.type === 'video' ? 'video/mp4' : 'image/jpeg',
+                          dialogTitle: local.length > 1 ? `Share (${local.indexOf(entry) + 1} of ${local.length})` : 'Share',
+                        });
+                      }
                     }
                   } catch (error) {
-                    // Dismissing a share sheet mid-sequence lands here — a
-                    // normal exit, not an error worth alerting about.
+                    // A real failure (not a dismiss) — worth a line, not an alert.
+                    console.warn('[MediaGallery] bulk share failed:', error?.message || error);
                   } finally {
+                    bulkShareBusyRef.current = false;
+                    setSharePreparing(false);
+                    setSharePrepLabel(null);
                     // Delete the cached copies we downloaded just for the share
                     // sheet — otherwise every bulk share leaks originals to disk.
                     for (const entry of local) {
@@ -4430,7 +4366,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
 
       {/* Pre-Upload Album Selection Modal (Draggable Bottom-Sheet Style) */}
       <Modal 
-        visible={uploadModalVisible && !uploadMinimized}
+        visible={uploadModalVisible}
         transparent={true}
         animationType="none"
         onShow={() => {
@@ -4564,138 +4500,28 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             </ScrollView>
             
             <View style={styles.uploadModalButtons}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[styles.uploadModalButton, { backgroundColor: theme.colors.surface }]}
                 onPress={dismissUploadModal}
-                disabled={uploading}
               >
                 <Text style={{ color: theme.colors.textPrimary }}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary, opacity: uploading ? 0.6 : 1 }]}
+                style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary, opacity: uploadBusy ? 0.6 : 1 }]}
                 onPressIn={() => impactHaptic('medium')}
                 onPress={executeUpload}
-                disabled={uploading}
+                disabled={uploadBusy}
               >
                 <Text style={{ color: theme.colors.background, fontWeight: 'bold' }}>
-                  {uploading ? 'Uploading...' : 'Upload Now'}
+                  {uploadBusy ? 'Upload running…' : 'Upload Now'}
                 </Text>
               </TouchableOpacity>
             </View>
-
-            {uploading && (
-              <View style={{ marginTop: 16, alignItems: 'center', width: '100%' }}>
-                {uploadPercentage < 100 ? (
-                  <ActivityIndicator size="large" color={theme.colors.primary} />
-                ) : (
-                  <View style={{ height: 36, justifyContent: 'center' }}>
-                    <Text style={{ color: theme.colors.primary, fontSize: 28, fontWeight: '700' }}>✓</Text>
-                  </View>
-                )}
-                <Text style={{ color: theme.colors.textPrimary, marginTop: 12, fontWeight: 'bold' }}>
-                  {uploadPercentage < 100
-                    ? `Uploading Item ${Math.min(uploadingItemIndex, pendingAssets.length)} of ${pendingAssets.length}`
-                    : 'Upload Complete'}
-                </Text>
-                <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>
-                  {uploadPercentage}% Complete
-                </Text>
-
-                {/* Visual Progress Bar — animated width driven by progressAnim. */}
-                <View style={{ width: '100%', height: 6, backgroundColor: theme.colors.border, borderRadius: 3, marginTop: 8, overflow: 'hidden' }}>
-                  <Animated.View
-                    style={{
-                      height: '100%',
-                      backgroundColor: theme.colors.primary,
-                      borderRadius: 3,
-                      width: progressAnim.interpolate({
-                        inputRange: [0, 100],
-                        outputRange: ['0%', '100%'],
-                        extrapolate: 'clamp',
-                      }),
-                    }}
-                  />
-                </View>
-
-                {/* Keep the upload running while you use the app. */}
-                <TouchableOpacity
-                  onPress={() => setUploadMinimized(true)}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14, paddingVertical: 8, paddingHorizontal: 16 }}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Icon name="arrow-collapse-down" size={16} color={theme.colors.textSecondary} />
-                  <Text style={{ color: theme.colors.textSecondary, fontWeight: '600' }}>Run in background</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+            {/* Progress, the run-in-background pill, and the delete-originals
+                prompt all live in the GLOBAL VaultUploadPill now — confirming
+                here closes this modal instantly and the pill takes over. */}
           </Animated.View>
         </KeyboardAvoidingView>
-      </Modal>
-
-      {/* Compact "uploading in background" pill — shown when the user taps
-          "Run in background". Tap it to bring the full progress modal back. */}
-      {uploading && uploadMinimized && (
-        <View pointerEvents="box-none" style={{ position: 'absolute', top: insets.top + 8, left: 0, right: 0, alignItems: 'center', zIndex: 1000 }}>
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() => setUploadMinimized(false)}
-            style={{
-              flexDirection: 'row', alignItems: 'center', gap: 10,
-              paddingVertical: 8, paddingHorizontal: 14, borderRadius: 22,
-              backgroundColor: theme.colors.surfaceElevated,
-              borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
-              shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 6,
-            }}
-          >
-            <ActivityIndicator size="small" color={theme.colors.primary} />
-            <Text style={{ color: theme.colors.textPrimary, fontWeight: '600' }}>
-              Uploading {Math.min(uploadingItemIndex, pendingAssets.length)}/{pendingAssets.length} · {uploadPercentage}%
-            </Text>
-            <Icon name="chevron-up" size={16} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Post-upload "delete the originals?" prompt — the opt-in replacement for
-          the old auto-delete. Delete hands the IDs to MediaLibrary, which shows
-          the OS's own delete confirmation. */}
-      <Modal visible={!!pendingDelete} transparent animationType="fade" onRequestClose={() => setPendingDelete(null)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 28 }}>
-          <View style={{ width: '100%', maxWidth: 360, backgroundColor: theme.colors.surfaceElevated, borderRadius: 18, padding: 22 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <Icon name="check-circle" size={22} color={theme.colors.accentSuccess || theme.colors.primary} />
-              <Text style={{ color: theme.colors.textPrimary, fontSize: 17, fontWeight: '700', flex: 1 }}>
-                {pendingDelete?.ids?.length || 0} uploaded
-              </Text>
-            </View>
-            <Text style={{ color: theme.colors.textSecondary, fontSize: 14, lineHeight: 20, marginBottom: 4 }}>
-              Delete the {pendingDelete?.ids?.length === 1 ? 'original' : 'originals'} from your phone to free up space?
-              {pendingDelete?.failed ? ` (${pendingDelete.failed} didn't upload and will be kept.)` : ''}
-            </Text>
-            <Text style={{ color: theme.colors.textMuted, fontSize: 12, marginBottom: 18 }}>
-              They're safe on your Turtle server. Your phone will ask you to confirm.
-            </Text>
-            <View style={{ flexDirection: 'row', gap: 10 }}>
-              <TouchableOpacity
-                onPress={() => setPendingDelete(null)}
-                style={{ flex: 1, paddingVertical: 13, borderRadius: 12, backgroundColor: theme.colors.surface, alignItems: 'center' }}
-              >
-                <Text style={{ color: theme.colors.textPrimary, fontWeight: '600' }}>Keep</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPressIn={() => notifyHaptic('warning')}
-                onPress={async () => {
-                  const ids = pendingDelete?.ids || [];
-                  setPendingDelete(null);
-                  try { await MediaLibrary.deleteAssetsAsync(ids); } catch (e) { /* user cancelled OS prompt / perms */ }
-                }}
-                style={{ flex: 1, paddingVertical: 13, borderRadius: 12, backgroundColor: theme.colors.accentError || '#F87171', alignItems: 'center' }}
-              >
-                <Text style={{ color: '#fff', fontWeight: '700' }}>Delete from phone</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
       </Modal>
 
       {/* Keyboard Dismiss Button (iOS only) */}
@@ -4846,16 +4672,16 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
                   </View>
                   <View style={{ alignItems: 'center', width: '100%', marginTop: 8 }}>
                     <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-                      <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPressIn={() => impactHaptic('medium')} onPress={handleUpload} disabled={uploading} activeOpacity={0.7}>
+                      <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPressIn={() => impactHaptic('medium')} onPress={handleUpload} disabled={uploadBusy} activeOpacity={0.7}>
                         <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="image-plus" size={18} color={theme.colors.primary} /></View>
                         <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Upload</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPress={openLocalSyncGallery} disabled={uploading} activeOpacity={0.7}>
+                      <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPress={openLocalSyncGallery} disabled={uploadBusy} activeOpacity={0.7}>
                         <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="folder-sync" size={18} color={theme.colors.primary} /></View>
                         <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Smart Sync</Text>
                       </TouchableOpacity>
                     </View>
-                    {uploading && <Text style={{ marginTop: 12, fontSize: 13, fontWeight: '600', color: theme.colors.primary }}>Uploading {Math.min(uploadingItemIndex, pendingAssets.length)} of {pendingAssets.length} • {uploadPercentage}% Complete</Text>}
+                    {/* Live progress lives in the global VaultUploadPill. */}
                   </View>
                 </View>
                 </View>
@@ -5108,7 +4934,8 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
               >
                 <Icon name="magnify" size={24} color={isUploadsSearchVisible || uploadsSearchQuery ? theme.colors.primary : theme.colors.textPrimary} />
               </TouchableOpacity>
-              <TouchableOpacity 
+              <TouchableOpacity
+                testID="gallery-select-toggle"
                 onPress={() => {
                   if (isSelectMode) { setIsSelectMode(false); setIsBulkTagging(false); setSelectedGridItems(new Set()); setRangeSelectMode(false); setRangeAnchorIdx(null); rangeAnchorRef.current = null; }
                   else { setIsSelectMode(true); }
@@ -5244,14 +5071,11 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
         </View>
       </View>
 
-      {/* Upload progress — a thin determinate bar fixed just above the navbar
-          (relocated here from the top header). pointerEvents none so it never
-          blocks taps; bottom offset gives a slight margin above the nav bar. */}
-      {uploading && (
-        <View pointerEvents="none" style={{ position: 'absolute', bottom: insets.bottom + 10, left: 0, right: 0, height: 1.5, backgroundColor: 'transparent', zIndex: 30 }}>
-          <View style={{ height: '100%', width: `${uploadPercentage}%`, backgroundColor: theme.mode === 'dark' ? '#FFFFFF' : '#000000' }} />
-        </View>
-      )}
+      {/* Upload progress lives in the app-root VaultUploadPill — shown on every
+          screen, and when the user hides it, it COLLAPSES to a small chip
+          (still visible here in the vault) rather than disappearing. So there's
+          no separate vault strip to overlap the bulk-select console or jump on
+          reveal. */}
 
     </View>
   );
@@ -5404,13 +5228,6 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
     setLocalTags(item.tags || []);
   }
   
-  // Format seconds to MM:SS
-  const formatDuration = (seconds) => {
-    if (!seconds) return null;
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
   
   // Self-healing: Fetch missing duration independently without parent re-render
   useEffect(() => {
@@ -5456,6 +5273,7 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
         // Claim at fire time (not arm time) so a timer cancelled by recycle
         // doesn't burn the id's single attempt.
         if (tagHealAttempted.has(item.id)) return;
+        if (tagHealAttempted.size > 5000) tagHealAttempted.clear(); // bound this process-lifetime guard set
         tagHealAttempted.add(item.id);
         try {
           const url = `${getBaseUrl()}/media/tags/sync?id=${item.id}&filename=${encodeURIComponent(item.filename)}`;
@@ -5497,6 +5315,8 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
   return (
     <TouchableOpacity
       disabled={isSkeleton}
+      // Stable hook for the batch-share E2E flow (.maestro/batch-share.yaml).
+      testID={isSkeleton ? undefined : `gallery-cell-${gridIndex}`}
       style={[styles.thumbnailContainer, { backgroundColor: cellBase }, isSelectMode && isSelected && { opacity: 0.8 }]}
       onPress={() => isSelectMode ? onToggleSelect(item.id, gridIndex) : openViewer(item)}
       onPressIn={(e) => onTouchDown?.(gridIndex, e.nativeEvent.pageX, e.nativeEvent.pageY)}
@@ -5693,11 +5513,6 @@ const createStyles = (theme) =>
       alignItems: 'flex-start',
       justifyContent: 'center',
     },
-    headerCenter: {
-      flex: 1,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
     headerRight: {
       width: 70, // Equal width to headerLeft for true centering
       alignItems: 'flex-end',
@@ -5709,15 +5524,6 @@ const createStyles = (theme) =>
       borderRadius: 10,
       justifyContent: 'center',
       alignItems: 'center',
-    },
-    iconButtonPlaceholder: {
-      width: 36,
-      height: 36,
-    },
-    pillButton: {
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: 12,
     },
     closeButton: {
       padding: 8,
@@ -5747,73 +5553,6 @@ const createStyles = (theme) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-    },
-    albumBackButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'flex-start',
-      paddingLeft: 4,
-    },
-    dropdownOverlay: {
-      flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.3)',
-      justifyContent: 'flex-start',
-      alignItems: 'center',
-      paddingTop: Platform.OS === 'ios' ? 90 : 70, // Position below header
-    },
-    dropdownMenu: {
-      width: width * 0.6,
-      borderRadius: 12,
-      overflow: 'hidden',
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.15,
-      shadowRadius: 12,
-      elevation: 8,
-    },
-    dropdownItem: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingVertical: 14,
-      paddingHorizontal: 16,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: 'rgba(0,0,0,0.05)',
-    },
-    dropdownItemText: {
-      fontSize: 16,
-      fontWeight: '500',
-    },
-    placeholder: {
-      width: 40,
-    },
-    tabContainer: {
-      flexDirection: 'row',
-      paddingHorizontal: 4,
-      paddingVertical: 4,
-      gap: 4,
-      backgroundColor: 'transparent',
-    },
-    tabButton: {
-      flex: 1,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: 8,
-      paddingHorizontal: 10,
-      borderRadius: 10,
-      gap: 6,
-    },
-    tabButtonActive: {
-      // Active styles applied inline for theme-aware shadows
-    },
-    tabText: {
-      fontSize: 13,
-      fontWeight: '500',
-      color: theme.colors.textSecondary,
-    },
-    tabTextActive: {
-      color: theme.colors.background,
     },
     floatingHeaderContainer: {
       position: 'absolute',
@@ -5852,9 +5591,6 @@ const createStyles = (theme) =>
       backgroundColor: theme.colors.surfaceElevated,
       borderWidth: 0,
     },
-    skeletonThumbnail: {
-      backgroundColor: 'rgba(150, 150, 150, 0.15)', // Smooth light gray placeholder
-    },
     thumbnail: {
       width: '100%',
       height: '100%',
@@ -5892,11 +5628,6 @@ const createStyles = (theme) =>
       alignItems: 'center',
       backgroundColor: theme.colors.surfaceElevated,
     },
-    loadingContainer: {
-      flex: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
     emptyContainer: {
       flex: 1,
       justifyContent: 'center',
@@ -5914,9 +5645,6 @@ const createStyles = (theme) =>
       textAlign: 'center',
       paddingHorizontal: 32,
     },
-    loadMoreIndicator: {
-      marginVertical: 16,
-    },
     bottomContainer: {
       paddingHorizontal: 16,
       paddingVertical: 0,
@@ -5929,13 +5657,6 @@ const createStyles = (theme) =>
       flexWrap: 'wrap',
       paddingHorizontal: 0,
       marginBottom: 16,
-    },
-    phantomSkeleton: {
-      width: THUMBNAIL_SIZE,
-      height: THUMBNAIL_SIZE,
-      margin: 0.5,
-      borderRadius: 0,
-      opacity: 0.5,
     },
     uploadButton: {
       flexDirection: 'row',
@@ -6026,30 +5747,12 @@ const createStyles = (theme) =>
       justifyContent: 'center',
       alignItems: 'center',
     },
-    viewerInfoOverlay: {
-      ...StyleSheet.absoluteFillObject,
-      pointerEvents: 'none',
-    },
-    viewerInfoTop: {
-      position: 'absolute',
-      left: 24,
-      right: 24,
-      top: 56, // Positioned from top for centering
-      alignItems: 'center',
-    },
     viewerInfoDate: {
       color: 'rgba(255,255,255,0.5)',
       fontSize: 14,
       fontWeight: '300',
       textAlign: 'center',
       letterSpacing: 0.5,
-    },
-    viewerInfoBottom: {
-      position: 'absolute',
-      left: 24,
-      right: 24,
-      bottom: 24, // Positioned from bottom for centering
-      alignItems: 'center',
     },
     viewerInfoResolution: {
       color: 'rgba(255,255,255,0.8)',
@@ -6095,13 +5798,6 @@ const createStyles = (theme) =>
     uploadModalLabel: {
       fontSize: 14,
       marginBottom: 8,
-    },
-    albumInput: {
-      borderWidth: 1,
-      borderRadius: 8,
-      padding: 12,
-      fontSize: 16,
-      marginBottom: 12,
     },
     quickSelectScroll: {
       flexGrow: 0,
@@ -6179,30 +5875,6 @@ const createStyles = (theme) =>
       fontWeight: '600',
     },
     // Progress Bar Styles
-    progressContainer: {
-      marginTop: 10,
-      alignItems: 'center',
-    },
-    progressText: {
-      fontSize: 14,
-      fontWeight: '600',
-      marginBottom: 8,
-    },
-    progressBarBackground: {
-      height: 8,
-      width: '100%',
-      borderRadius: 4,
-      overflow: 'hidden',
-    },
-    progressBarFill: {
-      height: '100%',
-      borderRadius: 4,
-    },
-    progressErrorText: {
-      color: '#DC2626',
-      fontSize: 12,
-      marginTop: 8,
-    },
     // Chip Input Styles for Tag Editor
     chipInputContainer: {
       flexDirection: 'row',
@@ -6265,20 +5937,6 @@ const createStyles = (theme) =>
       color: theme.colors.textPrimary,
     },
     // Header & Album Folder Styles
-    headerRightAction: {
-      width: 70,
-      alignItems: 'flex-end',
-      justifyContent: 'center',
-      paddingRight: 12,
-    },
-    clearFilterButton: {
-      paddingHorizontal: 12,
-      paddingVertical: 3,
-      borderRadius: 16,
-      borderWidth: 1,
-      width: 70,
-      borderColor: theme.colors.primary,
-    },
     albumsGridContent: {
       padding: 16,
       paddingBottom: 40,
@@ -6366,20 +6024,9 @@ const createStyles = (theme) =>
       letterSpacing: 0.5,
     },
     // Reusable layout patterns (extracted from inline JSX)
-    pageContainer: {
-      width: width,
-      height: '100%',
-    },
     scrollHorizontal: {
       flexGrow: 0,
       maxHeight: 40,
-    },
-    absoluteOverlay: {
-      ...StyleSheet.absoluteFillObject,
-    },
-    centeredContent: {
-      alignItems: 'center',
-      width: '100%',
     },
     // Metadata Drawer Styles
     metadataDrawer: {

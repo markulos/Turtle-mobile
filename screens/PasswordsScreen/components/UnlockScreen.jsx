@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { tapHaptic, impactHaptic } from '../../../utils/haptics';
 
 // Two-step unlock:
 //   • Biometrics (if enrolled + a master password was saved) → unlock directly,
@@ -145,7 +146,7 @@ export const UnlockScreen = ({
               {!!error && <Text style={styles.errorText}>{error}</Text>}
 
               {bioAvailable && bioHasSaved && (
-                <TouchableOpacity style={styles.bioButton} onPress={handleBiometric} disabled={busy}>
+                <TouchableOpacity style={styles.bioButton} onPressIn={() => impactHaptic('medium')} onPress={handleBiometric} disabled={busy}>
                   <Icon name="fingerprint" size={22} color={theme.colors.textPrimary} />
                   <Text style={styles.bioButtonText}>Unlock with biometrics</Text>
                 </TouchableOpacity>
@@ -171,6 +172,7 @@ export const UnlockScreen = ({
 
               <TouchableOpacity
                 style={[styles.button, (!password || busy || isProcessing) && styles.buttonDisabled]}
+                onPressIn={() => impactHaptic('medium')}
                 onPress={handlePassword}
                 disabled={!password || busy || isProcessing}
               >
@@ -203,6 +205,7 @@ export const UnlockScreen = ({
 
               <TouchableOpacity
                 style={[styles.button, (!code || busy) && styles.buttonDisabled]}
+                onPressIn={() => impactHaptic('medium')}
                 onPress={handleVerifyOtp}
                 disabled={!code || busy}
               >
@@ -210,7 +213,7 @@ export const UnlockScreen = ({
               </TouchableOpacity>
 
               <View style={styles.linkRow}>
-                <TouchableOpacity onPress={handleResend}><Text style={styles.linkText}>Resend code</Text></TouchableOpacity>
+                <TouchableOpacity onPressIn={() => tapHaptic()} onPress={handleResend}><Text style={styles.linkText}>Resend code</Text></TouchableOpacity>
                 <TouchableOpacity onPress={() => { setStep('password'); setCode(''); setError(''); }}><Text style={styles.linkText}>Back</Text></TouchableOpacity>
               </View>
             </>

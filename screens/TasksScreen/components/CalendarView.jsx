@@ -31,7 +31,6 @@ import Reanimated, {
   LinearTransition,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { LinearGradient } from 'expo-linear-gradient';
 // Resets the VirtualizedList "am I nested?" context for a subtree. The day
 // pager below is a horizontal FlatList that legitimately lives inside the
 // horizontal calendar⇄list pager (an Animated.ScrollView in TasksScreen) —
@@ -44,8 +43,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { VirtualizedListContextResetter } from 'react-native/Libraries/Lists/VirtualizedListContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
-import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters } from '../utils/taskHelpers';
+import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters, matchesRecurrence, isOccurrenceCompleted, parseLocalYMD } from '../utils/taskHelpers';
 import { TaskQuickInspector } from './TaskQuickInspector';
+import { TimelineTaskRow } from './TimelineTaskRow';
 import { WheelTimePicker } from './WheelTimePicker';
 import { tapHaptic } from '../../../utils/haptics';
 
@@ -236,6 +236,15 @@ const buildMonthsList = () => {
   return list;
 };
 const MONTHS_LIST = buildMonthsList();
+// Map a date → its index in MONTHS_LIST (clamped). Computed from the list's
+// first entry, NOT the module-load TODAY_INDEX, so it stays correct even if the
+// session crosses a month boundary (opened June 30, tapped "Today" on July 1).
+const monthIndexOf = (date) => {
+  const d = new Date(date);
+  const first = MONTHS_LIST[0];
+  const idx = (d.getFullYear() - first.getFullYear()) * 12 + (d.getMonth() - first.getMonth());
+  return Math.max(0, Math.min(MONTHS_LIST.length - 1, idx));
+};
 
 // ── Horizontal day-pager list ─────────────────────────────────
 //
@@ -344,9 +353,148 @@ const taskOccursOn = (task, dateStr, dueDateOnly) => {
     return task.dueDate ? task.dueDate === dateStr : false;
   }
   if (dueDateOnly) {
-    return task.dueDate ? task.dueDate === dateStr : false;
+    if (!task.dueDate) return false;
+    // A ticked recurring occurrence stays visible (and renders checked) on its
+    // own day even though dueDate advanced past it — completion is additive
+    // (meta.completedDates), not destructive. Mirrors web's taskOccursOnDate.
+    if (isOccurrenceCompleted(task, dateStr)) return true;
+    // Real base instance — the task's own scheduled day.
+    if (task.dueDate === dateStr) return true;
+    // Virtual recurring occurrence: a repeating task ALSO belongs on every
+    // future period boundary, so the calendar fans it out across its upcoming
+    // occurrence dates. Without this, a repeating task only ever showed on its
+    // single stored dueDate — so completing one occurrence (which advances the
+    // base dueDate a period forward) made it vanish from the calendar instead
+    // of simply moving to the next occurrence. Mirrors web's taskOccursOnDate.
+    // Completed tasks stop fanning out (the advanced dueDate is the new anchor).
+    const rec = task.recurring || task.recurrence || 'none';
+    if (rec === 'none' || task.completed) return false;
+    return matchesRecurrence(task.dueDate, rec, dateStr);
   }
   return !task.completed;
+};
+
+// Shared tasks array for empty day cells — one instance instead of 42 fresh
+// arrays per month page. FROZEN so any future code that mutates a day's tasks
+// in place throws immediately (Hermes runs strict) instead of silently
+// spreading the mutation across every empty cell of every month.
+const EMPTY_DAY_TASKS = Object.freeze([]);
+
+// ── Single-pass month-cell builder ───────────────────────────
+//
+// Builds one month's 42 grid cells from a PRE-FILTERED task list by expanding
+// each task onto the days it occupies — the exact days taskOccursOn(dueDateOnly
+// =true) would match, but computed from the TASK side. That turns a month build
+// from O(days × tasks) (the old per-cell `tasks.filter(taskOccursOn)`) into
+// O(tasks + recurring × days): dated tasks, ticked occurrences and birthdays
+// are O(1) date-key pushes; only RECURRING tasks still walk the month's days
+// (through the same matchesRecurrence oracle, so semantics can't drift).
+// Cell task-order matches the old filter exactly: tasks are pushed in list
+// order, so each day's array is the original order.
+const buildMonthCells = (filteredTasks, targetDate) => {
+  const year = targetDate.getFullYear();
+  const month = targetDate.getMonth();
+  const keyPrefix = `${year}-${month}`;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startDayOfWeek = new Date(year, month, 1).getDay();
+  const prefix = `${year}-${String(month + 1).padStart(2, '0')}-`; // YYYY-MM-
+
+  const byDay = new Array(daysInMonth + 1).fill(null); // 1-indexed, lazily filled
+
+  for (const task of filteredTasks) {
+    const seen = new Set(); // day numbers this task already occupies (dedupe)
+    const pushDateStr = (dateStr) => {
+      if (typeof dateStr !== 'string' || !dateStr.startsWith(prefix)) return;
+      const day = Number(dateStr.slice(8, 10));
+      if (!Number.isInteger(day) || day < 1 || day > daysInMonth || seen.has(day)) return;
+      seen.add(day);
+      (byDay[day] || (byDay[day] = [])).push(task);
+    };
+
+    const kind = itemTypeOf(task);
+    if (kind === 'birthday') {
+      if (!task.dueDate) continue;
+      if (task.meta && task.meta.yearly === false) { pushDateStr(task.dueDate); continue; }
+      // Yearly: occupies the month+day match in ANY year → at most one day here.
+      if (task.dueDate.length >= 10 && Number(task.dueDate.slice(5, 7)) === month + 1) {
+        pushDateStr(prefix + task.dueDate.slice(8, 10));
+      }
+      continue;
+    }
+    if (kind === 'event') { if (task.dueDate) pushDateStr(task.dueDate); continue; }
+
+    // Ordinary tasks: undated ones never occupy a calendar day (they live in
+    // the Pending strip) — mirrors taskOccursOn's early `!task.dueDate` bail.
+    if (!task.dueDate) continue;
+    const cd = task.meta && task.meta.completedDates;
+    if (Array.isArray(cd)) for (const ds of cd) pushDateStr(ds);
+    pushDateStr(task.dueDate);
+    const rec = task.recurring || task.recurrence || 'none';
+    if (rec !== 'none' && !task.completed) {
+      // Arithmetic recurrence expansion — computes this month's occurrence
+      // days directly instead of asking matchesRecurrence about all ~31 days
+      // (each such call re-parses two dates). Mirrors matchesRecurrence
+      // EXACTLY: same parseLocalYMD parse (incl. overflow normalization), the
+      // same "strictly after the base date" rule, and the same day-difference
+      // arithmetic (calendar-day diffs are additive, so diff(day N) =
+      // diff(day 1) + N - 1; the old Math.round absorbed DST the same way).
+      // Equivalence is pinned by the randomized property test in scripts.
+      const baseDt = parseLocalYMD(task.dueDate);
+      if (baseDt) {
+        const pushDay = (day) => {
+          if (day < 1 || day > daysInMonth || seen.has(day)) return;
+          seen.add(day);
+          (byDay[day] || (byDay[day] = [])).push(task);
+        };
+        // Day-difference between this month's 1st and the base date.
+        const diff1 = Math.round((new Date(year, month, 1).getTime() - baseDt.getTime()) / MS_PER_DAY);
+        if (rec === 'daily') {
+          // Every day strictly after the base: diff(day) = diff1 + day - 1 ≥ 1.
+          for (let day = Math.max(1, 2 - diff1); day <= daysInMonth; day++) pushDay(day);
+        } else if (rec === 'weekly' || rec === 'biweekly') {
+          const step = rec === 'weekly' ? 7 : 14;
+          // First day of this month on the recurrence lattice (diff ≡ 0 mod step)…
+          let day = ((1 - diff1) % step + step) % step;
+          if (day === 0) day = step;
+          // …then jump forward onto strictly-positive diffs (base in/after month).
+          const diffAt = diff1 + day - 1;
+          if (diffAt <= 0) day += Math.ceil((1 - diffAt) / step) * step;
+          for (; day <= daysInMonth; day += step) pushDay(day);
+        } else if (rec === 'monthly') {
+          // Same (normalized) day-of-month, any strictly later date.
+          const bd = baseDt.getDate();
+          if (bd <= daysInMonth && new Date(year, month, bd).getTime() > baseDt.getTime()) {
+            pushDay(bd);
+          }
+        }
+        // Unknown recurrence values fan out nowhere — matchesRecurrence's
+        // default case returns false for them too.
+      }
+    }
+  }
+
+  // Assemble the padded 42-cell page (leading/trailing empties) exactly as the
+  // old builder did, so every FlatList page keeps the same fixed height.
+  const days = new Array(CELLS_PER_MONTH);
+  let idx = 0;
+  for (let i = 0; i < startDayOfWeek; i++) {
+    days[idx++] = { type: 'empty', key: `${keyPrefix}-lead-${i}` };
+  }
+  for (let day = 1; day <= daysInMonth; day++) {
+    days[idx++] = {
+      type: 'day',
+      day,
+      date: new Date(year, month, day),
+      dateStr: prefix + String(day).padStart(2, '0'),
+      tasks: byDay[day] || EMPTY_DAY_TASKS,
+      key: `${keyPrefix}-day-${day}`,
+    };
+  }
+  while (idx < CELLS_PER_MONTH) {
+    days[idx] = { type: 'empty', key: `${keyPrefix}-trail-${idx}` };
+    idx++;
+  }
+  return days;
 };
 
 // ── Per-owner badge (shared calendar) ────────────────────────
@@ -415,6 +563,35 @@ const resetSubtasksForReuse = (subtasks) =>
     completedTime: null,
   }));
 
+// Static 0..23 row indexes for the hour grid — hoisted so the pane doesn't
+// rebuild the array (and 24 fresh objects) on every render.
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+
+// Props that only drive the ACTIVE pane's live inputs (add-task / search).
+// When a keystroke updates these, the two INACTIVE neighbour panes bail out of
+// re-rendering entirely (see dayPaneEqual) — typing used to re-render all
+// three mounted panes per keystroke.
+const DAYPANE_ACTIVE_ONLY_PROPS = new Set([
+  'isAddingTask', 'newTaskTitle', 'onSubmitAddTask', 'onCancelAdd',
+  'pendingTime', 'onClearPendingTime', 'onEditPendingTime', 'onPickSuggestion',
+  'isSearching', 'searchQuery', 'searchResults', 'onOpenSearchResult',
+]);
+
+// Custom React.memo comparator for DayPane. Shallow-equal, EXCEPT:
+//  • active-only props are ignored while the pane is (and stays) inactive;
+//  • nowMinutes (the once-a-minute clock tick) is ignored unless this pane IS
+//    today — only today's pane draws the now-line, so the other mounted panes
+//    skip the every-minute re-render.
+function dayPaneEqual(prev, next) {
+  for (const k in next) {
+    if (Object.is(prev[k], next[k])) continue;
+    if (!prev.isActive && !next.isActive && DAYPANE_ACTIVE_ONLY_PROPS.has(k)) continue;
+    if (k === 'nowMinutes' && toDateString(next.date) !== next.todayStr) continue;
+    return false;
+  }
+  return true;
+}
+
 // Interactive controls (add-task input, search box + results) only wire
 // up on the ACTIVE pane (date === selectedDate); neighbours show inert
 // placeholders so we never mount duplicate auto-focused TextInputs while
@@ -422,11 +599,14 @@ const resetSubtasksForReuse = (subtasks) =>
 const DayPane = React.memo(function DayPane({
   date,
   isActive,
+  // Full (unfiltered) task list — used ONLY by the re-add title suggestions.
   tasks,
-  selectedProject,
-  selectedTags,
-  tagFilterMode,
-  selectedOwners,
+  // (dateStr) => that day's filtered+sorted tasks, cached in the parent so a
+  // pane re-render is a Map hit instead of a full re-filter of every task.
+  getDayTasks,
+  // toDateString(new Date()) computed once per parent render — keeps the pane
+  // from re-deriving "today" (and lets dayPaneEqual gate the minute tick).
+  todayStr,
   multiUser,
   theme,
   styles,
@@ -441,6 +621,10 @@ const DayPane = React.memo(function DayPane({
   onTaskInspect,
   onTaskLongPress,
   onToggleComplete,
+  onUpdateTask, // used to pull an OPEN/pending task onto the viewed day
+  // Owner-badge tap (shared calendar). Was referenced but never declared as a
+  // prop — pressing a badge threw "ReferenceError: onOwnerPress is not defined".
+  onOwnerPress,
   onOpenAddTaskAt,
   // Add-task (active pane only)
   isAddingTask,
@@ -468,7 +652,7 @@ const DayPane = React.memo(function DayPane({
 }) {
   const scrollRef = useRef(null);
   const dayStr = toDateString(date);
-  const isViewingToday = dayStr === toDateString(new Date());
+  const isViewingToday = dayStr === todayStr;
 
   // Title suggestions for the re-add flow — only on the active pane while the
   // add-task input is open and the user has typed ≥2 chars.
@@ -477,18 +661,9 @@ const DayPane = React.memo(function DayPane({
     [isActive, isAddingTask, tasks, newTaskTitle]
   );
 
-  // This day's tasks — same predicates the calendar cells + header use.
-  const dayTasks = useMemo(() => {
-    const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners };
-    return tasks
-      .filter(t => taskPassesFilters(t, filters) && taskOccursOn(t, dayStr, true))
-      .sort((a, b) => {
-        if (a.time && b.time) return a.time.localeCompare(b.time);
-        if (a.time) return -1;
-        if (b.time) return 1;
-        return 0;
-      });
-  }, [tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners, dayStr]);
+  // This day's tasks — the parent's per-date cache (same predicates the month
+  // cells + header count use, so every surface stays in lock-step).
+  const dayTasks = getDayTasks(dayStr);
 
   // Split this day's items into calendar occasions (events + birthdays), timed
   // tasks (those with a HH:MM start) and untimed tasks (dated for THIS day but
@@ -809,123 +984,6 @@ const DayPane = React.memo(function DayPane({
           </View>
         )}
 
-        {/* To Do — this day's tasks with no time set yet ("TBD"). They're
-            dated for this day but unscheduled, so they show here in the day's
-            to-do list with a TBD marker rather than only the hour grid. Tap to
-            inspect (where a time can be added); checkbox completes. */}
-        {untimedTasks.length > 0 && (
-          <View style={styles.untimedSection}>
-            <View style={styles.untimedHeader}>
-              <Text style={styles.untimedLabel}>To Do · No Time Set</Text>
-              <Text style={styles.untimedCount}>{untimedTasks.length}</Text>
-            </View>
-            {untimedTasks.map(task => (
-              <TouchableOpacity
-                key={task.id}
-                style={[styles.untimedItem, task.completed && styles.taskItemCompleted]}
-                onPress={() => (onTaskInspect || onTaskPress)?.(task)}
-                onLongPress={() => onTaskLongPress?.(task)}
-              >
-                <TouchableOpacity
-                  style={styles.checkbox}
-                  onPressIn={() => tapHaptic()}
-                  onPress={(e) => { e.stopPropagation(); onToggleComplete?.(task.id); }}
-                >
-                  <Icon
-                    name={task.completed ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                    size={18}
-                    color={task.completed ? theme.colors.accentSuccess : theme.colors.textTertiary}
-                  />
-                </TouchableOpacity>
-                <Text
-                  style={[styles.untimedTitle, task.completed && styles.taskTitleCompleted]}
-                  numberOfLines={1}
-                >
-                  {task.title}
-                </Text>
-                <View style={styles.tbdBadge}>
-                  <Text style={styles.tbdBadgeText}>TBD</Text>
-                </View>
-                {multiUser && task.userId && (
-                  <TouchableOpacity
-                    style={[styles.ownerBadge, { backgroundColor: ownerColor(task.userId) }]}
-                    onPress={() => onOwnerPress?.(task)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Owner: ${task.ownerName || 'Unknown'}. Open profile`}
-                  >
-                    <Text style={styles.ownerBadgeText}>{ownerInitial(task.ownerName)}</Text>
-                  </TouchableOpacity>
-                )}
-                {task.priority && (
-                  <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(task.priority, theme) }]} />
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* Pending / All-Day strip */}
-        {stripTasks.length > 0 && (
-          <View style={styles.untimedSection}>
-            <TouchableOpacity
-              style={styles.untimedHeader}
-              onPress={onToggleUntimedCollapsed}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityLabel={`Pending tasks, ${stripTasks.length}, ${untimedCollapsed ? 'collapsed' : 'expanded'}`}
-            >
-              <Text style={styles.untimedLabel}>Pending Tasks</Text>
-              <Text style={styles.untimedCount}>{stripTasks.length}</Text>
-              <Icon
-                name={untimedCollapsed ? 'chevron-down' : 'chevron-up'}
-                size={18}
-                color={theme.colors.textTertiary}
-              />
-            </TouchableOpacity>
-            {!untimedCollapsed && stripTasks.map(task => (
-              <TouchableOpacity
-                key={task.id}
-                style={[styles.untimedItem, task.completed && styles.taskItemCompleted]}
-                onPress={() => onTaskPress?.(task)}
-                onLongPress={() => onTaskLongPress?.(task)}
-              >
-                <TouchableOpacity
-                  style={styles.checkbox}
-                  onPressIn={() => tapHaptic()}
-                  onPress={(e) => { e.stopPropagation(); onToggleComplete?.(task.id); }}
-                >
-                  <Icon
-                    name={task.completed ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                    size={18}
-                    color={task.completed ? theme.colors.accentSuccess : theme.colors.textTertiary}
-                  />
-                </TouchableOpacity>
-                <Text
-                  style={[styles.untimedTitle, task.completed && styles.taskTitleCompleted]}
-                  numberOfLines={1}
-                >
-                  {task.title}
-                </Text>
-                {multiUser && task.userId && (
-                  <TouchableOpacity
-                    style={[styles.ownerBadge, { backgroundColor: ownerColor(task.userId) }]}
-                    onPress={() => onOwnerPress?.(task)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Owner: ${task.ownerName || 'Unknown'}. Open profile`}
-                  >
-                    <Text style={styles.ownerBadgeText}>{ownerInitial(task.ownerName)}</Text>
-                  </TouchableOpacity>
-                )}
-                {task.priority && (
-                  <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(task.priority, theme) }]} />
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
         {/* Schedule toolbar — count + total tracked time on the left, a toggle
             between the COMPACT stack (default) and the full hour GRID. */}
         <View style={styles.scheduleToolbar}>
@@ -967,84 +1025,38 @@ const DayPane = React.memo(function DayPane({
                 No timed tasks yet. Tap + above, or expand to the timeline and long-press a slot.
               </Text>
             ) : segments.map((seg, idx) => {
-              const task = seg.task;
-              const projectColor = getProjectColor(task.project);
+              // Match the "Upcoming" agenda exactly by reusing TimelineTaskRow;
+              // keep the empty-time gap divider (which Upcoming lacks) as a
+              // sibling below each row. hideDate drops the redundant date since
+              // the day panel already shows it.
               const isLast = idx === segments.length - 1;
-              // Status pill mirrors the Upcoming timeline: done / overdue / upcoming.
-              const overdue = !task.completed && !!task.dueDate && isOverdue(task.dueDate);
-              const status = task.completed
-                ? { color: theme.colors.accentSuccess || '#2BA84A', icon: 'check', label: 'Done' }
-                : overdue
-                  ? { color: theme.colors.accentError || theme.colors.accentDanger || '#E5484D', icon: 'alert-circle-outline', label: 'Overdue' }
-                  : { color: theme.colors.accentWarning || '#E8911A', icon: 'clock-outline', label: 'Upcoming' };
+              const hasGap = seg.gapAfter != null && seg.gapAfter > 0;
               return (
-                <View key={task.id} style={styles.segRow}>
-                  {/* Left rail: an activity-icon node per task + a connector line. */}
-                  <View style={styles.segRail}>
-                    <View style={[styles.segIconCircle, task.completed ? styles.segIconDone : { borderColor: projectColor }]}>
-                      <Icon name={task.completed ? 'check' : itemIconOf(task)} size={task.completed ? 17 : 15} color={task.completed ? '#fff' : projectColor} />
+                <React.Fragment key={seg.task.id}>
+                  <TimelineTaskRow
+                    item={seg.task}
+                    onPress={onTaskInspect || onTaskPress}
+                    onLongPress={onTaskLongPress}
+                    onToggleComplete={(it) => onToggleComplete?.(it.id, dayStr)}
+                    isFirst={idx === 0}
+                    isLast={isLast && !hasGap}
+                    hideDate
+                    // Day context: checked = THIS day's occurrence is ticked
+                    // (meta.completedDates), not the never-true global bool.
+                    done={seg.task.completed || isOccurrenceCompleted(seg.task, dayStr)}
+                    // On a VIRTUAL future occurrence (this pane isn't the base
+                    // dueDate) the badge would count against the base day —
+                    // a red "started 1h ago" on tomorrow's pane. Suppress it.
+                    hideCountdown={seg.task.dueDate !== dayStr}
+                  />
+                  {hasGap && (
+                    <View style={styles.segGap}>
+                      <View style={styles.segGapLine} />
+                      <Text style={styles.segGapText}>{fmtDur(seg.gapAfter)}</Text>
+                      <View style={styles.segGapLine} />
                     </View>
-                    {!isLast && <View style={styles.segRailLine} />}
-                  </View>
-                  <View style={styles.segBody}>
-                    <View style={styles.segTimeRow}>
-                      <Text style={styles.segTimeText}>
-                        {fmtHM(seg.start, use24h)}
-                        <Text style={styles.segTimeSep}> — </Text>
-                        {fmtHM(seg.end, use24h)}
-                      </Text>
-                      <View style={[styles.segStatusChip, { backgroundColor: status.color }]}>
-                        <Icon name={status.icon} size={11} color="#fff" />
-                        <Text style={styles.segStatusText}>{status.label}</Text>
-                      </View>
-                    </View>
-                    <TouchableOpacity
-                      style={[
-                        styles.segCard,
-                        { borderLeftColor: projectColor },
-                        task.completed && styles.taskItemCompleted,
-                      ]}
-                      onPress={() => (onTaskInspect || onTaskPress)?.(task)}
-                      onLongPress={() => onTaskLongPress?.(task)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.segCardHeader}>
-                        <Text
-                          style={[styles.segCardTitle, task.completed && styles.taskTitleCompleted]}
-                          numberOfLines={1}
-                        >
-                          {task.title}
-                        </Text>
-                        {multiUser && task.userId && (
-                          <TouchableOpacity
-                            style={[styles.ownerBadge, { backgroundColor: ownerColor(task.userId) }]}
-                            onPress={() => onOwnerPress?.(task)}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Owner: ${task.ownerName || 'Unknown'}. Open profile`}
-                          >
-                            <Text style={styles.ownerBadgeText}>{ownerInitial(task.ownerName)}</Text>
-                          </TouchableOpacity>
-                        )}
-                        {task.priority && (
-                          <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(task.priority, theme) }]} />
-                        )}
-                        <Icon name="pencil" size={14} color={theme.colors.textTertiary} style={styles.segCardEdit} />
-                      </View>
-                      {!!task.description && (
-                        <Text style={styles.segCardDesc} numberOfLines={2}>{task.description}</Text>
-                      )}
-                    </TouchableOpacity>
-                    {/* Empty time before the next task, as a thin labelled line. */}
-                    {seg.gapAfter != null && seg.gapAfter > 0 && (
-                      <View style={styles.segGap}>
-                        <View style={styles.segGapLine} />
-                        <Text style={styles.segGapText}>{fmtDur(seg.gapAfter)}</Text>
-                        <View style={styles.segGapLine} />
-                      </View>
-                    )}
-                  </View>
-                </View>
+                  )}
+                </React.Fragment>
               );
             })}
           </Reanimated.View>
@@ -1056,7 +1068,7 @@ const DayPane = React.memo(function DayPane({
           onLongPress={handleLongPress}
           delayLongPress={350}
         >
-          {Array.from({ length: 24 }, (_, h) => (
+          {HOURS.map((h) => (
             <View key={`hour-${h}`} style={[styles.hourRow, { top: h * HOUR_HEIGHT }]}>
               <Text style={styles.hourLabel}>{formatHourLabel(h, use24h)}</Text>
               <View style={styles.hourDivider} />
@@ -1079,13 +1091,15 @@ const DayPane = React.memo(function DayPane({
             const duration = Number(task.duration) > 0 ? Number(task.duration) : DEFAULT_TASK_DURATION_MIN;
             const height = Math.max((duration / 60) * HOUR_HEIGHT, MIN_TASK_BLOCK_HEIGHT);
             const projectColor = getProjectColor(task.project);
+            // Day context: this block dims when THIS day's occurrence is ticked.
+            const blockDone = task.completed || isOccurrenceCompleted(task, dayStr);
             return (
               <TouchableOpacity
                 key={task.id}
                 style={[
                   styles.taskBlock,
                   { top, height, borderLeftColor: projectColor, backgroundColor: theme.colors.surfaceElevated },
-                  task.completed && styles.taskItemCompleted,
+                  blockDone && styles.taskItemCompleted,
                 ]}
                 // Tap a timeline block → minimal quick inspector (rename +
                 // time/date). Long-press still jumps straight to the full form.
@@ -1094,7 +1108,7 @@ const DayPane = React.memo(function DayPane({
               >
                 <View style={styles.taskBlockHeader}>
                   <Text
-                    style={[styles.taskBlockTitle, task.completed && styles.taskTitleCompleted]}
+                    style={[styles.taskBlockTitle, blockDone && styles.taskTitleCompleted]}
                     numberOfLines={height < 40 ? 1 : 2}
                   >
                     {task.title}
@@ -1126,8 +1140,442 @@ const DayPane = React.memo(function DayPane({
         </Reanimated.View>
         )}
         </Reanimated.View>
+
+        {/* To Do — this day's tasks with no time set yet. Dated for this day but
+            unscheduled, shown BELOW the schedule; tap to inspect / add a time. */}
+        {untimedTasks.length > 0 && (
+          <View style={styles.untimedSection}>
+            <View style={styles.untimedHeader}>
+              <Text style={styles.untimedLabel}>To Do · No Time Set</Text>
+              <Text style={styles.untimedCount}>{untimedTasks.length}</Text>
+            </View>
+            {untimedTasks.map(task => {
+              // Per-occurrence completion: a recurring task's checkbox reflects
+              // whether THIS day is ticked (meta.completedDates), not the global
+              // `completed` boolean.
+              const done = task.completed || isOccurrenceCompleted(task, dayStr);
+              return (
+              <TouchableOpacity
+                key={task.id}
+                style={[styles.untimedItem, done && styles.taskItemCompleted]}
+                onPress={() => (onTaskInspect || onTaskPress)?.(task)}
+                onLongPress={() => onTaskLongPress?.(task)}
+              >
+                <TouchableOpacity
+                  style={styles.checkbox}
+                  onPressIn={() => tapHaptic()}
+                  onPress={(e) => { e.stopPropagation(); onToggleComplete?.(task.id, dayStr); }}
+                >
+                  <Icon
+                    name={done ? 'check-circle' : 'circle-outline'}
+                    size={20}
+                    color={done ? theme.colors.accentSuccess : theme.colors.textTertiary}
+                  />
+                </TouchableOpacity>
+                <Text
+                  style={[styles.untimedTitle, done && styles.taskTitleCompleted]}
+                  numberOfLines={1}
+                >
+                  {task.title}
+                </Text>
+                {multiUser && task.userId && (
+                  <TouchableOpacity
+                    style={[styles.ownerBadge, { backgroundColor: ownerColor(task.userId) }]}
+                    onPress={() => onOwnerPress?.(task)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Owner: ${task.ownerName || 'Unknown'}. Open profile`}
+                  >
+                    <Text style={styles.ownerBadgeText}>{ownerInitial(task.ownerName)}</Text>
+                  </TouchableOpacity>
+                )}
+                {task.priority && (
+                  <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(task.priority, theme) }]} />
+                )}
+              </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
+        {/* Pending / All-Day strip — shown BELOW the day's schedule so the timed
+            plan reads first and the backlog sits underneath it. */}
+        {stripTasks.length > 0 && (
+          <View style={styles.untimedSection}>
+            <TouchableOpacity
+              style={styles.untimedHeader}
+              onPress={onToggleUntimedCollapsed}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={`Pending tasks, ${stripTasks.length}, ${untimedCollapsed ? 'collapsed' : 'expanded'}`}
+            >
+              <Text style={styles.untimedLabel}>Pending Tasks</Text>
+              <Text style={styles.untimedCount}>{stripTasks.length}</Text>
+              <Icon
+                name={untimedCollapsed ? 'chevron-down' : 'chevron-up'}
+                size={18}
+                color={theme.colors.textTertiary}
+              />
+            </TouchableOpacity>
+            {!untimedCollapsed && stripTasks.map(task => {
+              const done = task.completed || isOccurrenceCompleted(task, dayStr);
+              return (
+              <TouchableOpacity
+                key={task.id}
+                style={[styles.untimedItem, done && styles.taskItemCompleted]}
+                onPress={() => onTaskPress?.(task)}
+                onLongPress={() => onTaskLongPress?.(task)}
+              >
+                <TouchableOpacity
+                  style={styles.checkbox}
+                  onPressIn={() => tapHaptic()}
+                  onPress={(e) => { e.stopPropagation(); onToggleComplete?.(task.id, dayStr); }}
+                >
+                  <Icon
+                    name={done ? 'check-circle' : 'circle-outline'}
+                    size={20}
+                    color={done ? theme.colors.accentSuccess : theme.colors.textTertiary}
+                  />
+                </TouchableOpacity>
+                <Text
+                  style={[styles.untimedTitle, done && styles.taskTitleCompleted]}
+                  numberOfLines={1}
+                >
+                  {task.title}
+                </Text>
+                {multiUser && task.userId && (
+                  <TouchableOpacity
+                    style={[styles.ownerBadge, { backgroundColor: ownerColor(task.userId) }]}
+                    onPress={() => onOwnerPress?.(task)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Owner: ${task.ownerName || 'Unknown'}. Open profile`}
+                  >
+                    <Text style={styles.ownerBadgeText}>{ownerInitial(task.ownerName)}</Text>
+                  </TouchableOpacity>
+                )}
+                {!done && (
+                  <TouchableOpacity
+                    onPressIn={() => tapHaptic()}
+                    onPress={(e) => { e.stopPropagation(); onUpdateTask?.(task.id, { dueDate: dayStr, time: null }); }}
+                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={isViewingToday ? 'Add this task to today' : 'Add this task to the selected day'}
+                    style={{ paddingHorizontal: 4, paddingVertical: 2 }}
+                  >
+                    <Icon name="calendar-arrow-right" size={17} color={theme.colors.primary} />
+                  </TouchableOpacity>
+                )}
+                {task.priority && (
+                  <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(task.priority, theme) }]} />
+                )}
+              </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
       </ScrollView>
     </View>
+  );
+}, dayPaneEqual);
+
+// Highlight strings (selected / today) only matter to a month page when the
+// date falls INSIDE that month — so a selection tap re-renders just the page
+// losing the highlight and the page gaining it, not every mounted page (~13
+// with the fast-scroll window). Everything else compares shallowly.
+function monthPageEqual(prev, next) {
+  for (const k in next) {
+    if (Object.is(prev[k], next[k])) continue;
+    if (k === 'selectedStr' || k === 'todayStr') {
+      const touches = (v) => typeof v === 'string' && v.startsWith(next.monthPrefix);
+      if (!touches(prev[k]) && !touches(next[k])) continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+// ── Diagonal hatch fill (no SVG) ──────────────────────────────
+//
+// react-native-svg isn't in this app (adding it forces a native rebuild), so
+// the selected-cell hatch is drawn with a handful of very tall, thin Views each
+// rotated 45° — parallel diagonal bars. The parent clips them (overflow:hidden
+// + borderRadius), so the bars only need to over-span the cell; positions cover
+// cells up to ~150px wide and anything past the edge is clipped. Only one or two
+// cells are ever selected at once, so the ~20 tiny Views cost nothing.
+const HATCH_BARS = [];
+for (let x = -60; x <= 150; x += 2) HATCH_BARS.push(x);
+const DiagonalHatch = ({ color, lineWidth = StyleSheet.hairlineWidth }) =>
+  HATCH_BARS.map((x) => (
+    <View
+      key={x}
+      style={{
+        position: 'absolute',
+        left: x,
+        top: -80,
+        width: lineWidth,
+        height: 260,
+        backgroundColor: color,
+        transform: [{ rotate: '45deg' }],
+      }}
+    />
+  ));
+
+// One month page of the vertical calendar FlatList — title band, day-of-week
+// labels, and the 42-cell grid. Extracted from renderMonth and memoized with
+// monthPageEqual; receives its CELLS prebuilt (cached per month upstream).
+//
+// Every page paints its OWN month/year title: gating the title to a window
+// around currentMonthIndex tied its visibility to scroll state — a fast scroll
+// outran it and landed on blank header bands until the snap finished. Painting
+// unconditionally means the header is part of the page itself, with no pop-in
+// and no dependence on scroll timing. The MONTH_TITLE_HEIGHT band is reserved
+// on every page regardless, so snapping stays pixel-perfect.
+const MonthPage = React.memo(function MonthPage({
+  monthDate,
+  monthPrefix, // eslint-disable-line no-unused-vars — read by monthPageEqual
+  cells,
+  monthH,
+  cellH,
+  todayStr,
+  selectedStr,
+  showCalendarDayTasks,
+  theme,
+  styles,
+  onDatePress,
+}) {
+  // Very faint hairline colour for the in-between grid segments (see the
+  // per-cell top/left borders below). Kept low-alpha so it reads as a whisper
+  // of a table, not a hard rule.
+  const gridLineColor = theme.mode === 'dark' ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
+  return (
+    <View style={[styles.monthPage, { height: monthH }]}>
+      <View style={styles.monthYear}>
+        <View style={styles.monthTitleRow}>
+          <Text style={styles.monthText}>{MONTHS[monthDate.getMonth()]}</Text>
+          <Text style={styles.yearText}>{monthDate.getFullYear()}</Text>
+        </View>
+        {/* The inline "Today" shortcut that used to sit here (top-right of each
+            month) was removed — the fixed jump-to-today pill in the bottom-right
+            of the calendar viewport is the single, always-in-the-same-spot way
+            back to today now. */}
+      </View>
+
+      {/* Day-of-week labels — sit just under the title band. */}
+      <View style={styles.daysHeader}>
+        {DAYS.map(day => (
+          <View key={day} style={styles.dayHeaderCell}>
+            <Text style={styles.dayHeaderText}>{day}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.calendarGrid}>
+        {cells.map((cell, idx) => {
+          // Minimalist internal grid: a hairline on each cell's TOP + LEFT edge,
+          // skipped on the first row (idx < 7) and first column (idx % 7 === 0).
+          // That paints only the in-between segments — never the outer perimeter
+          // — so the grid reads as a faint table, uniform across empty + day cells.
+          const gridLine = {
+            borderColor: gridLineColor,
+            borderTopWidth: idx >= 7 ? StyleSheet.hairlineWidth : 0,
+            borderLeftWidth: (idx % 7) !== 0 ? StyleSheet.hairlineWidth : 0,
+          };
+          if (cell.type === 'empty') {
+            return <View key={cell.key} style={[styles.emptyCell, { height: cellH }, gridLine]} />;
+          }
+          const projectCount = getProjectCount(cell.tasks);
+          const heat = getContributionColor(cell.tasks.length);
+          // Highlight-only, computed here (cheap string compares) so selecting a
+          // day re-paints just that cell — it doesn't rebuild the month data.
+          const isToday = cell.dateStr === todayStr;
+          const isSelected = cell.dateStr === selectedStr;
+          return (
+            <Pressable
+              key={cell.key}
+              // Light tap haptic on touch-DOWN so the cell reacts the instant
+              // the finger lands. There is NO grey press wash: selecting goes
+              // straight to the solid backdrop (no two-phase grey→colour), and
+              // the haptic carries the "it reacted" feedback.
+              onPressIn={() => tapHaptic()}
+              onPress={() => onDatePress(cell.date)}
+              style={[
+                styles.dayCell,
+                { height: cellH },
+                gridLine,
+                showCalendarDayTasks && styles.dayCellList,
+              ]}
+            >
+              {/* Selected day = an OPAQUE backdrop with softly rounded corners,
+                  applied instantly (no press wash). It's a SEPARATE absolutely-
+                  positioned layer — not a background on the cell — so the square
+                  hairline grid stays a clean table while the fill reads as a
+                  rounded rectangle. ORANGE when it's today, else near-black
+                  (light) / white (dark). The bold number sits on top of it. */}
+              {/* Selected day — a DENSE, full-colour diagonal HATCH filling the
+                  cell (clipped to the rounded rect): ORANGE when the selected day
+                  is today, else near-BLACK (light) / white (dark). */}
+              {isSelected && (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.daySelectedBackdrop,
+                    isToday ? styles.daySelectedToday : styles.daySelectedOther,
+                  ]}
+                >
+                  <DiagonalHatch
+                    color={isToday ? WEEK_SELECT_BG : (theme.mode === 'dark' ? '#FFFFFF' : '#000000')}
+                  />
+                </View>
+              )}
+              {/* Today, when NOT selected — the same orange HATCH so today reads
+                  as "selectable today"; the selection just deepens it (base tint)
+                  and bolds the number. Hidden once today is tapped. */}
+              {isToday && !isSelected && (
+                <View pointerEvents="none" style={styles.todayHatchBackdrop}>
+                  <DiagonalHatch color={WEEK_SELECT_BG} />
+                </View>
+              )}
+              {/* Day number in a fixed box. The SELECTED day fills the whole
+                  cell (orange/blue) with a bold white number; today-when-not-
+                  selected keeps its tinted number; others stay neutral. */}
+              <View style={[
+                styles.dayNumWrap,
+                showCalendarDayTasks && styles.dayNumWrapList,
+              ]}>
+                <Text style={[
+                  styles.dayText,
+                  showCalendarDayTasks && styles.dayTextList,
+                  isToday && !isSelected && styles.todayText,
+                  isSelected && (isToday ? styles.todaySelectedText : styles.selectedText),
+                  // Days that HAVE activities keep the same neutral colour as
+                  // empty days (no heat tint) — they're set apart only by a
+                  // normal-weight number: heavier than the hairthin `200` of a
+                  // blank day, but lighter than the bold `700` of the selected
+                  // day. Skipped when selected/today (those own their weight).
+                  !isSelected && !isToday && cell.tasks.length > 0 && styles.dayTextHasTasks,
+                ]}>
+                  {cell.day}
+                </Text>
+              </View>
+
+              {showCalendarDayTasks ? (
+                // iOS-Calendar-style tiny list: each task on a solid color
+                // pill (the item's own color for events/birthdays, else its
+                // priority color) with white text so titles read easily
+                // against the grid on the phone.
+                cell.tasks.length > 0 && (
+                  <View style={styles.dayTaskList}>
+                    {cell.tasks.slice(0, 3).map((t, idx) => {
+                      const c = itemColorOf(t) || getPriorityColor(t.priority, theme);
+                      return (
+                        <View
+                          key={t.id || idx}
+                          style={[styles.dayTaskPill, { backgroundColor: c }]}
+                        >
+                          <Text
+                            numberOfLines={1}
+                            style={[
+                              styles.dayTaskItem,
+                              { color: '#fff' },
+                              (t.completed || isOccurrenceCompleted(t, cell.dateStr)) && styles.dayTaskItemDone,
+                            ]}
+                          >
+                            {t.title || 'Untitled'}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                    {cell.tasks.length > 3 && (
+                      <Text style={styles.dayTaskMore}>+{cell.tasks.length - 3} more</Text>
+                    )}
+                  </View>
+                )
+              ) : (
+                projectCount > 0 && (
+                  <View style={styles.projectDots}>
+                    {Array.from({ length: Math.min(projectCount, 3) }).map((_, idx) => (
+                      <View
+                        key={idx}
+                        style={[styles.projectDot, { backgroundColor: heat }]}
+                      />
+                    ))}
+                    {projectCount > 3 && (
+                      <Text style={[styles.moreProjects, { color: heat }]}>+</Text>
+                    )}
+                  </View>
+                )
+              )}
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}, monthPageEqual);
+
+// One sliding week-strip day cell — memoized so a parent render (keystroke,
+// sheet drag, minute tick) doesn't rebuild all ~29 windowed cells, each of
+// which used to mint two fresh Animated interpolations per pass. A cell
+// re-renders only when its own geometry, selection/today flag, or the centre
+// measuring hook changes; the slide itself is the native track translate.
+const WeekStripCell = React.memo(function WeekStripCell({
+  idx,
+  date,
+  cellW,
+  pillW,
+  isActive,
+  isToday,
+  dayScrollX,
+  styles,
+  onPress,          // stable goToDate — receives this cell's date
+  onPillSlotLayout, // set ONLY on the centre cell (fixed-pill measuring)
+}) {
+  const abbr = WEEKDAY_ABBR[date.getDay()];
+  // On/off-pill cross-fade peaks when THIS cell's day page is centred under
+  // the fixed pill: dayScrollX === idx * SCREEN_W.
+  const { onPillOpacity, offPillOpacity } = useMemo(() => ({
+    onPillOpacity: dayScrollX.interpolate({
+      inputRange: [(idx - 1) * SCREEN_W, idx * SCREEN_W, (idx + 1) * SCREEN_W],
+      outputRange: [0, 1, 0],
+      extrapolate: 'clamp',
+    }),
+    offPillOpacity: dayScrollX.interpolate({
+      inputRange: [(idx - 1) * SCREEN_W, idx * SCREEN_W, (idx + 1) * SCREEN_W],
+      outputRange: [1, 0, 1],
+      extrapolate: 'clamp',
+    }),
+  }), [dayScrollX, idx]);
+  return (
+    <TouchableOpacity
+      style={[styles.weekDayCell, { position: 'absolute', left: (idx - DAY_TODAY_INDEX) * cellW, width: cellW }]}
+      onPress={() => onPress(date)}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+      accessibilityState={{ selected: isActive }}
+    >
+      <View style={[styles.weekPillSlot, { width: pillW }]} onLayout={onPillSlotLayout}>
+        {/* Today (when not selected) = a soft filled pill; fades out as the
+            orange pill slides over it. */}
+        {isToday && (
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.weekTodayPill, { opacity: offPillOpacity }]}
+          />
+        )}
+        {/* Weekday abbreviation — cross-fades to on-pill ink. */}
+        <View style={styles.weekDowRow}>
+          <Animated.Text style={[styles.weekDow, { opacity: offPillOpacity }]}>{abbr}</Animated.Text>
+          <Animated.Text style={[styles.weekDow, styles.weekDowOnPill, { opacity: onPillOpacity }]}>{abbr}</Animated.Text>
+        </View>
+        {/* Date number — same cross-fade. */}
+        <View style={styles.weekNumRow}>
+          <Animated.Text style={[styles.weekDayNum, { opacity: offPillOpacity }]}>{date.getDate()}</Animated.Text>
+          <Animated.Text style={[styles.weekDayNum, styles.weekDayNumOnPill, { opacity: onPillOpacity }]}>{date.getDate()}</Animated.Text>
+        </View>
+      </View>
+    </TouchableOpacity>
   );
 });
 
@@ -1143,6 +1591,11 @@ export const CalendarView = ({
   // everyone) + multiUser flag (more than one person owns visible tasks) which
   // gates the per-owner colour badge so a solo calendar stays uncluttered.
   selectedOwners,
+  // Global "incomplete only" filter (the FilterMenu's completed toggle). When
+  // true (the app default), completed tasks are hidden from the calendar too —
+  // matching the task tree — so the day-cell lists don't surface finished items.
+  // Defaults false so an unpassed prop preserves the old "show everything" shape.
+  showIncompleteOnly = false,
   multiUser,
   onAddTask,
   onUpdateTask,
@@ -1165,7 +1618,7 @@ export const CalendarView = ({
   // (task) => void — tapping a task's owner badge opens that person's profile.
   onOwnerPress,
 }) => {
-  const { theme, timeFormat, showCalendarDayTasks } = useTheme();
+  const { theme, timeFormat, showCalendarDayTasks, calendarFreeScroll } = useTheme();
   const use24h = timeFormat === '24h';
   // currentMonthIndex is the source of truth for "which month is on
   // screen". currentDate is derived from it so all the existing
@@ -1199,6 +1652,21 @@ export const CalendarView = ({
   const [pendingTime, setPendingTime] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Switching days must NOT carry an open add-task / search input across. The
+  // add-task and search fields use `autoFocus`, and they render on whichever
+  // pane is active (date === selectedDate). If either state is still true when
+  // the day changes, the newly-active pane re-mounts an autoFocus TextInput and
+  // the keyboard pops up unbidden on a plain day-cell tap. Reset those
+  // transient input states (and their drafts) whenever the selected day changes.
+  useEffect(() => {
+    setIsAddingTask(false);
+    setNewTaskTitle('');
+    setPendingTime(null);
+    setIsSearching(false);
+    setSearchQuery('');
+  }, [selectedDate]);
+
   // Whether the "All Day" / Open-tasks list strip is collapsed. Defaults
   // COLLAPSED so the day's tasks open tidy — you see the header + count and
   // tap to expand the list, rather than a long list unfurled on first open.
@@ -1264,6 +1732,13 @@ export const CalendarView = ({
   // briefly render the sheet raised before onLayout corrects it.
   const containerH = useSharedValue(WINDOW_HEIGHT);
   const headerH = useSharedValue(84);       // measured via onLayout; est. default
+  // Gates the calendar's first paint. The month grid renders once at a static
+  // fallback height (calAreaH=0) and again — grown to fill the screen — the
+  // instant the area is measured, which reads as a visible "pop/resize" on
+  // load. We hold the grid invisible until that first measure + re-anchor has
+  // happened, then fade it in at the final geometry so only one layout is ever
+  // seen. Starts at 1 on native re-mounts where calAreaH is already known.
+  const contentReady = useSharedValue(0);
 
   // translateY travel = how far the sheet slides between docked and
   // raised. At sheet=1 translateY=0 (full up); at sheet=0 translateY=travel
@@ -1275,10 +1750,16 @@ export const CalendarView = ({
   // Calendar fades out as the sheet covers it, so it isn't visible through
   // the sheet's rounded top corners on the last few pixels of travel.
   const calendarStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(sheet.value, [0, 0.85], [1, 0], Extrapolation.CLAMP),
+    // Sheet-cover fade × first-paint gate: both must be "open" to show the grid.
+    opacity: contentReady.value * interpolate(sheet.value, [0, 0.85], [1, 0], Extrapolation.CLAMP),
   }));
 
-  const styles = createStyles(theme);
+  // Memoized so `styles` keeps a STABLE identity across renders. Unmemoized this
+  // ran StyleSheet.create over a ~110-key object every render (keystroke, minute
+  // tick, tap) and — worse — its fresh identity flowed into renderMonth/
+  // renderDayItem deps + the React.memo'd DayPane prop, defeating EVERY memo
+  // boundary in the file. This one line is the dominant calendar-lag fix.
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   // ── Fill-the-screen month sizing ─────────────────────────────
   // We measure the calendar area (`calAreaH`) and grow each cell so the
@@ -1470,6 +1951,15 @@ export const CalendarView = ({
   // The pill is FIXED over the centre cell; the cell row slides under it.
   const pillLeft = 6 + STRIP_CENTER_CELL * cellW + (cellW - PILL_W) / 2;
 
+  // Measure the centre cell's pill slot so the fixed pill lines up on any
+  // screen width / font metrics. Stable identity — passed only to the centre
+  // WeekStripCell, so re-windowing swaps which cell holds it without
+  // re-rendering the rest.
+  const measurePillSlot = useCallback((e) => {
+    setPillTop(6 + e.nativeEvent.layout.y);
+    setPillH(e.nativeEvent.layout.height);
+  }, []);
+
   // Track translate — a PURE function of the day-pager scroll, with NO
   // stripCenterIndex term, so re-windowing the rendered cells can never rebase
   // it. Each cell is absolutely positioned at its own day index
@@ -1490,13 +1980,20 @@ export const CalendarView = ({
     });
   }, [cellW, dayScrollX]);
 
+  // Latest-selection ref so handleDatePress can read the current selection
+  // WITHOUT depending on it — keeps the handler's identity stable across
+  // selection changes, which is what lets the memoized MonthPage skip
+  // re-rendering the ~11 months a tap doesn't touch.
+  const selectedDateRef = useRef(selectedDate);
+  selectedDateRef.current = selectedDate;
+
   // Handle date selection with double-tap or re-tap detection
   const handleDatePress = useCallback((date) => {
     const now = Date.now();
     const DOUBLE_TAP_DELAY = 300; // ms
     const isDoubleTap = now - lastTapRef.current < DOUBLE_TAP_DELAY;
-    const isAlreadySelected = selectedDate.toDateString() === date.toDateString();
-    
+    const isAlreadySelected = selectedDateRef.current.toDateString() === date.toDateString();
+
     // Select the date (jumpToDate also moves the day pager + fires
     // onDateChange). A double-tap / re-tap additionally raises the panel.
     jumpToDate(date, false);
@@ -1505,7 +2002,7 @@ export const CalendarView = ({
     }
 
     lastTapRef.current = now;
-  }, [snapSheet, selectedDate, jumpToDate]);
+  }, [snapSheet, jumpToDate]);
 
   // Header tap toggles the sheet between docked and raised. (Drags are
   // handled separately by the Pan gesture wrapping the header.)
@@ -1566,88 +2063,69 @@ export const CalendarView = ({
     setScheduleCollapsed(prev => !prev);
   }, []);
 
-  // Calendar-data builder — produces the cell array for ONE month.
-  // Padded to CELLS_PER_MONTH (42 = 6 rows × 7 cols) regardless of the
-  // month's actual length, so every page in the FlatList has the same
-  // height and `snapToInterval` snaps cleanly to month boundaries.
-  //
-  // The cells ALWAYS render due-date-only dots, regardless of the
-  // user's `dueDateOnly` toggle. Lighting up every day in a task's
-  // created→due range produced a flood of dots that drowned out the
-  // actual deadlines. The toggle's "Open Tasks" mode is still
-  // honoured for the day's task LIST below the calendar — see
-  // `selectedDateTasks`.
+  // ── The one shared filter pass ───────────────────────────────
+  // Every calendar surface (month cells, day panes, pending strip, search)
+  // filters the SAME task set the same way — so run taskPassesFilters ONCE per
+  // tasks/filter change and let everything below start from this list. The old
+  // shape re-ran the full predicate per CELL (42 cells × ~13 mounted months ×
+  // every task) on each cache reset.
+  const filteredTasks = useMemo(() => {
+    const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners };
+    return tasks.filter(t =>
+      taskPassesFilters(t, filters)
+      // Honour the global "incomplete only" filter here too, so completed tasks
+      // drop out of the month cells' day-lists (and the dots/heat/day panes)
+      // exactly as they do from the task tree — not just get struck through.
+      && (!showIncompleteOnly || !t.completed)
+    );
+  }, [tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners, showIncompleteOnly]);
+
   // Per-month calendar cells (day number + that day's matching tasks), built
-  // lazily and CACHED per month. Deliberately does NOT depend on selectedDate or
-  // "today": selection + today are highlight-only, computed at render time in
-  // renderMonth — so tapping a day no longer re-runs the per-day task filter for
-  // every visible month, it just re-paints the highlighted number. The cache
-  // resets whenever the tasks or active filters change (the useMemo deps).
+  // lazily via the single-pass buildMonthCells and CACHED per month.
+  // Deliberately does NOT depend on selectedDate or "today": selection + today
+  // are highlight-only, computed at render time — so tapping a day just
+  // re-paints the highlighted number. The cache resets whenever the tasks or
+  // active filters change (the filteredTasks identity).
+  //
+  // The cells ALWAYS render due-date-only dots (dueDateOnly=true semantics):
+  // lighting up every day in a task's created→due range produced a flood of
+  // dots that drowned out the actual deadlines.
   const buildCalendarDataFor = useMemo(() => {
     const cache = new Map();
-    const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners };
     return (targetDate) => {
-      const year = targetDate.getFullYear();
-      const month = targetDate.getMonth();
-      const keyPrefix = `${year}-${month}`;
-      const hit = cache.get(keyPrefix);
+      const key = `${targetDate.getFullYear()}-${targetDate.getMonth()}`;
+      const hit = cache.get(key);
       if (hit) return hit;
-
-      const daysInMonth = new Date(year, month + 1, 0).getDate();
-      const startDayOfWeek = new Date(year, month, 1).getDay();
-      const days = new Array(CELLS_PER_MONTH);
-      let idx = 0;
-
-      // Leading empties — the cells before day 1 in the first row.
-      for (let i = 0; i < startDayOfWeek; i++) {
-        days[idx++] = { type: 'empty', key: `${keyPrefix}-lead-${i}` };
-      }
-
-      // The days themselves. Note the hard-coded `true` for the
-      // dueDateOnly argument — dots on the calendar grid track real
-      // deadlines, never the full open-range fanout.
-      for (let day = 1; day <= daysInMonth; day++) {
-        const date = new Date(year, month, day);
-        const dateStr = toDateString(date);
-        const dayTasks = tasks.filter(t =>
-          taskPassesFilters(t, filters) && taskOccursOn(t, dateStr, true),
-        );
-        days[idx++] = {
-          type: 'day',
-          day,
-          date,
-          dateStr,
-          tasks: dayTasks,
-          key: `${keyPrefix}-day-${day}`,
-        };
-      }
-
-      // Trailing empties — pad to a full 6-row grid for consistent height.
-      while (idx < CELLS_PER_MONTH) {
-        days[idx] = { type: 'empty', key: `${keyPrefix}-trail-${idx}` };
-        idx++;
-      }
-
-      cache.set(keyPrefix, days);
+      const days = buildMonthCells(filteredTasks, targetDate);
+      cache.set(key, days);
       return days;
     };
-  }, [tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners]);
+  }, [filteredTasks]);
 
-  // Tasks for the selected date, ordered earliest-time-first.
-  // Reuses the same predicates the calendar cells use, so what lights
-  // up in the grid matches what shows in the list below.
-  const selectedDateTasks = useMemo(() => {
-    const dateStr = toDateString(selectedDate);
-    const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners };
-    return tasks
-      .filter(t => taskPassesFilters(t, filters) && taskOccursOn(t, dateStr, true))
-      .sort((a, b) => {
-        if (a.time && b.time) return a.time.localeCompare(b.time);
-        if (a.time) return -1;
-        if (b.time) return 1;
-        return 0;
-      });
-  }, [selectedDate, tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners]);
+  // One day's tasks, ordered earliest-time-first — the same predicates the
+  // month cells use, so what lights up in the grid matches the day's list.
+  // Cached per date string; shared by the day panes AND the selected-date
+  // header count, so a pane re-render is a Map hit, not a full re-filter.
+  const getDayTasks = useMemo(() => {
+    const cache = new Map();
+    return (dateStr) => {
+      const hit = cache.get(dateStr);
+      if (hit) return hit;
+      const list = filteredTasks
+        .filter(t => taskOccursOn(t, dateStr, true))
+        .sort((a, b) => {
+          if (a.time && b.time) return a.time.localeCompare(b.time);
+          if (a.time) return -1;
+          if (b.time) return 1;
+          return 0;
+        });
+      cache.set(dateStr, list);
+      return list;
+    };
+  }, [filteredTasks]);
+
+  // Tasks for the selected date — same cache the day panes read.
+  const selectedDateTasks = getDayTasks(toDateString(selectedDate));
 
   // PENDING tasks — incomplete tasks with NO due date AND no time: the truly
   // unscheduled backlog. Surfaced in the day planner's "Pending Tasks" strip so
@@ -1655,22 +2133,23 @@ export const CalendarView = ({
   // excluded here — they now show on their own day's "To Do · No Time Set" (TBD)
   // list instead, so they aren't duplicated across every day.
   const pendingTasks = useMemo(() => {
-    const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners };
-    return tasks
+    return filteredTasks
       .filter(t => !t.completed
         && itemTypeOf(t) === 'task' // events/birthdays show in their own strip
         && !t.dueDate               // dated tasks live on their day (timed grid or TBD list)
-        && taskPassesFilters(t, filters)
         && !(t.time && /^\d{1,2}:\d{2}/.test(t.time)))
       .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
-  }, [tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners]);
+  }, [filteredTasks]);
+
+  // Highlight strings, computed once per render and shared by the month
+  // pages, week strip, and day panes (each used to call toDateString(new
+  // Date()) themselves — the strip did it per CELL per render).
+  const todayStr = toDateString(new Date());
+  const selectedStr = toDateString(selectedDate);
 
   // True iff the selected date is "today" — drives the live red
   // now-line in the hour grid.
-  const isViewingToday = useMemo(
-    () => toDateString(selectedDate) === toDateString(new Date()),
-    [selectedDate],
-  );
+  const isViewingToday = selectedStr === todayStr;
 
   // Minutes-from-midnight for the now-line indicator. Only ticks when
   // the user is viewing today (otherwise the now-line is hidden and
@@ -1754,7 +2233,11 @@ export const CalendarView = ({
 
   const goToToday = useCallback(() => {
     jumpToDate(new Date(), false);
-    scrollToMonth(TODAY_INDEX);
+    // Live month index (not the frozen module-load TODAY_INDEX) so we land on
+    // the ACTUAL current month even if the app has been open across midnight
+    // into a new month — otherwise the day pager shows today while the month
+    // grid sits on last month.
+    scrollToMonth(monthIndexOf(new Date()));
   }, [scrollToMonth, jumpToDate]);
 
   // FlatList per-item layout. With every month at exactly `monthH`,
@@ -1766,28 +2249,44 @@ export const CalendarView = ({
   }), [monthH]);
   const keyExtractor = useCallback((item) => `${item.getFullYear()}-${item.getMonth()}`, []);
 
-  // When the calendar area is first measured, `monthH` jumps from its
-  // static estimate to the real fill-the-screen height. The list was
-  // positioned with the old offsets, so re-anchor it to the visible
-  // month once (guarded) to absorb the height change without a drift.
+  // Mirror the committed month index into a ref so the re-anchor effect below
+  // can read the latest WITHOUT re-running on every scroll-driven month change
+  // (which would yank the list back mid-swipe).
+  const currentMonthIndexRef = useRef(currentMonthIndex);
+  currentMonthIndexRef.current = currentMonthIndex;
+
+  // Re-anchor the month list whenever the per-page height (`monthH`) changes:
+  // first when `calAreaH` is measured (static estimate → real fill-screen
+  // height), and AGAIN on any later resize (rotation, split-screen, unfold).
+  // `getItemLayout` maps scroll-offset → month via `monthH`, so a height change
+  // that isn't re-anchored silently shows a DIFFERENT month at the same offset.
+  // Not one-shot anymore — the old guard only fixed the first measure and left
+  // the grid on the wrong month after a rotate. The calendar is revealed once,
+  // right after the first anchor (the fade hides that initial layout swap).
   const didRescaleRef = useRef(false);
   useEffect(() => {
-    if (calAreaH > 0 && !didRescaleRef.current) {
-      didRescaleRef.current = true;
-      requestAnimationFrame(() => {
-        try {
-          flatListRef.current?.scrollToIndex({ index: currentMonthIndex, animated: false, viewPosition: 0 });
-        } catch (e) { /* getItemLayout makes this reliable; ignore races */ }
-      });
-    }
-  }, [calAreaH, currentMonthIndex]);
+    if (calAreaH <= 0) return;
+    const raf = requestAnimationFrame(() => {
+      try {
+        flatListRef.current?.scrollToIndex({ index: currentMonthIndexRef.current, animated: false, viewPosition: 0 });
+      } catch (e) { /* getItemLayout makes this reliable; ignore races */ }
+      if (!didRescaleRef.current) {
+        didRescaleRef.current = true;
+        contentReady.value = withTiming(1, { duration: 140 });
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [calAreaH, monthH, contentReady]);
 
-  const handleAddTask = () => {
+  const handleAddTask = useCallback(() => {
     if (!newTaskTitle.trim()) return;
-    const dateStr = toDateString(selectedDate);
+    const dateStr = toDateString(selectedDateRef.current);
     onAddTask?.(
       newTaskTitle.trim(),
-      selectedProject === 'All' ? '' : selectedProject,
+      // 'All' AND the 'No Project' sentinel both mean "no board" — passing the
+      // sentinel through would store it as a real (truthy) board name, making
+      // the task vanish from the very No-Board scope it was created in.
+      selectedProject === 'All' || selectedProject === 'No Project' ? '' : selectedProject,
       dateStr,
       pendingTime, // null for the regular "Add a new task" flow; HH:MM
                    // when the user reached the input via a long-press
@@ -1796,16 +2295,17 @@ export const CalendarView = ({
     setNewTaskTitle('');
     setIsAddingTask(false);
     setPendingTime(null);
-  };
+  }, [newTaskTitle, onAddTask, selectedProject, pendingTime]);
 
   // Re-add a previously-existing task: create a fresh instance on the
   // selected day, copying the original's description + tags + subtasks
   // (reset to incomplete with new ids) and any pending time slot.
-  const handlePickSuggestion = (task) => {
-    const dateStr = toDateString(selectedDate);
+  const handlePickSuggestion = useCallback((task) => {
+    const dateStr = toDateString(selectedDateRef.current);
     onAddTask?.(
       task.title,
-      task.project || (selectedProject === 'All' ? '' : selectedProject),
+      // Same sentinel guard as handleAddTask above.
+      task.project || (selectedProject === 'All' || selectedProject === 'No Project' ? '' : selectedProject),
       dateStr,
       pendingTime,
       {
@@ -1818,197 +2318,53 @@ export const CalendarView = ({
     setNewTaskTitle('');
     setIsAddingTask(false);
     setPendingTime(null);
-  };
+  }, [onAddTask, selectedProject, pendingTime]);
 
-  // One month's worth of UI — title + grid. Called by the FlatList for
-  // each item in MONTHS_LIST. The Date is the FlatList item; cells are
-  // computed on-demand via buildCalendarDataFor.
-  //
-  // `data` lives inline (not memoized per-item) because:
-  //   - FlatList virtualization keeps the live set tiny (3–5 months).
-  //   - The cells depend on selectedDate / tasks / filters — memoising
-  //     would just shift the work to extra cache invalidation.
+  // One month's worth of UI — a thin adapter over the memoized MonthPage.
+  // Cells come prebuilt from the per-month cache; highlight strings are
+  // computed once per render (component body) and MonthPage's comparator
+  // scopes their changes to the month(s) they actually touch.
   const renderMonth = useCallback(({ item: monthDate }) => {
-    const data = buildCalendarDataFor(monthDate);
-    // Highlight strings recomputed per render (cheap) so today/selected stay fresh
-    // without baking a date into the cached cell data.
-    const todayStr = toDateString(new Date());
-    const selectedStr = toDateString(selectedDate);
-    // Every page paints its OWN month/year title (the old, pre-gated
-    // logic). Gating the title to a ±N window around `currentMonthIndex`
-    // tied its visibility to scroll state — and `currentMonthIndex` only
-    // updates on momentum-settle, so a fast scroll outran it and landed on
-    // blank header bands until the snap finished. Painting unconditionally
-    // means the header is part of the page itself: it's already there the
-    // instant the page scrolls into view, with no pop-in and no dependence
-    // on scroll timing. The layout is unchanged — the MONTH_TITLE_HEIGHT
-    // band is reserved on every page regardless, so snapping stays
-    // pixel-perfect; we just always fill it.
-    // Whether this page is the real current calendar month (today) —
-    // drives the inline "Today" jump shortcut (only useful off-today).
-    const isCurrentMonth =
-      monthDate.getFullYear() === MONTHS_LIST[TODAY_INDEX].getFullYear() &&
-      monthDate.getMonth() === MONTHS_LIST[TODAY_INDEX].getMonth();
+    const monthPrefix = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}-`;
     return (
-      <View style={[styles.monthPage, { height: monthH }]}>
-        {/* Month/year title — same style/aesthetic as before, painted on
-            EVERY page so it's already mounted with the page and slides in
-            seamlessly on scroll (no pop-in, no scroll-timing dependency). */}
-        <View style={styles.monthYear}>
-          <View style={styles.monthTitleRow}>
-            <Text style={styles.monthText}>{MONTHS[monthDate.getMonth()]}</Text>
-            <Text style={styles.yearText}>{monthDate.getFullYear()}</Text>
-          </View>
-          {!isCurrentMonth && (
-            <TouchableOpacity
-              onPressIn={() => tapHaptic()}
-              onPress={goToToday}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              style={styles.todayInline}
-              accessibilityRole="button"
-              accessibilityLabel="Go to today"
-            >
-              <Icon name="calendar-today" size={14} color={theme.colors.accentSuccess} />
-              <Text style={styles.todayInlineText}>Today</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Day-of-week labels — sit just under the title band. */}
-        <View style={styles.daysHeader}>
-          {DAYS.map(day => (
-            <View key={day} style={styles.dayHeaderCell}>
-              <Text style={styles.dayHeaderText}>{day}</Text>
-            </View>
-          ))}
-        </View>
-
-        <View style={styles.calendarGrid}>
-          {data.map((cell) => {
-            if (cell.type === 'empty') {
-              return <View key={cell.key} style={[styles.emptyCell, { height: cellH }]} />;
-            }
-            const projectCount = getProjectCount(cell.tasks);
-            const heat = getContributionColor(cell.tasks.length);
-            // Highlight-only, computed here (cheap string compares) so selecting a
-            // day re-paints just the number — it doesn't rebuild the month data.
-            const isToday = cell.dateStr === todayStr;
-            const isSelected = cell.dateStr === selectedStr;
-            return (
-              <Pressable
-                key={cell.key}
-                // Light tap haptic + faint press wash fire on touch-DOWN
-                // (onPressIn), so the cell feels responsive the instant the
-                // finger lands — before the selection state even commits.
-                // Pressable also drops TouchableOpacity's ~150ms opacity fade.
-                onPressIn={() => tapHaptic()}
-                onPress={() => handleDatePress(cell.date)}
-                style={({ pressed }) => [
-                  styles.dayCell,
-                  { height: cellH },
-                  showCalendarDayTasks && styles.dayCellList,
-                  pressed && styles.dayCellPressed,
-                ]}
-              >
-                {/* Day number in a fixed box. Selection is shown by highlighting
-                    the NUMBER itself (accent colour + bold) — no filled disc /
-                    backdrop behind it. */}
-                <View style={[
-                  styles.dayNumWrap,
-                  showCalendarDayTasks && styles.dayNumWrapList,
-                ]}>
-                  <Text style={[
-                    styles.dayText,
-                    showCalendarDayTasks && styles.dayTextList,
-                    isToday && !isSelected && styles.todayText,
-                    isSelected && (isToday ? styles.todaySelectedText : styles.selectedText),
-                    !showCalendarDayTasks && !isSelected && cell.tasks.length > 0 && { color: heat },
-                  ]}>
-                    {cell.day}
-                  </Text>
-                </View>
-
-                {showCalendarDayTasks ? (
-                  // iOS-Calendar-style tiny list: each task on a solid color
-                  // pill (the item's own color for events/birthdays, else its
-                  // priority color) with white text so titles read easily
-                  // against the grid on the phone.
-                  cell.tasks.length > 0 && (
-                    <View style={styles.dayTaskList}>
-                      {cell.tasks.slice(0, 3).map((t, idx) => {
-                        const c = itemColorOf(t) || getPriorityColor(t.priority, theme);
-                        return (
-                          <View
-                            key={t.id || idx}
-                            style={[styles.dayTaskPill, { backgroundColor: c }]}
-                          >
-                            <Text
-                              numberOfLines={1}
-                              style={[
-                                styles.dayTaskItem,
-                                { color: '#fff' },
-                                t.completed && styles.dayTaskItemDone,
-                              ]}
-                            >
-                              {t.title || 'Untitled'}
-                            </Text>
-                          </View>
-                        );
-                      })}
-                      {cell.tasks.length > 3 && (
-                        <Text style={styles.dayTaskMore}>+{cell.tasks.length - 3} more</Text>
-                      )}
-                    </View>
-                  )
-                ) : (
-                  projectCount > 0 && (
-                    <View style={styles.projectDots}>
-                      {Array.from({ length: Math.min(projectCount, 3) }).map((_, idx) => (
-                        <View
-                          key={idx}
-                          style={[styles.projectDot, { backgroundColor: heat }]}
-                        />
-                      ))}
-                      {projectCount > 3 && (
-                        <Text style={[styles.moreProjects, { color: heat }]}>+</Text>
-                      )}
-                    </View>
-                  )
-                )}
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
+      <MonthPage
+        monthDate={monthDate}
+        monthPrefix={monthPrefix}
+        cells={buildCalendarDataFor(monthDate)}
+        monthH={monthH}
+        cellH={cellH}
+        todayStr={todayStr}
+        selectedStr={selectedStr}
+        showCalendarDayTasks={showCalendarDayTasks}
+        theme={theme}
+        styles={styles}
+        onDatePress={handleDatePress}
+      />
     );
-  }, [buildCalendarDataFor, handleDatePress, goToToday, theme, styles, monthH, cellH, showCalendarDayTasks, selectedDate]);
+  }, [buildCalendarDataFor, handleDatePress, theme, styles, monthH, cellH, showCalendarDayTasks, selectedStr, todayStr]);
 
-  // Helper to get task title and subtitle for selected date
-  const getTaskListTitle = () => {
+  // Sheet-header title + subtitle for the selected date.
+  const { title: taskTitle, subtitle: taskSubtitle } = useMemo(() => {
     const today = new Date();
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
-    
+
     const isToday = selectedDate.toDateString() === today.toDateString();
     const isTomorrow = selectedDate.toDateString() === tomorrow.toDateString();
-    
+
     // Format date for subtitle
-    const dateStr = selectedDate.toLocaleDateString('en-US', { 
-      weekday: 'short', 
-      month: 'short', 
-      day: 'numeric' 
+    const dateStr = selectedDate.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric'
     });
-    
+
     if (isToday) return { title: "Today's Tasks", subtitle: dateStr };
     if (isTomorrow) return { title: "Tomorrow's Tasks", subtitle: dateStr };
-    
-    // For other dates, return date as subtitle
     return { title: "Tasks", subtitle: dateStr };
-  };
-  
-  const { title: taskTitle, subtitle: taskSubtitle } = getTaskListTitle();
+  }, [selectedDate]);
 
-  const handleCancelAdd = () => {
+  const handleCancelAdd = useCallback(() => {
     // Swallow the single blur-cancel caused by opening the wheel time picker —
     // the add row must stay alive (and keep its pending time) while the user
     // is choosing a time.
@@ -2021,7 +2377,7 @@ export const CalendarView = ({
     // Clear any long-press-derived time slot so the next manual
     // "Add a new task" tap doesn't accidentally inherit it.
     setPendingTime(null);
-  };
+  }, []);
 
   // General task lookup. Matches title + description across the whole
   // library (respecting the active project/tag filters) so the user can
@@ -2030,11 +2386,9 @@ export const CalendarView = ({
   const searchResults = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return [];
-    const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners };
 
-    return tasks
+    return filteredTasks
       .filter(task => {
-        if (!taskPassesFilters(task, filters)) return false;
         const titleMatch = task.title?.toLowerCase().includes(query);
         const descMatch  = task.description?.toLowerCase().includes(query);
         return titleMatch || descMatch;
@@ -2046,16 +2400,16 @@ export const CalendarView = ({
         return 0;
       })
       .slice(0, 25);
-  }, [searchQuery, tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners]);
+  }, [searchQuery, filteredTasks]);
 
   // Open a search result for viewing/editing (where the due date can
   // also be changed). Replaces the old tap-to-reassign behaviour so the
   // search reads as a lookup, not a scheduling shortcut.
-  const handleOpenSearchResult = (task) => {
+  const handleOpenSearchResult = useCallback((task) => {
     onTaskPress?.(task);
     setIsSearching(false);
     setSearchQuery('');
-  };
+  }, [onTaskPress]);
 
   // Render one day page of the horizontal pager. The active page (its date
   // === selectedDate) wires up the live add-task / search inputs; neighbours
@@ -2063,12 +2417,10 @@ export const CalendarView = ({
   const renderDayItem = useCallback(({ item: date }) => (
     <DayPane
       date={date}
-      isActive={toDateString(date) === toDateString(selectedDate)}
+      isActive={toDateString(date) === selectedStr}
       tasks={tasks}
-      selectedProject={selectedProject}
-      selectedTags={selectedTags}
-      tagFilterMode={tagFilterMode}
-      selectedOwners={selectedOwners}
+      getDayTasks={getDayTasks}
+      todayStr={todayStr}
       multiUser={multiUser}
       theme={theme}
       styles={styles}
@@ -2083,6 +2435,8 @@ export const CalendarView = ({
       onTaskInspect={openInspector}
       onTaskLongPress={onTaskLongPress}
       onToggleComplete={onToggleComplete}
+      onUpdateTask={onUpdateTask}
+      onOwnerPress={onOwnerPress}
       onOpenAddTaskAt={openAddTaskAt}
       isAddingTask={isAddingTask}
       newTaskTitle={newTaskTitle}
@@ -2106,10 +2460,10 @@ export const CalendarView = ({
       keyboardHeight={keyboardHeight}
     />
   ), [
-    selectedDate, tasks, selectedProject, selectedTags, tagFilterMode, selectedOwners,
-    multiUser, theme, styles, nowMinutes, pendingTasks, untimedCollapsed,
+    selectedStr, tasks, getDayTasks, todayStr,
+    multiUser, theme, styles, use24h, nowMinutes, pendingTasks, untimedCollapsed,
     toggleUntimedCollapsed, scheduleCollapsed, toggleScheduleCollapsed,
-    onTaskPress, openInspector, onTaskLongPress, onToggleComplete, openAddTaskAt,
+    onTaskPress, openInspector, onTaskLongPress, onToggleComplete, onOwnerPress, openAddTaskAt,
     isAddingTask, newTaskTitle, handleAddTask, handleCancelAdd, pendingTime, clearPendingTime,
     openTimeEditor,
     openAddTask, handlePickSuggestion, isSearching, searchQuery, openSearch, closeSearch, searchResults,
@@ -2167,9 +2521,14 @@ export const CalendarView = ({
             // active month: every page paints its own title now, so it never
             // needs a re-render to appear/disappear.)
             extraData={+selectedDate}
-            snapToInterval={monthH}
+            // Scroll style (setting). Paged (default): snap one whole month per
+            // swipe via snapToInterval + fast deceleration. Free-form: drop the
+            // snap so months flow continuously past the viewport like iOS
+            // Calendar. onMomentumScrollEnd still derives the landed month in
+            // both modes, so the header/state stays correct either way.
+            snapToInterval={calendarFreeScroll ? undefined : monthH}
             snapToAlignment="start"
-            decelerationRate="fast"
+            decelerationRate={calendarFreeScroll ? 'normal' : 'fast'}
             showsVerticalScrollIndicator={false}
             // Each page is a full viewport, so windowSize (in viewport
             // units) ≈ months kept mounted. 13 = ~6 months above + below
@@ -2187,26 +2546,39 @@ export const CalendarView = ({
             style={{ height: monthH, marginTop: HINT_STRIP, marginBottom: SHEET_PEEK_RESERVE }}
           />
 
-          {/* Faint animated swipe-hint carets — up = previous month,
-              down = next month. pointerEvents none so they never
-              intercept a tap/scroll; they fade with the calendar as the
-              sheet rises (they're inside calendarStyle's fade). Behind each
-              chevron sits a LinearGradient that's strongest at the screen
-              edge and dissolves to transparent toward the grid — so the
-              caret stays legible without masking the month underneath. */}
+          {/* Faint animated swipe-hint carets — up = previous month, down = next
+              month. pointerEvents none so they never intercept a tap/scroll; they
+              fade with the calendar as the sheet rises (inside calendarStyle's
+              fade). NO backdrop: the chevrons sit fully TRANSPARENT over the grid
+              so they read as a light hint, never a solid overlay band. They live
+              inside CalendarView, so they only ever show on the calendar page —
+              never on the Upcoming list tab. */}
           <Reanimated.View pointerEvents="none" style={[styles.swipeHintTop, hintTopStyle]}>
             <Icon name="chevron-up" size={28} color={theme.colors.textSecondary} />
           </Reanimated.View>
           <Reanimated.View pointerEvents="none" style={[styles.swipeHintBottom, hintBottomStyle]}>
-            <LinearGradient
-              colors={[hexToRgba(theme.colors.background, 0), hexToRgba(theme.colors.background, 0.9)]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 0, y: 1 }}
-              style={StyleSheet.absoluteFill}
-              pointerEvents="none"
-            />
             <Icon name="chevron-down" size={28} color={theme.colors.textSecondary} />
           </Reanimated.View>
+
+          {/* Jump-to-today button — pinned under the grid (just above the sheet
+              peek), bottom-right so it clears the centred swipe-hint caret. Only
+              shown when the calendar has drifted off today (a different month is
+              on screen OR a non-today day is selected); tapping snaps the month
+              list to today AND re-selects today. Redundant with the inline pill
+              in each month header, but always in the same fixed spot. */}
+          {(currentMonthIndex !== monthIndexOf(new Date()) || selectedStr !== todayStr) && (
+            <TouchableOpacity
+              style={styles.todayJumpBtn}
+              onPressIn={() => tapHaptic()}
+              onPress={goToToday}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Jump to today"
+            >
+              <Icon name="calendar-today" size={15} color={theme.colors.accentSuccess} />
+              <Text style={styles.todayJumpText}>Today</Text>
+            </TouchableOpacity>
+          )}
       </Reanimated.View>
 
       {/* Selected Date Tasks — a draggable bottom sheet. Always full
@@ -2298,58 +2670,20 @@ export const CalendarView = ({
           >
             {windowDays.map(({ idx, date: d }) => {
               const key = toDateString(d);
-              const isActive = key === toDateString(selectedDate);
-              const isToday = key === toDateString(new Date());
-              const abbr = WEEKDAY_ABBR[d.getDay()];
-              // On/off-pill cross-fade peaks when THIS cell's day page is centred
-              // under the fixed pill: dayScrollX === idx * SCREEN_W.
-              const onPillOpacity = dayScrollX.interpolate({
-                inputRange: [(idx - 1) * SCREEN_W, idx * SCREEN_W, (idx + 1) * SCREEN_W],
-                outputRange: [0, 1, 0],
-                extrapolate: 'clamp',
-              });
-              const offPillOpacity = dayScrollX.interpolate({
-                inputRange: [(idx - 1) * SCREEN_W, idx * SCREEN_W, (idx + 1) * SCREEN_W],
-                outputRange: [1, 0, 1],
-                extrapolate: 'clamp',
-              });
               return (
-                <TouchableOpacity
+                <WeekStripCell
                   key={key}
-                  style={[styles.weekDayCell, { position: 'absolute', left: (idx - DAY_TODAY_INDEX) * cellW, width: cellW }]}
-                  onPress={() => goToDate(d)}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel={d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-                  accessibilityState={{ selected: isActive }}
-                >
-                  <View
-                    style={[styles.weekPillSlot, { width: PILL_W }]}
-                    onLayout={idx === stripCenterIndex ? (e) => {
-                      setPillTop(6 + e.nativeEvent.layout.y);
-                      setPillH(e.nativeEvent.layout.height);
-                    } : undefined}
-                  >
-                    {/* Today (when not selected) = a soft filled pill; fades out
-                        as the orange pill slides over it. */}
-                    {isToday && (
-                      <Animated.View
-                        pointerEvents="none"
-                        style={[styles.weekTodayPill, { opacity: offPillOpacity }]}
-                      />
-                    )}
-                    {/* Weekday abbreviation — cross-fades to on-pill ink. */}
-                    <View style={styles.weekDowRow}>
-                      <Animated.Text style={[styles.weekDow, { opacity: offPillOpacity }]}>{abbr}</Animated.Text>
-                      <Animated.Text style={[styles.weekDow, styles.weekDowOnPill, { opacity: onPillOpacity }]}>{abbr}</Animated.Text>
-                    </View>
-                    {/* Date number — same cross-fade. */}
-                    <View style={styles.weekNumRow}>
-                      <Animated.Text style={[styles.weekDayNum, { opacity: offPillOpacity }]}>{d.getDate()}</Animated.Text>
-                      <Animated.Text style={[styles.weekDayNum, styles.weekDayNumOnPill, { opacity: onPillOpacity }]}>{d.getDate()}</Animated.Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
+                  idx={idx}
+                  date={d}
+                  cellW={cellW}
+                  pillW={PILL_W}
+                  isActive={key === selectedStr}
+                  isToday={key === todayStr}
+                  dayScrollX={dayScrollX}
+                  styles={styles}
+                  onPress={goToDate}
+                  onPillSlotLayout={idx === stripCenterIndex ? measurePillSlot : undefined}
+                />
               );
             })}
           </Animated.View>
@@ -2412,6 +2746,9 @@ export const CalendarView = ({
         onClose={closeInspector}
         onUpdateTask={onUpdateTask}
         onToggleComplete={onToggleComplete}
+        // The inspector opens from a day pane's block — its toggle must tick
+        // THAT day's occurrence, and its circle reflect that day's state.
+        contextDate={toDateString(selectedDate)}
         // On a shared/multi-user calendar, surface the co-owner's name so the
         // reschedule flow can offer to notify them. onNotifyReschedule does the
         // actual send (wired by the parent); absent → the prompt's "Notify" is
@@ -2538,19 +2875,32 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textSecondary,
     letterSpacing: -0.6,
   },
-  // The Today shortcut moved into the per-month title row. Only
-  // rendered when the visible page isn't the current month.
-  todayInline: {
+  // Jump-to-today button pinned under the grid, above the sheet peek. A solid
+  // rounded pill so it reads as a tappable action (vs. the faint caret hints).
+  // Bottom-right keeps it clear of the centred down-caret. zIndex over the grid.
+  todayJumpBtn: {
+    position: 'absolute',
+    right: CALENDAR_HORIZONTAL_PADDING,
+    bottom: SHEET_PEEK_RESERVE + 8,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: `${theme.colors.accentSuccess}1A`, // ~10% success tint
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    // Lift the pill off the grid so it reads as floating chrome.
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+    zIndex: 6,
   },
-  todayInlineText: {
-    fontSize: 12,
+  todayJumpText: {
+    fontSize: 13,
     fontWeight: '700',
     color: theme.colors.accentSuccess,
   },
@@ -2605,14 +2955,12 @@ const createStyles = (theme) => StyleSheet.create({
     height: CELL_HEIGHT,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 8,
+    // Square (no radius) so the hairline grid segments read as a clean table.
+    // The selected-day fill is a separate ROUNDED layer (daySelectedBackdrop),
+    // not a background on this cell, so rounding it never curves the grid.
+    // `position: relative` anchors that absolute backdrop to the cell.
+    borderRadius: 0,
     position: 'relative',
-  },
-  // Instant press feedback — a faint neutral wash painted on touch-down via
-  // Pressable's `pressed` state, so the tap registers immediately instead of
-  // waiting on TouchableOpacity's opacity fade.
-  dayCellPressed: {
-    backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
   },
   // The day number sits in a fixed 30×30 box so every cell's number stays
   // aligned regardless of selection. Selection is shown by highlighting the
@@ -2625,9 +2973,14 @@ const createStyles = (theme) => StyleSheet.create({
     justifyContent: 'center',
     alignSelf: 'center',
   },
-  // List mode keeps a little air between the number and the task list.
+  // List mode: shrink the number box (the dots-mode default is a fixed 30×30,
+  // which would eat half a small cell) so the three task pills below get room.
+  // A short auto-width box with a hair of air beneath the number.
   dayNumWrapList: {
-    marginBottom: 2,
+    width: 'auto',
+    height: 16,
+    borderRadius: 0,
+    marginBottom: 1,
   },
   // Day numbers — hairthin weight matches the iOS Calendar /
   // reference-design aesthetic. RN's '100' renders inconsistently
@@ -2637,28 +2990,76 @@ const createStyles = (theme) => StyleSheet.create({
   // "1" and "0" so columns stay aligned.
   dayText: {
     fontSize: theme.typography.body,
-    color: theme.colors.textPrimary,
+    // Monochrome numbering — pure black in light mode, pure white in dark.
+    // Every non-selected day number (blank, has-tasks, today) reads in this
+    // one ink; days are set apart by WEIGHT, not colour.
+    color: theme.mode === 'dark' ? '#FFFFFF' : '#000000',
     fontWeight: '200',
     fontVariant: ['tabular-nums'],
     letterSpacing: 0.3,
   },
-  // Today (not selected) — just the accent-coloured number, no disc, matching
-  // iOS Calendar where today's date is tinted until you tap it.
+  // Days WITH activities — same neutral colour as a blank day, set apart only
+  // by a normal weight. Sits between the hairthin `200` (empty days) and the
+  // bold `700` (selected day) so an active day reads as "has something" without
+  // shouting or pulling in a heat colour.
+  dayTextHasTasks: {
+    fontWeight: '400',
+  },
+  // Today (not selected) — monochrome BOLD number sitting over the orange hatch
+  // backdrop (todayHatchBackdrop). No underline; the hatch is today's marker.
   todayText: {
-    fontWeight: '300',
-    color: theme.colors.accentSuccess,
-  },
-  // Selected day's number — highlighted in the accent colour + bold (no disc
-  // behind it), so the selection reads on the number itself.
-  selectedText: {
-    color: theme.colors.accentSuccess,
-    fontWeight: '600',
-  },
-  // Selected + today — same accent, a touch heavier so today still stands out
-  // as the selected day.
-  todaySelectedText: {
-    color: theme.colors.accentSuccess,
     fontWeight: '700',
+  },
+  // Today (not selected) hatch layer — a clipped rounded rect that holds the
+  // DiagonalHatch bars, same inset + radius as the selection backdrop so it
+  // occupies the exact same footprint.
+  todayHatchBackdrop: {
+    position: 'absolute',
+    top: 2,
+    left: 2,
+    right: 2,
+    bottom: 2,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  // Selected number — bold, in the normal monochrome ink (black in light / white
+  // in dark). The selection is a hatch over a faint tint, so the cell background
+  // still shows through the gaps; the number contrasts with THAT, not the lines.
+  selectedText: {
+    color: theme.mode === 'dark' ? '#FFFFFF' : '#000000',
+    fontWeight: '700',
+  },
+  // Selected + today — same bold ink over the orange hatch.
+  todaySelectedText: {
+    color: theme.mode === 'dark' ? '#FFFFFF' : '#000000',
+    fontWeight: '700',
+  },
+  // Selection backdrop LAYER — a rounded rectangle that nearly fills the cell,
+  // sitting behind the day number as its own absolute layer so the square
+  // hairline grid is untouched. Inset a hair on every side so the curved corners
+  // breathe against the grid instead of pinching into the line intersections;
+  // radius 12 matches the week strip's rounded pill (borderRadius 14, scaled to
+  // these slightly smaller cells).
+  // Selection backdrop LAYER — a clipped, radiused rounded rectangle that holds
+  // the dense DiagonalHatch bars (overflow:hidden clips them to the rounded
+  // corners). Its own absolute layer so the square hairline grid is untouched;
+  // inset a hair on every side so the curved corners breathe against the grid.
+  daySelectedBackdrop: {
+    position: 'absolute',
+    top: 2,
+    left: 2,
+    right: 2,
+    bottom: 2,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  // Base tint UNDER the hatch — a whisper of the accent so the hatched region
+  // reads as a filled selection. ORANGE for today; neutral ink for other days.
+  daySelectedToday: {
+    backgroundColor: hexToRgba(WEEK_SELECT_BG, 0.12),
+  },
+  daySelectedOther: {
+    backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
   },
   // List mode: top-align the cell so the day number sits at the top with the
   // task titles stacked beneath it (vs centered for the dots mode).
@@ -2669,24 +3070,28 @@ const createStyles = (theme) => StyleSheet.create({
     paddingHorizontal: 3,
     overflow: 'hidden', // clip the title list to the cell — never bleed into the next row
   },
+  // List mode: a tighter, smaller day number than the dots-mode default so it
+  // claims less of the cell — leaving vertical room for three task pills.
   dayTextList: {
     textAlign: 'center',
-    marginBottom: 2,
+    fontSize: 13,
+    lineHeight: 15,
+    marginBottom: 0,
   },
   dayTaskList: {
     alignSelf: 'stretch',
-    gap: 2,
+    gap: 1,
   },
-  // iOS-style event pill: a soft tinted rounded chip per task. Keeps the title
-  // readable against the grid and groups it visually.
+  // iOS-style event pill: a soft tinted rounded chip per task. Slim vertical
+  // padding + tight line-height so three chips stack inside a single day cell.
   dayTaskPill: {
-    borderRadius: 4,
+    borderRadius: 3,
     paddingHorizontal: 3,
-    paddingVertical: 1,
+    paddingVertical: 0,
   },
   dayTaskItem: {
     fontSize: 9,
-    lineHeight: 12,
+    lineHeight: 11,
     fontWeight: '600',
   },
   dayTaskItemDone: {
@@ -3051,24 +3456,6 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textPrimary,
     fontWeight: '500',
   },
-  // "TBD" chip on a dated-but-untimed task — reads as a placeholder time so the
-  // task sits in the day's to-do list until an hour is set. Muted outlined pill
-  // so it doesn't compete with real timed-task colour coding.
-  tbdBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginLeft: 8,
-    backgroundColor: theme.colors.surfaceElevated,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-  },
-  tbdBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    color: theme.colors.textTertiary,
-  },
   // Smaller priority chip used inside compact rows / blocks where the
   // larger priorityIndicator would crowd the title.
   priorityDot: {
@@ -3143,123 +3530,9 @@ const createStyles = (theme) => StyleSheet.create({
     paddingHorizontal: 24,
     lineHeight: 19,
   },
-  // One timed task: a left timeline rail (node + dashed connector) and the
-  // body (time header + card + gap line).
-  segRow: {
-    flexDirection: 'row',
-  },
-  segRail: {
-    width: 34,
-    alignItems: 'center',
-    paddingTop: 2,
-  },
-  segNode: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    borderWidth: 2,
-    borderColor: theme.colors.textTertiary,
-    backgroundColor: theme.colors.surface,
-  },
-  segNodeDone: {
-    borderColor: theme.colors.accentSuccess,
-    backgroundColor: theme.colors.accentSuccess,
-  },
-  // Solid connector down to the next node; flex:1 stretches it across the
-  // card + gap height (matches the Upcoming timeline's rail).
-  segRailLine: {
-    flex: 1,
-    width: 2,
-    backgroundColor: theme.colors.border,
-    marginTop: 4,
-  },
-  // Activity-icon node on the rail (replaces the old dot) + its completed state.
-  segIconCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 2,
-    backgroundColor: theme.colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segIconDone: {
-    borderColor: theme.colors.accentSuccess,
-    backgroundColor: theme.colors.accentSuccess,
-  },
-  // Done / overdue / upcoming pill on the right of the time row.
-  segStatusChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingVertical: 2,
-    paddingHorizontal: 8,
-    borderRadius: 999,
-    marginLeft: 8,
-  },
-  segStatusText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  segBody: {
-    flex: 1,
-    paddingLeft: 10,
-  },
-  segTimeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  segTimeText: {
-    fontSize: 15,
-    fontWeight: '400',
-    color: theme.colors.textPrimary,
-    letterSpacing: 0.2,
-  },
-  segTimeSep: {
-    fontSize: 13,
-    fontWeight: '400',
-    color: theme.colors.textTertiary,
-  },
-  segDurText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: theme.colors.textTertiary,
-  },
-  segCard: {
-    backgroundColor: theme.colors.surfaceElevated,
-    // Right corners rounded, LEFT corners square so the coloured accent edge
-    // runs straight down the left side instead of curving around the radius.
-    borderTopRightRadius: 12,
-    borderBottomRightRadius: 12,
-    borderTopLeftRadius: 0,
-    borderBottomLeftRadius: 0,
-    borderLeftWidth: 3,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-  },
-  segCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  segCardTitle: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '600',
-    color: theme.colors.textPrimary,
-  },
-  segCardEdit: {
-    marginLeft: 8,
-  },
-  segCardDesc: {
-    fontSize: 13,
-    color: theme.colors.textSecondary,
-    marginTop: 4,
-    lineHeight: 18,
-  },
   // The empty time between two tasks: a thin line with the duration centred.
+  // (The old per-segment rail/card styles were removed when the compact day
+  // schedule switched to reusing TimelineTaskRow; only the gap divider remains.)
   segGap: {
     flexDirection: 'row',
     alignItems: 'center',

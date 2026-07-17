@@ -11,6 +11,7 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { ITEM_TYPES } from '../utils/constants';
+import { tapHaptic } from '../../../utils/haptics';
 
 // ── Google-Calendar-style "+" create button ──────────────────────────────
 // A floating action button pinned bottom-right of the calendar. Tapping it
@@ -93,6 +94,7 @@ export const AddItemFab = ({ onSelect, bottomInset = 0 }) => {
               <TouchableOpacity
                 style={[styles.optionBtn, { backgroundColor: opt.accent }]}
                 activeOpacity={0.85}
+                onPressIn={() => tapHaptic()}
                 onPress={() => pick(opt.value)}
                 accessibilityRole="button"
                 accessibilityLabel={`New ${opt.label.toLowerCase()}`}
@@ -107,6 +109,7 @@ export const AddItemFab = ({ onSelect, bottomInset = 0 }) => {
         <TouchableOpacity
           style={styles.fab}
           activeOpacity={0.85}
+          onPressIn={() => tapHaptic()}
           onPress={toggle}
           accessibilityRole="button"
           accessibilityLabel={open ? 'Close create menu' : 'Create birthday, task, or event'}

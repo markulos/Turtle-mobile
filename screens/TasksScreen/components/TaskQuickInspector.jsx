@@ -20,6 +20,8 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { WheelTimePicker } from './WheelTimePicker';
 import { DatePickerModal } from './DatePickerModal';
+import { isOccurrenceCompleted, isTaskDoneNow } from '../utils/taskHelpers';
+import { tapHaptic, impactHaptic } from '../../../utils/haptics';
 
 // Minimal, web-inspector-style quick editor that slides up when a task block in
 // the day's hour grid is tapped. Deliberately small: it only does the two
@@ -119,9 +121,18 @@ export const TaskQuickInspector = ({
   notifyTargetName = null,
   // (task, { dueDate, time }) => void — fired only if the user taps "Notify".
   onNotifyReschedule,
+  // YYYY-MM-DD of the day PANE this inspector was opened from. Recurring tasks
+  // complete per-occurrence, so the toggle must tick THIS day (not the handler's
+  // date-less default = today/anchor) and the circle must reflect THIS day.
+  contextDate = null,
 }) => {
   const { theme } = useTheme();
   const styles = createStyles(theme);
+  // Per-occurrence checked state for the circle: day context when provided,
+  // else the single-row done-now rule. Falls back to the plain bool inside.
+  const done = !!task && (task.completed || (contextDate
+    ? isOccurrenceCompleted(task, contextDate)
+    : isTaskDoneNow(task)));
 
   // Slide = the open/close transform (off-screen bottom → 0). Drag = the live
   // finger offset while swiping the handle down. The sheet's translateY is
@@ -327,18 +338,19 @@ export const TaskQuickInspector = ({
           {/* Title row: complete circle + inline rename + expand-to-full. */}
           <View style={styles.titleRow}>
             <TouchableOpacity
-              onPress={() => onToggleComplete?.(task.id)}
+              onPressIn={() => tapHaptic()}
+              onPress={() => onToggleComplete?.(task.id, contextDate || undefined)}
               activeOpacity={0.7}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              style={[styles.circle, task.completed && styles.circleDone]}
-              accessibilityLabel={task.completed ? 'Mark incomplete' : 'Mark complete'}
+              style={[styles.circle, done && styles.circleDone]}
+              accessibilityLabel={done ? 'Mark incomplete' : 'Mark complete'}
             >
-              {task.completed && <Icon name="check" size={15} color={theme.colors.background} />}
+              {done && <Icon name="check" size={15} color={theme.colors.background} />}
             </TouchableOpacity>
 
             <TextInput
               ref={titleRef}
-              style={[styles.titleInput, task.completed && styles.titleDone]}
+              style={[styles.titleInput, done && styles.titleDone]}
               value={titleDraft}
               onChangeText={setTitleDraft}
               onBlur={commitTitle}
@@ -471,7 +483,7 @@ export const TaskQuickInspector = ({
                 <TouchableOpacity style={styles.rescheduleCancel} onPress={() => setShowReschedule(false)} activeOpacity={0.7}>
                   <Text style={styles.rescheduleCancelText}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.rescheduleConfirm} onPress={confirmReschedule} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.rescheduleConfirm} onPressIn={() => impactHaptic('medium')} onPress={confirmReschedule} activeOpacity={0.85}>
                   <Text style={styles.rescheduleConfirmText}>Reschedule</Text>
                 </TouchableOpacity>
               </View>

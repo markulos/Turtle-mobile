@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useCommandBus } from '../context/CommandBusContext';
+import { tapHaptic } from '../utils/haptics';
 
 // The iOS keyboard ease — Animated has no built-in "keyboard" curve, so this
 // bezier matches it closely; the OS-reported duration is what really syncs the
@@ -163,6 +164,7 @@ export default function CommandConsole({ visible, onClose }) {
                   <TouchableOpacity
                     key={s.command}
                     style={styles.row}
+                    onPressIn={() => tapHaptic()}
                     onPress={() => applySuggestion(s)}
                     activeOpacity={0.6}
                   >

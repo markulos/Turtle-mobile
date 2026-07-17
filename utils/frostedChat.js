@@ -10,7 +10,6 @@
 //     without fully hiding the content scrolling behind it.
 //   • Android needs `experimentalBlurMethod="dimezisBlurView"` to actually
 //     blur (otherwise BlurView just renders a flat translucent overlay).
-import { Platform } from 'react-native';
 
 // How far the frosted composer overlaps the content above it, so chat
 // messages visibly slide UNDER the frost as they scroll (the Telegram

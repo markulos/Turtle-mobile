@@ -9,6 +9,7 @@ import {
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { FieldInput } from './FieldInput';
+import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
 
 const PasswordItemImpl = ({ item, onSave, onDelete, allEntries }) => {
   const { theme } = useTheme();
@@ -83,7 +84,7 @@ const PasswordItemImpl = ({ item, onSave, onDelete, allEntries }) => {
         </View>
 
         <View style={styles.actions}>
-          <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+          <TouchableOpacity style={styles.saveBtn} onPressIn={() => impactHaptic('medium')} onPress={handleSave}>
             <Text style={styles.saveText}>Save</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => setIsEditing(false)}>
@@ -100,7 +101,7 @@ const PasswordItemImpl = ({ item, onSave, onDelete, allEntries }) => {
         <Text style={styles.title} numberOfLines={1}>
           {item.title || 'Untitled'}
         </Text>
-        <TouchableOpacity onPress={() => onDelete(item.id)}>
+        <TouchableOpacity onPressIn={() => notifyHaptic('warning')} onPress={() => onDelete(item.id)}>
           <Icon name="delete" size={20} color={theme.colors.accentError} />
         </TouchableOpacity>
       </View>
@@ -220,7 +221,7 @@ export const NewEntryForm = ({ onSave, onCancel, allEntries }) => {
       </View>
 
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+        <TouchableOpacity style={styles.saveBtn} onPressIn={() => impactHaptic('medium')} onPress={handleSave}>
           <Text style={styles.saveText}>Save Entry</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={onCancel}>

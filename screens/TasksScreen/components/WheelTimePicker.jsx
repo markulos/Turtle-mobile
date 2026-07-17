@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '../../../context/ThemeContext';
+import { useSheetDismiss } from '../../../utils/useSheetDismiss';
 
 /**
  * WheelTimePicker — a slick iOS-style scrolling-wheel time picker.
@@ -227,6 +228,10 @@ export const WheelTimePicker = ({ visible, initialTime, onSelect, onClose }) => 
 
   const handleCancel = useCallback(() => animateOut(() => onClose?.()), [animateOut, onClose]);
 
+  // iOS-style pull-down on the grabber/header strip (composes with the
+  // sheet's own slide-up entrance — two translateY entries add).
+  const { panHandlers, sheetDragStyle } = useSheetDismiss(handleCancel, visible);
+
   // Live preview string in the header ("3:45 PM").
   const previewLabel = useMemo(() => {
     const h12 = hourIdx + 1;
@@ -242,18 +247,22 @@ export const WheelTimePicker = ({ visible, initialTime, onSelect, onClose }) => 
           <Pressable style={StyleSheet.absoluteFill} onPress={handleCancel} />
         </Animated.View>
 
-        <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetY }] }]}>
-          <View style={styles.grabber} />
+        <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetY }, ...sheetDragStyle.transform] }]}>
+          {/* Grabber + header = the pull-down-to-close zone. Restricted to
+              this strip so the wheels' own vertical scrolling never fights it. */}
+          <View {...panHandlers}>
+            <View style={styles.grabber} />
 
-          {/* Header: cancel · live preview · set */}
-          <View style={styles.header}>
-            <TouchableOpacity onPress={handleCancel} hitSlop={HIT} style={styles.headerSide}>
-              <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <Text style={styles.preview}>{previewLabel}</Text>
-            <TouchableOpacity onPress={handleSet} hitSlop={HIT} style={[styles.headerSide, styles.headerSideRight]}>
-              <Text style={styles.setText}>Set</Text>
-            </TouchableOpacity>
+            {/* Header: cancel · live preview · set */}
+            <View style={styles.header}>
+              <TouchableOpacity onPress={handleCancel} hitSlop={HIT} style={styles.headerSide}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.preview}>{previewLabel}</Text>
+              <TouchableOpacity onPress={handleSet} hitSlop={HIT} style={[styles.headerSide, styles.headerSideRight]}>
+                <Text style={styles.setText}>Set</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Wheels */}

@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useServer } from '../../../context/ServerContext';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { tapHaptic, notifyHaptic } from '../../../utils/haptics';
 import { useVault } from '../../PasswordsScreen/hooks/useVault';
 import {
   SetupScreen,
@@ -152,11 +153,11 @@ export default function VaultOverlay({ initialPassword, onClose }) {
     <View style={[styles.overlayContainer, { paddingTop: insets.top }]}>
       {/* Custom Header with Close Button */}
       <View style={styles.overlayHeader}>
-        <TouchableOpacity onPress={handleLock} style={styles.closeButton}>
+        <TouchableOpacity onPressIn={() => tapHaptic()} onPress={handleLock} style={styles.closeButton}>
           <Icon name="lock" size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.overlayTitle}>Password Vault</Text>
-        <TouchableOpacity onPress={clearAll}>
+        <TouchableOpacity onPressIn={() => notifyHaptic('warning')} onPress={clearAll}>
           <Text style={styles.resetText}>Reset</Text>
         </TouchableOpacity>
       </View>
@@ -207,6 +208,7 @@ export default function VaultOverlay({ initialPassword, onClose }) {
       {!showNewForm && (
         <TouchableOpacity
           style={styles.fab}
+          onPressIn={() => tapHaptic()}
           onPress={() => setShowNewForm(true)}
         >
           <Icon name="plus" size={28} color={theme.colors.textPrimary} />
