@@ -63,6 +63,13 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 const { width, height: WINDOW_HEIGHT } = Dimensions.get('window');
 const DAY_WIDTH = (width - 40) / 7;
+// Full-bleed calendar column width. NOT `100/7 %`: that's 14.285714285714286%,
+// and ×7 = 100.00000000000001 (float) — a hair over 100%, which under
+// `flexWrap` bumps the 7th cell to a new row (the 6-per-row / empty-SAT bug).
+// TRUNCATED to 14.2857% so 7 columns sum to 99.9999% (< 100, never wraps) while
+// still filling the width edge-to-edge (the sub-pixel remainder is invisible).
+// Shared by the weekday header AND the day cells so both stay pixel-aligned.
+const CAL_COL_WIDTH = `${Math.floor((100 / 7) * 1e4) / 1e4}%`; // '14.2857%'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = [
@@ -2930,10 +2937,15 @@ const createStyles = (theme) => StyleSheet.create({
     height: DAYS_HEADER_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: CALENDAR_HORIZONTAL_PADDING,
+    // Full-bleed: no L/R indent so the 7 weekday labels line up with the
+    // edge-to-edge day cells below (no margin beside Sun / Sat).
+    paddingHorizontal: 0,
   },
   dayHeaderCell: {
-    flex: 1,
+    // Same CAL_COL_WIDTH as the day cells — flex:1 distributed leftover pixels
+    // differently than the grid, drifting labels off their columns at full
+    // bleed. Shared width = labels sit dead-centre over each day.
+    width: CAL_COL_WIDTH,
     alignItems: 'center',
   },
   dayHeaderText: {
@@ -2956,7 +2968,9 @@ const createStyles = (theme) => StyleSheet.create({
   calendarGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    paddingHorizontal: CALENDAR_HORIZONTAL_PADDING,
+    // Full-bleed grid: each of the 7 columns is 100/7 % of the FULL screen
+    // width, so days span edge-to-edge with no overall L/R margin.
+    paddingHorizontal: 0,
     paddingTop: GRID_PADDING_TOP,
   },
   // Empty cells (leading + trailing pad) match the dayCell layout
@@ -2965,11 +2979,11 @@ const createStyles = (theme) => StyleSheet.create({
   // so all 7 columns fill the available horizontal space evenly even
   // when CALENDAR_HORIZONTAL_PADDING changes.
   emptyCell: {
-    width: `${100 / 7}%`,
+    width: CAL_COL_WIDTH,
     height: CELL_HEIGHT,
   },
   dayCell: {
-    width: `${100 / 7}%`,
+    width: CAL_COL_WIDTH,
     height: CELL_HEIGHT,
     alignItems: 'center',
     justifyContent: 'center',
