@@ -2115,35 +2115,10 @@ export default function TasksScreen() {
             where edit mode still does anything). So the Upcoming list opens
             straight into search + the agenda — no redundant toolbar. */}
         <View style={styles.listClip}>
-          {/* Simple search box — always visible, activates (focuses) on tap.
-              Replaced the old overscroll "pull-down" reveal, which was fiddly. */}
-          <View style={styles.searchBar}>
-            <View style={styles.searchInputRow}>
-              <Icon name="magnify" size={18} color={theme.colors.textTertiary} style={styles.searchIcon} />
-              <TextInput
-                ref={searchInputRef}
-                style={styles.searchInput}
-                placeholder="Search tasks and subtasks..."
-                placeholderTextColor={theme.colors.textPlaceholder}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                returnKeyType="search"
-                autoCorrect={false}
-                autoCapitalize="none"
-                clearButtonMode="while-editing"
-              />
-              {searchQuery.length > 0 && Platform.OS !== 'ios' && (
-                <TouchableOpacity
-                  onPress={() => setSearchQuery('')}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  style={styles.searchClearBtn}
-                >
-                  <Icon name="close-circle" size={16} color={theme.colors.textTertiary} />
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-
+          {/* Search bar removed — the Upcoming list opens straight into the
+              agenda (the old always-visible box read as a stray black band
+              under the header). searchQuery stays '' so agenda filtering is a
+              no-op; wire a new entry point here if search comes back. */}
           <View style={styles.listShift}>
           <FlashList
             ref={listRef}

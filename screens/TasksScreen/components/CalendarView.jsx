@@ -1640,9 +1640,16 @@ export const CalendarView = ({
   const [isExpanded, setIsExpanded] = useState(true);
   // Tell the parent when the planner opens/closes (raised = !isExpanded) so it
   // can lock the calendar⇄list pager while the day schedule is up.
-  useEffect(() => {
-    onPlannerOpenChange?.(!isExpanded);
-  }, [isExpanded, onPlannerOpenChange]);
+  //
+  // DEFERRED, not effect-driven: this flips `dayPlannerOpen` in the PARENT,
+  // which re-renders the whole TasksScreen (both pager pages). Running it off
+  // the `isExpanded` effect landed that heavy render mid-spring — the stutter
+  // felt on pull up/down. Instead the snap's spring-completion callback fires
+  // it AFTER the animation settles, so the sheet glides on the UI thread and
+  // the React churn happens once it's already parked. `raise` = planner open.
+  const notifyPlanner = useCallback((raise) => {
+    onPlannerOpenChange?.(raise);
+  }, [onPlannerOpenChange]);
   const [isAddingTask, setIsAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   // When the user long-presses an hour on the day calendar grid, we
@@ -1805,8 +1812,13 @@ export const CalendarView = ({
   // `raise=true` → panel up (isExpanded false); `raise=false` → docked.
   const snapSheet = useCallback((raise) => {
     setIsExpanded(!raise);
-    sheet.value = withSpring(raise ? 1 : 0, SHEET_SPRING);
-  }, [sheet]);
+    // Parent notify rides the spring's completion (see notifyPlanner) so the
+    // heavy TasksScreen re-render lands after the settle, not during it.
+    sheet.value = withSpring(raise ? 1 : 0, SHEET_SPRING, (finished) => {
+      'worklet';
+      if (finished) runOnJS(notifyPlanner)(raise);
+    });
+  }, [sheet, notifyPlanner]);
 
   // Called from the Pan gesture's onEnd via runOnJS to commit the
   // React-side boolean once the finger lifts (the spring itself is
@@ -1836,9 +1848,15 @@ export const CalendarView = ({
       // from past the midpoint.
       const projected = sheet.value + (-e.velocityY / travel) * 0.12;
       const raise = projected >= 0.5;
-      sheet.value = withSpring(raise ? 1 : 0, SHEET_SPRING);
+      // Commit the local boolean now (cheap; heavy children are memoized), but
+      // defer the parent pager-lock notify to the spring's settle so the big
+      // TasksScreen re-render never lands mid-animation (the pull stutter).
+      sheet.value = withSpring(raise ? 1 : 0, SHEET_SPRING, (finished) => {
+        'worklet';
+        if (finished) runOnJS(notifyPlanner)(raise);
+      });
       runOnJS(commitSheet)(raise);
-    }), [sheet, sheetStart, containerH, headerH, commitSheet]);
+    }), [sheet, sheetStart, containerH, headerH, commitSheet, notifyPlanner]);
 
   // ── Horizontal day pager ─────────────────────────────────────────────
   //

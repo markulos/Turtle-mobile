@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Image } from 'expo-image';
 import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
 import { tapHaptic } from '../../../utils/haptics';
@@ -55,7 +56,16 @@ export default function BoardTimeline({ visible, board, onClose }) {
   const { theme } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
-  const { api } = useServer();
+  const { api, getBaseUrl, getMediaBaseUrl } = useServer();
+
+  // Prefer the HTTP/2 media origin (shared expo-image cache) when the probe
+  // landed; fall back to the http origin. Stored media paths are /api/-relative
+  // (thumbnailUrl/rawUrl start with /api/), so strip the base's own /api suffix.
+  const mediaBase = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '');
+  const getFullUrl = useCallback((p) => {
+    if (!p) return null;
+    return /^https?:/i.test(p) ? p : mediaBase + p;
+  }, [mediaBase]);
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -201,6 +211,53 @@ export default function BoardTimeline({ visible, board, onClose }) {
       );
     }
 
+    // Media rows show the ACTUAL uploaded image inline (thumbnail → raw
+    // fallback), rendered as a photo card on the feed side — not a bare
+    // icon+name row. A video keeps a play badge over its poster frame.
+    if (item.kind === 'media') {
+      const uri = getFullUrl(item.thumbnailUrl || item.rawUrl);
+      const isVideo = item.mediaType && item.mediaType !== 'image';
+      return (
+        <View style={{ paddingHorizontal: 14, paddingVertical: 4, alignItems: 'flex-start' }}>
+          <View style={{
+            maxWidth: '74%', borderRadius: 16, overflow: 'hidden',
+            backgroundColor: c.surfaceElevated,
+          }}>
+            {uri ? (
+              <Image
+                source={{ uri }}
+                style={{ width: 210, height: 210 }}
+                contentFit="cover"
+                transition={150}
+                recyclingKey={uri}
+                cachePolicy="memory-disk"
+              />
+            ) : (
+              <View style={{ width: 210, height: 150, alignItems: 'center', justifyContent: 'center' }}>
+                <Icon name="image-off-outline" size={28} color={c.textTertiary} />
+              </View>
+            )}
+            {isVideo && !!uri && (
+              <View style={{
+                position: 'absolute', top: 8, right: 8,
+                width: 26, height: 26, borderRadius: 13,
+                backgroundColor: '#000000A6', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Icon name="play" size={16} color="#fff" />
+              </View>
+            )}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
+              <Icon name="image-outline" size={13} color={c.textTertiary} />
+              <Text style={{ flex: 1, fontSize: 12, color: c.textSecondary }} numberOfLines={1}>
+                {item.title || 'Photo'}
+              </Text>
+              <Text style={{ fontSize: 10, color: c.textTertiary }}>{timeAgo(item.ts)}</Text>
+            </View>
+          </View>
+        </View>
+      );
+    }
+
     const meta = KIND_META[item.kind] || KIND_META.note;
     const tint = c[meta.tint] || c.textSecondary;
     const done = item.kind === 'task' && item.completed;
@@ -235,7 +292,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
         </View>
       </View>
     );
-  }, [c, sendBoardMessage]);
+  }, [c, sendBoardMessage, getFullUrl]);
 
   const keyExtractor = useCallback((it, i) => `${it.kind}:${it.id ?? i}`, []);
 
