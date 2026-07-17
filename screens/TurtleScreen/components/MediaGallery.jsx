@@ -1819,6 +1819,16 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     return { starts, labels, countLabels, total, yearMarks };
   }, [uploadTimeline]);
 
+  // Sort-basis-aware date: under 'upload' sort the grid orders by uploadDate,
+  // so the fallback scrubber must key its months on the SAME date or its
+  // labels/marks drift from the actual scroll order.
+  const dateOfSorted = useCallback((item) => {
+    const raw = item && (sortMode === 'upload' ? item.uploadDate : (item.originalDate || item.uploadDate));
+    if (!raw) return null;
+    const d = new Date(raw);
+    return isNaN(d.getTime()) ? null : d;
+  }, [sortMode]);
+
   const fallbackScrubData = useMemo(() => {
     if (timelineScrubData) return null; // buckets arrived — skip the 25k-item walk entirely
     const items = (uploadDisplayItems || []).filter((it) => it && !it.isSkeleton);
@@ -1828,20 +1838,20 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     const yearMarks = []; const seenY = new Set();
     let lastKey = '';
     for (let i = 0; i < n; i++) {
-      const d = dateOf(items[i]);
+      const d = dateOfSorted(items[i]);
       if (!d) continue;
       const key = `${d.getFullYear()}-${d.getMonth()}`;
       if (key !== lastKey) {
         lastKey = key;
         starts.push(i);
-        labels.push(monthLabelOf(items[i]));
+        labels.push(d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }));
         countLabels.push('');
       }
       const y = String(d.getFullYear());
       if (!seenY.has(y)) { seenY.add(y); yearMarks.push({ year: y, frac: 1 - i / (n - 1) }); }
     }
     return { starts, labels, countLabels, total: n, yearMarks };
-  }, [timelineScrubData, uploadDisplayItems]);
+  }, [timelineScrubData, uploadDisplayItems, dateOfSorted]);
 
   const scrubberData = timelineScrubData || fallbackScrubData;
 
@@ -2101,15 +2111,13 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
   const pendingJumpClearRef = useRef(null);   // safety timer that voids a never-consumed jump
   const [jumpBusy, setJumpBusy] = useState(false);
   const handleLocateTag = useCallback(async () => {
-    // The tag×month index (and the scrubber math it feeds) is defined in
-    // ORIGINAL-date space — a jump under the "date added" basis would land in
-    // the wrong place. The button is hidden in that mode; this is the belt.
-    if (sortModeRef.current !== 'original') return;
     const q = uploadsSearchQuery.trim();
     if (!q || jumpBusy) return;
     setJumpBusy(true);
     try {
-      const res = await api.get(`/media/tag-distribution?tag=${encodeURIComponent(q)}`);
+      // sortBy so the returned suggestedDataFrac is computed in the SAME date
+      // space (capture vs added) the scrubber is currently scrolling in.
+      const res = await api.get(`/media/tag-distribution?tag=${encodeURIComponent(q)}&sortBy=${sortModeRef.current}`);
       if (res?.success && res.found && typeof res.suggestedDataFrac === 'number') {
         pendingJumpRef.current = res.suggestedDataFrac;
         // REDUNDANCY: if the jump is never consumed (e.g. the virtual timeline
@@ -2176,6 +2184,9 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
     galleryEpochRef.current += 1;
     setLoading(true);
     setUploadItems([]);
+    // Drop the old-basis month frame so the scrubber doesn't show stale
+    // months until fetchBuckets() returns the new-basis timeline.
+    setUploadTimeline({ months: [], total: 0 });
     Promise.all([fetchUploads(true), fetchBuckets()]).finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortMode]);
@@ -5096,7 +5107,7 @@ export default function MediaGallery({ onClose, autoUpload = false }) {
             />
             {/* Jump — leave the filter and scroll the full timeline to where this
                 tag clusters in time (uploads tab only, when a tag is typed). */}
-            {activeTab === 'uploads' && sortMode === 'original' && uploadsSearchQuery.trim() !== '' && (
+            {activeTab === 'uploads' && uploadsSearchQuery.trim() !== '' && (
               <TouchableOpacity
                 onPress={handleLocateTag}
                 disabled={jumpBusy}
