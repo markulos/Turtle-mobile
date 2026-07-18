@@ -317,7 +317,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
   const handleClose = useCallback(() => onClose(dirtyRef.current), [onClose]);
 
   return (
-    <EdgeSwipePage overlay visible={visible} onClose={handleClose}>
+    <EdgeSwipePage overlay visible={visible} onClose={handleClose} swipeEnabled={!lightbox}>
       <KeyboardAvoidingView
         style={{ flex: 1, backgroundColor: c.background }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}

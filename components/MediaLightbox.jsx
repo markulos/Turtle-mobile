@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import {
-  View, TouchableOpacity, ScrollView, StyleSheet, Dimensions, BackHandler, Pressable, StatusBar,
+  View, TouchableOpacity, ScrollView, StyleSheet, useWindowDimensions, BackHandler, Pressable, StatusBar,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -26,7 +26,9 @@ function LightboxVideo({ uri }) {
 
 export default function MediaLightbox({ visible, uri, isVideo = false, onClose }) {
   const insets = useSafeAreaInsets();
-  const { width, height } = Dimensions.get('window');
+  // Reactive — re-reads on rotation / iPad window resize (Dimensions.get is a
+  // one-shot snapshot that goes stale where insets don't change, e.g. iPad).
+  const { width, height } = useWindowDimensions();
 
   // Android hardware back closes the lightbox (not the whole board).
   useEffect(() => {
@@ -55,16 +57,19 @@ export default function MediaLightbox({ visible, uri, isVideo = false, onClose }
           showsHorizontalScrollIndicator={false}
           showsVerticalScrollIndicator={false}
         >
-          {/* The image itself doesn't intercept the backdrop tap-to-close (a tap
-              that isn't a zoom gesture falls through to the Pressable). */}
-          <Image
-            source={{ uri }}
-            style={{ width, height }}
-            contentFit="contain"
-            transition={120}
-            cachePolicy="memory-disk"
-            pointerEvents="none"
-          />
+          {/* Tap-to-close lives on the image itself: the full-screen ScrollView
+              covers the backdrop Pressable, so a stationary tap must be caught
+              here. A two-finger pinch is still handled by the parent
+              ScrollView's native zoom recogniser, so zoom is preserved. */}
+          <Pressable onPress={onClose} style={{ width, height }}>
+            <Image
+              source={{ uri }}
+              style={{ width, height }}
+              contentFit="contain"
+              transition={120}
+              cachePolicy="memory-disk"
+            />
+          </Pressable>
         </ScrollView>
       )}
 

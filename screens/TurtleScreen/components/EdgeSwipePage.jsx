@@ -36,10 +36,17 @@ const COMMIT_VX = 0.5;
  *               nested page must live INSIDE the parent page's tree, not as its
  *               own modal. (Top-level pages over a tab use the Modal form.)
  */
-export default function EdgeSwipePage({ visible, onClose, children, overlay = false }) {
+export default function EdgeSwipePage({ visible, onClose, children, overlay = false, swipeEnabled = true }) {
   const { theme } = useTheme();
   const tx = useRef(new Animated.Value(SCREEN_W)).current;
   const [mounted, setMounted] = useState(false);
+  // Latest swipeEnabled read on the JS thread by the pan responder. Mirrored to
+  // a ref so the responder (memoised on [tx]) never rebuilds — the guard reads
+  // .current live. Callers set swipeEnabled={false} while an in-tree overlay
+  // (e.g. an open lightbox) is up, so the left-edge back-swipe can't leak
+  // through and close the whole page from under it.
+  const swipeEnabledRef = useRef(swipeEnabled);
+  swipeEnabledRef.current = swipeEnabled;
 
   // Keep the last-visible children so the page still renders its content while
   // animating OUT (after the caller has already cleared the backing data).
@@ -69,6 +76,7 @@ export default function EdgeSwipePage({ visible, onClose, children, overlay = fa
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponder: (evt, g) => {
+          if (!swipeEnabledRef.current) return false;
           const startX = evt.nativeEvent.pageX - g.dx;
           return (
             startX < EDGE_ZONE_PX &&
