@@ -6,15 +6,22 @@ import { blurProps, frostOverlayColor, frostBorderColor } from '../utils/frosted
 import { tapHaptic, impactHaptic } from '../utils/haptics';
 
 /**
- * ChatComposer — the app's ONE chat input, shared by the main Turtle chat and
- * every board conversation so they look + feel identical. A reference-style
+ * ChatComposer — the app's ONE chat input body, shared by the main Turtle chat
+ * AND every board conversation so they look + feel identical. A reference-style
  * frosted rounded card: an optional top slot (bot toggle / attached image), a
  * big bare input, an optional row of circular action buttons, and a round send
  * button that fills when armed.
  *
- * Presentational + fully controlled — the parent owns the text + send logic, so
- * this component carries none of the main chat's Claude/terminal machinery
- * (those stay opt-in via `topSlot` / `actions`). Boards use the plain form.
+ * Two shells:
+ *   • default — renders its own frosted card (marginHorizontal, rounded,
+ *     border, blur+tint). Boards use this.
+ *   • bare    — renders ONLY the body (top slot + input + actions), no card /
+ *     frost / margin, so it slots INSIDE an existing frosted wrapper. The main
+ *     chat uses this (its `inputArea` already carries the frost, autocomplete
+ *     dropdown, and keyboard-sync margin — bare mode avoids double-frost and
+ *     leaves that delicate layout untouched).
+ *
+ * Presentational + fully controlled — the parent owns the text + send logic.
  */
 export default function ChatComposer({
   theme,
@@ -25,23 +32,23 @@ export default function ChatComposer({
   disabled = false,
   placeholder = 'Message…',
   inputRef,
-  topSlot = null,        // node rendered above the input (bot slot, image thumb)
-  actions = null,        // node rendered as the left action cluster
-  marginBottom = 0,      // gap down to whatever sits below (nav bar / safe area)
+  topSlot = null,        // node above the input (bot slot / image thumb)
+  actions = null,        // node: the left action cluster
+  marginBottom = 0,      // gap below the card (default shell only)
+  bare = false,          // render only the body (no frost card)
+  canSend,               // optional override of the armed condition
+  inputProps = null,     // extra props spread onto the TextInput
   multiline = true,
   maxLength = 500,
 }) {
   const c = theme.colors;
-  const armed = !!value && value.trim().length > 0 && !disabled;
+  const armed = canSend !== undefined
+    ? !!canSend
+    : (!!value && value.trim().length > 0 && !disabled);
   const styles = makeStyles(theme);
 
-  return (
-    <View style={[styles.card, { marginBottom }]}>
-      {/* Frosted surface (blur + tint) behind the content — the "see-through"
-          look shared with the main chat. */}
-      <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
-      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
-
+  const body = (
+    <>
       {topSlot ? <View style={styles.topZone}>{topSlot}</View> : null}
 
       <TextInput
@@ -55,6 +62,7 @@ export default function ChatComposer({
         maxLength={maxLength}
         editable={!disabled}
         autoCorrect={false}
+        {...(inputProps || {})}
       />
 
       <View style={styles.actions}>
@@ -79,32 +87,40 @@ export default function ChatComposer({
           )}
         </TouchableOpacity>
       </View>
+    </>
+  );
+
+  if (bare) return body;
+
+  return (
+    <View style={[styles.card, { marginBottom }]}>
+      {/* Frosted surface (blur + tint) — the "see-through" look shared with the
+          main chat's inputArea. */}
+      <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
+      {body}
     </View>
   );
 }
 
-// Optional helper so callers get the same circular action buttons as the main
-// chat's @ / # buttons.
-export function ComposerAction({ theme, icon, onPress, active, accessibilityLabel }) {
+// Shared circular action button, so callers get the exact @ / # look.
+export function ComposerAction({ theme, icon, onPress, active, accessibilityLabel, size = 14 }) {
   const c = theme.colors;
   return (
     <TouchableOpacity
-      style={[styles0.actionCircle, {
+      style={{
+        width: 29, height: 29, borderRadius: 14.5, alignItems: 'center', justifyContent: 'center',
         backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.05)',
-      }]}
+      }}
       onPressIn={() => tapHaptic()}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
     >
-      <Icon name={icon} size={14} color={active ? (c.accentInfo || '#4ADE80') : c.textPrimary} />
+      <Icon name={icon} size={size} color={active ? (c.accentInfo || '#4ADE80') : c.textPrimary} />
     </TouchableOpacity>
   );
 }
-
-const styles0 = StyleSheet.create({
-  actionCircle: { width: 29, height: 29, borderRadius: 14.5, alignItems: 'center', justifyContent: 'center' },
-});
 
 const makeStyles = (theme) => StyleSheet.create({
   card: {

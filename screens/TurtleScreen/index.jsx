@@ -54,6 +54,7 @@ import TerminalConsole from './components/TerminalConsole';
 import FriendCard from './components/FriendCard';
 import EdgeSwipePage from './components/EdgeSwipePage';
 import ConversationsOverlay from './components/ConversationsOverlay';
+import ChatComposer from '../../components/ChatComposer';
 import LinkDesktop from './components/LinkDesktop';
 // SettingsScreen used to be its own tab. We surface it from inside
 // the Turtle page now via the top-right gear icon — the tab bar
@@ -2555,165 +2556,85 @@ export default function TurtleScreen() {
           </View>
         )}
 
-        {/* ── Composer card, reference-style ─────────────────────────────
-            Three stacked zones inside the frosted card:
-              1. top zone    — attached-image thumb (X badge) + the dashed
-                               "bot slot" circle (= the Claude session toggle,
-                               solid + tinted while a session is live)
-              2. big input   — large bare text, no pill, like the reference
-              3. actions row — circular buttons (attach / keyboard / boards /
-                               commands) + the round send button on the right */}
-        <View style={styles.composerTopZone}>
-          {claudeImage && (
-            <View style={{ position: 'relative' }}>
-              <Image
-                source={{ uri: claudeImage.uri }}
-                style={styles.composerThumb}
-                contentFit="cover"
-              />
-              <TouchableOpacity
-                onPress={() => setClaudeImage(null)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                style={styles.composerThumbX}
-                accessibilityLabel="Remove attached image"
-              >
-                <Icon name="close" size={14} color={theme.colors.textPrimary} />
-              </TouchableOpacity>
-            </View>
-          )}
-          {/* The bot slot — opens (or hides) the Claude session. While it's
-              open, the composer types straight to Claude. Long-press → the
-              Claude model picker (Opus / Sonnet / Haiku / Default). */}
-          <TouchableOpacity
-            style={[styles.botSlot, claudeUiMode === 'session' && styles.botSlotActive]}
-            onPressIn={() => tapHaptic()}
-            onPress={() => {
-              if (claudeUiMode === 'session') {
-                claudeClose();              // toggle off (keeps the session alive)
-              } else {
-                terminalClose();            // mutually exclusive with the terminal
-                claudeStart();              // open the session → input routes to Claude
-                setTimeout(() => inputRef.current?.focus(), 60);
-              }
-            }}
-            onLongPress={() => setShowModelPicker(true)}
-            delayLongPress={350}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityRole="button"
-            accessibilityLabel={claudeUiMode === 'session' ? 'Hide Claude session' : 'Open Claude session'}
-            accessibilityHint="Long-press to choose the Claude model"
-          >
-            <Icon
-              name="robot-outline"
-              size={17}
-              color={claudeUiMode === 'session' ? (theme.mode === 'dark' ? '#FACC15' : '#CA8A04') : theme.colors.textMuted}
-            />
-          </TouchableOpacity>
-        </View>
-
-        <TextInput
-          ref={inputRef}
-          style={styles.input}
+        {/* Composer body — the SHARED ChatComposer in `bare` mode: it renders
+            only the top slot + input + actions + send, INSIDE this inputArea's
+            existing frost + autocomplete + keyboard-sync margin (bare avoids a
+            second frosted card). Same component every board conversation uses,
+            so the main chat and board chats are literally one composer. */}
+        <ChatComposer
+          bare
+          theme={theme}
+          inputRef={inputRef}
           value={inputText}
           onChangeText={handleInputChange}
+          onSend={sendMessage}
+          canSend={(inputText.trim() || (claudeUiMode === 'session' && claudeImage)) && isConnected}
+          disabled={!isConnected}
           placeholder={terminalOpen ? 'Run a command…' : claudeUiMode === 'login' ? 'Paste sign-in code…' : claudeUiMode === 'session' ? 'Message Claude…' : 'Message...'}
-          placeholderTextColor={theme.colors.textMuted}
-          multiline
-          maxLength={500}
-          editable={isConnected}
-          autoComplete="off"
-          textContentType="none"
-          // Keyboard mode — only the coding contexts opt into the "Code"
-          // keyboard; everyday chat keeps the OS defaults. Changing these
-          // takes effect on the input's next focus.
-          autoCapitalize={
-            (claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && keyboardMode === 'code'
-              ? 'none'
-              : 'sentences'
+          inputProps={{
+            autoComplete: 'off',
+            textContentType: 'none',
+            spellCheck: false,
+            // Code keyboard (no autocap) only in the coding contexts.
+            autoCapitalize: (claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && keyboardMode === 'code' ? 'none' : 'sentences',
+          }}
+          topSlot={
+            <>
+              {claudeImage && (
+                <View style={{ position: 'relative' }}>
+                  <Image source={{ uri: claudeImage.uri }} style={styles.composerThumb} contentFit="cover" />
+                  <TouchableOpacity
+                    onPress={() => setClaudeImage(null)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    style={styles.composerThumbX}
+                    accessibilityLabel="Remove attached image"
+                  >
+                    <Icon name="close" size={14} color={theme.colors.textPrimary} />
+                  </TouchableOpacity>
+                </View>
+              )}
+              {/* Bot slot — opens/hides the Claude session; long-press = model picker. */}
+              <TouchableOpacity
+                style={[styles.botSlot, claudeUiMode === 'session' && styles.botSlotActive]}
+                onPressIn={() => tapHaptic()}
+                onPress={() => {
+                  if (claudeUiMode === 'session') { claudeClose(); }
+                  else { terminalClose(); claudeStart(); setTimeout(() => inputRef.current?.focus(), 60); }
+                }}
+                onLongPress={() => setShowModelPicker(true)}
+                delayLongPress={350}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={claudeUiMode === 'session' ? 'Hide Claude session' : 'Open Claude session'}
+                accessibilityHint="Long-press to choose the Claude model"
+              >
+                <Icon name="robot-outline" size={17} color={claudeUiMode === 'session' ? (theme.mode === 'dark' ? '#FACC15' : '#CA8A04') : theme.colors.textMuted} />
+              </TouchableOpacity>
+            </>
           }
-          // Predictive/QuickType bar OFF: it slid in as a second keyboard
-          // frame and made the composer jump up at the END of the open
-          // animation. Disabling it gives a single-height keyboard that
-          // opens in one smooth motion. (Code mode already had it off.)
-          autoCorrect={false}
-          spellCheck={false}
+          actions={
+            <>
+              {claudeUiMode === 'session' && (
+                <TouchableOpacity style={styles.actionCircle} onPressIn={() => tapHaptic()} onPress={pickClaudeImage} accessibilityRole="button" accessibilityLabel="Attach an image to send to Claude">
+                  <Icon name="image-outline" size={14} color={claudeImage ? '#4ADE80' : theme.colors.textPrimary} />
+                </TouchableOpacity>
+              )}
+              {(claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && (
+                <TouchableOpacity style={styles.actionCircle} onPress={() => setKeyboardMode((m) => (m === 'code' ? 'normal' : 'code'))} accessibilityRole="button" accessibilityLabel={`Keyboard: ${keyboardMode === 'code' ? 'Code' : 'Normal'}. Tap to switch.`}>
+                  <Icon name={keyboardMode === 'code' ? 'code-tags' : 'keyboard-outline'} size={13} color={keyboardMode === 'code' ? '#4ADE80' : theme.colors.textPrimary} />
+                </TouchableOpacity>
+              )}
+              {/* @ — board conversations inbox. */}
+              <TouchableOpacity style={styles.actionCircle} onPressIn={() => tapHaptic()} onPress={() => setShowConversations(true)} accessibilityRole="button" accessibilityLabel="Open board conversations">
+                <Icon name="at" size={14} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+              {/* # — slash-commands: prefill "/" so the autocomplete opens. */}
+              <TouchableOpacity style={styles.actionCircle} onPressIn={() => tapHaptic()} onPress={() => { handleInputChange('/'); setTimeout(() => inputRef.current?.focus(), 0); }} accessibilityRole="button" accessibilityLabel="Show commands">
+                <Icon name="pound" size={14} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+            </>
+          }
         />
-
-        <View style={styles.composerActions}>
-          {/* Attach image — only while a Claude session is open. */}
-          {claudeUiMode === 'session' && (
-            <TouchableOpacity
-              style={styles.actionCircle}
-              onPressIn={() => tapHaptic()}
-              onPress={pickClaudeImage}
-              accessibilityRole="button"
-              accessibilityLabel="Attach an image to send to Claude"
-            >
-              <Icon name="image-outline" size={14} color={claudeImage ? '#4ADE80' : theme.colors.textPrimary} />
-            </TouchableOpacity>
-          )}
-          {/* Keyboard chooser — coding contexts only (Code = no autocorrect). */}
-          {(claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && (
-            <TouchableOpacity
-              style={styles.actionCircle}
-              onPress={() => setKeyboardMode((m) => (m === 'code' ? 'normal' : 'code'))}
-              accessibilityRole="button"
-              accessibilityLabel={`Keyboard: ${keyboardMode === 'code' ? 'Code' : 'Normal'}. Tap to switch.`}
-            >
-              <Icon
-                name={keyboardMode === 'code' ? 'code-tags' : 'keyboard-outline'}
-                size={13}
-                color={keyboardMode === 'code' ? '#4ADE80' : theme.colors.textPrimary}
-              />
-            </TouchableOpacity>
-          )}
-          {/* @ — the board conversations inbox (the app's "mentions"). */}
-          <TouchableOpacity
-            style={styles.actionCircle}
-            onPressIn={() => tapHaptic()}
-            onPress={() => setShowConversations(true)}
-            accessibilityRole="button"
-            accessibilityLabel="Open board conversations"
-          >
-            <Icon name="at" size={14} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
-          {/* # — slash-commands: prefill "/" so the autocomplete opens. */}
-          <TouchableOpacity
-            style={styles.actionCircle}
-            onPressIn={() => tapHaptic()}
-            onPress={() => {
-              handleInputChange('/');
-              setTimeout(() => inputRef.current?.focus(), 0);
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Show commands"
-          >
-            <Icon name="pound" size={14} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
-          <View style={{ flex: 1 }} />
-          <TouchableOpacity
-            style={[
-              styles.sendCircle,
-              ((inputText.trim() || (claudeUiMode === 'session' && claudeImage)) && isConnected) && styles.sendCircleArmed,
-            ]}
-            onPressIn={() => impactHaptic('medium')}
-            onPress={sendMessage}
-            disabled={(!inputText.trim() && !(claudeUiMode === 'session' && claudeImage)) || !isConnected}
-            accessibilityRole="button"
-            accessibilityLabel="Send"
-          >
-            <Icon
-              name="arrow-up"
-              size={17}
-              color={
-                (inputText.trim() || (claudeUiMode === 'session' && claudeImage)) && isConnected
-                  // Armed = inverse ink on the filled circle.
-                  ? (theme.mode === 'dark' ? '#111111' : '#FFFFFF')
-                  : theme.colors.textMuted
-              }
-            />
-          </TouchableOpacity>
-        </View>
       </View>
       </View>{/* /below-console measuring wrapper */}
       </Reanimated.View>{/* /bottom dock */}
