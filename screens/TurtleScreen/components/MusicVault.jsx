@@ -52,6 +52,14 @@ export default function MusicVault({ onClose }) {
   const player = useVideoPlayer(null, (p) => {
     p.timeUpdateEventInterval = 0.4;
     p.loop = false;
+    // Lock-screen / notification transport controls + keep audio playing when
+    // the app is backgrounded. expo-video renders the OS now-playing widget
+    // (play/pause/seek). NOTE: true background playback also needs the
+    // UIBackgroundModes:audio native capability (app.json expo-video plugin
+    // supportsBackgroundPlayback) — a dev-client REBUILD activates it; these
+    // flags are the JS half.
+    try { p.staysActiveInBackground = true; } catch { /* older expo-video */ }
+    try { p.showNowPlayingNotification = true; } catch { /* older expo-video */ }
   });
 
   const load = useCallback(async () => {

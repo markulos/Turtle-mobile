@@ -45,7 +45,12 @@
           "faceIDPermission": "Allow $(PRODUCT_NAME) to use Face ID to unlock your passwords."
         }
       ],
-      "expo-video",
+      [
+        "expo-video",
+        {
+          "supportsBackgroundPlayback": true
+        }
+      ],
       "expo-secure-store",
       "expo-notifications",
       [
