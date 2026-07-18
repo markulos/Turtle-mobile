@@ -10,8 +10,9 @@ import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
 import { tapHaptic } from '../../../utils/haptics';
 import EdgeSwipePage from './EdgeSwipePage';
-import ChatComposer from '../../../components/ChatComposer';
+import ChatComposer, { ComposerAction } from '../../../components/ChatComposer';
 import MediaLightbox from '../../../components/MediaLightbox';
+import QuickTaskCreate from '../../TasksScreen/components/QuickTaskCreate';
 
 // One board's CONVERSATION (conversation-boards Phase 3): the merged feed of
 // everything on the board — tasks, events, notes, media (rendered as compact
@@ -68,6 +69,11 @@ export default function BoardTimeline({ visible, board, onClose }) {
     if (!p) return null;
     return /^https?:/i.test(p) ? p : mediaBase + p;
   }, [mediaBase]);
+
+  // Composer "＋ task" → quick full-page task creator, prefilled with THIS
+  // board (the callback itself is defined after `load`/`dirtyRef` below, so it
+  // can depend on the CURRENT-board `load` rather than a stale first-render one).
+  const [quickOpen, setQuickOpen] = useState(false);
 
   // Tapped chat image/video → full-screen lightbox. { uri, isVideo } | null.
   const [lightbox, setLightbox] = useState(null);
@@ -130,6 +136,23 @@ export default function BoardTimeline({ visible, board, onClose }) {
       load(null);
     }
   }, [visible, board, load]);
+
+  // Persist a task created from THIS board's composer via POST /tasks/single
+  // (the whole-list POST the Tasks screen uses isn't reachable here), then
+  // refresh the feed so it shows inline. Deps include `load` so it always calls
+  // the CURRENT board's loader — not a stale first-render one (board was null
+  // then, which would no-op the refresh and invite duplicate taps).
+  const createTaskFromBoard = useCallback(async (finalTask) => {
+    try {
+      await api.post('/tasks/single', finalTask);
+      dirtyRef.current = true; // the inbox overview should re-count on close
+      load(null);              // pull the new task into the merged feed
+    } catch (e) {
+      // Non-fatal: the composer already closed optimistically. Surface nothing
+      // louder than a console note — the user can retry from the Tasks tab.
+      console.warn('Board quick-task create failed:', e?.message || e);
+    }
+  }, [api, load]);
 
   // The last few chat turns (oldest→newest), handed to the AI as conversation
   // history so the board thread stays coherent turn to turn.
@@ -317,7 +340,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
   const handleClose = useCallback(() => onClose(dirtyRef.current), [onClose]);
 
   return (
-    <EdgeSwipePage overlay visible={visible} onClose={handleClose} swipeEnabled={!lightbox}>
+    <EdgeSwipePage overlay visible={visible} onClose={handleClose} swipeEnabled={!lightbox && !quickOpen}>
       <KeyboardAvoidingView
         style={{ flex: 1, backgroundColor: c.background }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -401,8 +424,26 @@ export default function BoardTimeline({ visible, board, onClose }) {
           sending={sending}
           placeholder={`Message ${board || 'board'}…`}
           marginBottom={Math.max(insets.bottom, 8)}
+          actions={(
+            <ComposerAction
+              theme={theme}
+              icon="checkbox-marked-circle-plus-outline"
+              onPress={() => { tapHaptic(); setQuickOpen(true); }}
+              accessibilityLabel="New task on this board"
+            />
+          )}
         />
       </KeyboardAvoidingView>
+
+      {/* Quick task creator, scoped to this board (board fixed → no board chip;
+          it's implied by the conversation). */}
+      <QuickTaskCreate
+        visible={quickOpen}
+        onClose={() => setQuickOpen(false)}
+        onSubmit={createTaskFromBoard}
+        boards={[]}
+        initialBoard={board || ''}
+      />
 
       {/* Full-screen image/video viewer — in-tree overlay above the board
           (a sibling Modal wouldn't present over this EdgeSwipePage on iOS). */}

@@ -127,6 +127,7 @@ import {
 } from './components';
 import FriendCard from '../TurtleScreen/components/FriendCard';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
+import QuickTaskCreate from './components/QuickTaskCreate';
 import { useNavigation } from '@react-navigation/native';
 import { useCommandBus } from '../../context/CommandBusContext';
 import { useCelebration } from '../../context/CelebrationContext';
@@ -493,6 +494,12 @@ export default function TasksScreen() {
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [showProjectManager, setShowProjectManager] = useState(false);
   const [showTaskForm, setShowTaskForm] = useState(false);
+  // Quick full-page task creator (the simple default for NEW tasks). Board /
+  // date it opens prefilled with; the full TaskForm is one "More details" tap
+  // away for the rest of the capabilities.
+  const [showQuick, setShowQuick] = useState(false);
+  const [quickBoard, setQuickBoard] = useState('');
+  const [quickDate, setQuickDate] = useState('');
   // Whose-profile-is-open: { userId, ownerName } set when a task's owner badge
   // is tapped on the shared calendar; drives the FriendCard popup below.
   const [profileOwner, setProfileOwner] = useState(null);
@@ -1624,6 +1631,27 @@ export default function TasksScreen() {
     setShowTaskForm(true);
   }, []);
 
+  // NEW tasks open the simple full-page quick creator (not the full sheet).
+  // Events/birthdays still go straight to the full form (they need the occasion
+  // fields). `date`/`board` prefill it.
+  const openQuickCreate = useCallback((date = '', board = '') => {
+    setQuickDate(date || '');
+    setQuickBoard(board || '');
+    setShowQuick(true);
+  }, []);
+
+  // "More details" from the quick creator: hand its draft to the full TaskForm,
+  // prefilled. The draft carries no id, so the form still treats it as a NEW
+  // item (no delete, fresh id on save) while showing every advanced field.
+  const openMoreFromQuick = useCallback((draft) => {
+    setShowQuick(false);
+    setEditingTask(draft || null);
+    setNewItemType('task');
+    setNewItemDate(null);
+    setFormContinue(false);
+    setShowTaskForm(true);
+  }, []);
+
   const openDetail = (task) => {
     setSelectedTask(task);
     setShowDetail(true);
@@ -1937,6 +1965,16 @@ export default function TasksScreen() {
         onCollectTags={collectTags}
       />
 
+      <QuickTaskCreate
+        visible={showQuick}
+        onClose={() => setShowQuick(false)}
+        onSubmit={handleSaveTask}
+        onMore={openMoreFromQuick}
+        boards={projects}
+        initialBoard={quickBoard}
+        initialDate={quickDate}
+      />
+
       <TaskDetail
         // Derive the detail task LIVE from `tasks` (not the snapshot captured
         // at openDetail) so toggling a subtask checkbox — which updates the
@@ -2103,7 +2141,7 @@ export default function TasksScreen() {
           onPlannerOpenChange={setDayPlannerOpen}
           // The day-planner's "+" creates a task pre-dated to the tapped day;
           // the type is still switchable inside the form.
-          onCreateForDate={(dateStr) => openCreateForm('task', dateStr)}
+          onCreateForDate={(dateStr) => openQuickCreate(dateStr)}
           // Tap a task's owner badge → open that person's profile card.
           onOwnerPress={(t) => { if (t?.userId) setProfileOwner({ userId: t.userId, ownerName: t.ownerName }); }}
         />
@@ -2292,10 +2330,7 @@ export default function TasksScreen() {
                 {!searchQuery && (
                   <TouchableOpacity
                     onPressIn={() => impactHaptic('medium')}
-                    onPress={() => {
-                      setEditingTask(null);
-                      setShowTaskForm(true);
-                    }}
+                    onPress={() => openQuickCreate()}
                     style={styles.addNewTaskBtn}
                   >
                     <Icon name="plus" size={20} color={theme.colors.textPrimary} />
