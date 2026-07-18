@@ -2159,7 +2159,19 @@ export default function TurtleScreen() {
       {/* Conversation boards — messenger inbox of per-board threads (list +
           board conversation with board-scoped Turtle AI). Sibling Modal of the
           Friends page; never open at the same time as it. */}
-      <ConversationsOverlay visible={showConversations} onClose={() => setShowConversations(false)} />
+      <ConversationsOverlay
+        visible={showConversations}
+        onClose={() => setShowConversations(false)}
+        onOpenClaude={() => {
+          // The dedicated "Claude" inbox entry → close the inbox + open the
+          // Claude coding session in the main chat (reuses the existing
+          // session machinery; input then routes straight to Claude).
+          setShowConversations(false);
+          terminalClose();
+          if (claudeUiMode !== 'session') claudeStart();
+          setTimeout(() => inputRef.current?.focus(), 80);
+        }}
+      />
 
       {/* Link a desktop — scan the QR the Turtle desktop app shows to sign it in. */}
       <LinkDesktop visible={showLinkDesktop} onClose={() => setShowLinkDesktop(false)} />

@@ -140,7 +140,7 @@ const timeAgo = (ts) => {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
 
-export default function ConversationsOverlay({ visible, onClose }) {
+export default function ConversationsOverlay({ visible, onClose, onOpenClaude }) {
   const { theme } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
@@ -361,6 +361,37 @@ export default function ConversationsOverlay({ visible, onClose }) {
             ItemSeparatorComponent={() => (
               <View style={{ height: 1, backgroundColor: c.border, marginLeft: 72 }} />
             )}
+            ListHeaderComponent={
+              // Dedicated Claude session — pinned at the top of the inbox (only
+              // when not searching). Opens the Claude coding session in the
+              // main chat via the parent's onOpenClaude.
+              !query.trim() && onOpenClaude ? (
+                <View>
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => { tapHaptic(); onOpenClaude(); }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 12 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open Claude session"
+                  >
+                    <View style={{
+                      width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
+                      backgroundColor: (c.accentWarning || '#FACC15') + '2A',
+                    }}>
+                      <Icon name="robot-outline" size={22} color={c.accentWarning || '#CA8A04'} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 16, fontWeight: '700', color: c.textPrimary }} numberOfLines={1}>Claude</Text>
+                      <Text style={{ fontSize: 13, color: c.textTertiary, marginTop: 1 }} numberOfLines={1}>
+                        AI coding session
+                      </Text>
+                    </View>
+                    <Icon name="chevron-right" size={22} color={c.textTertiary} />
+                  </TouchableOpacity>
+                  <View style={{ height: 1, backgroundColor: c.border, marginLeft: 72 }} />
+                </View>
+              ) : null
+            }
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={() => load({ isRefresh: true })} tintColor={c.textSecondary} />
             }

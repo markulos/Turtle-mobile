@@ -10,6 +10,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
 import { tapHaptic } from '../../../utils/haptics';
 import EdgeSwipePage from './EdgeSwipePage';
+import ChatComposer from '../../../components/ChatComposer';
 
 // One board's CONVERSATION (conversation-boards Phase 3): the merged feed of
 // everything on the board — tasks, events, notes, media (rendered as compact
@@ -296,7 +297,6 @@ export default function BoardTimeline({ visible, board, onClose }) {
 
   const keyExtractor = useCallback((it, i) => `${it.kind}:${it.id ?? i}`, []);
 
-  const canSend = draft.trim().length > 0 && !sending;
 
   // Explicit wrapper so EdgeSwipePage / button press event args can't leak
   // through as a truthy "did activity" flag — the parent inbox only refreshes
@@ -377,46 +377,18 @@ export default function BoardTimeline({ visible, board, onClose }) {
           />
         )}
 
-        {/* Composer — board-scoped chat. Turtle AI answers with this board's
-            items as its working context. */}
-        <View style={{
-          flexDirection: 'row', alignItems: 'flex-end', gap: 6,
-          paddingHorizontal: 10, paddingTop: 6,
-          paddingBottom: Math.max(insets.bottom, 8),
-          borderTopWidth: 1, borderTopColor: c.border,
-          backgroundColor: c.surface,
-        }}>
-          <TextInput
-            style={{
-              flex: 1, minHeight: 32, maxHeight: 96,
-              paddingHorizontal: 12, paddingVertical: 6,
-              borderRadius: 16, fontSize: 13,
-              backgroundColor: c.surfaceElevated, color: c.textPrimary,
-            }}
-            placeholder={`Message ${board || 'board'}…`}
-            placeholderTextColor={c.textTertiary}
-            value={draft}
-            onChangeText={setDraft}
-            multiline
-            maxLength={500}
-          />
-          <TouchableOpacity
-            onPressIn={() => canSend && tapHaptic()}
-            onPress={() => sendBoardMessage(draft)}
-            disabled={!canSend}
-            style={{
-              width: 32, height: 32, borderRadius: 16,
-              alignItems: 'center', justifyContent: 'center',
-              backgroundColor: canSend ? c.accentInfo : c.surfaceElevated,
-            }}
-            accessibilityLabel="Send message"
-            accessibilityRole="button"
-          >
-            {sending
-              ? <ActivityIndicator size="small" color={canSend ? '#fff' : c.textTertiary} />
-              : <Icon name="send" size={15} color={canSend ? '#fff' : c.textTertiary} />}
-          </TouchableOpacity>
-        </View>
+        {/* Composer — the SAME ChatComposer as the main Turtle chat, so board
+            conversations look + feel identical. Turtle AI answers with this
+            board's items as its working context. */}
+        <ChatComposer
+          theme={theme}
+          value={draft}
+          onChangeText={setDraft}
+          onSend={() => sendBoardMessage(draft)}
+          sending={sending}
+          placeholder={`Message ${board || 'board'}…`}
+          marginBottom={Math.max(insets.bottom, 8)}
+        />
       </KeyboardAvoidingView>
     </EdgeSwipePage>
   );
