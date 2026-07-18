@@ -460,13 +460,16 @@ export default function NotesScreen() {
   useEffect(() => {
     const q = search.trim();
     if (!q) { setServerMatches([]); return; }
+    // Don't fire a doomed request while disconnected — leave serverMatches
+    // empty so the Tier-3 fuzzy fallback still gets a chance over the index.
+    if (!isConnected) { setServerMatches([]); return; }
     const h = setTimeout(() => {
       api.get(`/turtle/notes/search?q=${encodeURIComponent(q)}`)
         .then((r) => setServerMatches(r.notes || []))
         .catch(() => setServerMatches([]));
     }, 300);
     return () => clearTimeout(h);
-  }, [search, api]);
+  }, [search, api, isConnected]);
 
   // Rail chips = note-derived topics MERGED with every server board (count 0
   // while no note carries it yet) — so the Notes rail lists the same boards
@@ -515,6 +518,15 @@ export default function NotesScreen() {
     for (const n of notes) if (matchesNoteSearch(n, q)) byId.set(n.id, n);
     for (const n of serverMatches) if (!byId.has(n.id)) byId.set(n.id, n);
     if (byId.size > 0) return Array.from(byId.values());
+    // Tier 3 fallback. KNOWN LIMITATION: fuzzyRank ranks ids over the FULL
+    // noteIndex (every note), but we can only RENDER a note we actually have
+    // in hand — the loaded page + serverMatches. Tier 3 only runs when Tier 2
+    // returned zero hits, so serverMatches is empty here too, making the pool
+    // effectively just the loaded page (limit=200). A fuzzy candidate whose id
+    // falls outside that page ranks but has no Note object to render, so it's
+    // silently dropped. Left as-is rather than adding an id-fetch — acceptable
+    // for the current small-notes quick-capture scale; revisit with an
+    // id-fetch endpoint if notes volume grows large.
     const ids = new Set(fuzzyRank(q, noteIndex.current));
     if (ids.size === 0) return [];
     const pool = new Map();
