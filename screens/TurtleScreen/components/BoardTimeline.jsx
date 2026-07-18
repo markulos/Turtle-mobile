@@ -11,6 +11,7 @@ import { useServer } from '../../../context/ServerContext';
 import { tapHaptic } from '../../../utils/haptics';
 import EdgeSwipePage from './EdgeSwipePage';
 import ChatComposer from '../../../components/ChatComposer';
+import MediaLightbox from '../../../components/MediaLightbox';
 
 // One board's CONVERSATION (conversation-boards Phase 3): the merged feed of
 // everything on the board — tasks, events, notes, media (rendered as compact
@@ -67,6 +68,16 @@ export default function BoardTimeline({ visible, board, onClose }) {
     if (!p) return null;
     return /^https?:/i.test(p) ? p : mediaBase + p;
   }, [mediaBase]);
+
+  // Tapped chat image/video → full-screen lightbox. { uri, isVideo } | null.
+  const [lightbox, setLightbox] = useState(null);
+  const openLightbox = useCallback((item) => {
+    // Full-res raw for the viewer (the row itself shows the thumbnail).
+    const uri = getFullUrl(item.rawUrl || item.thumbnailUrl);
+    if (!uri) return;
+    tapHaptic();
+    setLightbox({ uri, isVideo: !!(item.mediaType && item.mediaType !== 'image') });
+  }, [getFullUrl]);
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -224,29 +235,31 @@ export default function BoardTimeline({ visible, board, onClose }) {
             maxWidth: '74%', borderRadius: 16, overflow: 'hidden',
             backgroundColor: c.surfaceElevated,
           }}>
-            {uri ? (
-              <Image
-                source={{ uri }}
-                style={{ width: 210, height: 210 }}
-                contentFit="cover"
-                transition={150}
-                recyclingKey={uri}
-                cachePolicy="memory-disk"
-              />
-            ) : (
-              <View style={{ width: 210, height: 150, alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name="image-off-outline" size={28} color={c.textTertiary} />
-              </View>
-            )}
-            {isVideo && !!uri && (
-              <View style={{
-                position: 'absolute', top: 8, right: 8,
-                width: 26, height: 26, borderRadius: 13,
-                backgroundColor: '#000000A6', alignItems: 'center', justifyContent: 'center',
-              }}>
-                <Icon name="play" size={16} color="#fff" />
-              </View>
-            )}
+            <TouchableOpacity activeOpacity={0.9} disabled={!uri} onPress={() => openLightbox(item)}>
+              {uri ? (
+                <Image
+                  source={{ uri }}
+                  style={{ width: 210, height: 210 }}
+                  contentFit="cover"
+                  transition={150}
+                  recyclingKey={uri}
+                  cachePolicy="memory-disk"
+                />
+              ) : (
+                <View style={{ width: 210, height: 150, alignItems: 'center', justifyContent: 'center' }}>
+                  <Icon name="image-off-outline" size={28} color={c.textTertiary} />
+                </View>
+              )}
+              {isVideo && !!uri && (
+                <View style={{
+                  position: 'absolute', top: 8, right: 8,
+                  width: 26, height: 26, borderRadius: 13,
+                  backgroundColor: '#000000A6', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Icon name="play" size={16} color="#fff" />
+                </View>
+              )}
+            </TouchableOpacity>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
               <Icon name="image-outline" size={13} color={c.textTertiary} />
               <Text style={{ flex: 1, fontSize: 12, color: c.textSecondary }} numberOfLines={1}>
@@ -293,7 +306,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
         </View>
       </View>
     );
-  }, [c, sendBoardMessage, getFullUrl]);
+  }, [c, sendBoardMessage, getFullUrl, openLightbox]);
 
   const keyExtractor = useCallback((it, i) => `${it.kind}:${it.id ?? i}`, []);
 
@@ -390,6 +403,15 @@ export default function BoardTimeline({ visible, board, onClose }) {
           marginBottom={Math.max(insets.bottom, 8)}
         />
       </KeyboardAvoidingView>
+
+      {/* Full-screen image/video viewer — in-tree overlay above the board
+          (a sibling Modal wouldn't present over this EdgeSwipePage on iOS). */}
+      <MediaLightbox
+        visible={!!lightbox}
+        uri={lightbox?.uri}
+        isVideo={lightbox?.isVideo}
+        onClose={() => setLightbox(null)}
+      />
     </EdgeSwipePage>
   );
 }
