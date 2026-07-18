@@ -77,6 +77,8 @@ import { useServer } from '../../context/ServerContext';
 import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
+// Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
+import { fuzzyRank } from '../../utils/trigram';
 
 const FILTER_ALL = 'all';
 const FILTER_NOTE = 'note';
@@ -149,6 +151,17 @@ function buildSearchEntries(notes, boards) {
   }
   entries.sort((a, b) => a.topic.toLowerCase().localeCompare(b.topic.toLowerCase()));
   return entries;
+}
+
+// Everything-style instant matcher: case-insensitive, multi-term AND over
+// headline + description + tags. Mirror of web matchesNoteSearch — this is
+// Tier 1 (the client's already-loaded page of notes); Tier 2 is the server
+// FTS merge and Tier 3 is the trigram fuzzy fallback, both wired below.
+function matchesNoteSearch(n, query) {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const hay = `${n.content || ''} ${n.description || ''} ${(n.tags || []).join(' ')}`.toLowerCase();
+  return terms.every((t) => hay.includes(t));
 }
 
 // ── Shared-link note helpers ────────────────────────────────
@@ -274,6 +287,16 @@ export default function NotesScreen() {
   const [composerOpen, setComposerOpen] = useState(false);
   // The note currently being edited (null = the composer is in "create" mode).
   const [editingNote, setEditingNote] = useState(null);
+
+  // Header search (top-right magnify → expandable bar). `search` drives the
+  // 3-tier live filter below; `serverMatches` holds the Tier-2 FTS results for
+  // the current query; `noteIndex` is the Tier-1/3 client-side index (id+text
+  // over ALL notes, not just the loaded page) fetched once on mount.
+  const [search, setSearch] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [serverMatches, setServerMatches] = useState([]);
+  const noteIndex = useRef([]);
+  const searchInputRef = useRef(null);
 
   // ── Fetch list ──────────────────────────────────────────
   // Newest-first: the server's GET /notes already orders DESC by
@@ -424,6 +447,27 @@ export default function NotesScreen() {
     return () => { cancelled = true; };
   }, [topicSearchOpen, isConnected, api]);
 
+  // Tier 1 index (all notes' text, not just the loaded page) — instant client
+  // filter across every note the account has, fetched once on mount.
+  useEffect(() => {
+    if (!isConnected) return;
+    api.get('/turtle/notes/index')
+      .then((r) => { noteIndex.current = r.index || []; })
+      .catch(() => {});
+  }, [isConnected, api]);
+
+  // Tier 2 debounced server FTS — catches matches beyond the loaded page.
+  useEffect(() => {
+    const q = search.trim();
+    if (!q) { setServerMatches([]); return; }
+    const h = setTimeout(() => {
+      api.get(`/turtle/notes/search?q=${encodeURIComponent(q)}`)
+        .then((r) => setServerMatches(r.notes || []))
+        .catch(() => setServerMatches([]));
+    }, 300);
+    return () => clearTimeout(h);
+  }, [search, api]);
+
   // Rail chips = note-derived topics MERGED with every server board (count 0
   // while no note carries it yet) — so the Notes rail lists the same boards
   // the tasks tab does, browsable before their first note.
@@ -457,6 +501,27 @@ export default function NotesScreen() {
     () => (topicSearchOpen ? buildSearchEntries(notes, boards) : []),
     [topicSearchOpen, notes, boards],
   );
+
+  // Header search — Everything-style 3-tier live filter. No query → every
+  // loaded note. Otherwise: Tier 1 (instant substring match over the loaded
+  // page) UNION Tier 2 (server FTS results, which can include notes beyond the
+  // loaded page/limit) deduped by id. If that union is empty, fall back to
+  // Tier 3 — trigram/Dice fuzzy ranking over the full noteIndex, mapped back
+  // to whatever note objects are on hand (loaded page first, then serverMatches).
+  const visibleNotes = useMemo(() => {
+    const q = search.trim();
+    if (!q) return notes;
+    const byId = new Map();
+    for (const n of notes) if (matchesNoteSearch(n, q)) byId.set(n.id, n);
+    for (const n of serverMatches) if (!byId.has(n.id)) byId.set(n.id, n);
+    if (byId.size > 0) return Array.from(byId.values());
+    const ids = new Set(fuzzyRank(q, noteIndex.current));
+    if (ids.size === 0) return [];
+    const pool = new Map();
+    for (const n of notes) pool.set(n.id, n);
+    for (const n of serverMatches) pool.set(n.id, n);
+    return Array.from(ids).map((id) => pool.get(id)).filter(Boolean);
+  }, [notes, search, serverMatches]);
 
   // Visible list ANDs the type filter (All/Notes/Todos) with the topic filter.
   // Topic match is "exact topic OR a sub-topic of it" (e.g. selecting `moodboard`
@@ -521,9 +586,10 @@ export default function NotesScreen() {
     const f = FILTER_ORDER[idx];
     if (f && f !== filter) setFilter(f);
   }, [screenW, filter]);
-  // Per-page list: type filter + the active topic filter. Notes are few.
+  // Per-page list: search filter (Tier 1-3, see visibleNotes) + the type
+  // filter + the active topic filter. Notes are few.
   const listFor = useCallback((filterKey) => {
-    let list = notes;
+    let list = visibleNotes;
     if (filterKey !== FILTER_ALL) list = list.filter((n) => (n.type || 'note') === filterKey);
     if (selectedTopic === UNTAGGED) {
       list = list.filter((n) => !Array.isArray(n.tags) || n.tags.length === 0);
@@ -533,7 +599,7 @@ export default function NotesScreen() {
         && n.tags.some((t) => t === sel || String(t).startsWith(sel + '/')));
     }
     return list;
-  }, [notes, selectedTopic]);
+  }, [visibleNotes, selectedTopic]);
   const renderPageBody = (filterKey) => {
     const data = listFor(filterKey);
     if (data.length === 0) {
@@ -616,7 +682,46 @@ export default function NotesScreen() {
           </Text>
         )}
         <Text style={styles.titleCount}>{counts.all}</Text>
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity
+          onPress={() => {
+            const next = !searchOpen;
+            setSearchOpen(next);
+            if (!next) setSearch('');
+            else setTimeout(() => searchInputRef.current?.focus?.(), 50);
+          }}
+          accessibilityLabel="Search notes and to-dos"
+          accessibilityRole="button"
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={styles.headerSearchBtn}
+        >
+          <Icon name="magnify" size={22} color={theme.colors.textSecondary} />
+        </TouchableOpacity>
       </View>
+
+      {/* Expandable search bar — Everything-style live filter over the current
+          tab/topic view; see visibleNotes + matchesNoteSearch above. */}
+      {searchOpen && (
+        <View style={[styles.searchBar, { borderColor: theme.colors.border, backgroundColor: theme.colors.surface }]}>
+          <Icon name="magnify" size={18} color={theme.colors.textMuted} />
+          <TextInput
+            ref={searchInputRef}
+            style={[styles.searchInput, { color: theme.colors.textPrimary }]}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search notes & to-dos"
+            placeholderTextColor={theme.colors.textMuted}
+            returnKeyType="search"
+            autoCorrect={false}
+            autoCapitalize="none"
+          />
+          {search.length > 0 && (
+            <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Icon name="close" size={18} color={theme.colors.textMuted} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
       {/* Swipeable segmented control — the pill slides 1:1 with the pager. */}
       <View style={styles.tabTrack}>
@@ -2279,6 +2384,10 @@ const createStyles = (theme, isDark) => StyleSheet.create({
     color: theme.colors.textMuted,
     fontVariant: ['tabular-nums'],
   },
+  // Top-right header search toggle (magnify → expandable bar below).
+  headerSearchBtn: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginTop: 6, marginBottom: 4, paddingHorizontal: 12, height: 40, borderRadius: 12, borderWidth: 1 },
+  searchInput: { flex: 1, fontSize: 15, paddingVertical: 0 },
   // Swipeable segmented control — same look as the photo vault's tab switcher.
   tabTrack: {
     marginHorizontal: 16,
