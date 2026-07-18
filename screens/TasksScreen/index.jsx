@@ -1965,16 +1965,6 @@ export default function TasksScreen() {
         onCollectTags={collectTags}
       />
 
-      <QuickTaskCreate
-        visible={showQuick}
-        onClose={() => setShowQuick(false)}
-        onSubmit={handleSaveTask}
-        onMore={openMoreFromQuick}
-        boards={projects}
-        initialBoard={quickBoard}
-        initialDate={quickDate}
-      />
-
       <TaskDetail
         // Derive the detail task LIVE from `tasks` (not the snapshot captured
         // at openDetail) so toggling a subtask checkbox — which updates the
@@ -2602,6 +2592,19 @@ export default function TasksScreen() {
           />
         </View>
       </EdgeSwipePage>
+
+      {/* Quick task creator — rendered LAST in the screen root (same reason as
+          the boards EdgeSwipePage above): its in-tree absolute-fill overlay must
+          paint ABOVE the calendar/list pager, or the pager shows through it. */}
+      <QuickTaskCreate
+        visible={showQuick}
+        onClose={() => setShowQuick(false)}
+        onSubmit={handleSaveTask}
+        onMore={openMoreFromQuick}
+        boards={projects}
+        initialBoard={quickBoard}
+        initialDate={quickDate}
+      />
     </View>
   );
 }
