@@ -295,6 +295,9 @@ export const TaskForm = ({
   const isEvent = itemType === 'event';
   const isBirthday = itemType === 'birthday';
   const copy = TYPE_COPY[itemType] || TYPE_COPY.task;
+  // "At time" reminder (lead 0) — read by both the essentials' collapsed
+  // quick toggle and to keep it visually in sync with the expanded preset.
+  const remindAtTime = ((formData.taskReminders && formData.taskReminders.leads) || []).includes(0);
 
   useEffect(() => {
     if (visible) {
@@ -670,6 +673,27 @@ export const TaskForm = ({
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
+  // Toggle a reminder lead time (minutes before due) on/off in
+  // taskReminders.leads. Shared by the essentials' collapsed "remind at due
+  // time" quick toggle (lead 0) AND the expanded Reminders preset chips
+  // below — same state, same setter, no parallel reminder state.
+  const toggleReminderLead = (min) => {
+    const cur = (formData.taskReminders && formData.taskReminders.leads) || [];
+    const next = cur.includes(min)
+      ? cur.filter((x) => x !== min)
+      : [...cur, min].sort((a, b) => a - b);
+    updateField('taskReminders', { ...(formData.taskReminders || {}), leads: next });
+  };
+
+  // Cycle the tasks-only Priority chip through TaskForm's real priority set
+  // (PRIORITIES = low/medium/high — no separate cyclePriority existed, so
+  // this walks the same array the expanded Priority button group renders).
+  const cyclePriority = () => {
+    const idx = PRIORITIES.indexOf(formData.priority);
+    const next = PRIORITIES[(idx + 1) % PRIORITIES.length] || PRIORITIES[0];
+    updateField('priority', next);
+  };
+
   // Add a custom reminder lead time (tasks/events). The picked value+unit is
   // converted to minutes-before-due — the exact unit the notification pipeline
   // already consumes — deduped, clamped to 4 weeks so a typo can't schedule a
@@ -837,141 +861,185 @@ export const TaskForm = ({
               />
             </FormField>
 
-            {/* Board — tasks only. Optional by design: the row reads "Choose
-                later" until one is picked (tap → picker with all boards + a
-                New-board option that reveals the inline name input). */}
-            {isTask && (
-              <FormField label="Board">
-                <TouchableOpacity
-                  style={styles.datePickerButton}
+            {/* Essentials — one-tap chips (mirrors QuickTaskCreate's collapsed
+                quick-create view). Date + Time always show (Time hidden for
+                birthdays, which are all-day); Priority + Board are tasks-only.
+                Each chip wires straight into TaskForm's existing handlers —
+                no parallel state. */}
+            <View style={styles.chipRow}>
+              <Chip
+                theme={theme} icon="calendar-blank-outline"
+                label={formData.dueDate ? formatDateLabel(formData.dueDate) : (copy.dateLabel || 'Date')}
+                active={!!formData.dueDate}
+                onPress={() => setShowDatePicker(true)}
+                onClear={(isTask && formData.dueDate) ? () => updateField('dueDate', '') : null}
+              />
+              {!isBirthday && (
+                <Chip
+                  theme={theme} icon="clock-outline"
+                  label={formData.time ? formatTime12(formData.time) : 'Time'}
+                  active={!!formData.time}
+                  onPress={() => setShowTimePicker(true)}
+                  // Clearing the start time drops the end time too — an end
+                  // with no start has nothing to anchor to (same behaviour as
+                  // the old standalone "Clear time" row).
+                  onClear={formData.time ? () => setFormData(prev => ({ ...prev, time: '', duration: null })) : null}
+                />
+              )}
+              {isTask && (
+                <Chip
+                  theme={theme} icon="flag-variant-outline"
+                  label={formData.priority.charAt(0).toUpperCase() + formData.priority.slice(1)}
+                  active tint={getPriorityColor(formData.priority, theme)}
+                  onPress={cyclePriority}
+                />
+              )}
+              {isTask && (
+                <Chip
+                  theme={theme} icon="folder-outline"
+                  label={formData.project || 'Board'}
+                  active={!!formData.project}
                   onPress={selectProject}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Board: ${formData.project || 'choose later'}`}
+                  onClear={formData.project ? () => updateField('project', '') : null}
+                />
+              )}
+            </View>
+
+            {/* Inline board list — toggled open/closed by the Board chip
+                above (selectProject/boardListOpen). Unchanged from the old
+                Board row: every board as a chip (scales past Android's
+                3-button Alert cap), plus "choose later" + new-board input. */}
+            {isTask && boardListOpen && (
+              <View style={styles.boardList}>
+                <TouchableOpacity
+                  style={[styles.boardChip, !formData.project && styles.boardChipActive]}
+                  onPress={() => pickBoard('')}
                 >
-                  <Icon name="folder-outline" size={20} color={formData.project ? theme.colors.accentInfo : theme.colors.textSecondary} />
-                  <Text style={[
-                    styles.datePickerText,
-                    !formData.project && styles.datePickerPlaceholder,
-                  ]}>
-                    {formData.project || 'Choose later'}
+                  <Text style={[styles.boardChipText, !formData.project && styles.boardChipTextActive]}>
+                    No board — later
                   </Text>
-                  <Icon name={boardListOpen ? 'chevron-up' : 'chevron-down'} size={20} color={theme.colors.textTertiary} />
                 </TouchableOpacity>
-                {/* Inline board list — every board as a chip (scales past
-                    Android's 3-button Alert cap), plus "choose later" + new. */}
-                {boardListOpen && (
-                  <View style={styles.boardList}>
-                    <TouchableOpacity
-                      style={[styles.boardChip, !formData.project && styles.boardChipActive]}
-                      onPress={() => pickBoard('')}
-                    >
-                      <Text style={[styles.boardChipText, !formData.project && styles.boardChipTextActive]}>
-                        No board — later
-                      </Text>
-                    </TouchableOpacity>
-                    {projects.map(p => (
-                      <TouchableOpacity
-                        key={p}
-                        style={[styles.boardChip, formData.project === p && styles.boardChipActive]}
-                        onPress={() => pickBoard(p)}
-                      >
-                        <Text style={[styles.boardChipText, formData.project === p && styles.boardChipTextActive]}>
-                          {p}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                    <TouchableOpacity style={styles.boardChip} onPress={openNewBoard}>
-                      <Icon name="plus" size={13} color={theme.colors.accentInfo} />
-                      <Text style={[styles.boardChipText, { color: theme.colors.accentInfo }]}>New board</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {newBoardOpen && (
-                  <View style={[styles.projectRow, { marginTop: 8 }]}>
-                    <TextInput
-                      style={[styles.input, styles.projectInput]}
-                      placeholder="New board name..."
-                      placeholderTextColor={theme.colors.textPlaceholder}
-                      value={formData.project}
-                      onChangeText={text => updateField('project', text)}
-                      autoFocus
-                      returnKeyType="done"
-                    />
-                    <TouchableOpacity
-                      style={styles.projectBtn}
-                      onPress={() => { setNewBoardOpen(false); Keyboard.dismiss(); }}
-                      accessibilityLabel="Done naming board"
-                    >
-                      <Icon name="check" size={20} color={theme.colors.textPrimary} />
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {!!formData.project && !projects.includes(formData.project) && (
-                  <Text style={styles.hint}>Will create new board "{formData.project}"</Text>
-                )}
+                {projects.map(p => (
+                  <TouchableOpacity
+                    key={p}
+                    style={[styles.boardChip, formData.project === p && styles.boardChipActive]}
+                    onPress={() => pickBoard(p)}
+                  >
+                    <Text style={[styles.boardChipText, formData.project === p && styles.boardChipTextActive]}>
+                      {p}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+                <TouchableOpacity style={styles.boardChip} onPress={openNewBoard}>
+                  <Icon name="plus" size={13} color={theme.colors.accentInfo} />
+                  <Text style={[styles.boardChipText, { color: theme.colors.accentInfo }]}>New board</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {isTask && newBoardOpen && (
+              <View style={[styles.projectRow, { marginTop: 8 }]}>
+                <TextInput
+                  style={[styles.input, styles.projectInput]}
+                  placeholder="New board name..."
+                  placeholderTextColor={theme.colors.textPlaceholder}
+                  value={formData.project}
+                  onChangeText={text => updateField('project', text)}
+                  autoFocus
+                  returnKeyType="done"
+                />
+                <TouchableOpacity
+                  style={styles.projectBtn}
+                  onPress={() => { setNewBoardOpen(false); Keyboard.dismiss(); }}
+                  accessibilityLabel="Done naming board"
+                >
+                  <Icon name="check" size={20} color={theme.colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+            )}
+            {isTask && !!formData.project && !projects.includes(formData.project) && (
+              <Text style={styles.hint}>Will create new board "{formData.project}"</Text>
+            )}
+
+            {/* Remind-at-due-time — collapsed quick toggle (tasks/events;
+                birthdays have their own all-day reminder block further down).
+                Derived from taskReminders.leads (lead 0 = "at time") and
+                toggled via toggleReminderLead — the SAME setter the expanded
+                "At time" preset chip below uses, so collapsed + expanded stay
+                in sync with no parallel reminder state. */}
+            {!isBirthday && (
+              <TouchableOpacity
+                style={styles.qReminderRow}
+                activeOpacity={0.7}
+                onPress={() => toggleReminderLead(0)}
+                accessibilityRole="button"
+                accessibilityLabel={remindAtTime ? 'Reminder at due time on' : 'Reminder at due time off'}
+              >
+                <Icon
+                  name={remindAtTime ? 'bell-ring-outline' : 'bell-off-outline'}
+                  size={18}
+                  color={remindAtTime ? theme.colors.accentInfo : theme.colors.textMuted}
+                />
+                <Text style={styles.qReminderText}>Remind me at the due time</Text>
+                <View style={{ flex: 1 }} />
+                <View style={[styles.switch, remindAtTime && styles.switchOn]}>
+                  <View style={[styles.knob, remindAtTime && styles.knobOn]} />
+                </View>
+              </TouchableOpacity>
+            )}
+
+            {/* People involved — surfaced into the ESSENTIALS (above the fold)
+                whenever the task already has people, so the partner accounts
+                auto-added on a new task are VISIBLE on create, not hidden under
+                "More options". Only while collapsed: once expanded, the full
+                copy inside the fold takes over (this hides to avoid a dupe).
+                Solo ponds (no partners → empty set) never see it here, so the
+                quick-add card stays minimal. */}
+            {isTask && !showMore && (formData.involvedUsers?.length > 0) && (
+              <FormField label="People involved">
+                <ParticipantPicker
+                  selected={formData.involvedUsers || []}
+                  onChange={(ids) => { involvedTouched.current = true; updateField('involvedUsers', ids); }}
+                />
               </FormField>
             )}
 
-            {/* Date — tasks call it "Due Date" (optional); events/birthdays
-                require it. */}
-            <FormField label={copy.dateLabel}>
-              <TouchableOpacity
-                style={styles.datePickerButton}
-                onPress={() => setShowDatePicker(true)}
-              >
-                <Icon name="calendar" size={20} color={theme.colors.textSecondary} />
-                <Text style={[
-                  styles.datePickerText,
-                  !formData.dueDate && styles.datePickerPlaceholder
-                ]}>
-                  {formData.dueDate ? formatDateLabel(formData.dueDate) : 'Select a date...'}
-                </Text>
-                <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
-              </TouchableOpacity>
+            {/* ── More options — everything beyond the fast path, folded away
+                so a quick add is three taps. Expanded by default when EDITING
+                (nothing should look lost). */}
+            <TouchableOpacity
+              style={styles.moreToggle}
+              onPress={toggleShowMore}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={showMore ? 'Hide extra options' : 'Show more options'}
+            >
+              <Text style={styles.moreToggleText}>{showMore ? 'Fewer options' : 'More options'}</Text>
+              <Icon name={showMore ? 'chevron-up' : 'chevron-down'} size={18} color={theme.colors.accentInfo} />
+            </TouchableOpacity>
 
-              {formData.dueDate && isTask && (
-                <TouchableOpacity
-                  style={styles.clearDateBtn}
-                  onPress={() => updateField('dueDate', '')}
-                >
-                  <Text style={styles.clearDateText}>Clear date</Text>
-                </TouchableOpacity>
-              )}
-            </FormField>
+            {showMore && (<>
 
-            {/* Time — tasks + events (birthdays are all-day). */}
+            {/* Description — moved from the essentials fast path into the
+                expanded block (a pure relocation; same field + handler). */}
             {!isBirthday && (
-              <FormField label={isEvent ? 'Start time (optional)' : 'Time (optional)'}>
-                <TouchableOpacity
-                  style={styles.datePickerButton}
-                  onPress={() => setShowTimePicker(true)}
-                >
-                  <Icon name="clock-outline" size={20} color={formData.time ? theme.colors.accentInfo : theme.colors.textSecondary} />
-                  <Text style={[
-                    styles.datePickerText,
-                    !formData.time && styles.datePickerPlaceholder
-                  ]}>
-                    {formData.time ? formatTime12(formData.time) : 'Set a time...'}
-                  </Text>
-                  <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
-                </TouchableOpacity>
-
-                {formData.time && (
-                  <TouchableOpacity
-                    style={styles.clearDateBtn}
-                    // Clearing the start time drops the end time too — an end
-                    // with no start has nothing to anchor to.
-                    onPress={() => setFormData(prev => ({ ...prev, time: '', duration: null }))}
-                  >
-                    <Text style={styles.clearDateText}>Clear time</Text>
-                  </TouchableOpacity>
-                )}
+              <FormField label="Description">
+                <TextInput
+                  ref={descInputRef}
+                  style={[styles.input, styles.descInput]}
+                  placeholder={isEvent ? 'Event details, location, notes...' : 'Add details...'}
+                  placeholderTextColor={theme.colors.textPlaceholder}
+                  value={formData.description}
+                  onChangeText={text => updateField('description', text)}
+                  multiline
+                  textAlignVertical="top"
+                />
               </FormField>
             )}
 
             {/* End time — appears only once a start time exists (an end is
                 meaningless without one). Stored as `duration` (end − start in
-                minutes); the calendar reads that to size the block. */}
+                minutes); the calendar reads that to size the block. Moved
+                from the essentials fast path into the expanded block. */}
             {!isBirthday && formData.time && (
               <FormField label="End time (optional)">
                 <TouchableOpacity
@@ -1001,41 +1069,9 @@ export const TaskForm = ({
               </FormField>
             )}
 
-            {/* People involved — surfaced into the ESSENTIALS (above the fold)
-                whenever the task already has people, so the partner accounts
-                auto-added on a new task are VISIBLE on create, not hidden under
-                "More options". Only while collapsed: once expanded, the full
-                copy inside the fold takes over (this hides to avoid a dupe).
-                Solo ponds (no partners → empty set) never see it here, so the
-                quick-add card stays minimal. */}
-            {isTask && !showMore && (formData.involvedUsers?.length > 0) && (
-              <FormField label="People involved">
-                <ParticipantPicker
-                  selected={formData.involvedUsers || []}
-                  onChange={(ids) => { involvedTouched.current = true; updateField('involvedUsers', ids); }}
-                />
-              </FormField>
-            )}
-
-            {/* Description — on the quick card now (not buried under More options),
-                and expandable: the box grows as you type (see descInput). */}
-            {!isBirthday && (
-              <FormField label="Description">
-                <TextInput
-                  ref={descInputRef}
-                  style={[styles.input, styles.descInput]}
-                  placeholder={isEvent ? 'Event details, location, notes...' : 'Add details...'}
-                  placeholderTextColor={theme.colors.textPlaceholder}
-                  value={formData.description}
-                  onChangeText={text => updateField('description', text)}
-                  multiline
-                  textAlignVertical="top"
-                />
-              </FormField>
-            )}
-
             {/* Linked note — search an existing note and attach it to the task.
-                Shows a "Linked to note" chip once one is picked. */}
+                Shows a "Linked to note" chip once one is picked. Moved from
+                the essentials fast path into the expanded block. */}
             {isTask && (
               <FormField label="Linked note">
                 {formData.linkedNote ? (
@@ -1114,22 +1150,6 @@ export const TaskForm = ({
                 )}
               </FormField>
             )}
-
-            {/* ── More options — everything beyond the fast path, folded away
-                so a quick add is three taps. Expanded by default when EDITING
-                (nothing should look lost). */}
-            <TouchableOpacity
-              style={styles.moreToggle}
-              onPress={toggleShowMore}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityLabel={showMore ? 'Hide extra options' : 'Show more options'}
-            >
-              <Text style={styles.moreToggleText}>{showMore ? 'Fewer options' : 'More options'}</Text>
-              <Icon name={showMore ? 'chevron-up' : 'chevron-down'} size={18} color={theme.colors.accentInfo} />
-            </TouchableOpacity>
-
-            {showMore && (<>
 
             {/* Tags — tasks only. */}
             {isTask && (
@@ -1240,13 +1260,7 @@ export const TaskForm = ({
                     return (
                       <TouchableOpacity
                         key={p.min}
-                        onPress={() => {
-                          const cur = (formData.taskReminders && formData.taskReminders.leads) || [];
-                          const next = cur.includes(p.min)
-                            ? cur.filter((x) => x !== p.min)
-                            : [...cur, p.min].sort((a, b) => a - b);
-                          updateField('taskReminders', { ...(formData.taskReminders || {}), leads: next });
-                        }}
+                        onPress={() => toggleReminderLead(p.min)}
                         style={{
                           paddingVertical: 8,
                           paddingHorizontal: 14,
