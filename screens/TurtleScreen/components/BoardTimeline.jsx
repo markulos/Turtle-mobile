@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, ActivityIndicator,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -77,9 +77,8 @@ export default function BoardTimeline({ visible, board, onClose }) {
 
   // TaskForm needs the full board list (its Board chip lets the user change
   // off the preset) + tag list, plus handlers for creating a brand-new board
-  // or collecting brand-new tags typed inline. Loaded lazily — once, the
-  // first time the composer opens — rather than on every board-conversation
-  // open, since most opens never touch the task creator.
+  // or collecting brand-new tags typed inline. Loaded once on mount (see the
+  // effect below) — cheap and avoids racing the composer's "+" tap.
   const [projects, setProjects] = useState([]);
   const [allTags, setAllTags] = useState([]);
   const projectsLoadedRef = useRef(false);
@@ -94,6 +93,16 @@ export default function BoardTimeline({ visible, board, onClose }) {
       projectsLoadedRef.current = false; // fetch failed — allow a retry next open
     }
   }, [api]);
+
+  // Kick the load off on MOUNT rather than on composer-open: BoardTimeline is
+  // mounted once (as a sibling overlay under ConversationsOverlay) well before
+  // any board is opened, so this has resolved long before the user ever taps
+  // "+" — closing the race where TaskForm would briefly see `projects=[]` and
+  // wrongly show "Will create new board" for a board that already exists
+  // (which also fired a needless POST /projects/add on a fast save).
+  // loadProjectsAndTags is itself guarded by projectsLoadedRef, so this is a
+  // one-shot fetch regardless of remounts/re-renders.
+  useEffect(() => { loadProjectsAndTags(); }, [loadProjectsAndTags]);
 
   // Optimistic-first (mirrors useTaskData's addProject): show the new board
   // immediately, persist in the background, reconcile/roll back on response.
@@ -110,6 +119,8 @@ export default function BoardTimeline({ visible, board, onClose }) {
       return true;
     } catch (e) {
       if (!alreadyExists) setProjects((prev) => prev.filter((p) => p !== trimmed));
+      console.error('Failed to add board:', e);
+      Alert.alert('Error', 'Failed to add board');
       return false;
     }
   }, [api, projects]);
@@ -478,7 +489,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
             <ComposerAction
               theme={theme}
               icon="checkbox-marked-circle-plus-outline"
-              onPress={() => { tapHaptic(); loadProjectsAndTags(); setQuickOpen(true); }}
+              onPress={() => { tapHaptic(); setQuickOpen(true); }}
               accessibilityLabel="New task on this board"
             />
           )}
