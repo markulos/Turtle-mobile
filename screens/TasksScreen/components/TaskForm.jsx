@@ -867,11 +867,11 @@ export const TaskForm = ({
               />
             </FormField>
 
-            {/* Essentials — one-tap chips (mirrors QuickTaskCreate's collapsed
-                quick-create view). Date + Time always show (Time hidden for
-                birthdays, which are all-day); Priority + Board are tasks-only.
-                Each chip wires straight into TaskForm's existing handlers —
-                no parallel state. */}
+            {/* Essentials — one-tap chips for the most common fields. Date +
+                Time always show (Time hidden for birthdays, which are
+                all-day); Priority + Board are tasks-only. Each chip wires
+                straight into TaskForm's existing handlers — no parallel
+                state. */}
             <View style={styles.chipRow}>
               <Chip
                 theme={theme} icon="calendar-blank-outline"
@@ -1682,10 +1682,10 @@ export const TaskForm = ({
   );
 };
 
-// Chip primitive — ported from QuickTaskCreate's Chip (groundwork for the
-// upcoming chip-based collapsed view; unused here until a later task wires
-// it up). Resolves styles via TaskForm's own `createStyles` factory; insets
-// isn't relevant to chip rendering, so it's called with an empty object.
+// Chip primitive — the one-tap control used by the Essentials chip row
+// (date/time/priority/board). Resolves styles via TaskForm's own
+// `createStyles` factory; insets isn't relevant to chip rendering, so it's
+// called with an empty object.
 function Chip({ theme, icon, label, active, tint, onPress, onClear }) {
   const c = theme.colors;
   const color = tint || (active ? (c.accentInfo || '#4ADE80') : c.textSecondary);
@@ -2137,12 +2137,11 @@ const createStyles = (theme, insets) => StyleSheet.create({
     color: theme.colors.accentInfo,
     fontWeight: '600',
   },
-  // --- Chip primitives (ported from QuickTaskCreate, groundwork for the
-  // upcoming chip-based collapsed view — unused until a later task wires
-  // them up). `reminderRow`/`reminderText` already exist above with a
-  // different meaning and are actively used, so their QuickTaskCreate
-  // counterparts are added here under a `q` prefix instead of clobbering
-  // them. `boardList` also already exists above (reused as-is); only the
+  // --- Chip primitives for the Essentials chip row (date/time/priority/
+  // board). `reminderRow`/`reminderText` already exist above with a
+  // different meaning and are actively used, so the chip-row counterparts
+  // are added here under a `q` prefix instead of clobbering them.
+  // `boardList` also already exists above (reused as-is); only the
   // still-missing `boardItem`/`boardItemActive`/`boardItemText` trio is
   // added here.
   chipRow: {
