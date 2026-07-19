@@ -1662,6 +1662,31 @@ export const TaskForm = ({
   );
 };
 
+// Chip primitive — ported from QuickTaskCreate's Chip (groundwork for the
+// upcoming chip-based collapsed view; unused here until a later task wires
+// it up). Resolves styles via TaskForm's own `createStyles` factory; insets
+// isn't relevant to chip rendering, so it's called with an empty object.
+function Chip({ theme, icon, label, active, tint, onPress, onClear }) {
+  const c = theme.colors;
+  const color = tint || (active ? (c.accentInfo || '#4ADE80') : c.textSecondary);
+  const styles = createStyles(theme, {});
+  return (
+    <TouchableOpacity
+      style={[styles.chip, active && { borderColor: color }]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <Icon name={icon} size={15} color={color} />
+      <Text style={[styles.chipText, active && { color: c.textPrimary }]} numberOfLines={1}>{label}</Text>
+      {onClear && (
+        <TouchableOpacity onPress={onClear} hitSlop={8} style={styles.chipClear}>
+          <Icon name="close" size={13} color={c.textMuted} />
+        </TouchableOpacity>
+      )}
+    </TouchableOpacity>
+  );
+}
+
 const createStyles = (theme, insets) => StyleSheet.create({
   overlay: {
     flex: 1,
@@ -2091,6 +2116,90 @@ const createStyles = (theme, insets) => StyleSheet.create({
   boardChipTextActive: {
     color: theme.colors.accentInfo,
     fontWeight: '600',
+  },
+  // --- Chip primitives (ported from QuickTaskCreate, groundwork for the
+  // upcoming chip-based collapsed view — unused until a later task wires
+  // them up). `reminderRow`/`reminderText` already exist above with a
+  // different meaning and are actively used, so their QuickTaskCreate
+  // counterparts are added here under a `q` prefix instead of clobbering
+  // them. `boardList` also already exists above (reused as-is); only the
+  // still-missing `boardItem`/`boardItemActive`/`boardItemText` trio is
+  // added here.
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 18,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  chipText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: theme.colors.textSecondary,
+    maxWidth: 140,
+  },
+  chipClear: {
+    marginLeft: 2,
+  },
+  qReminderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 22,
+    paddingVertical: 6,
+  },
+  qReminderText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: theme.colors.textSecondary,
+  },
+  switch: {
+    width: 44,
+    height: 26,
+    borderRadius: 13,
+    padding: 3,
+    backgroundColor: theme.colors.surfaceElevated,
+    justifyContent: 'center',
+  },
+  switchOn: {
+    backgroundColor: theme.colors.accentInfo || '#4ADE80',
+  },
+  knob: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+  },
+  knobOn: {
+    alignSelf: 'flex-end',
+  },
+  // boardList is reused as-is (defined above); only the item-level styles
+  // were missing.
+  boardItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  boardItemActive: {
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  boardItemText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: theme.colors.textPrimary,
+    flex: 1,
   },
   // Cancel — quiet, recedes against the filled Save CTA.
   cancelBtn: {
