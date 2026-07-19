@@ -161,6 +161,11 @@ export const TaskForm = ({
   // Date (YYYY-MM-DD) to pre-fill as the due/occasion date when creating from a
   // tapped calendar day. Ignored when editing.
   initialDate = null,
+  // Board/project name to pre-fill on a NEW task (e.g. opened from a board's
+  // conversation "+" — the task should land pre-associated with that board).
+  // Ignored when editing or for non-task types (events/birthdays have no board).
+  // Still shown/editable via the Board chip — this only seeds the initial value.
+  initialProject = null,
   // True when opened by continuing the calendar quick inspector — present from
   // the quick card's resting spot (CONTINUE_OFFSET) rather than off-screen.
   continueFromQuick = false,
@@ -356,6 +361,7 @@ export const TaskForm = ({
         setFormData({
           ...blankForm(newType),
           dueDate: initialDate || '',
+          project: newType === 'task' ? (initialProject || '') : '',
           involvedUsers: newType === 'task' ? partnerIdsRef.current : [],
         });
       }
@@ -369,7 +375,7 @@ export const TaskForm = ({
       setNewBoardOpen(false);
       savingRef.current = false;
     }
-  }, [visible, initialData, initialType, initialDate, continueFromQuick, sheetY]);
+  }, [visible, initialData, initialType, initialDate, initialProject, continueFromQuick, sheetY]);
 
   // Cold-start seed: if the partner list resolves AFTER a fresh new-task form
   // is already open, fill the still-empty, untouched involved set with the

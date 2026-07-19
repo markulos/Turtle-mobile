@@ -12,7 +12,7 @@ import { tapHaptic } from '../../../utils/haptics';
 import EdgeSwipePage from './EdgeSwipePage';
 import ChatComposer, { ComposerAction } from '../../../components/ChatComposer';
 import MediaLightbox from '../../../components/MediaLightbox';
-import QuickTaskCreate from '../../TasksScreen/components/QuickTaskCreate';
+import { TaskForm } from '../../TasksScreen/components/TaskForm';
 
 // One board's CONVERSATION (conversation-boards Phase 3): the merged feed of
 // everything on the board — tasks, events, notes, media (rendered as compact
@@ -70,10 +70,60 @@ export default function BoardTimeline({ visible, board, onClose }) {
     return /^https?:/i.test(p) ? p : mediaBase + p;
   }, [mediaBase]);
 
-  // Composer "＋ task" → quick full-page task creator, prefilled with THIS
-  // board (the callback itself is defined after `load`/`dirtyRef` below, so it
-  // can depend on the CURRENT-board `load` rather than a stale first-render one).
+  // Composer "＋ task" → the unified TaskForm, pre-associated with THIS board
+  // (the callback itself is defined after `load`/`dirtyRef` below, so it can
+  // depend on the CURRENT-board `load` rather than a stale first-render one).
   const [quickOpen, setQuickOpen] = useState(false);
+
+  // TaskForm needs the full board list (its Board chip lets the user change
+  // off the preset) + tag list, plus handlers for creating a brand-new board
+  // or collecting brand-new tags typed inline. Loaded lazily — once, the
+  // first time the composer opens — rather than on every board-conversation
+  // open, since most opens never touch the task creator.
+  const [projects, setProjects] = useState([]);
+  const [allTags, setAllTags] = useState([]);
+  const projectsLoadedRef = useRef(false);
+  const loadProjectsAndTags = useCallback(async () => {
+    if (projectsLoadedRef.current) return;
+    projectsLoadedRef.current = true;
+    try {
+      const [projectsData, tagsData] = await Promise.all([api.get('/projects'), api.get('/tags')]);
+      setProjects(Array.isArray(projectsData) ? projectsData : []);
+      setAllTags(Array.isArray(tagsData) ? tagsData : []);
+    } catch (e) {
+      projectsLoadedRef.current = false; // fetch failed — allow a retry next open
+    }
+  }, [api]);
+
+  // Optimistic-first (mirrors useTaskData's addProject): show the new board
+  // immediately, persist in the background, reconcile/roll back on response.
+  const addProjectFromBoard = useCallback(async (name) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return false;
+    const alreadyExists = projects.includes(trimmed);
+    if (!alreadyExists) {
+      setProjects((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed].sort((a, b) => a.localeCompare(b))));
+    }
+    try {
+      const res = await api.post('/projects/add', { name: trimmed });
+      if (res && Array.isArray(res.projects)) setProjects(res.projects);
+      return true;
+    } catch (e) {
+      if (!alreadyExists) setProjects((prev) => prev.filter((p) => p !== trimmed));
+      return false;
+    }
+  }, [api, projects]);
+
+  // Mirrors useTaskData's collectTags — persist newly-typed tags so they show
+  // up as suggestions everywhere else too.
+  const collectTagsFromBoard = useCallback(async (tagsArray) => {
+    const newTags = (tagsArray || []).filter((t) => !allTags.includes(t));
+    if (newTags.length === 0) return;
+    try {
+      await api.post('/tags/collect', { tags: newTags });
+      setAllTags((prev) => [...prev, ...newTags].sort());
+    } catch (e) { /* best-effort — tags still saved on the task itself */ }
+  }, [api, allTags]);
 
   // Tapped chat image/video → full-screen lightbox. { uri, isVideo } | null.
   const [lightbox, setLightbox] = useState(null);
@@ -428,21 +478,27 @@ export default function BoardTimeline({ visible, board, onClose }) {
             <ComposerAction
               theme={theme}
               icon="checkbox-marked-circle-plus-outline"
-              onPress={() => { tapHaptic(); setQuickOpen(true); }}
+              onPress={() => { tapHaptic(); loadProjectsAndTags(); setQuickOpen(true); }}
               accessibilityLabel="New task on this board"
             />
           )}
         />
       </KeyboardAvoidingView>
 
-      {/* Quick task creator, scoped to this board (board fixed → no board chip;
-          it's implied by the conversation). */}
-      <QuickTaskCreate
+      {/* Unified task creator, pre-associated with this board (TaskForm's
+          Board chip still lets it be changed — the inline expand is the
+          whole point of the shared form). Opens COLLAPSED (no `id`/
+          `initialData`) — same fast path as the Tasks screen's "+". */}
+      <TaskForm
         visible={quickOpen}
         onClose={() => setQuickOpen(false)}
-        onSubmit={createTaskFromBoard}
-        boards={[]}
-        initialBoard={board || ''}
+        onSave={createTaskFromBoard}
+        initialType="task"
+        initialProject={board || ''}
+        projects={projects}
+        allTags={allTags}
+        onAddProject={addProjectFromBoard}
+        onCollectTags={collectTagsFromBoard}
       />
 
       {/* Full-screen image/video viewer — in-tree overlay above the board
