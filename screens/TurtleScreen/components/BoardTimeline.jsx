@@ -499,12 +499,18 @@ export default function BoardTimeline({ visible, board, onClose }) {
       {/* Unified task creator, pre-associated with this board (TaskForm's
           Board chip still lets it be changed — the inline expand is the
           whole point of the shared form). Opens COLLAPSED (no `id`/
-          `initialData`) — same fast path as the Tasks screen's "+". */}
+          `initialData`) — same fast path as the Tasks screen's "+".
+          lockType: this saves via createTaskFromBoard → POST /tasks/single,
+          which only persists a plain task (no item_type/meta column) — and
+          events/birthdays have no board anyway. Without this, switching to
+          Event/Birthday from a board and saving would silently drop the
+          type + meta (color/guests/yearly), landing as a bare task. */}
       <TaskForm
         visible={quickOpen}
         onClose={() => setQuickOpen(false)}
         onSave={createTaskFromBoard}
         initialType="task"
+        lockType
         initialProject={board || ''}
         projects={projects}
         allTags={allTags}

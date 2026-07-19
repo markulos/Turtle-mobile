@@ -169,6 +169,14 @@ export const TaskForm = ({
   // True when opened by continuing the calendar quick inspector — present from
   // the quick card's resting spot (CONTINUE_OFFSET) rather than off-screen.
   continueFromQuick = false,
+  // True when this form is mounted somewhere that can only persist a plain
+  // task (e.g. a board conversation composer, which saves via a task-only
+  // endpoint that doesn't store item_type/meta — see BoardTimeline). Hides
+  // the type selector + swipe-affordance dots, disables the header's
+  // swipe-to-cycle-type gesture, and keeps itemType pinned to 'task' so an
+  // Event/Birthday can never be silently saved as (and lose the data of) a
+  // plain task.
+  lockType = false,
   projects,
   allTags,
   onAddProject,
@@ -410,6 +418,7 @@ export const TaskForm = ({
   // ends so the three types read like a little carousel. Board UI folds shut
   // when leaving 'task' — same reason as setItemType.
   const cycleType = (dir) => {
+    if (lockType) return; // locked callers (BoardTimeline) never change type
     const order = ITEM_TYPES.map(o => o.value);
     const idx = Math.max(0, order.indexOf(formData.itemType || 'task'));
     const type = order[Math.min(order.length - 1, Math.max(0, idx + dir))];
@@ -722,6 +731,7 @@ export const TaskForm = ({
   // The board UI (list / new-board input, tasks-only) folds shut so its
   // auto-focused input can't pop the keyboard from a type it doesn't exist on.
   const setItemType = (type) => {
+    if (lockType) return; // locked callers (BoardTimeline) never change type
     if (type !== 'task') {
       setBoardListOpen(false);
       setNewBoardOpen(false);
@@ -794,7 +804,10 @@ export const TaskForm = ({
             {/* Header — hold + slide DOWN to close, swipe LEFT/RIGHT to change
                 type (same gesture-handler Pan the calendar day-sheet uses). It's
                 the fixed top of the sheet, so the type switcher (and the action
-                buttons pinned at the bottom) are always on screen. */}
+                buttons pinned at the bottom) are always on screen. When
+                lockType, the swipe still starts the Pan but cycleType() is a
+                no-op, so a horizontal drag just springs the sheet back to 0
+                instead of changing the type. */}
             <GestureDetector gesture={headerPan}>
             <View style={styles.sheetHeader}>
               <View style={styles.grabHandle} pointerEvents="none" />
@@ -803,44 +816,51 @@ export const TaskForm = ({
               </Text>
 
               {/* Type selector — tap a kind, or swipe across the header to move
-                  between Task / Event / Birthday. */}
-              <View style={styles.typeSelector}>
-                {ITEM_TYPES.map(opt => {
-                  const active = itemType === opt.value;
-                  return (
-                    <TouchableOpacity
-                      key={opt.value}
-                      style={[styles.typeBtn, active && { backgroundColor: opt.accent, borderColor: opt.accent }]}
-                      onPress={() => setItemType(opt.value)}
-                      activeOpacity={0.85}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${opt.label} type`}
-                    >
-                      <Icon
-                        name={opt.icon}
-                        size={18}
-                        color={active ? '#FFFFFF' : theme.colors.textTertiary}
-                      />
-                      <Text style={[styles.typeBtnText, active && styles.typeBtnTextActive]}>
-                        {opt.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+                  between Task / Event / Birthday. Hidden entirely when
+                  lockType (e.g. the board composer): that caller only ever
+                  persists a plain task, so offering Event/Birthday here would
+                  silently lose the type + meta on save (see BoardTimeline). */}
+              {!lockType && (
+                <>
+                  <View style={styles.typeSelector}>
+                    {ITEM_TYPES.map(opt => {
+                      const active = itemType === opt.value;
+                      return (
+                        <TouchableOpacity
+                          key={opt.value}
+                          style={[styles.typeBtn, active && { backgroundColor: opt.accent, borderColor: opt.accent }]}
+                          onPress={() => setItemType(opt.value)}
+                          activeOpacity={0.85}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${opt.label} type`}
+                        >
+                          <Icon
+                            name={opt.icon}
+                            size={18}
+                            color={active ? '#FFFFFF' : theme.colors.textTertiary}
+                          />
+                          <Text style={[styles.typeBtnText, active && styles.typeBtnTextActive]}>
+                            {opt.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
 
-              {/* Swipe affordance — a dot per type, the active one widened. */}
-              <View style={styles.typeDots}>
-                {ITEM_TYPES.map(opt => (
-                  <View
-                    key={opt.value}
-                    style={[
-                      styles.typeDot,
-                      itemType === opt.value && { backgroundColor: opt.accent, width: 16 },
-                    ]}
-                  />
-                ))}
-              </View>
+                  {/* Swipe affordance — a dot per type, the active one widened. */}
+                  <View style={styles.typeDots}>
+                    {ITEM_TYPES.map(opt => (
+                      <View
+                        key={opt.value}
+                        style={[
+                          styles.typeDot,
+                          itemType === opt.value && { backgroundColor: opt.accent, width: 16 },
+                        ]}
+                      />
+                    ))}
+                  </View>
+                </>
+              )}
             </View>
             </GestureDetector>
 
