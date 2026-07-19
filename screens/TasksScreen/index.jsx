@@ -127,7 +127,6 @@ import {
 } from './components';
 import FriendCard from '../TurtleScreen/components/FriendCard';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
-import QuickTaskCreate from './components/QuickTaskCreate';
 import { useNavigation } from '@react-navigation/native';
 import { useCommandBus } from '../../context/CommandBusContext';
 import { useCelebration } from '../../context/CelebrationContext';
@@ -494,12 +493,6 @@ export default function TasksScreen() {
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [showProjectManager, setShowProjectManager] = useState(false);
   const [showTaskForm, setShowTaskForm] = useState(false);
-  // Quick full-page task creator (the simple default for NEW tasks). Board /
-  // date it opens prefilled with; the full TaskForm is one "More details" tap
-  // away for the rest of the capabilities.
-  const [showQuick, setShowQuick] = useState(false);
-  const [quickBoard, setQuickBoard] = useState('');
-  const [quickDate, setQuickDate] = useState('');
   // Whose-profile-is-open: { userId, ownerName } set when a task's owner badge
   // is tapped on the shared calendar; drives the FriendCard popup below.
   const [profileOwner, setProfileOwner] = useState(null);
@@ -1622,32 +1615,14 @@ export default function TasksScreen() {
   // Open the unified create form pre-set to a kind chosen from the calendar
   // "+" menu (birthday / task / event). The type stays switchable inside the form.
   // `date` (YYYY-MM-DD, optional) pre-fills the due/occasion date when creating
-  // from a specific tapped calendar day.
+  // from a specific tapped calendar day. This is now the single NEW-item entry
+  // point (the FAB-equivalent "Add new task" button and the calendar day "+"
+  // both route through it with type 'task') — TaskForm itself opens COLLAPSED
+  // for new items (no initialData), so the fast path is preserved.
   const openCreateForm = useCallback((type, date) => {
     setEditingTask(null);
     setNewItemType(type || 'task');
     setNewItemDate(date || null);
-    setFormContinue(false);
-    setShowTaskForm(true);
-  }, []);
-
-  // NEW tasks open the simple full-page quick creator (not the full sheet).
-  // Events/birthdays still go straight to the full form (they need the occasion
-  // fields). `date`/`board` prefill it.
-  const openQuickCreate = useCallback((date = '', board = '') => {
-    setQuickDate(date || '');
-    setQuickBoard(board || '');
-    setShowQuick(true);
-  }, []);
-
-  // "More details" from the quick creator: hand its draft to the full TaskForm,
-  // prefilled. The draft carries no id, so the form still treats it as a NEW
-  // item (no delete, fresh id on save) while showing every advanced field.
-  const openMoreFromQuick = useCallback((draft) => {
-    setShowQuick(false);
-    setEditingTask(draft || null);
-    setNewItemType('task');
-    setNewItemDate(null);
     setFormContinue(false);
     setShowTaskForm(true);
   }, []);
@@ -2131,7 +2106,7 @@ export default function TasksScreen() {
           onPlannerOpenChange={setDayPlannerOpen}
           // The day-planner's "+" creates a task pre-dated to the tapped day;
           // the type is still switchable inside the form.
-          onCreateForDate={(dateStr) => openQuickCreate(dateStr)}
+          onCreateForDate={(dateStr) => openCreateForm('task', dateStr)}
           // Tap a task's owner badge → open that person's profile card.
           onOwnerPress={(t) => { if (t?.userId) setProfileOwner({ userId: t.userId, ownerName: t.ownerName }); }}
         />
@@ -2320,7 +2295,7 @@ export default function TasksScreen() {
                 {!searchQuery && (
                   <TouchableOpacity
                     onPressIn={() => impactHaptic('medium')}
-                    onPress={() => openQuickCreate()}
+                    onPress={() => openCreateForm('task')}
                     style={styles.addNewTaskBtn}
                   >
                     <Icon name="plus" size={20} color={theme.colors.textPrimary} />
@@ -2592,19 +2567,6 @@ export default function TasksScreen() {
           />
         </View>
       </EdgeSwipePage>
-
-      {/* Quick task creator — rendered LAST in the screen root (same reason as
-          the boards EdgeSwipePage above): its in-tree absolute-fill overlay must
-          paint ABOVE the calendar/list pager, or the pager shows through it. */}
-      <QuickTaskCreate
-        visible={showQuick}
-        onClose={() => setShowQuick(false)}
-        onSubmit={handleSaveTask}
-        onMore={openMoreFromQuick}
-        boards={projects}
-        initialBoard={quickBoard}
-        initialDate={quickDate}
-      />
     </View>
   );
 }
