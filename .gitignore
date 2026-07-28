@@ -5,3 +5,6 @@ node_modules/
 # never commit local prebuild artifacts (they'd override app.json config).
 /android
 /ios
+
+# Isolated feature workspaces
+/.worktrees/
