@@ -1,19 +1,24 @@
 import TrackPlayer, { PlayerCommand } from '@rntp/player';
 import { createMusicPlayerController } from './musicPlayerController';
 
+let nativePlayerReady = false;
+
 const nativeAdapter = {
   async setup() {
-    await Promise.resolve(
-      TrackPlayer.setupPlayer({
-        contentType: 'music',
-        handleAudioBecomingNoisy: true,
-        autoUpdateMetadataFromStream: true,
-        android: {
-          wakeMode: 'network',
-          taskRemovedBehavior: 'stop',
-        },
-      })
-    );
+    if (!nativePlayerReady) {
+      await Promise.resolve(
+        TrackPlayer.setupPlayer({
+          contentType: 'music',
+          handleAudioBecomingNoisy: true,
+          autoUpdateMetadataFromStream: true,
+          android: {
+            wakeMode: 'network',
+            taskRemovedBehavior: 'stop',
+          },
+        })
+      );
+      nativePlayerReady = true;
+    }
     await Promise.resolve(
       TrackPlayer.setCommands({
         capabilities: [

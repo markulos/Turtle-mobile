@@ -25,7 +25,10 @@
         ],
         "ITSAppUsesNonExemptEncryption": false,
         "CADisableMinimumFrameDurationOnPhone": true,
-        "NSSupportsLiveActivities": true
+        "NSSupportsLiveActivities": true,
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
     "android": {
