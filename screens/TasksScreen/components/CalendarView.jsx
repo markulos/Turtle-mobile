@@ -46,6 +46,8 @@ import { useTheme } from '../../../context/ThemeContext';
 import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters, matchesRecurrence, isOccurrenceCompleted, parseLocalYMD } from '../utils/taskHelpers';
 import { TaskQuickInspector } from './TaskQuickInspector';
 import { TimelineTaskRow } from './TimelineTaskRow';
+import { HatchBackdrop } from './HatchBackdrop';
+import { TaskCardSkeletonCluster } from './TaskCardSkeleton';
 import { WheelTimePicker } from './WheelTimePicker';
 import { tapHaptic } from '../../../utils/haptics';
 
@@ -714,6 +716,27 @@ const DayPane = React.memo(function DayPane({
   // The cross-day Pending backlog — incomplete untimed tasks across all dates.
   const stripTasks = pendingTasks;
 
+  // ── Lazy-load the day's long card lists (To-Do + Pending) ──────────────
+  // Same idea as the Upcoming agenda: real cards fill in on scroll behind
+  // skeleton placeholders. A plain ScrollView can't virtualize like the
+  // agenda's FlashList, so rather than a placeholder per overflow item we render
+  // real cards up to `dayLimit` plus a short skeleton cluster at the frontier,
+  // growing the limit as the user scrolls near the bottom. Small days
+  // (≤ DAY_BATCH per list) render fully with no skeletons — no behaviour change.
+  // The cap is intentionally per list, not a shared total: both sections keep a
+  // useful first batch visible, and neither Pending nor To-Do is starved behind
+  // the other. One scroll can therefore reveal a batch in each overflowing list.
+  const DAY_BATCH = 20;
+  const [dayLimit, setDayLimit] = useState(DAY_BATCH);
+  const lazyMax = Math.max(untimedTasks.length, untimedCollapsed ? 0 : stripTasks.length);
+  const onDayScroll = (e) => {
+    if (dayLimit >= lazyMax) return;
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    if (contentOffset.y + layoutMeasurement.height >= contentSize.height - 480) {
+      setDayLimit((n) => Math.min(lazyMax, n + DAY_BATCH));
+    }
+  };
+
   // Auto-scroll to a useful hour on mount (now-1h today, else 8 AM) so a
   // freshly-swiped day lands on working hours rather than midnight. Mount-
   // only — later now-line ticks must not yank the user's scroll position.
@@ -748,6 +771,7 @@ const DayPane = React.memo(function DayPane({
         style={styles.taskList}
         contentContainerStyle={{ paddingBottom: Math.max(100, keyboardHeight + 20) }}
         scrollEventThrottle={16}
+        onScroll={onDayScroll}
         // Let taps on the suggestion rows register on the FIRST tap while the
         // keyboard is up (default would just dismiss the keyboard instead).
         keyboardShouldPersistTaps="handled"
@@ -1055,6 +1079,7 @@ const DayPane = React.memo(function DayPane({
                     // dueDate) the badge would count against the base day —
                     // a red "started 1h ago" on tomorrow's pane. Suppress it.
                     hideCountdown={seg.task.dueDate !== dayStr}
+                    hatchColor={seg.task.project ? getProjectColor(seg.task.project) : undefined}
                   />
                   {hasGap && (
                     <View style={styles.segGap}>
@@ -1106,6 +1131,9 @@ const DayPane = React.memo(function DayPane({
                 style={[
                   styles.taskBlock,
                   { top, height, borderLeftColor: projectColor, backgroundColor: theme.colors.surfaceElevated },
+                  // Board tasks: hairline border in the board colour on the
+                  // other three sides (left keeps its 3px project edge).
+                  task.project && { borderWidth: StyleSheet.hairlineWidth, borderColor: projectColor, borderLeftWidth: 3 },
                   blockDone && styles.taskItemCompleted,
                 ]}
                 // Tap a timeline block → minimal quick inspector (rename +
@@ -1113,6 +1141,13 @@ const DayPane = React.memo(function DayPane({
                 onPress={() => (onTaskInspect || onTaskPress)?.(task)}
                 onLongPress={() => onTaskLongPress?.(task)}
               >
+                {/* Board-colour diagonal hatch wash behind the block (board
+                    tasks only). Right corners match the block's rounding; left
+                    stays square under the 3px project edge. */}
+                <HatchBackdrop
+                  color={task.project ? projectColor : null}
+                  style={{ borderTopRightRadius: 6, borderBottomRightRadius: 6 }}
+                />
                 <View style={styles.taskBlockHeader}>
                   <Text
                     style={[styles.taskBlockTitle, blockDone && styles.taskTitleCompleted]}
@@ -1152,56 +1187,45 @@ const DayPane = React.memo(function DayPane({
             unscheduled, shown BELOW the schedule; tap to inspect / add a time. */}
         {untimedTasks.length > 0 && (
           <View style={styles.untimedSection}>
-            <View style={styles.untimedHeader}>
+            {/* marginBottom matches the scheduled compact list's header→first-
+                card gap (toolbar paddingBottom 6 + list paddingTop 4) so the
+                To-Do cards sit off the title, not flush against it. */}
+            <View style={[styles.untimedHeader, { marginBottom: 10 }]}>
               <Text style={styles.untimedLabel}>To Do · No Time Set</Text>
               <Text style={styles.untimedCount}>{untimedTasks.length}</Text>
             </View>
-            {untimedTasks.map(task => {
+            {/* Rendered with TimelineTaskRow — the SAME card as the scheduled
+                compact rows above — so untimed To-Dos read as identical task
+                cards (rail toggle, elevated card, title, board subtitle). No
+                time to show, so the when-line falls back to "No time set" and
+                the live countdown is suppressed. */}
+            {untimedTasks.slice(0, dayLimit).map((task, idx) => {
               // Per-occurrence completion: a recurring task's checkbox reflects
               // whether THIS day is ticked (meta.completedDates), not the global
               // `completed` boolean.
               const done = task.completed || isOccurrenceCompleted(task, dayStr);
               return (
-              <TouchableOpacity
-                key={task.id}
-                style={[styles.untimedItem, done && styles.taskItemCompleted]}
-                onPress={() => (onTaskInspect || onTaskPress)?.(task)}
-                onLongPress={() => onTaskLongPress?.(task)}
-              >
-                <TouchableOpacity
-                  style={styles.checkbox}
-                  onPressIn={() => tapHaptic()}
-                  onPress={(e) => { e.stopPropagation(); onToggleComplete?.(task.id, dayStr); }}
-                >
-                  <Icon
-                    name={done ? 'check-circle' : 'circle-outline'}
-                    size={20}
-                    color={done ? theme.colors.accentSuccess : theme.colors.textTertiary}
-                  />
-                </TouchableOpacity>
-                <Text
-                  style={[styles.untimedTitle, done && styles.taskTitleCompleted]}
-                  numberOfLines={1}
-                >
-                  {task.title}
-                </Text>
-                {multiUser && task.userId && (
-                  <TouchableOpacity
-                    style={[styles.ownerBadge, { backgroundColor: ownerColor(task.userId) }]}
-                    onPress={() => onOwnerPress?.(task)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Owner: ${task.ownerName || 'Unknown'}. Open profile`}
-                  >
-                    <Text style={styles.ownerBadgeText}>{ownerInitial(task.ownerName)}</Text>
-                  </TouchableOpacity>
-                )}
-                {task.priority && (
-                  <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(task.priority, theme) }]} />
-                )}
-              </TouchableOpacity>
+                <TimelineTaskRow
+                  key={task.id}
+                  item={task}
+                  onPress={onTaskInspect || onTaskPress}
+                  onLongPress={onTaskLongPress}
+                  onToggleComplete={(it) => onToggleComplete?.(it.id, dayStr)}
+                  isFirst={idx === 0}
+                  isLast={idx === untimedTasks.length - 1}
+                  hideDate
+                  done={done}
+                  hideCountdown
+                  whenLabelFallback="No time set"
+                  hatchColor={task.project ? getProjectColor(task.project) : undefined}
+                />
               );
             })}
+            {/* Lazy frontier — skeleton cards for the un-rendered overflow;
+                fills in as dayLimit grows on scroll (see onDayScroll). */}
+            {untimedTasks.length > dayLimit && (
+              <TaskCardSkeletonCluster theme={theme} remaining={untimedTasks.length - dayLimit} />
+            )}
           </View>
         )}
 
@@ -1209,8 +1233,10 @@ const DayPane = React.memo(function DayPane({
             plan reads first and the backlog sits underneath it. */}
         {stripTasks.length > 0 && (
           <View style={styles.untimedSection}>
+            {/* marginBottom matches the scheduled/To-Do header→first-card gap now
+                that Pending renders as the same large cards. */}
             <TouchableOpacity
-              style={styles.untimedHeader}
+              style={[styles.untimedHeader, { marginBottom: 10 }]}
               onPress={onToggleUntimedCollapsed}
               activeOpacity={0.7}
               accessibilityRole="button"
@@ -1224,61 +1250,43 @@ const DayPane = React.memo(function DayPane({
                 color={theme.colors.textTertiary}
               />
             </TouchableOpacity>
-            {!untimedCollapsed && stripTasks.map(task => {
+            {/* Same large TimelineTaskRow card as the scheduled + To-Do sections.
+                Pending keeps its due-date + countdown (backlog context) and adds
+                a trailing "add to today" button that stamps the viewed day as the
+                dueDate with no time — moving the task into today's To-Do. */}
+            {!untimedCollapsed && stripTasks.slice(0, dayLimit).map((task, idx) => {
               const done = task.completed || isOccurrenceCompleted(task, dayStr);
               return (
-              <TouchableOpacity
-                key={task.id}
-                style={[styles.untimedItem, done && styles.taskItemCompleted]}
-                onPress={() => onTaskPress?.(task)}
-                onLongPress={() => onTaskLongPress?.(task)}
-              >
-                <TouchableOpacity
-                  style={styles.checkbox}
-                  onPressIn={() => tapHaptic()}
-                  onPress={(e) => { e.stopPropagation(); onToggleComplete?.(task.id, dayStr); }}
-                >
-                  <Icon
-                    name={done ? 'check-circle' : 'circle-outline'}
-                    size={20}
-                    color={done ? theme.colors.accentSuccess : theme.colors.textTertiary}
-                  />
-                </TouchableOpacity>
-                <Text
-                  style={[styles.untimedTitle, done && styles.taskTitleCompleted]}
-                  numberOfLines={1}
-                >
-                  {task.title}
-                </Text>
-                {multiUser && task.userId && (
-                  <TouchableOpacity
-                    style={[styles.ownerBadge, { backgroundColor: ownerColor(task.userId) }]}
-                    onPress={() => onOwnerPress?.(task)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Owner: ${task.ownerName || 'Unknown'}. Open profile`}
-                  >
-                    <Text style={styles.ownerBadgeText}>{ownerInitial(task.ownerName)}</Text>
-                  </TouchableOpacity>
-                )}
-                {!done && (
-                  <TouchableOpacity
-                    onPressIn={() => tapHaptic()}
-                    onPress={(e) => { e.stopPropagation(); onUpdateTask?.(task.id, { dueDate: dayStr, time: null }); }}
-                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                    accessibilityRole="button"
-                    accessibilityLabel={isViewingToday ? 'Add this task to today' : 'Add this task to the selected day'}
-                    style={{ paddingHorizontal: 4, paddingVertical: 2 }}
-                  >
-                    <Icon name="calendar-arrow-right" size={17} color={theme.colors.primary} />
-                  </TouchableOpacity>
-                )}
-                {task.priority && (
-                  <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(task.priority, theme) }]} />
-                )}
-              </TouchableOpacity>
+                <TimelineTaskRow
+                  key={task.id}
+                  item={task}
+                  onPress={onTaskInspect || onTaskPress}
+                  onLongPress={onTaskLongPress}
+                  onToggleComplete={(it) => onToggleComplete?.(it.id, dayStr)}
+                  isFirst={idx === 0}
+                  isLast={idx === stripTasks.length - 1}
+                  done={done}
+                  hatchColor={task.project ? getProjectColor(task.project) : undefined}
+                  trailing={!done ? (
+                    <TouchableOpacity
+                      onPressIn={() => tapHaptic()}
+                      onPress={() => onUpdateTask?.(task.id, { dueDate: dayStr, time: null })}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={isViewingToday ? 'Add this task to today' : 'Add this task to the selected day'}
+                      style={styles.addTodayBtn}
+                    >
+                      <Icon name="calendar-arrow-right" size={18} color={theme.colors.primary} />
+                    </TouchableOpacity>
+                  ) : undefined}
+                />
               );
             })}
+            {/* Lazy frontier for the Pending backlog — opening it on a big
+                backlog shows a batch + skeletons, filling in as you scroll. */}
+            {!untimedCollapsed && stripTasks.length > dayLimit && (
+              <TaskCardSkeletonCluster theme={theme} remaining={stripTasks.length - dayLimit} />
+            )}
           </View>
         )}
       </ScrollView>
@@ -2783,9 +2791,7 @@ export const CalendarView = ({
         onOpenFull={() => {
           const t = inspectorTask;
           setInspectorTaskId(null);
-          // Second arg = continue from the quick card, so the full form rises
-          // from where this sheet sat instead of re-sliding from off-screen.
-          if (t) onTaskLongPress?.(t, true);
+          if (t) onTaskLongPress?.(t);
         }}
       />
 
@@ -3285,9 +3291,6 @@ const createStyles = (theme) => StyleSheet.create({
     textDecorationLine: 'line-through',
     color: theme.colors.textTertiary,
   },
-  checkbox: {
-    marginRight: 10,
-  },
 
   // ── Hour-timetable view ─────────────────────────────────────
   // Untimed ("All Day") header strip — sits above the hour grid for
@@ -3477,16 +3480,19 @@ const createStyles = (theme) => StyleSheet.create({
     marginLeft: 6,
     marginRight: 'auto',
   },
-  untimedItem: {
-    flexDirection: 'row',
+  // Round "add to today's To-Do" button sitting as the right accessory on a
+  // Pending TimelineTaskRow card. Reads as a tappable control (bordered surface
+  // disc) without competing with the card's title.
+  addTodayBtn: {
+    marginLeft: 10,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: 'center',
-    paddingVertical: 6,
-  },
-  untimedTitle: {
-    flex: 1,
-    fontSize: theme.typography.body,
-    color: theme.colors.textPrimary,
-    fontWeight: '500',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
   },
   // Smaller priority chip used inside compact rows / blocks where the
   // larger priorityIndicator would crowd the title.

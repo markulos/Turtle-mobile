@@ -507,6 +507,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
           type + meta (color/guests/yearly), landing as a bare task. */}
       <TaskForm
         visible={quickOpen}
+        asOverlay
         onClose={() => setQuickOpen(false)}
         onSave={createTaskFromBoard}
         initialType="task"

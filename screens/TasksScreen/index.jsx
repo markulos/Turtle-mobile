@@ -506,7 +506,6 @@ export default function TasksScreen() {
   const [editingTask, setEditingTask] = useState(null);
   // True when the edit form was reached by continuing the calendar quick
   // inspector (so it presents as a continuation, not a fresh slide-up).
-  const [formContinue, setFormContinue] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   // Accordion for the task tree: only ONE task row's subtasks/details are
   // expanded at a time — expanding another collapses the previous, so exactly
@@ -843,7 +842,19 @@ export default function TasksScreen() {
       return t.createdAt || 0;
     };
     const visible = source.filter((t) => t && taskPassesFilters(t, filters));
-    const past = visible
+    // "Show incomplete only" is a LIST-level concern (see taskHelpers' note on
+    // why completion isn't in taskPassesFilters), applied here at SNAPSHOT time
+    // rather than in the live hydration path. That keeps a tick a pure repaint:
+    // the ticked row holds its slot until the next rebuild boundary (refocus /
+    // add / delete / edit-save), exactly like every other filter — filtering it
+    // live would yank the row out from under FlashList mid-tick, the very class
+    // of bug the frozen order exists to prevent.
+    // Only completed / done-now rows drop; overdue-but-OPEN tasks are still
+    // incomplete, so they stay in the Past band.
+    const inScope = showIncompleteOnly
+      ? visible.filter((t) => !(t.completed || isTaskDoneNow(t)))
+      : visible;
+    const past = inScope
       .filter(isPast)
       .map((t) => ({ t, k: stampOf(t) }))
       .sort((a, b) => a.k - b.k)
@@ -851,7 +862,7 @@ export default function TasksScreen() {
     // Upcoming: dated open tasks from today onward (date asc, timed before
     // untimed within a day), then the undated backlog newest-first. Grouping
     // key = the due date it was SORTED under (undated rows get no divider).
-    const open = visible.filter((t) => !isPast(t));
+    const open = inScope.filter((t) => !isPast(t));
     const dated = open
       .filter(hasDate)
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || String(a.time || '99:99').localeCompare(String(b.time || '99:99')));
@@ -864,7 +875,7 @@ export default function TasksScreen() {
     ];
     return { past, upcoming };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [membershipKey, orderEpoch, selectedProject, selectedTags, tagFilterMode, selectedOwners, searchQuery]);
+  }, [membershipKey, orderEpoch, selectedProject, selectedTags, tagFilterMode, selectedOwners, searchQuery, showIncompleteOnly]);
 
   // Live lookup for hydration — fresh objects every tasks change, so a ticked
   // row repaints (✓, strikethrough) in its frozen slot.
@@ -1602,13 +1613,8 @@ export default function TasksScreen() {
     await collectTags([newTag]);
   };
 
-  // `continueFromQuick` is true only on the hand-off from the calendar quick
-  // inspector (drag up / "Edit details"): the full form then rises from where
-  // the quick card sat — and keeps the backdrop dim steady — so it reads as the
-  // same sheet continuing, not a second sheet re-sliding from off-screen.
-  const openEditForm = (task, continueFromQuick = false) => {
+  const openEditForm = (task) => {
     setEditingTask(task);
-    setFormContinue(continueFromQuick);
     setShowTaskForm(true);
   };
 
@@ -1623,7 +1629,6 @@ export default function TasksScreen() {
     setEditingTask(null);
     setNewItemType(type || 'task');
     setNewItemDate(date || null);
-    setFormContinue(false);
     setShowTaskForm(true);
   }, []);
 
@@ -1933,7 +1938,6 @@ export default function TasksScreen() {
         initialData={editingTask}
         initialType={newItemType}
         initialDate={newItemDate}
-        continueFromQuick={formContinue}
         projects={projects}
         allTags={allTags}
         onAddProject={addProject}

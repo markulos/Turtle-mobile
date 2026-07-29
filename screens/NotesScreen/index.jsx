@@ -614,29 +614,34 @@ export default function NotesScreen() {
   }, [visibleNotes, selectedTopic]);
   const renderPageBody = (filterKey) => {
     const data = listFor(filterKey);
-    if (data.length === 0) {
-      return (
-        <View style={styles.center}>
-          <Icon
-            name={filterKey === FILTER_TODO ? 'checkbox-blank-outline' : 'note-text-outline'}
-            size={36}
-            color={theme.colors.textMuted}
-          />
-          <Text style={styles.emptyTitle}>
-            {filterKey === FILTER_TODO ? 'No todos yet' : filterKey === FILTER_NOTE ? 'No notes yet' : 'Nothing here yet'}
-          </Text>
-          <Text style={styles.emptyHint}>
-            Tap ＋ to add one, or use /note · /todo in Turtle chat.
-          </Text>
-        </View>
-      );
-    }
+    // Empty state now rides as ListEmptyComponent so the scrolling header
+    // (ListHeaderComponent) still shows above it — an empty tab keeps its
+    // banner/pill/rail instead of collapsing to a bare centred message.
+    const empty = (
+      <View style={styles.center}>
+        <Icon
+          name={filterKey === FILTER_TODO ? 'checkbox-blank-outline' : 'note-text-outline'}
+          size={36}
+          color={theme.colors.textMuted}
+        />
+        <Text style={styles.emptyTitle}>
+          {filterKey === FILTER_TODO ? 'No todos yet' : filterKey === FILTER_NOTE ? 'No notes yet' : 'Nothing here yet'}
+        </Text>
+        <Text style={styles.emptyHint}>
+          Tap ＋ to add one, or use /note · /todo in Turtle chat.
+        </Text>
+      </View>
+    );
     return (
       <FlatList
         data={data}
         keyExtractor={(item) => item.id}
         style={{ flex: 1 }}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[styles.list, data.length === 0 && { flexGrow: 1 }]}
+        // Header chrome scrolls with the notes (see renderChrome). flexGrow lets
+        // the empty state centre in the space below it.
+        ListHeaderComponent={renderChrome()}
+        ListEmptyComponent={empty}
         refreshing={loading}
         onRefresh={refresh}
         {...keyboardScrollProps}
@@ -676,18 +681,17 @@ export default function NotesScreen() {
     ? ['rgba(74,222,128,0.06)', 'rgba(74,222,128,0.02)', 'transparent']
     : ['rgba(34,197,94,0.06)', 'rgba(34,197,94,0.02)', 'transparent'];
 
-  return (
-    <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
-      <LinearGradient
-        colors={headerGradient}
-        style={styles.headerGradient}
-        pointerEvents="none"
-      />
-
+  // Header chrome (title banner + type-filter pill + topic rail) rendered as the
+  // list's ListHeaderComponent so it SCROLLS AWAY with the notes instead of
+  // sitting as a fixed overlay. The negative horizontal margin cancels the
+  // list's contentContainer padding so the chrome spans edge-to-edge and its
+  // own paddings position exactly as they did when it was fixed. (The
+  // expandable search bar stays fixed above the pager — a single instance, so
+  // its ref/focus isn't split across the three per-page header copies.)
+  const renderChrome = () => (
+    <View style={styles.chrome}>
       <View style={styles.header}>
         <Text style={styles.title}>Notes</Text>
-        {/* Breadcrumb: when a topic is selected, "Notes / <topic>" with the
-            topic name in a hairline-thin weight next to the bold "Notes". */}
         {selectedTopic && (
           <Text style={styles.titleTopic} numberOfLines={1}>
             / {selectedTopic === UNTAGGED ? 'Untagged' : selectedTopic}
@@ -710,30 +714,6 @@ export default function NotesScreen() {
           <Icon name="magnify" size={22} color={theme.colors.textSecondary} />
         </TouchableOpacity>
       </View>
-
-      {/* Expandable search bar — Everything-style live filter over the current
-          tab/topic view; see visibleNotes + matchesNoteSearch above. */}
-      {searchOpen && (
-        <View style={[styles.searchBar, { borderColor: theme.colors.border, backgroundColor: theme.colors.surface }]}>
-          <Icon name="magnify" size={18} color={theme.colors.textMuted} />
-          <TextInput
-            ref={searchInputRef}
-            style={[styles.searchInput, { color: theme.colors.textPrimary }]}
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search notes & to-dos"
-            placeholderTextColor={theme.colors.textMuted}
-            returnKeyType="search"
-            autoCorrect={false}
-            autoCapitalize="none"
-          />
-          {search.length > 0 && (
-            <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Icon name="close" size={18} color={theme.colors.textMuted} />
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
 
       {/* Swipeable segmented control — the pill slides 1:1 with the pager. */}
       <View style={styles.tabTrack}>
@@ -829,6 +809,40 @@ export default function NotesScreen() {
             />
           )}
         </ScrollView>
+      )}
+    </View>
+  );
+
+  return (
+    <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
+      <LinearGradient
+        colors={headerGradient}
+        style={styles.headerGradient}
+        pointerEvents="none"
+      />
+
+      {/* Expandable search bar — Everything-style live filter over the current
+          tab/topic view; see visibleNotes + matchesNoteSearch above. */}
+      {searchOpen && (
+        <View style={[styles.searchBar, { borderColor: theme.colors.border, backgroundColor: theme.colors.surface }]}>
+          <Icon name="magnify" size={18} color={theme.colors.textMuted} />
+          <TextInput
+            ref={searchInputRef}
+            style={[styles.searchInput, { color: theme.colors.textPrimary }]}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search notes & to-dos"
+            placeholderTextColor={theme.colors.textMuted}
+            returnKeyType="search"
+            autoCorrect={false}
+            autoCapitalize="none"
+          />
+          {search.length > 0 && (
+            <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Icon name="close" size={18} color={theme.colors.textMuted} />
+            </TouchableOpacity>
+          )}
+        </View>
       )}
 
       {/* Body — swipeable pager (one page per filter); the pill tracks scroll */}
@@ -2038,6 +2052,13 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
             </View>
           )}
 
+          {/* scrollEnabled={false}: a growing multiline TextInput otherwise
+              captures the vertical pan for its own (non-existent) internal
+              scroll, starving the parent ScrollView — so a long note can't be
+              scrolled to its end AND keyboardDismissMode (scroll-down-to-close)
+              never fires. Disabling the input's own scroll lets the input grow
+              to its full height and hands ALL panning to the body ScrollView,
+              which then scrolls the whole card and dismisses the keyboard. */}
           <TextInput
             ref={contentRef}
             placeholder={mode === 'note' ? 'Anything to remember' : mode === 'feedback' ? 'Feedback for Claude' : 'Buy milk'}
@@ -2046,6 +2067,7 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
             onChangeText={setContent}
             style={styles.input}
             multiline
+            scrollEnabled={false}
           />
 
           <TextInput
@@ -2055,6 +2077,7 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
             onChangeText={setDescription}
             style={[styles.input, styles.inputDescription]}
             multiline
+            scrollEnabled={false}
           />
 
           {/* Tags — selected chips + inline new-tag input, then a row of the
@@ -2467,6 +2490,14 @@ const createStyles = (theme, isDark) => StyleSheet.create({
   list: {
     paddingHorizontal: 16,
     paddingBottom: 100,
+  },
+  // Wraps the header chrome when it rides as the list's ListHeaderComponent.
+  // The list's contentContainer adds 16px horizontal padding to every child
+  // (header included); this negative margin cancels it so the banner / pill /
+  // rail span edge-to-edge and their own paddings position exactly as they did
+  // when the chrome was a fixed overlay.
+  chrome: {
+    marginHorizontal: -16,
   },
   center: {
     flex: 1,

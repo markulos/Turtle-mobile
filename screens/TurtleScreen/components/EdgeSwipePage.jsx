@@ -36,10 +36,16 @@ const COMMIT_VX = 0.5;
  *               nested page must live INSIDE the parent page's tree, not as its
  *               own modal. (Top-level pages over a tab use the Modal form.)
  */
-export default function EdgeSwipePage({ visible, onClose, children, overlay = false, swipeEnabled = true }) {
+export default function EdgeSwipePage({ visible, onClose, children, overlay = false, swipeEnabled = true, edgeZone = EDGE_ZONE_PX }) {
   const { theme } = useTheme();
   const tx = useRef(new Animated.Value(SCREEN_W)).current;
   const [mounted, setMounted] = useState(false);
+
+  // How wide the left grab zone is. Defaults to the bezel strip; callers can
+  // widen it (e.g. the quick task form wants the whole left edge to pull back).
+  // Mirrored to a ref so the memoised pan responder reads the live value.
+  const edgeZoneRef = useRef(edgeZone);
+  edgeZoneRef.current = edgeZone;
   // Latest swipeEnabled read on the JS thread by the pan responder. Mirrored to
   // a ref so the responder (memoised on [tx]) never rebuilds — the guard reads
   // .current live. Callers set swipeEnabled={false} while an in-tree overlay
@@ -79,7 +85,7 @@ export default function EdgeSwipePage({ visible, onClose, children, overlay = fa
           if (!swipeEnabledRef.current) return false;
           const startX = evt.nativeEvent.pageX - g.dx;
           return (
-            startX < EDGE_ZONE_PX &&
+            startX < edgeZoneRef.current &&
             g.dx > 8 &&
             Math.abs(g.dx) > Math.abs(g.dy) * 1.5
           );
@@ -89,13 +95,27 @@ export default function EdgeSwipePage({ visible, onClose, children, overlay = fa
         },
         onPanResponderRelease: (_, g) => {
           if (g.dx > COMMIT_DX || g.vx > COMMIT_VX) {
-            onCloseRef.current?.(); // caller flips `visible` → the effect slides it out
+            // Continue the motion straight off the right edge from EXACTLY where
+            // the finger let go — don't wait for the parent's `visible`
+            // round-trip to start the exit (that left a frame of stall
+            // mid-swipe, which read as "not smooth"). Carry the fling velocity:
+            // a fast flick whips out, a slow drag glides. onClose still fires so
+            // the page unmounts; the effect's own out-timing then no-ops from
+            // ~SCREEN_W.
+            const remaining = SCREEN_W - Math.max(0, g.dx);
+            const duration = Math.max(
+              120,
+              Math.min(300, g.vx > 0.1 ? remaining / g.vx : 240),
+            );
+            Animated.timing(tx, { toValue: SCREEN_W, duration, useNativeDriver: true }).start();
+            onCloseRef.current?.();
           } else {
-            Animated.spring(tx, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+            // Short drag → glide back to fully-open with a soft, quick settle.
+            Animated.spring(tx, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
           }
         },
         onPanResponderTerminate: () => {
-          Animated.spring(tx, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+          Animated.spring(tx, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
         },
       }),
     [tx],
