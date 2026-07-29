@@ -105,7 +105,7 @@ export default function MusicVault({ onClose }) {
         </Text>
       ) : null}
 
-      {loading ? (
+      {loading && tracks.length === 0 ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator color={c.textSecondary} />
         </View>

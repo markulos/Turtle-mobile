@@ -64,6 +64,8 @@ describe('MusicVault', () => {
       artist: 'Turtle Music',
     };
     mockMusicPlayer.ready = true;
+    mockMusicPlayer.loading = false;
+    mockMusicPlayer.error = null;
   });
 
   test('starts the selected media row through the shared provider', async () => {
@@ -109,5 +111,14 @@ describe('MusicVault', () => {
 
     expect(mockPlayMedia).not.toHaveBeenCalled();
     expect(mockTogglePlayback).not.toHaveBeenCalled();
+  });
+
+  test('keeps retained tracks visible while the library refreshes with an error', async () => {
+    mockMusicPlayer.loading = true;
+    mockMusicPlayer.error = 'Unable to refresh music';
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+
+    expect(view.getByText('First')).toBeTruthy();
+    expect(view.getByText('Unable to refresh music')).toBeTruthy();
   });
 });
