@@ -15,6 +15,16 @@ export const FormField = ({ label, children }) => {
 };
 
 const createStyles = (theme) => StyleSheet.create({
-  container: { marginBottom: 10 },
-  label: { fontSize: theme.typography.body, fontWeight: '600', color: theme.colors.textSecondary, marginBottom: 8 },
+  container: { marginBottom: 14 },
+  // Quiet metadata label — small, uppercase, tracked, muted — so the field's
+  // VALUE (input text / chips) reads as primary and the label recedes. (Was
+  // body-size weight-600, which competed with the value for attention.)
+  label: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: theme.colors.textTertiary,
+    marginBottom: 8,
+  },
 });

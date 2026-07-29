@@ -1,36 +1,25 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
-  Modal,
   View,
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   Platform,
   StyleSheet,
   Alert,
   ScrollView,
   Keyboard,
-  Dimensions,
   KeyboardAvoidingView,
   Switch,
   LayoutAnimation,
 } from 'react-native';
-import Reanimated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  withTiming,
-  interpolate,
-  Extrapolation,
-  runOnJS,
-} from 'react-native-reanimated';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
 import { FormField } from './FormField';
+import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import { DatePickerModal } from './DatePickerModal';
 import { WheelTimePicker } from './WheelTimePicker';
 import { normalizeTags, getPriorityColor } from '../utils/taskHelpers';
@@ -43,16 +32,6 @@ import {
   OCCASION_COLORS,
   REMINDER_OPTIONS,
 } from '../utils/constants';
-
-// Off-screen start/stop point for the sheet's slide-up present animation.
-const SHEET_H = Dimensions.get('window').height || 900;
-// When the form is reached by continuing the calendar quick inspector, it rises
-// this short distance into place (instead of all the way from off-screen) so the
-// two sheets read as one continuous card. Small enough that the backdrop dim —
-// derived from sheetY over [0, SHEET_H] — barely changes, so it never flashes.
-const CONTINUE_OFFSET = 120;
-// Snap spring — tuned to match the calendar day-sheet's rise/settle feel.
-const SHEET_SPRING = { damping: 22, stiffness: 220, mass: 0.9 };
 
 // Per-type wording so the same modal reads naturally whether you're creating a
 // task, an event, or a birthday.
@@ -166,9 +145,6 @@ export const TaskForm = ({
   // Ignored when editing or for non-task types (events/birthdays have no board).
   // Still shown/editable via the Board chip — this only seeds the initial value.
   initialProject = null,
-  // True when opened by continuing the calendar quick inspector — present from
-  // the quick card's resting spot (CONTINUE_OFFSET) rather than off-screen.
-  continueFromQuick = false,
   // True when this form is mounted somewhere that can only persist a plain
   // task (e.g. a board conversation composer, which saves via a task-only
   // endpoint that doesn't store item_type/meta — see BoardTimeline). Hides
@@ -181,6 +157,12 @@ export const TaskForm = ({
   allTags,
   onAddProject,
   onCollectTags,
+  // Render as an in-tree EdgeSwipePage OVERLAY instead of its own native Modal.
+  // Required when mounted inside another page/Modal (e.g. BoardTimeline, itself
+  // an EdgeSwipePage overlay): iOS won't present a second sibling Modal over an
+  // open one, so a nested form must live in the parent's tree. Top-level callers
+  // (Tasks screen "+") leave this false → the Modal form.
+  asOverlay = false,
 }) => {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
@@ -225,17 +207,6 @@ export const TaskForm = ({
     return list.slice(0, 8);
   }, [notes, noteQuery]);
 
-  // Track keyboard visibility so the sheet can drop its bottom safe-area inset
-  // while the keyboard is up (the keyboard already covers that strip — the inset
-  // would otherwise leave a dead gap between the card and the keyboard).
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
-  useEffect(() => {
-    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const s = Keyboard.addListener(showEvt, () => setKeyboardVisible(true));
-    const h = Keyboard.addListener(hideEvt, () => setKeyboardVisible(false));
-    return () => { s.remove(); h.remove(); };
-  }, []);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showEndTimePicker, setShowEndTimePicker] = useState(false);
@@ -249,6 +220,9 @@ export const TaskForm = ({
   // Inline "name a new board" input under the board row (opened from the
   // board list's "New board…" chip).
   const [newBoardOpen, setNewBoardOpen] = useState(false);
+  // Inline Low/Med/High picker under the essentials chip row (opened by the
+  // Priority chip — replaces the old silent tap-to-cycle behaviour).
+  const [priorityListOpen, setPriorityListOpen] = useState(false);
   // Custom reminder lead-time entry (tasks/events): the "+ Custom" row.
   const [customReminderOpen, setCustomReminderOpen] = useState(false);
   const [customReminderValue, setCustomReminderValue] = useState('');
@@ -293,15 +267,6 @@ export const TaskForm = ({
 
   const titleInputRef = useRef(null);
   const descInputRef = useRef(null);
-  // Single source of truth for the sheet's vertical position (Reanimated shared
-  // value, driven on the UI thread exactly like the calendar day-sheet): 0 =
-  // fully open, SHEET_H = off-screen at the bottom. The header drag writes to it
-  // 1:1, and the present/dismiss animations spring/time it. The backdrop dim is
-  // derived from it, so the dim fades in as the sheet rises and lightens as you
-  // drag it down — no separate opacity value to keep in sync.
-  const sheetY = useSharedValue(SHEET_H);
-  const dragStartY = useSharedValue(SHEET_H);
-
   const isEditing = !!initialData?.id;
   const itemType = formData.itemType || 'task';
   const isTask = itemType === 'task';
@@ -317,12 +282,6 @@ export const TaskForm = ({
       // Fresh open — the involved set hasn't been hand-edited yet, so the
       // partner auto-seed is allowed to fill it.
       involvedTouched.current = false;
-      // Present: spring the sheet up into place (dim fades in via the
-      // sheetY-derived backdrop style). When continuing from the quick
-      // inspector we start just below the open position so it grows out of that
-      // card rather than sliding the full height — a seamless hand-off.
-      sheetY.value = continueFromQuick ? CONTINUE_OFFSET : SHEET_H;
-      sheetY.value = withSpring(0, SHEET_SPRING);
       if (initialData) {
         // Check if task is an appointment (createdAt matches dueDate)
         const isAppointment = initialData.dueDate && initialData.createdAt && (() => {
@@ -383,7 +342,7 @@ export const TaskForm = ({
       setNewBoardOpen(false);
       savingRef.current = false;
     }
-  }, [visible, initialData, initialType, initialDate, initialProject, continueFromQuick, sheetY]);
+  }, [visible, initialData, initialType, initialDate, initialProject]);
 
   // Cold-start seed: if the partner list resolves AFTER a fresh new-task form
   // is already open, fill the still-empty, untouched involved set with the
@@ -398,97 +357,10 @@ export const TaskForm = ({
     ));
   }, [visible, initialData, partnerIds]);
 
-  // Stable JS callbacks the gesture/animation worklets invoke via runOnJS. They
-  // read the latest ref on the JS thread, so the gesture never has to rebuild
-  // (and the worklet never captures a stale function or a ref's .current).
-  const runClose = useCallback(() => onCloseRef.current?.(), []);
-  const runCycle = useCallback((dir) => cycleTypeRef.current?.(dir), []);
-
-  // Dismiss: slide the sheet off-screen (the dim fades out with it via the
-  // sheetY-derived backdrop), then fire onClose once it lands. Called from the
-  // Cancel/Save/backdrop paths AND from the header drag-release.
   const handleClose = () => {
     Keyboard.dismiss();
-    sheetY.value = withTiming(SHEET_H, { duration: 220 }, (finished) => {
-      if (finished) runOnJS(runClose)();
-    });
+    onClose?.();
   };
-
-  // Cycle the item kind by a swipe step (dir -1 prev, +1 next). Clamped to the
-  // ends so the three types read like a little carousel. Board UI folds shut
-  // when leaving 'task' — same reason as setItemType.
-  const cycleType = (dir) => {
-    if (lockType) return; // locked callers (BoardTimeline) never change type
-    const order = ITEM_TYPES.map(o => o.value);
-    const idx = Math.max(0, order.indexOf(formData.itemType || 'task'));
-    const type = order[Math.min(order.length - 1, Math.max(0, idx + dir))];
-    if (type !== 'task') {
-      setBoardListOpen(false);
-      setNewBoardOpen(false);
-    }
-    setFormData(prev => {
-      if (type === prev.itemType) return prev;
-      return {
-        ...prev,
-        itemType: type,
-        color: prev.color || ITEM_TYPE_DEFAULT_COLOR[type] || null,
-        reminders: prev.reminders.length ? prev.reminders : (type === 'birthday' ? ['1-week', 'same-day'] : prev.reminders),
-      };
-    });
-  };
-
-  // Keep the latest close/cycle callbacks in refs so the (once-created) gesture
-  // worklet always invokes the current versions without being rebuilt.
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-  const cycleTypeRef = useRef(cycleType);
-  cycleTypeRef.current = cycleType;
-
-  // ── Header pan — the SAME mechanism the calendar day-sheet uses ───────────
-  // A react-native-gesture-handler Pan on the header drives BOTH gestures on
-  // the UI thread (so the sheet tracks the finger 1:1, no JS-thread lag):
-  //   • hold + slide DOWN  → dismiss (sheetY follows the finger; release past
-  //     ~100px or a downward flick slides it the rest of the way and closes)
-  //   • swipe LEFT/RIGHT   → switch Task ⇄ Event ⇄ Birthday
-  // activeOffset means a plain tap never engages the pan, so the type buttons
-  // underneath stay tappable; only a deliberate drag grabs the sheet.
-  const headerPan = useMemo(() => Gesture.Pan()
-    .activeOffsetX([-14, 14])
-    .activeOffsetY([-8, 8])
-    .onStart(() => {
-      dragStartY.value = sheetY.value;
-    })
-    .onUpdate((e) => {
-      // Only the vertical-dominant drag moves the sheet; a horizontal swipe
-      // (type switch) leaves it parked.
-      if (Math.abs(e.translationY) >= Math.abs(e.translationX)) {
-        sheetY.value = Math.max(0, dragStartY.value + e.translationY);
-      }
-    })
-    .onEnd((e) => {
-      const horizontal = Math.abs(e.translationX) > Math.abs(e.translationY);
-      if (horizontal && Math.abs(e.translationX) > 40) {
-        sheetY.value = withSpring(0, SHEET_SPRING);
-        runOnJS(runCycle)(e.translationX < 0 ? 1 : -1);
-      } else if (e.translationY > 100 || e.velocityY > 600) {
-        // RNGH velocity is px/SECOND — the old 0.6 threshold (copied from a
-        // px/ms PanResponder) made nearly every release read as a flick, so
-        // the sheet closed on the slightest downward wiggle.
-        sheetY.value = withTiming(SHEET_H, { duration: 200 }, (finished) => {
-          if (finished) runOnJS(runClose)();
-        });
-      } else {
-        sheetY.value = withSpring(0, SHEET_SPRING);
-      }
-    }), [sheetY, dragStartY, runClose, runCycle]);
-
-  // Sheet transform + backdrop dim, both derived from sheetY on the UI thread.
-  const sheetStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: sheetY.value }],
-  }));
-  const backdropStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(sheetY.value, [0, SHEET_H], [1, 0], Extrapolation.CLAMP),
-  }));
 
   const suggestions = useMemo(() => {
     if (!tagInput.trim() || !showSuggestions) return [];
@@ -700,13 +572,18 @@ export const TaskForm = ({
     updateField('taskReminders', { ...(formData.taskReminders || {}), leads: next });
   };
 
-  // Cycle the tasks-only Priority chip through TaskForm's real priority set
-  // (PRIORITIES = low/medium/high — no separate cyclePriority existed, so
-  // this walks the same array the expanded Priority button group renders).
-  const cyclePriority = () => {
-    const idx = PRIORITIES.indexOf(formData.priority);
-    const next = PRIORITIES[(idx + 1) % PRIORITIES.length] || PRIORITIES[0];
-    updateField('priority', next);
+  // Toggle the inline Low/Med/High priority selector under the essentials chip
+  // row (mirrors the Board picker's in-card list — one obvious control instead
+  // of a chip whose tap silently cycled the value with no on-screen hint).
+  const togglePriorityList = () => {
+    Keyboard.dismiss();
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setPriorityListOpen(prev => !prev);
+  };
+  const pickPriority = (p) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setPriorityListOpen(false);
+    updateField('priority', p);
   };
 
   // Add a custom reminder lead time (tasks/events). The picked value+unit is
@@ -766,103 +643,51 @@ export const TaskForm = ({
     return `${displayH}:${m.toString().padStart(2, '0')} ${isPM ? 'PM' : 'AM'}`;
   };
 
-  return (
-    <Modal
-      animationType="none"
-      transparent
-      visible={visible}
-      onRequestClose={handleClose}
-    >
-      {/* A RN Modal renders OUTSIDE the app's root GestureHandlerRootView, so
-          GestureDetector won't get touches unless we mount a root here too. */}
-      <GestureHandlerRootView style={styles.overlay}>
-        {/* Tap the dimmed area above the sheet to dismiss. The dim fades in as
-            the sheet rises and lightens live as it's dragged down (both derived
-            from sheetY). */}
-        <TouchableWithoutFeedback onPress={handleClose}>
-          <Reanimated.View style={[styles.backdrop, backdropStyle]} />
-        </TouchableWithoutFeedback>
+  // Drives the pinned Save CTA's enabled/dimmed state — a title is the one
+  // hard requirement to persist anything.
+  const canSave = !!formData.title.trim();
 
-        {/* Single keyboard handler. The KeyboardAvoidingView lifts the WHOLE
-            sheet on the OS keyboard curve
+  return (
+    <EdgeSwipePage visible={visible} onClose={handleClose} overlay={asOverlay} edgeZone={110}>
+      {/* Instagram-style pushed PAGE: EdgeSwipePage slides this full-screen page
+          in from the right and owns the left-edge back-swipe. GestureHandlerRootView
+          is kept because a Modal renders outside the app's root, so any RNGH
+          gesture inside the page needs a root to receive touches. */}
+      <GestureHandlerRootView style={styles.page}>
+        {/* KeyboardAvoidingView lifts the fields on the OS keyboard curve
             — 'padding' on iOS, 'height' on Android. A plain ScrollView holds the
             fields; we deliberately do NOT also use KeyboardAwareScrollView,
             because stacking the two made them fight (double-shift/overshoot). */}
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.kav}
-          pointerEvents="box-none"
         >
-          <Reanimated.View style={[
-            styles.content,
-            sheetStyle,
-            // Keyboard up → drop the bottom safe-area inset so the card sits
-            // flush on the keyboard (a hair of breathing room, not the full
-            // home-indicator gap). Keyboard down → keep the inset.
-            { paddingBottom: keyboardVisible ? 8 : (insets.bottom || (Platform.OS === 'ios' ? 16 : 12)) },
-          ]}>
-            {/* Header — hold + slide DOWN to close, swipe LEFT/RIGHT to change
-                type (same gesture-handler Pan the calendar day-sheet uses). It's
-                the fixed top of the sheet, so the type switcher (and the action
-                buttons pinned at the bottom) are always on screen. When
-                lockType, the swipe still starts the Pan but cycleType() is a
-                no-op, so a horizontal drag just springs the sheet back to 0
-                instead of changing the type. */}
-            <GestureDetector gesture={headerPan}>
-            <View style={styles.sheetHeader}>
-              <View style={styles.grabHandle} pointerEvents="none" />
-              <Text style={styles.title}>
-                {isEditing ? `Edit ${copy.label}` : `New ${copy.label}`}
-              </Text>
-
-              {/* Type selector — tap a kind, or swipe across the header to move
-                  between Task / Event / Birthday. Hidden entirely when
-                  lockType (e.g. the board composer): that caller only ever
-                  persists a plain task, so offering Event/Birthday here would
-                  silently lose the type + meta on save (see BoardTimeline). */}
-              {!lockType && (
-                <>
-                  <View style={styles.typeSelector}>
-                    {ITEM_TYPES.map(opt => {
-                      const active = itemType === opt.value;
-                      return (
-                        <TouchableOpacity
-                          key={opt.value}
-                          style={[styles.typeBtn, active && { backgroundColor: opt.accent, borderColor: opt.accent }]}
-                          onPress={() => setItemType(opt.value)}
-                          activeOpacity={0.85}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${opt.label} type`}
-                        >
-                          <Icon
-                            name={opt.icon}
-                            size={18}
-                            color={active ? '#FFFFFF' : theme.colors.textTertiary}
-                          />
-                          <Text style={[styles.typeBtnText, active && styles.typeBtnTextActive]}>
-                            {opt.label}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-
-                  {/* Swipe affordance — a dot per type, the active one widened. */}
-                  <View style={styles.typeDots}>
-                    {ITEM_TYPES.map(opt => (
-                      <View
-                        key={opt.value}
-                        style={[
-                          styles.typeDot,
-                          itemType === opt.value && { backgroundColor: opt.accent, width: 16 },
-                        ]}
-                      />
-                    ))}
-                  </View>
-                </>
-              )}
+          <View style={styles.pageBody}>
+            {/* Fixed header bar — matches the app's page header (Boards /
+                Friends): a back chevron INLINE with the title on one row, a
+                quiet helper subtitle, and a hairline divider. Left-edge swipe
+                also goes back (EdgeSwipePage, wide edgeZone). Stays put while
+                the fields scroll beneath it, so "where am I / how do I leave"
+                is always answered — clarity for new users. */}
+            <View style={styles.headerBar}>
+              <TouchableOpacity
+                onPress={handleClose}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                style={styles.headerBackBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Back"
+              >
+                <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+              <View style={styles.headerTitleCol}>
+                <Text style={styles.headerTitle} numberOfLines={1}>
+                  {isEditing ? `Edit ${copy.label}` : `New ${copy.label}`}
+                </Text>
+                <Text style={styles.headerSubtitle} numberOfLines={1}>
+                  {isEditing ? 'Update the details below' : 'Add the essentials — the rest is optional'}
+                </Text>
+              </View>
             </View>
-            </GestureDetector>
 
             <ScrollView
               style={styles.fieldsScroll}
@@ -870,22 +695,63 @@ export const TaskForm = ({
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               showsVerticalScrollIndicator={true}
+              // iOS otherwise floats the vertical indicator on the WRONG side /
+              // inset; pinning a 1px right inset forces it to the true right
+              // edge. indicatorStyle keeps it visible on the black theme.
+              scrollIndicatorInsets={{ right: 1 }}
+              indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
             >
+            {/* Type selector — tap a kind to move between Task / Event /
+                Birthday. Hidden entirely when lockType (e.g. the board
+                composer): that caller only ever persists a plain task, so
+                offering Event/Birthday here would silently lose the type +
+                meta on save (see BoardTimeline). Sits at the top of the
+                scrolling fields, just under the fixed header. */}
+            {!lockType && (
+              <View style={styles.typeSelector}>
+                {ITEM_TYPES.map(opt => {
+                  const active = itemType === opt.value;
+                  return (
+                    <TouchableOpacity
+                      key={opt.value}
+                      style={[styles.typeBtn, active && { backgroundColor: opt.accent, borderColor: opt.accent }]}
+                      onPress={() => setItemType(opt.value)}
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${opt.label} type`}
+                    >
+                      <Icon
+                        name={opt.icon}
+                        size={18}
+                        color={active ? '#FFFFFF' : theme.colors.textTertiary}
+                      />
+                      <Text style={[styles.typeBtnText, active && styles.typeBtnTextActive]}>
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
             {/* ── Essentials — the fast path. Title first, then the two facts
                 that place the item on the calendar (date/time) and, for tasks,
                 a compact board picker that's happy to stay "Choose later".
                 Everything else lives behind "More options" below. */}
-            <FormField label={copy.titleLabel}>
-              <TextInput
-                ref={titleInputRef}
-                style={styles.input}
-                placeholder={copy.titlePlaceholder}
-                placeholderTextColor={theme.colors.textPlaceholder}
-                value={formData.title}
-                onChangeText={text => updateField('title', text)}
-                returnKeyType="done"
-              />
-            </FormField>
+            {/* Title is the hero field — the one thing every create/edit is
+                really about. Large + bold + borderless, no "Title" label, so it
+                reads as the headline of the sheet (iOS Reminders / Things
+                pattern) and every secondary field below stays quiet by
+                contrast. */}
+            <TextInput
+              ref={titleInputRef}
+              style={styles.titleInput}
+              placeholder={copy.titlePlaceholder}
+              placeholderTextColor={theme.colors.textPlaceholder}
+              value={formData.title}
+              onChangeText={text => updateField('title', text)}
+              returnKeyType="done"
+            />
 
             {/* Essentials — one-tap chips for the most common fields. Date +
                 Time always show (Time hidden for birthdays, which are
@@ -917,7 +783,7 @@ export const TaskForm = ({
                   theme={theme} icon="flag-variant-outline"
                   label={formData.priority.charAt(0).toUpperCase() + formData.priority.slice(1)}
                   active tint={getPriorityColor(formData.priority, theme)}
-                  onPress={cyclePriority}
+                  onPress={togglePriorityList}
                 />
               )}
               {isTask && (
@@ -986,6 +852,34 @@ export const TaskForm = ({
               <Text style={styles.hint}>Will create new board "{formData.project}"</Text>
             )}
 
+            {/* Inline priority picker — opened by the Priority chip above. The
+                single source of truth for priority now (the duplicate expanded
+                Priority row was removed). */}
+            {isTask && priorityListOpen && (
+              <View style={[styles.priorityRow, { marginTop: 10, marginBottom: 0 }]}>
+                {PRIORITIES.map(p => (
+                  <TouchableOpacity
+                    key={p}
+                    style={[
+                      styles.priorityBtn,
+                      formData.priority === p && {
+                        backgroundColor: getPriorityColor(p, theme),
+                        borderColor: getPriorityColor(p, theme),
+                      },
+                    ]}
+                    onPress={() => pickPriority(p)}
+                  >
+                    <Text style={[
+                      styles.priorityText,
+                      formData.priority === p && styles.priorityTextActive,
+                    ]}>
+                      {p.charAt(0).toUpperCase() + p.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
             {/* Remind-at-due-time — collapsed quick toggle (tasks/events;
                 birthdays have their own all-day reminder block further down).
                 Derived from taskReminders.leads (lead 0 = "at time") and
@@ -1045,6 +939,10 @@ export const TaskForm = ({
 
             {showMore && (<>
 
+            {/* ── DETAILS — what the item is: description, linked note, tags,
+                and (for events/birthdays) its calendar colour. */}
+            <GroupHeader theme={theme} label="Details" />
+
             {/* Description — moved from the essentials fast path into the
                 expanded block (a pure relocation; same field + handler). */}
             {!isBirthday && (
@@ -1059,39 +957,6 @@ export const TaskForm = ({
                   multiline
                   textAlignVertical="top"
                 />
-              </FormField>
-            )}
-
-            {/* End time — appears only once a start time exists (an end is
-                meaningless without one). Stored as `duration` (end − start in
-                minutes); the calendar reads that to size the block. Moved
-                from the essentials fast path into the expanded block. */}
-            {!isBirthday && formData.time && (
-              <FormField label="End time (optional)">
-                <TouchableOpacity
-                  style={styles.datePickerButton}
-                  onPress={() => setShowEndTimePicker(true)}
-                >
-                  <Icon name="clock-check-outline" size={20} color={formData.duration > 0 ? theme.colors.accentInfo : theme.colors.textSecondary} />
-                  <Text style={[
-                    styles.datePickerText,
-                    !(formData.duration > 0) && styles.datePickerPlaceholder
-                  ]}>
-                    {formData.duration > 0
-                      ? `${formatTime12(addMinutesToHHMM(formData.time, formData.duration))}  ·  ${formatDurationShort(formData.duration)}`
-                      : 'Set an end time...'}
-                  </Text>
-                  <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
-                </TouchableOpacity>
-
-                {formData.duration > 0 && (
-                  <TouchableOpacity
-                    style={styles.clearDateBtn}
-                    onPress={() => updateField('duration', null)}
-                  >
-                    <Text style={styles.clearDateText}>Clear end time</Text>
-                  </TouchableOpacity>
-                )}
               </FormField>
             )}
 
@@ -1263,20 +1128,100 @@ export const TaskForm = ({
               </FormField>
             )}
 
-            {/* People involved — Tasks only. They see the task (view-only) and
-                get an assignment notification when newly added. */}
+            {/* Colour — events + birthdays. Sits with the DETAILS group as an
+                appearance choice. */}
+            {!isTask && (
+              <FormField label="Colour">
+                <View style={styles.colorRow}>
+                  {OCCASION_COLORS.map(c => (
+                    <TouchableOpacity
+                      key={c}
+                      style={[
+                        styles.colorSwatch,
+                        { backgroundColor: c },
+                        formData.color === c && styles.colorSwatchActive,
+                      ]}
+                      onPress={() => updateField('color', c)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Colour ${c}`}
+                    >
+                      {formData.color === c && (
+                        <Icon name="check" size={16} color="#FFFFFF" />
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </FormField>
+            )}
+
+            {/* ── WHEN — when it happens and how it repeats / reminds. */}
+            <GroupHeader theme={theme} label="When" />
+
+            {/* End time — appears only once a start time exists (an end is
+                meaningless without one). Stored as `duration` (end − start in
+                minutes); the calendar reads that to size the block. */}
+            {!isBirthday && formData.time && (
+              <FormField label="End time (optional)">
+                <TouchableOpacity
+                  style={styles.datePickerButton}
+                  onPress={() => setShowEndTimePicker(true)}
+                >
+                  <Icon name="clock-check-outline" size={20} color={formData.duration > 0 ? theme.colors.accentInfo : theme.colors.textSecondary} />
+                  <Text style={[
+                    styles.datePickerText,
+                    !(formData.duration > 0) && styles.datePickerPlaceholder
+                  ]}>
+                    {formData.duration > 0
+                      ? `${formatTime12(addMinutesToHHMM(formData.time, formData.duration))}  ·  ${formatDurationShort(formData.duration)}`
+                      : 'Set an end time...'}
+                  </Text>
+                  <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
+                </TouchableOpacity>
+
+                {formData.duration > 0 && (
+                  <TouchableOpacity
+                    style={styles.clearDateBtn}
+                    onPress={() => updateField('duration', null)}
+                  >
+                    <Text style={styles.clearDateText}>Clear end time</Text>
+                  </TouchableOpacity>
+                )}
+              </FormField>
+            )}
+
+            {/* Repeat — tasks only (birthdays use the yearly toggle below). */}
             {isTask && (
-              <FormField label="People involved">
-                <ParticipantPicker
-                  selected={formData.involvedUsers || []}
-                  onChange={(ids) => { involvedTouched.current = true; updateField('involvedUsers', ids); }}
-                />
+              <FormField label="Repeat">
+                <View style={styles.recurringRow}>
+                  {RECURRING_OPTIONS.map(option => (
+                    <TouchableOpacity
+                      key={option.value}
+                      style={[
+                        styles.recurringBtn,
+                        formData.recurring === option.value && styles.recurringBtnActive
+                      ]}
+                      onPress={() => updateField('recurring', option.value)}
+                    >
+                      <Icon
+                        name={option.icon}
+                        size={16}
+                        color={formData.recurring === option.value ? theme.colors.textPrimary : theme.colors.textTertiary}
+                      />
+                      <Text style={[
+                        styles.recurringText,
+                        formData.recurring === option.value && styles.recurringTextActive
+                      ]}>
+                        {option.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </FormField>
             )}
 
             {/* Reminders — tasks + events. Lead times before due; push always,
                 SMS opt-in, to the owner and (optionally) involved parties.
-                Birthdays use their own all-day reminder block further down. */}
+                Birthdays use their own all-day reminder block below. */}
             {(isTask || isEvent) && (
               <FormField label="Reminders">
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -1287,16 +1232,9 @@ export const TaskForm = ({
                       <TouchableOpacity
                         key={p.min}
                         onPress={() => toggleReminderLead(p.min)}
-                        style={{
-                          paddingVertical: 8,
-                          paddingHorizontal: 14,
-                          borderRadius: 8,
-                          borderWidth: 1,
-                          borderColor: on ? theme.colors.accentInfo : theme.colors.border,
-                          backgroundColor: on ? theme.colors.accentInfo + '22' : theme.colors.surfaceElevated,
-                        }}
+                        style={[styles.remPill, on && styles.remPillActive]}
                       >
-                        <Text style={{ fontSize: 13, color: on ? theme.colors.accentInfo : theme.colors.textSecondary }}>
+                        <Text style={[styles.remPillText, on && styles.remPillTextActive]}>
                           {p.label === 'At time' ? 'At time' : `${p.label} before`}
                         </Text>
                       </TouchableOpacity>
@@ -1313,30 +1251,19 @@ export const TaskForm = ({
                           const cur = (formData.taskReminders && formData.taskReminders.leads) || [];
                           updateField('taskReminders', { ...(formData.taskReminders || {}), leads: cur.filter((x) => x !== m) });
                         }}
-                        style={{
-                          flexDirection: 'row', alignItems: 'center', gap: 5,
-                          paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8,
-                          borderWidth: 1, borderColor: theme.colors.accentInfo,
-                          backgroundColor: theme.colors.accentInfo + '22',
-                        }}
+                        style={[styles.remPill, styles.remPillActive]}
                       >
-                        <Text style={{ fontSize: 13, color: theme.colors.accentInfo }}>{formatLead(m)}</Text>
+                        <Text style={[styles.remPillText, styles.remPillTextActive]}>{formatLead(m)}</Text>
                         <Icon name="close" size={13} color={theme.colors.accentInfo} />
                       </TouchableOpacity>
                     ))}
                   {/* + Custom — reveal the value + unit entry row. */}
                   <TouchableOpacity
                     onPress={() => setCustomReminderOpen((o) => !o)}
-                    style={{
-                      flexDirection: 'row', alignItems: 'center', gap: 4,
-                      paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8,
-                      borderWidth: 1, borderStyle: 'dashed',
-                      borderColor: customReminderOpen ? theme.colors.accentInfo : theme.colors.border,
-                      backgroundColor: theme.colors.surfaceElevated,
-                    }}
+                    style={[styles.remPill, { borderStyle: 'dashed' }, customReminderOpen && styles.remPillActive]}
                   >
                     <Icon name="plus" size={14} color={customReminderOpen ? theme.colors.accentInfo : theme.colors.textSecondary} />
-                    <Text style={{ fontSize: 13, color: customReminderOpen ? theme.colors.accentInfo : theme.colors.textSecondary }}>Custom</Text>
+                    <Text style={[styles.remPillText, customReminderOpen && styles.remPillTextActive]}>Custom</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -1419,92 +1346,6 @@ export const TaskForm = ({
               </FormField>
             )}
 
-            {/* Guests — events only. */}
-            {isEvent && (
-              <FormField label="Guests">
-                <View style={styles.tagRow}>
-                  <TextInput
-                    style={[styles.input, styles.tagInput]}
-                    placeholder="Add a guest by name..."
-                    placeholderTextColor={theme.colors.textPlaceholder}
-                    value={guestInput}
-                    onChangeText={setGuestInput}
-                    onSubmitEditing={() => addGuest()}
-                    blurOnSubmit={false}
-                    returnKeyType="done"
-                  />
-                  <TouchableOpacity style={styles.addTagBtn} onPress={() => addGuest()}>
-                    <Icon name="account-plus" size={20} color={theme.colors.textPrimary} />
-                  </TouchableOpacity>
-                </View>
-                {formData.guests.length > 0 && (
-                  <View style={styles.tagsContainer}>
-                    {formData.guests.map((guest, idx) => (
-                      <View key={idx} style={styles.selectedTagChip}>
-                        <Icon name="account" size={13} color={theme.colors.textSecondary} style={{ marginRight: 4 }} />
-                        <Text style={styles.selectedTagText}>{guest}</Text>
-                        <TouchableOpacity onPress={() => removeGuest(guest)}>
-                          <Icon name="close-circle" size={16} color={theme.colors.accentError} />
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </FormField>
-            )}
-
-            {/* Appointment option — tasks only, when a due date is set. */}
-            {formData.dueDate && isTask && (
-              <FormField label="Scheduling">
-                <TouchableOpacity
-                  style={styles.appointmentToggle}
-                  onPress={() => updateField('isAppointment', !formData.isAppointment)}
-                  activeOpacity={0.7}
-                >
-                  <View style={[
-                    styles.checkbox,
-                    formData.isAppointment && styles.checkboxChecked
-                  ]}>
-                    {formData.isAppointment && (
-                      <Icon name="check" size={14} color="#fff" />
-                    )}
-                  </View>
-                  <Text style={styles.appointmentText}>Single event (appointment)</Text>
-                  <Icon
-                    name="calendar-clock"
-                    size={16}
-                    color={formData.isAppointment ? theme.colors.accentSuccess : theme.colors.textTertiary}
-                    style={styles.appointmentIcon}
-                  />
-                </TouchableOpacity>
-              </FormField>
-            )}
-
-            {/* Colour — events + birthdays. */}
-            {!isTask && (
-              <FormField label="Colour">
-                <View style={styles.colorRow}>
-                  {OCCASION_COLORS.map(c => (
-                    <TouchableOpacity
-                      key={c}
-                      style={[
-                        styles.colorSwatch,
-                        { backgroundColor: c },
-                        formData.color === c && styles.colorSwatchActive,
-                      ]}
-                      onPress={() => updateField('color', c)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Colour ${c}`}
-                    >
-                      {formData.color === c && (
-                        <Icon name="check" size={16} color="#FFFFFF" />
-                      )}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </FormField>
-            )}
-
             {/* Yearly toggle + reminders — birthdays only. */}
             {isBirthday && (
               <>
@@ -1554,61 +1395,78 @@ export const TaskForm = ({
               </>
             )}
 
-            {/* Priority — tasks only. */}
-            {isTask && (
-              <FormField label="Priority">
-                <View style={styles.priorityRow}>
-                  {PRIORITIES.map(p => (
-                    <TouchableOpacity
-                      key={p}
-                      style={[
-                        styles.priorityBtn,
-                        formData.priority === p && {
-                          backgroundColor: getPriorityColor(p, theme),
-                          borderColor: getPriorityColor(p, theme)
-                        }
-                      ]}
-                      onPress={() => updateField('priority', p)}
-                    >
-                      <Text style={[
-                        styles.priorityText,
-                        formData.priority === p && styles.priorityTextActive
-                      ]}>
-                        {p.charAt(0).toUpperCase() + p.slice(1)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+            {/* Appointment option — tasks only, when a due date is set. */}
+            {formData.dueDate && isTask && (
+              <FormField label="Scheduling">
+                <TouchableOpacity
+                  style={styles.appointmentToggle}
+                  onPress={() => updateField('isAppointment', !formData.isAppointment)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[
+                    styles.checkbox,
+                    formData.isAppointment && styles.checkboxChecked
+                  ]}>
+                    {formData.isAppointment && (
+                      <Icon name="check" size={14} color="#fff" />
+                    )}
+                  </View>
+                  <Text style={styles.appointmentText}>Single event (appointment)</Text>
+                  <Icon
+                    name="calendar-clock"
+                    size={16}
+                    color={formData.isAppointment ? theme.colors.accentSuccess : theme.colors.textTertiary}
+                    style={styles.appointmentIcon}
+                  />
+                </TouchableOpacity>
               </FormField>
             )}
 
-            {/* Repeat — tasks only (birthdays use the yearly toggle above). */}
+            {/* ── PEOPLE — who's attached: assignees (tasks) or guests (events). */}
+            {(isTask || isEvent) && <GroupHeader theme={theme} label="People" />}
+
+            {/* People involved — Tasks only. They see the task (view-only) and
+                get an assignment notification when newly added. */}
             {isTask && (
-              <FormField label="Repeat">
-                <View style={styles.recurringRow}>
-                  {RECURRING_OPTIONS.map(option => (
-                    <TouchableOpacity
-                      key={option.value}
-                      style={[
-                        styles.recurringBtn,
-                        formData.recurring === option.value && styles.recurringBtnActive
-                      ]}
-                      onPress={() => updateField('recurring', option.value)}
-                    >
-                      <Icon
-                        name={option.icon}
-                        size={16}
-                        color={formData.recurring === option.value ? theme.colors.textPrimary : theme.colors.textTertiary}
-                      />
-                      <Text style={[
-                        styles.recurringText,
-                        formData.recurring === option.value && styles.recurringTextActive
-                      ]}>
-                        {option.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
+              <FormField label="People involved">
+                <ParticipantPicker
+                  selected={formData.involvedUsers || []}
+                  onChange={(ids) => { involvedTouched.current = true; updateField('involvedUsers', ids); }}
+                />
+              </FormField>
+            )}
+
+            {/* Guests — events only. */}
+            {isEvent && (
+              <FormField label="Guests">
+                <View style={styles.tagRow}>
+                  <TextInput
+                    style={[styles.input, styles.tagInput]}
+                    placeholder="Add a guest by name..."
+                    placeholderTextColor={theme.colors.textPlaceholder}
+                    value={guestInput}
+                    onChangeText={setGuestInput}
+                    onSubmitEditing={() => addGuest()}
+                    blurOnSubmit={false}
+                    returnKeyType="done"
+                  />
+                  <TouchableOpacity style={styles.addTagBtn} onPress={() => addGuest()}>
+                    <Icon name="account-plus" size={20} color={theme.colors.textPrimary} />
+                  </TouchableOpacity>
                 </View>
+                {formData.guests.length > 0 && (
+                  <View style={styles.tagsContainer}>
+                    {formData.guests.map((guest, idx) => (
+                      <View key={idx} style={styles.selectedTagChip}>
+                        <Icon name="account" size={13} color={theme.colors.textSecondary} style={{ marginRight: 4 }} />
+                        <Text style={styles.selectedTagText}>{guest}</Text>
+                        <TouchableOpacity onPress={() => removeGuest(guest)}>
+                          <Icon name="close-circle" size={16} color={theme.colors.accentError} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </FormField>
             )}
 
@@ -1657,13 +1515,13 @@ export const TaskForm = ({
               theme={theme}
             />
 
-            {/* Actions — at the END of the scroll, not pinned: scroll to the
-                bottom to save, iOS-form style. Delete (edit only) sits last. */}
+            {/* Secondary actions at the END of the scroll. The primary Save is
+                now a pinned footer (below), always reachable — so only the quiet
+                Cancel link and the destructive Delete (edit only) live here. */}
             <View style={styles.actionsBlock}>
-              <TouchableOpacity style={[styles.actionBtn, styles.saveBtn]} onPressIn={() => impactHaptic('medium')} onPress={handleSave}>
-                <Text style={styles.saveText}>Save {copy.label}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.actionBtn, styles.cancelBtn]} onPress={handleClose}>
+              {/* Cancel — a quiet text link, not a second big button (the back
+                  chevron already dismisses). Keeps Save the single bold action. */}
+              <TouchableOpacity style={styles.cancelBtn} onPress={handleClose}>
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
 
@@ -1695,10 +1553,31 @@ export const TaskForm = ({
             </View>
 
             </ScrollView>
-          </Reanimated.View>
+
+            {/* Pinned primary action — sits below the scroll and rides above the
+                keyboard (inside the KeyboardAvoidingView), so Save is reachable
+                from anywhere in the form without scrolling to the end. Dimmed
+                until the title has content; handleSave still guards + alerts. */}
+            <View style={styles.footer}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.saveBtn, !canSave && styles.saveBtnDisabled]}
+                disabled={!canSave}
+                activeOpacity={0.85}
+                onPressIn={() => { if (canSave) impactHaptic('medium'); }}
+                onPress={handleSave}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !canSave }}
+                accessibilityLabel={`${isEditing ? 'Save' : 'Add'} ${copy.label}`}
+              >
+                <Text style={styles.saveText}>
+                  {isEditing ? `Save ${copy.label}` : `Add ${copy.label}`}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </KeyboardAvoidingView>
       </GestureHandlerRootView>
-    </Modal>
+    </EdgeSwipePage>
   );
 };
 
@@ -1727,92 +1606,79 @@ function Chip({ theme, icon, label, active, tint, onPress, onClear }) {
   );
 }
 
+// Section header inside "More options" — anchors the eye so the expanded fields
+// read as three short groups (Details / When / People) instead of one long wall.
+function GroupHeader({ theme, label }) {
+  const styles = createStyles(theme, {});
+  return <Text style={styles.groupHeader}>{label}</Text>;
+}
+
 const createStyles = (theme, insets) => StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'flex-end'
-  },
-  // Full-screen dim + tap target behind the sheet — tapping it closes; its
-  // opacity is driven by sheetY (fades in on rise, lightens on drag-down).
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-  },
-  // Fills the overlay so the sheet's percentage maxHeight resolves against the
-  // full screen; the sheet itself is bottom-anchored. `box-none` lets taps in
-  // the empty space above the sheet fall through to the backdrop (close).
+  // KeyboardAvoidingView wrapper for the full-screen page.
   kav: {
     flex: 1,
     width: '100%',
-    justifyContent: 'flex-end',
   },
-  // Bounded bottom sheet: capped at 92% of the screen so a tall form scrolls
-  // internally (the header stays pinned; actions live at the scroll end) and a short one (e.g. a birthday)
-  // hugs the bottom — either way nothing is ever clipped.
-  content: {
-    backgroundColor: theme.colors.background,
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
-    paddingHorizontal: 18,
-    paddingBottom: insets.bottom || (Platform.OS === 'ios' ? 16 : 12),
-    maxHeight: '92%',
-    overflow: 'hidden',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-    // Soft lift off the dimmed backdrop.
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.22,
-    shadowRadius: 20,
-    elevation: 18,
+  // Full-page container (EdgeSwipePage paints the background; we own the insets).
+  page: {
+    flex: 1,
   },
-  // Fixed header (drag-to-close + swipe-to-switch-type gesture surface).
-  sheetHeader: {
-    paddingTop: 10,
-    paddingBottom: 6,
+  // No horizontal padding here: the ScrollView must span the full page width so
+  // its vertical scroll indicator sits at the true right edge, and the fixed
+  // header bar owns its own insets. The 18px field inset lives on
+  // fieldsContent + the header bar.
+  pageBody: {
+    flex: 1,
   },
-  grabHandle: {
-    alignSelf: 'center',
-    width: 44,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: theme.colors.borderStrong || theme.colors.border,
-    marginBottom: 14,
+  // Fixed page header bar — mirrors the app's standard page header (Boards /
+  // Friends): chevron inline with the title on one row + hairline divider. Owns
+  // the top safe-area inset (pageBody no longer does).
+  headerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingTop: (insets.top || 0) + 6,
+    paddingBottom: 10,
+    paddingHorizontal: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  headerBackBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: -4,
+  },
+  headerTitleCol: {
+    flex: 1,
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
+  },
+  headerSubtitle: {
+    fontSize: 12,
+    color: theme.colors.textTertiary,
+    marginTop: 1,
   },
   fieldsScroll: {
-    flexGrow: 0,
-    flexShrink: 1,
+    flex: 1,
   },
   fieldsContent: {
     paddingTop: 6,
-    paddingBottom: 12,
+    paddingHorizontal: 18,
+    // Just breathing room above the pinned footer — the safe-area bottom inset
+    // now lives on the footer, not here.
+    paddingBottom: 24,
   },
-  // Swipe affordance dots under the type selector.
-  typeDots: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
-  },
-  typeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: theme.colors.border,
-  },
-  title: {
-    fontSize: 19,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-    marginBottom: 14,
-    color: theme.colors.textPrimary
-  },
-  // Type selector (Task / Event / Birthday)
+  // Type selector (Task / Event / Birthday) — first item under the fixed header.
   typeSelector: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 10,
+    marginTop: 2,
+    marginBottom: 14,
   },
   typeBtn: {
     flex: 1,
@@ -1842,6 +1708,25 @@ const createStyles = (theme, insets) => StyleSheet.create({
     fontSize: theme.typography.body,
     color: theme.colors.inputText,
     backgroundColor: theme.colors.inputBackground,
+  },
+  // Hero title field — the headline of the create/edit page. Larger + bolder
+  // than anything else so the task name is unmistakably the primary input, with
+  // a hairline rule underneath so new users clearly read it as "type here".
+  // Every secondary field sits quiet beneath it.
+  titleInput: {
+    borderWidth: 0,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+    backgroundColor: 'transparent',
+    paddingHorizontal: 2,
+    paddingTop: 8,
+    paddingBottom: 12,
+    marginBottom: 14,
+    fontSize: 28,
+    lineHeight: 34,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    color: theme.colors.textPrimary,
   },
   projectRow: {
     flexDirection: 'row',
@@ -2054,7 +1939,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
   priorityBtn: {
     flex: 1,
     paddingVertical: 10,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
     marginHorizontal: 5,
@@ -2081,7 +1966,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 10,
     paddingHorizontal: 8,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
@@ -2115,6 +2000,44 @@ const createStyles = (theme, insets) => StyleSheet.create({
     fontWeight: '600',
     color: theme.colors.accentInfo,
   },
+  // Section header for the "More options" groups (Details / When / People) —
+  // stronger + tracked, with a hairline rule under it to separate groups.
+  groupHeader: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: theme.colors.textSecondary,
+    marginTop: 24,
+    marginBottom: 14,
+    paddingBottom: 7,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  // Shared "selectable pill" for the Reminders preset chips — matches the
+  // Repeat/Priority pill system (was one-off inline styles per chip).
+  remPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  remPillActive: {
+    borderColor: theme.colors.accentInfo,
+    backgroundColor: theme.colors.accentInfo + '22',
+  },
+  remPillText: {
+    fontSize: 13,
+    color: theme.colors.textSecondary,
+  },
+  remPillTextActive: {
+    color: theme.colors.accentInfo,
+  },
   // End-of-scroll actions: stacked full-width Save → Cancel → Delete. Part of
   // the scroll content (NOT pinned) — reach the bottom to commit, iOS-form style.
   actionsBlock: {
@@ -2126,6 +2049,19 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // Pinned footer holding the primary Save CTA. Hairline top divider + solid
+  // page-bg fill so it reads as a fixed bar over the scrolling fields.
+  footer: {
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: (insets.bottom || 12),
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
+    backgroundColor: theme.colors.background,
+  },
+  saveBtnDisabled: {
+    opacity: 0.4,
   },
   // Inline board picker under the Board row — every board as a chip.
   boardList: {
@@ -2240,11 +2176,12 @@ const createStyles = (theme, insets) => StyleSheet.create({
     color: theme.colors.textPrimary,
     flex: 1,
   },
-  // Cancel — quiet, recedes against the filled Save CTA.
+  // Cancel — a quiet centered text link under Save (no button chrome), so the
+  // filled Save is the only button-weight action in the actions block.
   cancelBtn: {
-    backgroundColor: 'transparent',
-    borderWidth: 0.5,
-    borderColor: theme.colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
   },
   cancelText: {
     color: theme.colors.textSecondary,
@@ -2284,7 +2221,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     backgroundColor: theme.colors.surfaceElevated,
     paddingHorizontal: 12,
     paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
   },
@@ -2313,7 +2250,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     backgroundColor: theme.colors.surfaceHighlight,
-    borderRadius: 8,
+    borderRadius: 10,
   },
   checkbox: {
     width: 20,

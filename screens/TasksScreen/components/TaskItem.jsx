@@ -123,6 +123,14 @@ const TaskItemImpl = ({
               size={22}
               color={done ? theme.colors.accentSuccess : theme.colors.textTertiary}
             />
+            {/* Small white connector: drops from under the checkbox circle and
+                angles over the card toward the time/date badge, overlapping it
+                by a hair. Anchored to the checkbox (not the row) so it stays
+                put whatever the row height. Only drawn when there's a
+                time/date to point at. pointerEvents off so it never eats taps. */}
+            {(item.time || shownDue) && (
+              <View pointerEvents="none" style={styles.checkConnector} />
+            )}
           </TouchableOpacity>
 
           <View style={styles.content}>
@@ -407,6 +415,26 @@ const createStyles = (theme) => StyleSheet.create({
   },
   checkbox: {
     marginRight: theme.spacing.sm,
+    position: 'relative',
+    // Let the connector line spill out of the 22px box (Android clips by
+    // default) and stack above the sibling content column.
+    overflow: 'visible',
+    zIndex: 5,
+  },
+  // Decorative connector line: starts at the CENTRE of the checkbox circle
+  // (icon is 22px, so top:11 / left:11 is dead centre) and runs horizontally
+  // right to the time/date badge in the meta row, lapping over its left edge
+  // by 5px. width = centre-to-badge (~24px) + 5px overlap.
+  checkConnector: {
+    position: 'absolute',
+    top: 11,
+    left: 11,
+    width: 29,
+    height: 1.5,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 1,
+    zIndex: 5,
+    elevation: 5, // Android paint-order: keep it above the content column
   },
   content: {
     flex: 1,

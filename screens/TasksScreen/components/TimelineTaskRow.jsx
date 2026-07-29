@@ -5,6 +5,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import { itemTypeOf, formatDueDate } from '../utils/taskHelpers';
 import { tapHaptic } from '../../../utils/haptics';
 import TaskCountdownBadge from './TaskCountdownBadge';
+import { HatchBackdrop } from './HatchBackdrop';
 
 // ── Quick time helpers (self-contained so this row works in any list) ──────────
 // Format "HH:MM" honoring the user's 12/24h preference.
@@ -55,7 +56,7 @@ export const UNIFORM_ROW_H = UNIFORM_CARD_H + ROW_GAP;
 // `uniform`: locks the card to UNIFORM_CARD_H with a ONE-line title, making
 // the whole row a fixed UNIFORM_ROW_H — required by the agenda's past zone,
 // where skeleton placeholders must match real rows to the pixel.
-export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, isFirst, isLast, hideDate, done, doneDate, hideCountdown, railColor, cardColor, uniform }) => {
+export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, isFirst, isLast, hideDate, done, doneDate, hideCountdown, railColor, cardColor, uniform, whenLabelFallback = 'No date', trailing, hatchColor }) => {
   const { theme, timeFormat } = useTheme();
   const c = theme.colors || {};
   const use24h = timeFormat === '24h';
@@ -82,6 +83,9 @@ export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, 
   const cCheckOutline = cSub;
   const cCheckEmptyBg = isDark ? '#000000' : '#FFFFFF';
   const cCheckEmptyBorder = isDark ? '#FFFFFF' : cCheckOutline;
+  // Opaque backing behind the toggle disc (black on dark, white on light) so the
+  // connector line tucks cleanly UNDER the checkmark instead of showing through.
+  const cCheckBackdrop = isDark ? '#000000' : '#FFFFFF';
 
   // `done` (optional) overrides the raw boolean — recurring tasks track
   // per-occurrence completion in meta.completedDates, so the CALLER decides
@@ -104,15 +108,43 @@ export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, 
   const timePart = start ? (end ? `${start} — ${end}` : start) : '';
   const whenLabel = dateLabel
     ? (timePart ? `${dateLabel} · ${timePart}` : dateLabel)
-    : (timePart || 'No date');
+    : (timePart || whenLabelFallback);
 
   const typeLabel = { event: 'Event', birthday: 'Birthday' }[itemTypeOf(item)];
   const subtitle = item.project || typeLabel || 'No Board';
 
+  // The card's text column (when-line + title + subtitle). Factored out so an
+  // optional `trailing` accessory (e.g. Pending's "add to today" button) can sit
+  // beside it in a row without disturbing the plain stacked layout every other
+  // caller uses.
+  const cardBody = (
+    <>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+        <Text style={{ fontSize: 12, color: cMuted, flexShrink: 1 }} numberOfLines={1}>{whenLabel}</Text>
+        {!completed && !hideCountdown && (
+          <View style={{ marginLeft: 8 }}>
+            <TaskCountdownBadge task={item} />
+          </View>
+        )}
+      </View>
+      <Text
+        style={{ fontSize: 15, fontWeight: '600', color: cText, textDecorationLine: completed ? 'line-through' : 'none' }}
+        // Uniform rows cap the title to ONE line — a wrapped title is the
+        // one thing that made row heights vary.
+        numberOfLines={uniform ? 1 : 2}
+      >
+        {item.title}
+      </Text>
+      <Text style={{ fontSize: 13, color: cSub, marginTop: 1 }} numberOfLines={1}>{subtitle}</Text>
+    </>
+  );
+
   return (
     <View style={{ flexDirection: 'row', marginBottom: ROW_GAP, paddingHorizontal: 14 }}>
-      {/* Rail column — connecting line segments + the completion toggle */}
-      <View style={{ width: ICON, alignSelf: 'stretch', alignItems: 'center' }}>
+      {/* Rail column — connecting line segments + the completion toggle.
+          overflow visible + zIndex so the connector line below can spill out
+          of this column and paint over the card. */}
+      <View style={{ width: ICON, alignSelf: 'stretch', alignItems: 'center', overflow: 'visible', zIndex: 2 }}>
         {!isFirst && (
           <View style={{ position: 'absolute', left: ICON_CENTRE - 1, top: 0, height: ICON_CENTRE, width: 2, backgroundColor: cRail }} />
         )}
@@ -130,8 +162,12 @@ export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, 
           accessibilityRole="button"
           accessibilityLabel={completed ? 'Mark not done' : 'Mark done'}
           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-          style={{ width: ICON, height: ICON, alignItems: 'center', justifyContent: 'center' }}
+          // zIndex/elevation above the connector line so the checkmark paints
+          // OVER it (line is above the card but below the checkmark).
+          style={{ width: ICON, height: ICON, alignItems: 'center', justifyContent: 'center', zIndex: 4, elevation: 4 }}
         >
+          {/* Opaque backdrop so the line disappears behind the checkmark. */}
+          <View style={{ position: 'absolute', width: DOT + 2, height: DOT + 2, borderRadius: (DOT + 2) / 2, backgroundColor: cCheckBackdrop }} />
           <View
             style={{
               width: DOT,
@@ -147,6 +183,35 @@ export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, 
             {completed && <Icon name="check" size={DOT - 5} color={cCheckMark} />}
           </View>
         </TouchableOpacity>
+
+        {/* Connector: a horizontal line from the CENTRE of the toggle circle
+            (top = ICON_CENTRE − half thickness; the disc is centred at y=20 in
+            the 40px toggle), running right over the card and lapping onto it by
+            5px. left = ICON_CENTRE (start at circle centre); width reaches the
+            card's left edge (ICON_CENTRE→ICON is the toggle's right half = 20,
+            + 12px card margin) + 5px overlap = 37. Only drawn when the card has
+            a time/date to point at. pointerEvents off so it never eats taps. */}
+        {(item.time || (!hideDate && whenDate)) && (
+          <View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              top: ICON_CENTRE - 1,
+              left: ICON_CENTRE,
+              // Starts under the checkmark (masked by the backdrop) and runs to
+              // 5px PAST the card's left edge: toggle right-half (ICON−ICON_CENTRE)
+              // + 12px card margin + 5px overlap onto the card.
+              width: (ICON - ICON_CENTRE) + 12 + 5,
+              height: 1.5,
+              backgroundColor: cCheckFill,
+              opacity: 0.8,
+              borderRadius: 1,
+              // Above the card, below the checkmark.
+              zIndex: 3,
+              elevation: 3,
+            }}
+          />
+        )}
       </View>
 
       {/* Card */}
@@ -161,37 +226,29 @@ export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, 
           backgroundColor: cCardBg,
           borderRadius: 12,
           borderWidth: 1,
-          borderColor: cBorder,
+          // Board tasks get a hairline border in the board's colour (matches the
+          // hatch backdrop); everything else keeps the neutral card border.
+          borderColor: hatchColor || cBorder,
           paddingVertical: 9,
           paddingHorizontal: 12,
           opacity: completed ? 0.65 : 1,
           // Uniform mode: pixel-exact card height so the row's total height is
           // a constant the agenda's placeholder geometry can rely on.
           ...(uniform ? { height: UNIFORM_CARD_H, overflow: 'hidden', justifyContent: 'center' } : {}),
+          // With a trailing accessory the card lays out as [text | button].
+          ...(trailing ? { flexDirection: 'row', alignItems: 'center' } : {}),
         }}
       >
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
-          <Text style={{ fontSize: 12, color: cMuted, flexShrink: 1 }} numberOfLines={1}>{whenLabel}</Text>
-          {/* Live countdown to when it happens — minute precision (blue when
-              upcoming, red once it's passed, amber for an all-day task today).
-              Hidden while checked: after a recurring tick the dueDate has
-              advanced, so the badge would count down to the NEXT occurrence —
-              reading as "it didn't complete". */}
-          {!completed && !hideCountdown && (
-            <View style={{ marginLeft: 8 }}>
-              <TaskCountdownBadge task={item} />
-            </View>
-          )}
-        </View>
-        <Text
-          style={{ fontSize: 15, fontWeight: '600', color: cText, textDecorationLine: completed ? 'line-through' : 'none' }}
-          // Uniform rows cap the title to ONE line — a wrapped title is the
-          // one thing that made row heights vary.
-          numberOfLines={uniform ? 1 : 2}
-        >
-          {item.title}
-        </Text>
-        <Text style={{ fontSize: 13, color: cSub, marginTop: 1 }} numberOfLines={1}>{subtitle}</Text>
+        {/* Low-opacity diagonal hatch in the board's colour, behind the content
+            (calendar day pane only — callers pass hatchColor when the task
+            belongs to a board). Self-clips to the card's radius. */}
+        <HatchBackdrop color={hatchColor} style={{ borderRadius: 12 }} />
+        {trailing ? (
+          <>
+            <View style={{ flex: 1, minWidth: 0 }}>{cardBody}</View>
+            {trailing}
+          </>
+        ) : cardBody}
       </TouchableOpacity>
     </View>
   );
