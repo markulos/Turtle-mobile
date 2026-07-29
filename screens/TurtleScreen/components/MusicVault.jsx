@@ -1,19 +1,13 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList, ActivityIndicator, StyleSheet, Pressable,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useVideoPlayer, VideoView } from 'expo-video';
 import { useTheme } from '../../../context/ThemeContext';
-import { useServer } from '../../../context/ServerContext';
+import { useMusicPlayer } from '../../../context/MusicPlayerContext';
+import { titleOf, sourceOf } from '../../../services/musicTrackMapper';
 import { tapHaptic, impactHaptic } from '../../../utils/haptics';
-
-// A lightweight music player over the vault's kind=audio slice (sound files
-// shared / ghost-downloaded from SoundCloud etc.). expo-video's player plays
-// audio-only sources; a 0-size VideoView keeps the native player attached.
-// In-app playback only for now — background + lock-screen controls need a
-// dev-client rebuild (react-native-track-player), a later phase.
 
 const fmtTime = (sec) => {
   if (!Number.isFinite(sec) || sec < 0) return '0:00';
@@ -22,128 +16,60 @@ const fmtTime = (sec) => {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 };
 
-// Strip a file extension + tidy an audio row's display title.
-const titleOf = (item) => {
-  const raw = item.originalName || item.filename || 'Unknown track';
-  return String(raw).replace(/\.[a-z0-9]{2,5}$/i, '').trim() || 'Unknown track';
-};
-const sourceOf = (item) => {
-  const u = item.sourceUrl || item.originalPath || '';
-  try { return u ? new URL(u).hostname.replace(/^www\./, '') : ''; } catch { return ''; }
-};
-
 export default function MusicVault({ onClose }) {
   const { theme } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
-  const { api, getBaseUrl, getMediaBaseUrl } = useServer();
-  const mediaBase = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '');
-  const fullUrl = useCallback((p) => (!p ? null : (/^https?:/i.test(p) ? p : mediaBase + p)), [mediaBase]);
-
-  const [tracks, setTracks] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [current, setCurrent] = useState(null); // index into tracks
-  const [playing, setPlaying] = useState(false);
-  const [position, setPosition] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const {
+    tracks,
+    loading,
+    ready,
+    error,
+    activeTrack,
+    isPlaying,
+    position,
+    duration,
+    playMedia,
+    togglePlayback,
+    previous,
+    next,
+    seekTo,
+  } = useMusicPlayer();
+  const current = tracks.findIndex(
+    (item) => String(item.id) === String(activeTrack?.mediaId)
+  );
+  const nowTrack = current >= 0 ? tracks[current] : null;
   const barWidthRef = useRef(1);
 
-  // Single player instance; swap sources via player.replace().
-  const player = useVideoPlayer(null, (p) => {
-    p.timeUpdateEventInterval = 0.4;
-    p.loop = false;
-    // Lock-screen / notification transport controls + keep audio playing when
-    // the app is backgrounded. expo-video renders the OS now-playing widget
-    // (play/pause/seek). NOTE: true background playback also needs the
-    // UIBackgroundModes:audio native capability (app.json expo-video plugin
-    // supportsBackgroundPlayback) — a dev-client REBUILD activates it; these
-    // flags are the JS half.
-    try { p.staysActiveInBackground = true; } catch { /* older expo-video */ }
-    try { p.showNowPlayingNotification = true; } catch { /* older expo-video */ }
-  });
+  const playIndex = useCallback(
+    (index) => {
+      const item = tracks[index];
+      if (item?.id != null) playMedia(String(item.id));
+    },
+    [playMedia, tracks]
+  );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const r = await api.get('/media/gallery?kind=audio&limit=300&order=desc&sortBy=upload');
-      setTracks(Array.isArray(r?.items) ? r.items : []);
-    } catch {
-      setTracks([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [api]);
-
-  useEffect(() => { load(); }, [load]);
-
-  // Player event wiring — position, duration, play-state, auto-advance.
-  const currentRef = useRef(current);
-  currentRef.current = current;
-  const tracksRef = useRef(tracks);
-  tracksRef.current = tracks;
-  const playIndex = useCallback((idx) => {
-    const list = tracksRef.current;
-    if (idx == null || idx < 0 || idx >= list.length) return;
-    const uri = fullUrl(list[idx].rawUrl || list[idx].url);
-    if (!uri) return;
-    setCurrent(idx);
-    setPosition(0);
-    try {
-      player.replace({ uri });
-      player.play();
-    } catch { /* ignore */ }
-  }, [fullUrl, player]);
-
-  useEffect(() => {
-    if (!player) return undefined;
-    const subs = [];
-    try {
-      subs.push(player.addListener('timeUpdate', (p) => {
-        if (typeof p?.currentTime === 'number') setPosition(p.currentTime);
-        if (typeof player.duration === 'number' && player.duration > 0) setDuration(player.duration);
-      }));
-      subs.push(player.addListener('playingChange', (p) => {
-        setPlaying(!!(p?.isPlaying ?? player.playing));
-      }));
-      subs.push(player.addListener('statusChange', () => {
-        if (typeof player.duration === 'number' && player.duration > 0) setDuration(player.duration);
-      }));
-      // Auto-advance to the next track at end.
-      subs.push(player.addListener('playToEnd', () => {
-        const next = (currentRef.current ?? -1) + 1;
-        if (next < tracksRef.current.length) playIndex(next);
-        else setPlaying(false);
-      }));
-    } catch { /* older expo-video event set — degrade gracefully */ }
-    return () => { for (const s of subs) { try { s.remove(); } catch { /* ignore */ } } };
-  }, [player, playIndex]);
-
-  const togglePlay = useCallback(() => {
-    if (current == null) { playIndex(0); return; }
-    try {
-      if (player.playing) player.pause();
-      else player.play();
-    } catch { /* ignore */ }
-  }, [current, player, playIndex]);
-
-  const seekTo = useCallback((frac) => {
-    if (!duration) return;
-    const t = Math.max(0, Math.min(duration, frac * duration));
-    try { player.currentTime = t; setPosition(t); } catch { /* ignore */ }
-  }, [duration, player]);
+  const seekFromFraction = useCallback(
+    (fraction) => {
+      if (!duration) return;
+      seekTo(Math.max(0, Math.min(duration, fraction * duration)));
+    },
+    [duration, seekTo]
+  );
 
   const renderTrack = useCallback(({ item, index }) => {
     const active = index === current;
     return (
       <TouchableOpacity
         activeOpacity={0.7}
+        disabled={!ready}
         onPressIn={() => tapHaptic()}
         onPress={() => playIndex(index)}
         style={styles.row}
       >
         <View style={[styles.art, { backgroundColor: (c.accentSuccess || '#4ADE80') + '22' }]}>
           <Icon
-            name={active && playing ? 'pause' : 'music-note'}
+            name={active && isPlaying ? 'pause' : 'music-note'}
             size={20}
             color={active ? (c.accentSuccess || '#4ADE80') : c.textSecondary}
           />
@@ -159,16 +85,10 @@ export default function MusicVault({ onClose }) {
         {item.duration ? <Text style={{ fontSize: 12, color: c.textTertiary }}>{fmtTime(item.duration)}</Text> : null}
       </TouchableOpacity>
     );
-  }, [c, current, playing, playIndex]);
-
-  const nowTrack = current != null ? tracks[current] : null;
+  }, [c, current, isPlaying, playIndex, ready]);
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
-      {/* Hidden player surface — keeps the native audio player attached. */}
-      <VideoView player={player} style={styles.hiddenPlayer} pointerEvents="none" />
-
-      {/* Header */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: insets.top + 6, paddingBottom: 8, paddingHorizontal: 10 }}>
         <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }} accessibilityLabel="Back">
           <Icon name="chevron-left" size={28} color={c.textPrimary} />
@@ -178,6 +98,12 @@ export default function MusicVault({ onClose }) {
           <Text style={{ fontWeight: '400' }}>Vault</Text>
         </Text>
       </View>
+
+      {error ? (
+        <Text style={[styles.error, { color: c.textSecondary, borderColor: c.border, backgroundColor: c.surfaceElevated }]}>
+          {error}
+        </Text>
+      ) : null}
 
       {loading ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -195,19 +121,18 @@ export default function MusicVault({ onClose }) {
           data={tracks}
           keyExtractor={(t) => String(t.id)}
           renderItem={renderTrack}
-          extraData={`${current}:${playing}`}
+          extraData={`${current}:${isPlaying}:${ready}`}
           contentContainerStyle={{ paddingBottom: nowTrack ? 150 : insets.bottom + 24 }}
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: c.border, marginLeft: 68 }} />}
         />
       )}
 
-      {/* Now-playing bar */}
       {nowTrack && (
         <View style={[styles.nowBar, { backgroundColor: c.surfaceElevated, borderTopColor: c.border, paddingBottom: insets.bottom + 8 }]}>
-          {/* Seek bar (tap to scrub) */}
           <Pressable
+            disabled={!ready}
             onLayout={(e) => { barWidthRef.current = e.nativeEvent.layout.width || 1; }}
-            onPress={(e) => seekTo(e.nativeEvent.locationX / barWidthRef.current)}
+            onPress={(e) => seekFromFraction(e.nativeEvent.locationX / barWidthRef.current)}
             style={styles.seekHit}
           >
             <View style={[styles.seekTrack, { backgroundColor: c.border }]}>
@@ -227,14 +152,41 @@ export default function MusicVault({ onClose }) {
               <Text style={{ fontSize: 15, fontWeight: '700', color: c.textPrimary }} numberOfLines={1}>{titleOf(nowTrack)}</Text>
               <Text style={{ fontSize: 12, color: c.textTertiary }} numberOfLines={1}>{sourceOf(nowTrack) || 'audio'}</Text>
             </View>
-            <TouchableOpacity onPress={() => { impactHaptic('light'); if (current > 0) playIndex(current - 1); }} disabled={current <= 0} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Icon name="skip-previous" size={30} color={current > 0 ? c.textPrimary : c.textMuted} />
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Previous track"
+              onPress={() => {
+                impactHaptic('light');
+                previous();
+              }}
+              disabled={!ready || current <= 0}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Icon name="skip-previous" size={30} color={ready && current > 0 ? c.textPrimary : c.textMuted} />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => { impactHaptic('medium'); togglePlay(); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Icon name={playing ? 'pause-circle' : 'play-circle'} size={44} color={c.accentSuccess || '#4ADE80'} />
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
+              onPress={() => {
+                impactHaptic('medium');
+                togglePlayback();
+              }}
+              disabled={!ready}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Icon name={isPlaying ? 'pause-circle' : 'play-circle'} size={44} color={c.accentSuccess || '#4ADE80'} />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => { impactHaptic('light'); if (current < tracks.length - 1) playIndex(current + 1); }} disabled={current >= tracks.length - 1} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Icon name="skip-next" size={30} color={current < tracks.length - 1 ? c.textPrimary : c.textMuted} />
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Next track"
+              onPress={() => {
+                impactHaptic('light');
+                next();
+              }}
+              disabled={!ready || current >= tracks.length - 1}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Icon name="skip-next" size={30} color={ready && current < tracks.length - 1 ? c.textPrimary : c.textMuted} />
             </TouchableOpacity>
           </View>
         </View>
@@ -244,9 +196,9 @@ export default function MusicVault({ onClose }) {
 }
 
 const styles = StyleSheet.create({
-  hiddenPlayer: { width: 0, height: 0, position: 'absolute', opacity: 0 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
   art: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  error: { marginHorizontal: 16, marginBottom: 8, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, fontSize: 13 },
   nowBar: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8 },
   seekHit: { paddingVertical: 8, paddingHorizontal: 16 },
   seekTrack: { height: 4, borderRadius: 2, overflow: 'hidden' },
