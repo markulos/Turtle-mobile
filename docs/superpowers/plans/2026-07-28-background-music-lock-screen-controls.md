@@ -1,12 +1,12 @@
-# Background Music and Lock-Screen Controls Implementation Plan
+# Background Music, Lock-Screen Controls, and Share-to-Audio Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace Music Vault's screen-owned video player with a native app-level music queue that survives locking, backgrounding, and navigation while exposing previous, play/pause, next, and timeline seeking through system media controls.
+**Goal:** Replace Music Vault's screen-owned video player with a native app-level music queue that survives locking, backgrounding, and navigation, expose complete system media controls, and let mobile shares import audio/video files or links into Music Vault through a reusable backend FFmpeg pipeline.
 
-**Architecture:** `@rntp/player` owns the native queue and media session. A small adapter-neutral controller handles setup and commands, `MusicPlayerProvider` owns Turtle's library/error state above navigation, and `MusicVault` becomes a UI consumer instead of owning playback. Pure mapping and controller logic are independently tested, while provider and UI behavior use Jest with the Expo preset.
+**Architecture:** `@rntp/player` owns the native queue and media session. A small adapter-neutral controller handles setup and commands, `MusicPlayerProvider` owns Turtle's library/error state above navigation, and `MusicVault` becomes a UI consumer instead of owning playback. Mobile share classification routes audio/video files through streaming multipart upload and URLs through `/api/share`. The backend extends its durable import queue with an explicit `outputKind`, uses authoritative ffprobe classification, preserves original audio, converts video audio to M4A/AAC, and ingests every successful result as `type='audio'` in the `Audio` album.
 
-**Tech Stack:** Expo SDK 54, React Native 0.81, React 19, `@rntp/player` v5.4+, Jest, `jest-expo`, React Native Testing Library, EAS development builds.
+**Tech Stack:** Expo SDK 54, React Native 0.81, React 19, `@rntp/player` v5.4+, Jest, `jest-expo`, React Native Testing Library, EAS development builds, Node ESM, Express, SQLite, Node's test runner, bundled FFmpeg/ffprobe, yt-dlp, and the existing ghost downloader.
 
 ## Global Constraints
 
@@ -19,12 +19,30 @@
 - Preserve all unrelated existing worktree changes.
 - `@rntp/player` must resolve to version 5.4.0 or newer and remain below the next major version.
 - Track Player v5 licensing must remain personal/educational unless a commercial license is obtained.
+- Audio-only shares preserve the original file and container after successful ffprobe validation.
+- Video files and video-backed links convert to M4A with AAC-LC, 192 kbps, stereo, 48 kHz, no video streams, and fast-start metadata.
+- Sources with no audio stream fail without creating a media row.
+- Audio/video files stream from the phone; they are never base64 encoded in JavaScript or JSON.
+- URL imports continue through the existing guarded ghost downloader or yt-dlp acquisition path and the durable backend queue.
+- `outputKind='source'` and the existing `Download` album behavior remain backward compatible.
+- URL-job deduplication includes normalized URL, user ID, destination album, and output kind.
+- At most one FFmpeg audio transcode runs concurrently; cancel, timeout, shutdown, and error paths kill the child and clean partial files.
+- Multipart and URL sources use a configurable 2 GiB default ceiling rather than an unlimited upload.
+- The seeded and pinned `Audio` album is visible even before its first media item.
+- Do not run `expo prebuild --clean`; the Live Activity extension must be preserved.
 
 ---
 
+## Repository Workspaces
+
+- Mobile repository: `mobile-app`
+- Backend repository: `server`
+- The plan document lives in the mobile repository, but backend tasks commit in
+  the backend repository. Each task brief names its required working directory.
+
 ## File Structure
 
-### Create
+### Create — Mobile
 
 - `services/musicTrackMapper.js` — converts Turtle media rows into Track Player media items.
 - `services/musicPlayerController.js` — adapter-neutral, testable setup and command orchestration.
@@ -34,14 +52,41 @@
 - `context/MusicPlayerContext.jsx` — app-level library and playback context.
 - `context/__tests__/MusicPlayerContext.test.jsx` — provider persistence, loading, and logout tests.
 - `screens/TurtleScreen/components/__tests__/MusicVault.test.jsx` — Music Vault integration tests.
+- `utils/shareMediaClassifier.js` — classifies audio/video/image/unsupported native share files.
+- `utils/__tests__/shareMediaClassifier.test.js` — share classification tests.
+- `services/streamMultipartUpload.js` — reusable native streaming upload with retries and watchdogs.
+- `context/__tests__/ShareUploadContext.test.jsx` — streaming audio/video import tests.
 
-### Modify
+### Modify — Mobile
 
 - `package.json` — Track Player and Jest dependencies, test scripts, Jest preset.
 - `package-lock.json` — resolved dependency graph.
 - `App.js` — mount `MusicPlayerProvider` inside `AuthProvider` and above navigation.
 - `screens/TurtleScreen/components/MusicVault.jsx` — consume the shared native player.
-- `app.json` — retain iOS background audio capability and document the native player requirement only if generated config needs an explicit adjustment.
+- `screens/ShareTargetScreen.jsx` — expose the first-class Audio destination and reject unsupported empty shares.
+- `context/ShareUploadContext.jsx` — stream audio/video imports and retain text/image behavior.
+- `context/VaultUploadContext.jsx` — consume the extracted streaming upload helper without behavior changes.
+- `app.json` — retain iOS background audio capability and register native audio/video share filters.
+
+### Create — Backend
+
+- `services/mediaProbe.js` — direct ffprobe runner and authoritative stream classification.
+- `services/audioTransform.js` — abortable, timeout-bound video-to-M4A/AAC transform.
+- `services/transcodeLimiter.js` — one-at-a-time audio conversion gate.
+- `test/media-probe.test.js` — probe classification tests.
+- `test/audio-transform.test.js` — command, timeout, abort, and cleanup tests.
+- `test/audio-import.test.js` — upload/download ingestion integration tests.
+
+### Modify — Backend
+
+- `services/downloadQueue.js` — generalized source/audio import intent, schema migration, dedupe, staging, conversion, and cleanup.
+- `services/downloadIngest.js` — transactional, storage-root-injectable audio ingestion.
+- `routes/downloads.js` — accepts and validates `outputKind` and `album`.
+- `routes/media.js` — streams audio/video imports to the queue, enforces limits, fixes album tagging and gallery cache keys.
+- `routes/share.js` — routes Audio-album URLs into the same import queue.
+- `server.js` — wires queue/import dependencies only if required.
+- `test/download-queue.test.js` — covers intent-aware jobs and isolated storage.
+- `test/smoke.test.js` — covers accepted audio/video multipart requests.
 
 ---
 
@@ -1130,21 +1175,454 @@ git commit -m "feat(mobile): control native music queue from Music Vault"
 
 ---
 
-### Task 5: Native Configuration, Build, and Device Acceptance
+### Task 5: Backend Probe and Reusable Audio Transform
+
+**Working directory:** backend repository
+
+**Files:**
+- Create: `services/mediaProbe.js`
+- Create: `services/audioTransform.js`
+- Create: `services/transcodeLimiter.js`
+- Create: `test/media-probe.test.js`
+- Create: `test/audio-transform.test.js`
+
+**Interfaces:**
+- Produces `probeMedia(filePath, options)` with bounded output, timeout, abort,
+  and `{ duration, hasAudio, hasVideo, formatName, audioStream }`.
+- Produces `prepareAudioSource(inputPath, options)` returning
+  `{ path, mimeType, extension, converted, probe }`.
+- Preserves an audio-only input path.
+- Converts video-with-audio to M4A/AAC-LC at 192 kbps, stereo, 48 kHz, no
+  video streams, and fast-start metadata.
+- Produces `withAudioTranscodeSlot(work)` with default concurrency one.
+
+- [ ] **Step 1: Write failing probe and transform tests**
+
+Tests must cover:
+
+1. audio-only, video-with-audio, and no-audio probe classifications;
+2. timeout and abort killing the injected child process;
+3. exact FFmpeg extraction arguments:
+
+```text
+-map 0:a:0 -vn -c:a aac -profile:a aac_low -b:a 192k -ac 2 -ar 48000 -movflags +faststart
+```
+
+4. audio-only preservation without invoking FFmpeg;
+5. video conversion returning `.m4a` and `audio/mp4`;
+6. `Source contains no audio stream`;
+7. partial output cleanup on failure;
+8. serialization of two conversions through the limiter.
+
+Use injectable `spawnImpl` seams for process lifecycle tests. Do not mock the
+classification logic itself.
+
+- [ ] **Step 2: Run the focused tests and verify RED**
+
+```powershell
+node --test test/media-probe.test.js test/audio-transform.test.js
+```
+
+Expected: FAIL because the three services do not exist.
+
+- [ ] **Step 3: Implement direct FFprobe process handling**
+
+Use `@ffprobe-installer/ffprobe` and `child_process.spawn`. Parse JSON from
+stdout, keep stderr bounded, and reject malformed output. On timeout or abort:
+
+1. send a termination signal;
+2. escalate to a forced kill after a short grace period;
+3. settle the promise exactly once;
+4. remove event listeners and timers.
+
+Do not add new calls through deprecated `fluent-ffmpeg`.
+
+- [ ] **Step 4: Implement the audio transform and limiter**
+
+Use `@ffmpeg-installer/ffmpeg` with the exact approved output settings. Write
+inside the caller-provided job directory. Validate the result with ffprobe
+before returning it. The limiter must release its slot in `finally`.
+
+- [ ] **Step 5: Run focused and backend tests**
+
+```powershell
+node --test test/media-probe.test.js test/audio-transform.test.js
+npm test
+git diff --check
+```
+
+Expected: all tests pass and no partial fixture output remains.
+
+- [ ] **Step 6: Commit the transform slice**
+
+```powershell
+git add services/mediaProbe.js services/audioTransform.js services/transcodeLimiter.js test/media-probe.test.js test/audio-transform.test.js
+git commit -m "feat(server): add reusable video to audio transform"
+```
+
+---
+
+### Task 6: Generalize the Durable Import Queue for Audio Output
+
+**Working directory:** backend repository
+
+**Files:**
+- Modify: `services/downloadQueue.js`
+- Modify: `services/downloadIngest.js`
+- Modify: `test/download-queue.test.js`
+- Create: `test/audio-import.test.js`
+
+**Interfaces:**
+- Extends jobs with `input_kind`, `source_path`, and `output_kind`.
+- Preserves `enqueueDownload({ url })` behavior.
+- Adds `enqueueUploadImport({ stagedPath, originalName, mimeType, userId,
+  album, outputKind, source })`.
+- URL dedupe includes normalized URL, user ID, album, and output kind.
+- Job states may include `downloading`, `converting`, and `ingesting`.
+
+- [ ] **Step 1: Write failing queue migration and intent tests**
+
+Cover:
+
+- guarded migration of an existing `download_jobs` table;
+- existing rows defaulting to `input_kind='url'` and
+  `output_kind='source'`;
+- Audio album and pin seeding;
+- same URL with different user, album, or output intent creating distinct
+  jobs;
+- identical active URL intent returning the existing job;
+- staged uploads being moved into an owned job directory;
+- audio-only URL/upload preserving source bytes;
+- video URL/upload calling `prepareAudioSource`;
+- no-audio failure leaving no media row;
+- cancel/retry/restart cleanup and state transitions;
+- an injected storage root so tests never write repository storage.
+
+- [ ] **Step 2: Run queue tests and verify RED**
+
+```powershell
+node --test test/download-queue.test.js test/audio-import.test.js
+```
+
+- [ ] **Step 3: Add backward-compatible schema migration**
+
+Create missing columns with guarded `ALTER TABLE` calls. Do not make `url`
+non-null for new upload jobs. Keep existing indexes and add an intent lookup
+index suitable for active-job dedupe.
+
+Seed:
+
+```text
+albums.name = "Audio"
+pinned_boards(kind, name) = ("album", "Audio")
+```
+
+without changing an existing user's pin ordering.
+
+- [ ] **Step 4: Generalize enqueue and processing**
+
+- URL input: acquire through yt-dlp, ghost download, or existing page-media
+  resolution.
+- Upload input: consume the durable staged source directly.
+- `outputKind='source'`: preserve current ingestion behavior.
+- `outputKind='audio'`: call Task 5's `prepareAudioSource`, then ingest the
+  validated result as audio.
+- Retain one job directory through download, conversion, and ingest.
+- Preserve concise failure details while avoiding unbounded FFmpeg output in
+  the database.
+
+- [ ] **Step 5: Make ingestion transactional and test-isolated**
+
+Accept injected storage paths. Prepare final files and derivatives before the
+database transaction. On database failure, roll back newly placed files. Set:
+
+```text
+type = "audio"
+tags includes "Audio"
+duration = probed duration
+user_id = job user
+source_folder = "ghost-download" or "upload"
+originalPath = source URL when present
+```
+
+- [ ] **Step 6: Run backend tests**
+
+```powershell
+node --test test/download-queue.test.js test/audio-import.test.js
+npm test
+git diff --check
+```
+
+- [ ] **Step 7: Commit the generalized queue**
+
+```powershell
+git add services/downloadQueue.js services/downloadIngest.js test/download-queue.test.js test/audio-import.test.js
+git commit -m "feat(server): queue audio imports from links and uploads"
+```
+
+---
+
+### Task 7: Stream Audio and Video Uploads into the Import Queue
+
+**Working directory:** backend repository
+
+**Files:**
+- Modify: `routes/media.js`
+- Modify: `test/smoke.test.js`
+- Modify: `test/audio-import.test.js`
+
+**Interfaces:**
+- `POST /api/media/upload` accepts `outputKind=audio`, `album=Audio`, and
+  `tags=["Audio"]`.
+- Returns HTTP 202 with `{ success: true, queued: true, jobId }` once the
+  source is durably staged.
+- Existing image/video upload behavior remains compatible.
+
+- [ ] **Step 1: Write failing multipart tests**
+
+Cover:
+
+- `audio/*` and conservative audio extension classification;
+- an audio recording upload accepted for the Audio output intent;
+- a video upload accepted for the same intent;
+- unsupported document rejection;
+- missing/corrupt media rejection;
+- a 413 response over `MEDIA_UPLOAD_MAX_BYTES`;
+- authenticated `user_id` passed to the job;
+- `album=Audio` automatically included in tags;
+- ordinary image/video smoke tests remaining unchanged.
+
+- [ ] **Step 2: Run focused tests and verify RED**
+
+```powershell
+node --test test/audio-import.test.js test/smoke.test.js
+```
+
+- [ ] **Step 3: Add safe audio-output routing**
+
+Set:
+
+```text
+MEDIA_UPLOAD_MAX_BYTES default = 2 * 1024 * 1024 * 1024
+```
+
+with an environment override. Detect the audio output intent before Sharp or
+the existing video branch. Move the Multer temp file into the queue-owned
+staging area and enqueue it; never pass audio to Sharp.
+
+The upload handler must remove Multer temp files and optional thumbnails after
+validation or enqueue failure.
+
+- [ ] **Step 4: Fix album/tag consistency and gallery cache keys**
+
+When an upload names an album, include that album exactly once in its tags.
+Include `kind` in both gallery cache lookup and storage keys so audio page-zero
+requests can actually hit their cache and cannot reuse image results.
+
+- [ ] **Step 5: Run focused and full backend tests**
+
+```powershell
+node --test test/audio-import.test.js test/smoke.test.js
+npm test
+git diff --check
+```
+
+- [ ] **Step 6: Commit the upload path**
+
+```powershell
+git add routes/media.js test/smoke.test.js test/audio-import.test.js
+git commit -m "feat(server): accept streamed audio vault imports"
+```
+
+---
+
+### Task 8: Route Audio Links and Expose the Audio Album
+
+**Working directory:** backend repository
+
+**Files:**
+- Modify: `routes/downloads.js`
+- Modify: `routes/share.js`
+- Modify: `routes/media.js`
+- Modify: `test/download-queue.test.js`
+- Modify: `test/audio-import.test.js`
+- Modify: `scripts/dev-tests/share-vault-e2e.mjs`
+
+**Interfaces:**
+- `POST /api/downloads` accepts validated `outputKind` and `album`.
+- Sharing a URL to `{ kind: 'album', name: 'Audio' }` enqueues the same job.
+- The share response includes `downloadJobId`.
+- Album listing includes seeded empty albums.
+
+- [ ] **Step 1: Write failing route tests**
+
+Cover:
+
+- existing `{ url }` download request retaining `source`/`Download` defaults;
+- `{ url, outputKind:'audio', album:'Audio' }` enqueueing audio intent;
+- rejection of unsupported output kinds, invalid album values, and non-HTTP(S)
+  URLs;
+- URL share to Audio returning a job ID;
+- audio file data never being accepted in the image-base64 field;
+- seeded Audio album visible before it contains media;
+- completed audio import visible through
+  `/api/media/gallery?kind=audio`.
+
+- [ ] **Step 2: Run focused tests and verify RED**
+
+```powershell
+node --test test/download-queue.test.js test/audio-import.test.js
+```
+
+- [ ] **Step 3: Implement route validation and share routing**
+
+Normalize only the documented values:
+
+```text
+outputKind: "source" | "audio"
+album: non-empty existing/seedable album name within current length limits
+url: HTTP(S)
+```
+
+`POST /api/share` remains fast: write the existing chat-log item, enqueue the
+audio job, return success and `downloadJobId`; do not wait for download or
+conversion.
+
+- [ ] **Step 4: Expose empty seeded albums**
+
+Build `/api/media/albums` from the albums table with media counts/tags joined
+in, rather than dropping albums with zero media.
+
+- [ ] **Step 5: Update the share E2E example and run tests**
+
+```powershell
+node --test test/download-queue.test.js test/audio-import.test.js
+npm test
+git diff --check
+```
+
+- [ ] **Step 6: Commit the route integration**
+
+```powershell
+git add routes/downloads.js routes/share.js routes/media.js test/download-queue.test.js test/audio-import.test.js scripts/dev-tests/share-vault-e2e.mjs
+git commit -m "feat(server): share links directly into Music Vault"
+```
+
+---
+
+### Task 9: Mobile Share-to-Audio Destination and Streaming Upload
+
+**Working directory:** mobile repository
+
+**Files:**
+- Create: `utils/shareMediaClassifier.js`
+- Create: `utils/__tests__/shareMediaClassifier.test.js`
+- Create: `services/streamMultipartUpload.js`
+- Create: `context/__tests__/ShareUploadContext.test.jsx`
+- Modify: `screens/ShareTargetScreen.jsx`
+- Modify: `context/ShareUploadContext.jsx`
+- Modify: `context/VaultUploadContext.jsx`
+- Modify: `app.json`
+
+**Interfaces:**
+- Classifies native share files by MIME first and extension only for missing
+  or generic MIME.
+- Shows `Audio — Save to Music Vault` for audio files, video files, and valid
+  HTTP(S) URLs.
+- Streams files to `/api/media/upload` with
+  `outputKind=audio`, `album=Audio`, `tags=["Audio"]`.
+- Routes URL-only Audio shares through `/api/share`.
+
+- [ ] **Step 1: Write failing classification tests**
+
+Test audio/video MIME values, generic MIME extension fallback, uppercase
+extensions, queryless paths, unsupported documents, malformed entries, valid
+HTTP(S) URLs, and rejection of non-HTTP schemes.
+
+- [ ] **Step 2: Write failing target and upload-context tests**
+
+Cover:
+
+- Audio row visibility and copy for audio file, video file, and URL;
+- no Audio row for an unsupported document-only share;
+- unsupported file not becoming `payload: {}`;
+- sequential streaming of multiple audio/video files;
+- exact multipart parameters;
+- URL share selecting board `{ kind:'album', name:'Audio' }`;
+- accepted jobs showing `Queued for Music Vault`;
+- retry retaining app-owned file copies;
+- existing text, link, and image sharing behavior.
+
+- [ ] **Step 3: Run tests and verify RED**
+
+```powershell
+npm run test:music -- --runTestsByPath utils/__tests__/shareMediaClassifier.test.js context/__tests__/ShareUploadContext.test.jsx
+```
+
+- [ ] **Step 4: Extract the native streaming helper**
+
+Move the existing `expo-file-system` upload-task retry/watchdog behavior from
+`VaultUploadContext` to `services/streamMultipartUpload.js`. Keep current vault
+upload constants and behavior stable. Both contexts call the shared helper;
+do not duplicate the upload loop.
+
+- [ ] **Step 5: Implement classification and the Audio destination**
+
+Use the classifier's output in `ShareTargetScreen`. Deduplicate the first-class
+Audio row from a matching board row. Copy OS temp file references into
+app-owned storage before dismissing the share screen.
+
+For file imports, stream one file per accepted backend job. For URL imports,
+send the existing share body with the Audio album board. Do not infer that a
+URL is audio based on its extension; it is merely an import source.
+
+- [ ] **Step 6: Register platform share types**
+
+Add `audio/*` to Android single and multi filters. Retain `video/*`. Ensure the
+iOS activation rules accept generic audio files and movie files without
+removing text, URL, or image support.
+
+- [ ] **Step 7: Run mobile tests and config validation**
+
+```powershell
+npm run test:music
+npx tsc --noEmit --pretty false
+npx expo config --type public
+git diff --check
+```
+
+- [ ] **Step 8: Commit the mobile share integration**
+
+```powershell
+git add utils/shareMediaClassifier.js utils/__tests__/shareMediaClassifier.test.js services/streamMultipartUpload.js context/ShareUploadContext.jsx context/VaultUploadContext.jsx context/__tests__/ShareUploadContext.test.jsx screens/ShareTargetScreen.jsx app.json
+git commit -m "feat(mobile): share audio and video into Music Vault"
+```
+
+---
+
+### Task 10: Native Configuration, Build, and Device Acceptance
 
 **Files:**
 - Inspect: `app.json`
 - Inspect: `eas.json`
+- Inspect: backend FFmpeg/ffprobe runtime resolution.
 - Modify: `app.json` only if generated native introspection does not contain iOS `audio` background mode.
 - Modify: generated native files only when the supported autolinking/build process requires it; do not run a destructive clean prebuild over the Live Activity extension.
 
 **Interfaces:**
-- Consumes: completed Tasks 1–4.
+- Consumes: completed Tasks 1–9.
 - Produces: installable iOS and Android development builds containing Track Player's native service.
 
 - [ ] **Step 1: Run the complete automated verification suite**
 
-Run:
+Run in the backend repository:
+
+```powershell
+npm test
+npm ls "@ffmpeg-installer/ffmpeg" "@ffprobe-installer/ffprobe"
+```
+
+Run in the mobile repository:
 
 ```powershell
 npm run test
@@ -1156,6 +1634,8 @@ npm ls "@rntp/player"
 
 Expected:
 
+- Backend Node tests report zero failures.
+- Bundled FFmpeg and ffprobe resolve once.
 - Jest reports zero failed tests.
 - TypeScript exits 0.
 - Expo Doctor reports no blocking dependency/config errors.
@@ -1247,10 +1727,29 @@ On each available platform:
    remain active.
 9. Log out; verify playback stops and the media notification disappears.
 10. Force-close Turtle; verify no requirement to restore or auto-start playback.
+11. From a recording app, share an audio file to
+    `Audio — Save to Music Vault`; verify the queued message, eventual Music
+    Vault appearance, original extension preservation, and playback.
+12. Share a local video to Audio; verify it appears as `.m4a`, reports an audio
+    MIME type, and plays with no video surface.
+13. Share a direct audio URL and a supported video-page URL to Audio; verify
+    both process after the share sheet dismisses and eventually appear in Music
+    Vault.
+14. Share a video with no audio track; verify a failed import and no phantom
+    Music Vault row.
 
 - [ ] **Step 6: Final regression and worktree review**
 
-Run:
+Run in the backend repository:
+
+```powershell
+npm test
+git status --short
+git diff --check
+git log -8 --oneline
+```
+
+Run in the mobile repository:
 
 ```powershell
 npm run test
@@ -1265,5 +1764,6 @@ Expected:
 - zero failed tests;
 - TypeScript exits 0;
 - no whitespace errors;
-- unrelated pre-existing files remain unstaged and unmodified by this feature;
+- both worktrees are clean;
+- unrelated files remain unmodified;
 - feature commits are limited to the files listed in this plan.

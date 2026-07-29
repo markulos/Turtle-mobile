@@ -218,3 +218,9 @@ features, physical-device acceptance checks cover:
 - shuffle, repeat, playlists, favorites, or queue editing;
 - a global in-app mini-player;
 - Android Auto or CarPlay browsing interfaces.
+
+## Companion Share-to-Audio Scope
+
+The approved follow-on scope for sharing audio/video files and links into the
+Music Vault, including reusable backend FFmpeg conversion, is specified in
+`2026-07-28-share-to-audio-conversion-design.md`.
