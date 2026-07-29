@@ -47,7 +47,7 @@ import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPass
 import { TaskQuickInspector } from './TaskQuickInspector';
 import { TimelineTaskRow } from './TimelineTaskRow';
 import { HatchBackdrop } from './HatchBackdrop';
-import { TaskCardSkeletonCluster } from './TaskCardSkeleton';
+import { TaskSectionFrontier } from './TaskSectionFrontier';
 import { WheelTimePicker } from './WheelTimePicker';
 import { tapHaptic } from '../../../utils/haptics';
 
@@ -716,27 +716,6 @@ const DayPane = React.memo(function DayPane({
   // The cross-day Pending backlog — incomplete untimed tasks across all dates.
   const stripTasks = pendingTasks;
 
-  // ── Lazy-load the day's long card lists (To-Do + Pending) ──────────────
-  // Same idea as the Upcoming agenda: real cards fill in on scroll behind
-  // skeleton placeholders. A plain ScrollView can't virtualize like the
-  // agenda's FlashList, so rather than a placeholder per overflow item we render
-  // real cards up to `dayLimit` plus a short skeleton cluster at the frontier,
-  // growing the limit as the user scrolls near the bottom. Small days
-  // (≤ DAY_BATCH per list) render fully with no skeletons — no behaviour change.
-  // The cap is intentionally per list, not a shared total: both sections keep a
-  // useful first batch visible, and neither Pending nor To-Do is starved behind
-  // the other. One scroll can therefore reveal a batch in each overflowing list.
-  const DAY_BATCH = 20;
-  const [dayLimit, setDayLimit] = useState(DAY_BATCH);
-  const lazyMax = Math.max(untimedTasks.length, untimedCollapsed ? 0 : stripTasks.length);
-  const onDayScroll = (e) => {
-    if (dayLimit >= lazyMax) return;
-    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    if (contentOffset.y + layoutMeasurement.height >= contentSize.height - 480) {
-      setDayLimit((n) => Math.min(lazyMax, n + DAY_BATCH));
-    }
-  };
-
   // Auto-scroll to a useful hour on mount (now-1h today, else 8 AM) so a
   // freshly-swiped day lands on working hours rather than midnight. Mount-
   // only — later now-line ticks must not yank the user's scroll position.
@@ -770,8 +749,6 @@ const DayPane = React.memo(function DayPane({
         ref={scrollRef}
         style={styles.taskList}
         contentContainerStyle={{ paddingBottom: Math.max(100, keyboardHeight + 20) }}
-        scrollEventThrottle={16}
-        onScroll={onDayScroll}
         // Let taps on the suggestion rows register on the FIRST tap while the
         // keyboard is up (default would just dismiss the keyboard instead).
         keyboardShouldPersistTaps="handled"
@@ -1080,6 +1057,11 @@ const DayPane = React.memo(function DayPane({
                     // a red "started 1h ago" on tomorrow's pane. Suppress it.
                     hideCountdown={seg.task.dueDate !== dayStr}
                     hatchColor={seg.task.project ? getProjectColor(seg.task.project) : undefined}
+                    owner={multiUser && seg.task.userId ? {
+                      name: seg.task.ownerName || 'Unknown',
+                      color: ownerColor(seg.task.userId),
+                    } : null}
+                    onOwnerPress={onOwnerPress}
                   />
                   {hasGap && (
                     <View style={styles.segGap}>
@@ -1199,33 +1181,38 @@ const DayPane = React.memo(function DayPane({
                 cards (rail toggle, elevated card, title, board subtitle). No
                 time to show, so the when-line falls back to "No time set" and
                 the live countdown is suppressed. */}
-            {untimedTasks.slice(0, dayLimit).map((task, idx) => {
-              // Per-occurrence completion: a recurring task's checkbox reflects
-              // whether THIS day is ticked (meta.completedDates), not the global
-              // `completed` boolean.
-              const done = task.completed || isOccurrenceCompleted(task, dayStr);
-              return (
-                <TimelineTaskRow
-                  key={task.id}
-                  item={task}
-                  onPress={onTaskInspect || onTaskPress}
-                  onLongPress={onTaskLongPress}
-                  onToggleComplete={(it) => onToggleComplete?.(it.id, dayStr)}
-                  isFirst={idx === 0}
-                  isLast={idx === untimedTasks.length - 1}
-                  hideDate
-                  done={done}
-                  hideCountdown
-                  whenLabelFallback="No time set"
-                  hatchColor={task.project ? getProjectColor(task.project) : undefined}
-                />
-              );
-            })}
-            {/* Lazy frontier — skeleton cards for the un-rendered overflow;
-                fills in as dayLimit grows on scroll (see onDayScroll). */}
-            {untimedTasks.length > dayLimit && (
-              <TaskCardSkeletonCluster theme={theme} remaining={untimedTasks.length - dayLimit} />
-            )}
+            <TaskSectionFrontier
+              items={untimedTasks}
+              sectionLabel="To-Do"
+              theme={theme}
+              renderItem={(task, idx) => {
+                // Per-occurrence completion: a recurring task's checkbox reflects
+                // whether THIS day is ticked (meta.completedDates), not the global
+                // `completed` boolean.
+                const done = task.completed || isOccurrenceCompleted(task, dayStr);
+                return (
+                  <TimelineTaskRow
+                    key={task.id}
+                    item={task}
+                    onPress={onTaskInspect || onTaskPress}
+                    onLongPress={onTaskLongPress}
+                    onToggleComplete={(it) => onToggleComplete?.(it.id, dayStr)}
+                    isFirst={idx === 0}
+                    isLast={idx === untimedTasks.length - 1}
+                    hideDate
+                    done={done}
+                    hideCountdown
+                    whenLabelFallback="No time set"
+                    hatchColor={task.project ? getProjectColor(task.project) : undefined}
+                    owner={multiUser && task.userId ? {
+                      name: task.ownerName || 'Unknown',
+                      color: ownerColor(task.userId),
+                    } : null}
+                    onOwnerPress={onOwnerPress}
+                  />
+                );
+              }}
+            />
           </View>
         )}
 
@@ -1254,38 +1241,45 @@ const DayPane = React.memo(function DayPane({
                 Pending keeps its due-date + countdown (backlog context) and adds
                 a trailing "add to today" button that stamps the viewed day as the
                 dueDate with no time — moving the task into today's To-Do. */}
-            {!untimedCollapsed && stripTasks.slice(0, dayLimit).map((task, idx) => {
-              const done = task.completed || isOccurrenceCompleted(task, dayStr);
-              return (
-                <TimelineTaskRow
-                  key={task.id}
-                  item={task}
-                  onPress={onTaskInspect || onTaskPress}
-                  onLongPress={onTaskLongPress}
-                  onToggleComplete={(it) => onToggleComplete?.(it.id, dayStr)}
-                  isFirst={idx === 0}
-                  isLast={idx === stripTasks.length - 1}
-                  done={done}
-                  hatchColor={task.project ? getProjectColor(task.project) : undefined}
-                  trailing={!done ? (
-                    <TouchableOpacity
-                      onPressIn={() => tapHaptic()}
-                      onPress={() => onUpdateTask?.(task.id, { dueDate: dayStr, time: null })}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      accessibilityRole="button"
-                      accessibilityLabel={isViewingToday ? 'Add this task to today' : 'Add this task to the selected day'}
-                      style={styles.addTodayBtn}
-                    >
-                      <Icon name="calendar-arrow-right" size={18} color={theme.colors.primary} />
-                    </TouchableOpacity>
-                  ) : undefined}
-                />
-              );
-            })}
-            {/* Lazy frontier for the Pending backlog — opening it on a big
-                backlog shows a batch + skeletons, filling in as you scroll. */}
-            {!untimedCollapsed && stripTasks.length > dayLimit && (
-              <TaskCardSkeletonCluster theme={theme} remaining={stripTasks.length - dayLimit} />
+            {!untimedCollapsed && (
+              <TaskSectionFrontier
+                items={stripTasks}
+                sectionLabel="Pending"
+                theme={theme}
+                renderItem={(task, idx) => {
+                  const done = task.completed || isOccurrenceCompleted(task, dayStr);
+                  return (
+                    <TimelineTaskRow
+                      key={task.id}
+                      item={task}
+                      onPress={onTaskInspect || onTaskPress}
+                      onLongPress={onTaskLongPress}
+                      onToggleComplete={(it) => onToggleComplete?.(it.id, dayStr)}
+                      isFirst={idx === 0}
+                      isLast={idx === stripTasks.length - 1}
+                      done={done}
+                      hatchColor={task.project ? getProjectColor(task.project) : undefined}
+                      owner={multiUser && task.userId ? {
+                        name: task.ownerName || 'Unknown',
+                        color: ownerColor(task.userId),
+                      } : null}
+                      onOwnerPress={onOwnerPress}
+                      trailing={!done ? (
+                        <TouchableOpacity
+                          onPressIn={() => tapHaptic()}
+                          onPress={() => onUpdateTask?.(task.id, { dueDate: dayStr, time: null })}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          accessibilityRole="button"
+                          accessibilityLabel={isViewingToday ? 'Add this task to today' : 'Add this task to the selected day'}
+                          style={styles.addTodayBtn}
+                        >
+                          <Icon name="calendar-arrow-right" size={18} color={theme.colors.primary} />
+                        </TouchableOpacity>
+                      ) : undefined}
+                    />
+                  );
+                }}
+              />
             )}
           </View>
         )}

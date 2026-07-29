@@ -12,9 +12,9 @@ import { View, Text, StyleSheet } from 'react-native';
 // Used to tint calendar task cards with a low-opacity wash in their board's
 // colour. Extra rows/columns are clipped, so the same texture covers compact
 // cards and tall calendar blocks with two native nodes total.
-const HATCH_ROW = '╱  '.repeat(48);
+const HATCH_ROW = '╱  '.repeat(12);
 const HATCH_GLYPHS = Array.from(
-  { length: 64 },
+  { length: 20 },
   (_, row) => `${' '.repeat(row % 3)}${HATCH_ROW}`,
 ).join('\n');
 
@@ -35,9 +35,9 @@ export function HatchBackdrop({ color, opacity = 0.16, style }) {
           left: -18,
           width: '180%',
           color,
-          fontSize: 9,
-          lineHeight: 8,
-          letterSpacing: 1.5,
+          fontSize: 14,
+          lineHeight: 26,
+          letterSpacing: 7,
           includeFontPadding: false,
         }}
       >

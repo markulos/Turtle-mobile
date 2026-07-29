@@ -643,9 +643,10 @@ export const TaskForm = ({
     return `${displayH}:${m.toString().padStart(2, '0')} ${isPM ? 'PM' : 'AM'}`;
   };
 
-  // Drives the pinned Save CTA's enabled/dimmed state — a title is the one
-  // hard requirement to persist anything.
-  const canSave = !!formData.title.trim();
+  // Keep the pinned Save CTA in lock-step with handleSave: occasions require
+  // both their title/name and calendar date, while plain tasks may stay undated.
+  const requiresDate = itemType === 'event' || itemType === 'birthday';
+  const canSave = !!formData.title.trim() && (!requiresDate || !!formData.dueDate);
 
   return (
     <EdgeSwipePage visible={visible} onClose={handleClose} overlay={asOverlay} edgeZone={110}>

@@ -85,8 +85,9 @@ export function TaskCardSkeleton({ theme, isFirst, isLast }) {
 
 // A short cluster of skeleton rows shown at the loading frontier of a lazily
 // filled list (a ScrollView can't cheaply render one-per-overflow-item like the
-// virtualized agenda, so a small cluster stands in and the batch grows on
-// scroll). `remaining` caps the cluster so it never shows more than are left.
+// virtualized agenda, so a small cluster stands in until the section-local
+// "Show more" control advances its frontier). `remaining` caps the cluster so
+// it never shows more than are left.
 export function TaskCardSkeletonCluster({ theme, remaining, rows = 3 }) {
   const n = Math.max(0, Math.min(rows, remaining));
   if (n === 0) return null;

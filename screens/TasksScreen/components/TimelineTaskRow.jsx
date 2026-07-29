@@ -56,7 +56,7 @@ export const UNIFORM_ROW_H = UNIFORM_CARD_H + ROW_GAP;
 // `uniform`: locks the card to UNIFORM_CARD_H with a ONE-line title, making
 // the whole row a fixed UNIFORM_ROW_H — required by the agenda's past zone,
 // where skeleton placeholders must match real rows to the pixel.
-export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, isFirst, isLast, hideDate, done, doneDate, hideCountdown, railColor, cardColor, uniform, whenLabelFallback = 'No date', trailing, hatchColor }) => {
+export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, isFirst, isLast, hideDate, done, doneDate, hideCountdown, railColor, cardColor, uniform, whenLabelFallback = 'No date', trailing, hatchColor, owner, onOwnerPress }) => {
   const { theme, timeFormat } = useTheme();
   const c = theme.colors || {};
   const use24h = timeFormat === '24h';
@@ -112,6 +112,7 @@ export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, 
 
   const typeLabel = { event: 'Event', birthday: 'Birthday' }[itemTypeOf(item)];
   const subtitle = item.project || typeLabel || 'No Board';
+  const ownerName = owner?.name?.trim() || null;
 
   // The card's text column (when-line + title + subtitle). Factored out so an
   // optional `trailing` accessory (e.g. Pending's "add to today" button) can sit
@@ -121,9 +122,30 @@ export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, 
     <>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
         <Text style={{ fontSize: 12, color: cMuted, flexShrink: 1 }} numberOfLines={1}>{whenLabel}</Text>
-        {!completed && !hideCountdown && (
-          <View style={{ marginLeft: 8 }}>
-            <TaskCountdownBadge task={item} />
+        {(ownerName || (!completed && !hideCountdown)) && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+            {ownerName && (
+              <TouchableOpacity
+                style={{
+                  width: 20,
+                  height: 20,
+                  borderRadius: 10,
+                  marginRight: !completed && !hideCountdown ? 8 : 0,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: owner.color || cSub,
+                }}
+                onPress={() => onOwnerPress?.(item)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Owner: ${ownerName}. Open profile`}
+              >
+                <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '700' }}>
+                  {ownerName.charAt(0).toUpperCase()}
+                </Text>
+              </TouchableOpacity>
+            )}
+            {!completed && !hideCountdown && <TaskCountdownBadge task={item} />}
           </View>
         )}
       </View>
