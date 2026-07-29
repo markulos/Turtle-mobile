@@ -263,6 +263,7 @@ export function ShareUploadProvider({ children }) {
   }, [authGeneration, authIdentity, cleanupJobFiles, isAuthenticated, ownsJob, publish]);
 
   useEffect(() => {
+    let cancelled = false;
     const previousOwner = previousOwnerRef.current;
     const activeDirectories = Array.from(jobsRef.current.values())
       .filter((job) => ownsJob(job) && job.ownedDirectory)
@@ -275,10 +276,53 @@ export function ShareUploadProvider({ children }) {
       }).catch(() => {});
     }
     if (authIdentity) {
-      sweepShareUploadStaging({ ownerIdentity: authIdentity, activeDirectories }).catch(() => {});
+      sweepShareUploadStaging({ ownerIdentity: authIdentity, activeDirectories })
+        .then((retained) => {
+          if (cancelled || authRef.current.authIdentity !== authIdentity) return;
+          let changed = false;
+          for (const { directory, manifest } of retained || []) {
+            if (
+              jobsRef.current.has(manifest.id) ||
+              !Array.isArray(manifest.media) ||
+              manifest.media.length === 0
+            ) {
+              continue;
+            }
+            const auth = authRef.current;
+            jobsRef.current.set(manifest.id, {
+              id: manifest.id,
+              kind: 'audio-files',
+              board: AUDIO_BOARD,
+              url: null,
+              mediaFiles: [],
+              media: manifest.media,
+              backendJobIds: Array.isArray(manifest.backendJobIds)
+                ? manifest.backendJobIds
+                : [],
+              total: manifest.total || manifest.media.length,
+              done: manifest.done || 0,
+              copied: true,
+              status: 'error',
+              error: 'Upload interrupted. Tap retry to continue.',
+              message: null,
+              ownerIdentity: auth.authIdentity,
+              authGeneration: auth.authGeneration,
+              token: auth.token,
+              apiClient: apiRef.current,
+              abortController: new AbortController(),
+              ownedDirectory: directory,
+            });
+            changed = true;
+          }
+          if (changed) publish();
+        })
+        .catch(() => {});
     }
     previousOwnerRef.current = authIdentity;
-  }, [authGeneration, authIdentity, ownsJob]);
+    return () => {
+      cancelled = true;
+    };
+  }, [authGeneration, authIdentity, ownsJob, publish]);
 
   const scheduleAutoDismiss = useCallback((id) => {
     const existing = autoDismissTimers.current.get(id);

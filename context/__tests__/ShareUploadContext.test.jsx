@@ -535,6 +535,68 @@ describe('ShareUploadProvider audio imports', () => {
     expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1);
   });
 
+  test('restores a process-death manifest as an owner-bound retry with the same import id', async () => {
+    mockReadDirectoryAsync.mockResolvedValueOnce(['restored-job']);
+    mockGetInfoAsync.mockResolvedValue({
+      exists: true,
+      isDirectory: true,
+      modificationTime: Date.now() / 1000,
+    });
+    mockReadAsStringAsync.mockImplementation(async (uri) => {
+      if (String(uri).endsWith('/manifest.json')) {
+        return JSON.stringify({
+          version: 1,
+          id: 'restored-job',
+          ownerIdentity: 'sub:account-a',
+          authGeneration: 'old-generation',
+          status: 'error',
+          total: 1,
+          done: 0,
+          backendJobIds: [],
+          media: [{
+            localPath: 'file:///app-cache/TurtleShareUploads/restored-job/0/song.mp3',
+            filename: 'song.mp3',
+            mimeType: 'audio/mpeg',
+            sent: false,
+            clientImportId: 'stable-process-death-id',
+          }],
+        });
+      }
+      return 'base64-image';
+    });
+    mockStreamMultipartUpload.mockResolvedValueOnce(queuedUpload('restored-backend-job'));
+    await render(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    await waitFor(() =>
+      expect(latestShareUpload.jobs).toEqual([
+        expect.objectContaining({ id: 'restored-job', status: 'error' }),
+      ])
+    );
+    await act(async () => {
+      latestShareUpload.retryJob('restored-job');
+    });
+    await waitFor(() => expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1));
+
+    expect(mockStreamMultipartUpload.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        token: 'token-7',
+        parameters: expect.objectContaining({
+          clientImportId: 'stable-process-death-id',
+        }),
+      })
+    );
+    await waitFor(() =>
+      expect(latestShareUpload.jobs[0]?.status).toBe('queued')
+    );
+    await act(async () => {
+      latestShareUpload.dismissJob('restored-job');
+    });
+  });
+
   test('does not surface a URL import as queued without downloadJobId', async () => {
     const error = jest.spyOn(console, 'error').mockImplementation(() => {});
     mockApiPost.mockResolvedValueOnce({ success: true });

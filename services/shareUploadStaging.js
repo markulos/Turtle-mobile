@@ -81,34 +81,38 @@ export async function sweepShareUploadStaging({
   const active = new Set(activeDirectories.map((uri) => (
     String(uri).endsWith('/') ? String(uri) : `${uri}/`
   )));
-  await Promise.all(names.map(async (name) => {
+  const retained = await Promise.all(names.map(async (name) => {
     const uri = `${SHARE_UPLOAD_ROOT}${name}${name.includes('.') ? '' : '/'}`;
-    if (active.has(uri)) return;
+    if (active.has(uri)) return null;
     let info;
     try {
       info = await FileSystem.getInfoAsync(uri, { size: true });
     } catch {
-      return;
+      return null;
     }
     const directory = info?.isDirectory ? uri : null;
     const manifest = directory ? await readShareUploadManifest(directory) : null;
     if (manifest) {
       if (forceOwnerCleanup && manifest.ownerIdentity === ownerIdentity) {
         await remove(uri);
-        return;
+        return null;
       }
       if (ownerIdentity && manifest.ownerIdentity && manifest.ownerIdentity !== ownerIdentity) {
         await remove(uri);
-        return;
+        return null;
       }
-      if (['uploading', 'error', 'retry', 'paused'].includes(manifest.status)) return;
+      if (['uploading', 'error', 'retry', 'paused'].includes(manifest.status)) {
+        return { directory: uri, manifest };
+      }
       await remove(uri);
-      return;
+      return null;
     }
     const rawModified = Number(info?.modificationTime) || 0;
     const modifiedAt = rawModified > 0 && rawModified < 1e12 ? rawModified * 1000 : rawModified;
     if (!modifiedAt || now - modifiedAt >= orphanMaxAgeMs) await remove(uri);
+    return null;
   }));
+  return retained.filter(Boolean);
 }
 
 export async function assertShareStagingCapacity(
