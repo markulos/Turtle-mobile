@@ -90,16 +90,19 @@
             "NSExtensionActivationSupportsWebURLWithMaxCount": 1,
             "NSExtensionActivationSupportsWebPageWithMaxCount": 1,
             "NSExtensionActivationSupportsImageWithMaxCount": 30,
+            "NSExtensionActivationSupportsMovieWithMaxCount": 5,
             "NSExtensionActivationSupportsFileWithMaxCount": 5
           },
           "androidIntentFilters": [
             "text/*",
             "image/*",
-            "video/*"
+            "video/*",
+            "audio/*"
           ],
           "androidMultiIntentFilters": [
             "image/*",
-            "video/*"
+            "video/*",
+            "audio/*"
           ],
           "iosShareExtensionName": "Send to Turtle"
         }

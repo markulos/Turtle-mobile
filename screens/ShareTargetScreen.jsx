@@ -24,10 +24,10 @@
  * Lifecycle:
  *   - App.js detects `hasShareIntent` from useShareIntent() and renders
  *     this screen as a modal overlay instead of the normal tab nav.
- *   - When the user taps a board, we POST to /api/share with base64-
- *     encoded image data (one request for the whole payload).
- *   - On success we show a checkmark briefly, then call
- *     resetShareIntent() which returns control to the normal app.
+ *   - Standard board taps hand text/link/image work to ShareUploadContext and
+ *     dismiss immediately.
+ *   - Music Vault file taps wait only for app-owned staging, then dismiss while
+ *     native streaming continues; URL imports dismiss immediately.
  *   - Cancel button skips the POST and just resetShareIntent()s.
  *
  * Edge cases handled:
@@ -56,6 +56,11 @@ import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
 import { useShareUpload } from '../context/ShareUploadContext';
 import { impactHaptic, notifyHaptic } from '../utils/haptics';
+import {
+  classifySharedFile,
+  isHttpImportUrl,
+  supportedAudioVideoFiles,
+} from '../utils/shareMediaClassifier';
 
 // Local cache of the boards list so the picker renders INSTANTLY on open
 // instead of waiting on the network — we show the cached list immediately and
@@ -79,15 +84,16 @@ const KIND_LABELS = {
 };
 
 export default function ShareTargetScreen({ shareIntent, onDismiss }) {
-  const { theme, isDark } = useTheme();
+  const { theme } = useTheme();
   const { api, serverIP, isConnected } = useServer();
-  const { enqueueShare } = useShareUpload();
+  const { enqueueShare, enqueueAudioShare } = useShareUpload();
 
   // ── State ────────────────────────────────────────────────────
   const [boards, setBoards] = useState([]);
   const [loadingBoards, setLoadingBoards] = useState(false);
   const [boardsError, setBoardsError] = useState(null);
   const [query, setQuery] = useState('');
+  const [handoffError, setHandoffError] = useState(null);
 
   // ── Derived: what is actually being shared? ─────────────────
   // expo-share-intent normalizes the payload across iOS/Android into
@@ -96,8 +102,11 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const text = shareIntent?.text || null;
   const url = shareIntent?.webUrl || null;
   const files = Array.isArray(shareIntent?.files) ? shareIntent.files : [];
-  const imageFiles = files.filter((f) => (f?.mimeType || '').startsWith('image/'));
-  const totalImages = imageFiles.length;
+  const imageFiles = files.filter((file) => classifySharedFile(file) === 'image');
+  const mediaFiles = supportedAudioVideoFiles(files);
+  const hasImportUrl = isHttpImportUrl(url);
+  const showAudioDestination = mediaFiles.length > 0 || hasImportUrl;
+  const hasStandardContent = !!text || !!url || imageFiles.length > 0;
 
   // ── Fetch ALL boards on mount ───────────────────────────────
   // We pull the full universe (not ?pinned=1) so the search box can find
@@ -161,19 +170,27 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   // every board. Otherwise we split into Suggested (pinned, quick-send)
   // and All boards (the rest).
   const q = query.trim().toLowerCase();
+  const isAudioBoard = (board) => (
+    board?.kind === 'album' && String(board?.name || '').toLowerCase() === 'audio'
+  );
+  const visibleBoards = hasStandardContent
+    ? boards.filter((board) => !(showAudioDestination && isAudioBoard(board)))
+    : [];
   const matches = q
-    ? boards.filter((b) => b.name.toLowerCase().includes(q))
+    ? visibleBoards.filter((b) => String(b?.name || '').toLowerCase().includes(q))
     : null;
-  const pinned = boards.filter((b) => b.isPinned);
-  const unpinned = boards.filter((b) => !b.isPinned);
+  const pinned = visibleBoards.filter((b) => b.isPinned);
+  const unpinned = visibleBoards.filter((b) => !b.isPinned);
   // Offer "create a new board" whenever the typed name doesn't already match an
   // existing board exactly (case-insensitive) — so a brand-new topic is one tap
   // away without leaving the share sheet. New boards are created as tags.
-  const exactMatch = q ? boards.some((b) => b.name.toLowerCase() === q) : false;
-  const canCreate = q.length > 0 && !exactMatch;
+  const exactMatch = q
+    ? visibleBoards.some((b) => String(b?.name || '').toLowerCase() === q)
+    : false;
+  const canCreate = hasStandardContent && q.length > 0 && !exactMatch;
   // Only block the UI on the network when we have NOTHING cached to paint. Once
   // the cache (or a fetch) has populated boards, refreshes happen silently.
-  const busyEmpty = loadingBoards && boards.length === 0;
+  const busyEmpty = hasStandardContent && loadingBoards && boards.length === 0;
 
   // ── Pick a board → hand off + dismiss ───────────────────────
   // Optimistic-by-default: we do NOT read or encode any image here. We hand the
@@ -183,9 +200,25 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   // outcome surface in the floating ShareUploadToast — so 10–30 large photos no
   // longer block the sheet.
   const pickBoard = (board) => {
+    if (!hasStandardContent) return;
     notifyHaptic('success');
     enqueueShare({ board, text, url, imageFiles });
     onDismiss?.();
+  };
+
+  const pickAudio = async () => {
+    setHandoffError(null);
+    try {
+      await enqueueAudioShare({
+        mediaFiles,
+        url: hasImportUrl ? url : null,
+      });
+      notifyHaptic('success');
+      onDismiss?.();
+    } catch (error) {
+      setHandoffError(error.message || 'Could not preserve the shared media.');
+      notifyHaptic('error');
+    }
   };
 
   // ── A single tappable destination row ───────────────────────
@@ -298,8 +331,45 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           text={text}
           url={url}
           imageFiles={imageFiles}
+          mediaFiles={mediaFiles}
           theme={theme}
         />
+
+        {showAudioDestination && (
+          <TouchableOpacity
+            key="__music_vault__"
+            activeOpacity={0.75}
+            onPressIn={() => impactHaptic('medium')}
+            onPress={pickAudio}
+            style={[
+              styles.boardRow,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.accentSuccess,
+              },
+            ]}
+          >
+            <View style={[styles.boardIcon, { backgroundColor: theme.colors.surfaceElevated || theme.colors.surface }]}>
+              <Icon name="music-box-multiple" size={18} color={theme.colors.accentSuccess} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.boardName, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+                Audio
+              </Text>
+              <Text style={[styles.boardKind, { color: theme.colors.textMuted }]}>
+                Save to Music Vault
+              </Text>
+            </View>
+            <Icon name="chevron-right" size={22} color={theme.colors.accentSuccess} />
+          </TouchableOpacity>
+        )}
+
+        {!!handoffError && (
+          <View style={[styles.errorBanner, { backgroundColor: 'rgba(248,113,113,0.10)', borderColor: 'rgba(248,113,113,0.3)' }]}>
+            <Icon name="alert-circle-outline" size={16} color={theme.colors.accentError} />
+            <Text style={{ color: theme.colors.accentError, flex: 1, fontSize: 13 }}>{handoffError}</Text>
+          </View>
+        )}
 
         {/* DEFAULT destination for photo shares: straight into the photo
             vault, as-is, no board tag. Pinned above every board so sharing
@@ -338,7 +408,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
             create. Shown as soon as we have anything to show (cached list paints
             instantly); hidden only while the FIRST load is running with nothing
             cached, or on a hard error. */}
-        {!busyEmpty && !boardsError && (
+        {hasStandardContent && !busyEmpty && !boardsError && (
           <View style={[styles.searchBox, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
             <Icon name="magnify" size={18} color={theme.colors.textMuted} />
             <TextInput
@@ -365,7 +435,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           </View>
         )}
 
-        {boardsError && (
+        {hasStandardContent && boardsError && (
           <View style={[styles.errorBanner, { backgroundColor: 'rgba(248,113,113,0.10)', borderColor: 'rgba(248,113,113,0.3)' }]}>
             <Icon name="cloud-off-outline" size={16} color={theme.colors.accentError} />
             <Text style={{ color: theme.colors.accentError, flex: 1, fontSize: 13 }}>{boardsError}</Text>
@@ -375,7 +445,19 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           </View>
         )}
 
-        {!busyEmpty && !boardsError && boards.length === 0 && !q && (
+        {!hasStandardContent && !showAudioDestination && (
+          <View style={styles.centerState}>
+            <Icon name="file-cancel-outline" size={36} color={theme.colors.textMuted} />
+            <Text style={[styles.centerTitle, { color: theme.colors.textPrimary, fontSize: 15 }]}>
+              Unsupported share
+            </Text>
+            <Text style={[styles.centerBody, { color: theme.colors.textMuted, fontSize: 12 }]}>
+              Turtle can send text, links, images, audio, and video from this screen.
+            </Text>
+          </View>
+        )}
+
+        {hasStandardContent && !busyEmpty && !boardsError && visibleBoards.length === 0 && !q && (
           <View style={styles.centerState}>
             <Icon name="folder-off-outline" size={36} color={theme.colors.textMuted} />
             <Text style={[styles.centerTitle, { color: theme.colors.textPrimary, fontSize: 15 }]}>
@@ -389,7 +471,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
 
         {/* Searching → the "create new board" row (when the name is new) on top,
             then a flat result list across every board. */}
-        {!busyEmpty && !boardsError && matches && (
+        {hasStandardContent && !busyEmpty && !boardsError && matches && (
           <>
             {canCreate && renderCreateRow(query.trim())}
             {matches.length > 0 ? (
@@ -411,7 +493,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
         )}
 
         {/* Not searching → Suggested (pinned, quick-send) then All boards. */}
-        {!busyEmpty && !boardsError && !matches && boards.length > 0 && (
+        {hasStandardContent && !busyEmpty && !boardsError && !matches && visibleBoards.length > 0 && (
           <>
             {pinned.length > 0 && (
               <>
@@ -451,8 +533,9 @@ function Header({ onDismiss, title, theme }) {
 // ── SharePreview ─────────────────────────────────────────────
 // Compact summary of the share payload at the top of the screen, so
 // the user can confirm what they're about to send.
-function SharePreview({ text, url, imageFiles, theme }) {
+function SharePreview({ text, url, imageFiles, mediaFiles, theme }) {
   const hasImages = imageFiles.length > 0;
+  const hasMedia = mediaFiles.length > 0;
   const hasText = !!text;
   const hasUrl = !!url;
 
@@ -492,6 +575,16 @@ function SharePreview({ text, url, imageFiles, theme }) {
           </ScrollView>
         </>
       )}
+      {hasMedia && (
+        <View style={styles.previewRow}>
+          <Icon name="music-note-plus" size={16} color={theme.colors.textSecondary} />
+          <Text style={{ color: theme.colors.textPrimary, flex: 1, fontSize: 13 }}>
+            {mediaFiles.length === 1
+              ? `Send ${mediaFiles[0]?.fileName || '1 audio/video file'}`
+              : `Send ${mediaFiles.length} audio/video files`}
+          </Text>
+        </View>
+      )}
       {hasUrl && (
         <View style={styles.previewRow}>
           <Icon name="link-variant" size={16} color={theme.colors.textSecondary} />
@@ -514,7 +607,7 @@ function SharePreview({ text, url, imageFiles, theme }) {
           </Text>
         </View>
       )}
-      {!hasImages && !hasText && !hasUrl && (
+      {!hasImages && !hasMedia && !hasText && !hasUrl && (
         <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontStyle: 'italic' }}>
           Empty share
         </Text>

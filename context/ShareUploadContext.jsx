@@ -15,6 +15,11 @@
  *   The server coalesces the per-image requests back into a single chat_log entry
  *   via a shared `groupId` (see server/routes/share.js).
  *
+ * Audio destination:
+ *   Shared audio/video files are copied into app-owned storage before the
+ *   share target dismisses, then streamed one at a time to the durable Audio
+ *   import queue. URL-only Audio shares stay on the existing /api/share path.
+ *
  * Why we copy the temp files first:
  *   The OS hands us temporary file URIs for the shared photos. They can be
  *   reclaimed once the share session ends, so before we start the (slower)
@@ -24,12 +29,18 @@
  * Retry:
  *   A failed job keeps its remaining file copies + its resume index on disk, so
  *   Retry picks up where it left off WITHOUT re-opening the OS share sheet.
- *   Only images that haven't uploaded yet are re-read.
+ *   Only images or staged media files that have not been accepted are retried.
  */
 import React, { createContext, useContext, useRef, useState, useEffect, useCallback } from 'react';
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
-import { useServer } from './ServerContext';
+import { useServer, getApiAuthToken } from './ServerContext';
+import { streamMultipartUpload } from '../services/streamMultipartUpload';
+import {
+  classifySharedFile,
+  isHttpImportUrl,
+  supportedAudioVideoFiles,
+} from '../utils/shareMediaClassifier';
 import { notifyHaptic } from '../utils/haptics';
 
 const ShareUploadContext = createContext(null);
@@ -41,18 +52,79 @@ const SHARE_DIR = `${FileSystem.cacheDirectory || ''}TurtleShareUploads/`;
 
 // How long a success toast lingers before auto-dismissing itself.
 const SUCCESS_TOAST_MS = 3500;
+const AUDIO_BOARD = { kind: 'album', name: 'Audio' };
+const AUDIO_QUEUED_MESSAGE = 'Queued for Music Vault';
 
 const channelForPlatform = () => (Platform.OS === 'android' ? 'android-share' : 'ios-share');
 
 // Pick a sensible file extension from the source path, falling back to mime.
 const extFromPathOrMime = (p, mime) => {
-  const m = /\.([a-zA-Z0-9]+)$/.exec(p || '');
+  const m = /\.([a-zA-Z0-9]+)$/.exec(String(p || '').split(/[?#]/, 1)[0]);
   if (m) return `.${m[1].toLowerCase()}`;
   if (mime === 'image/png') return '.png';
   if (mime === 'image/heic' || mime === 'image/heif') return '.heic';
   if (mime === 'image/webp') return '.webp';
   if (mime === 'image/gif') return '.gif';
   return '.jpg';
+};
+
+const MEDIA_MIME_EXTENSION = {
+  'audio/mpeg': '.mp3',
+  'audio/mp4': '.m4a',
+  'audio/aac': '.aac',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/flac': '.flac',
+  'audio/ogg': '.ogg',
+  'audio/opus': '.opus',
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+  'video/x-msvideo': '.avi',
+  'video/x-matroska': '.mkv',
+  'video/webm': '.webm',
+  'video/3gpp': '.3gp',
+};
+
+const sourceNameOf = (file, index) => {
+  if (typeof file?.fileName === 'string' && file.fileName.trim()) return file.fileName.trim();
+  const source = typeof file?.path === 'string' ? file.path.split(/[?#]/, 1)[0] : '';
+  const fallback = source.split('/').pop();
+  return fallback || `shared-media-${index}`;
+};
+
+const safeFileName = (value, fallback) => {
+  const safe = String(value || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim();
+  return safe && safe !== '.' && safe !== '..' ? safe : fallback;
+};
+
+const ownedMediaName = (file, index) => {
+  const kind = classifySharedFile(file);
+  const original = sourceNameOf(file, index);
+  const fallbackExtension = MEDIA_MIME_EXTENSION[
+    typeof file?.mimeType === 'string' ? file.mimeType.toLowerCase() : ''
+  ] || (kind === 'video' ? '.mp4' : '.mp3');
+  const safe = safeFileName(original, `shared-media-${index}${fallbackExtension}`);
+  return /\.[a-z0-9]+$/i.test(safe) ? safe : `${safe}${fallbackExtension}`;
+};
+
+const uploadEndpointOf = (baseUrl) => {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  return base.endsWith('/api') ? `${base}/media/upload` : `${base}/api/media/upload`;
+};
+
+const acceptedUploadJobId = (result) => {
+  let body = result?.body;
+  if (typeof body === 'string') {
+    try {
+      body = JSON.parse(body);
+    } catch {
+      body = null;
+    }
+  }
+  if (!body?.success || !body?.queued || !body?.jobId) {
+    throw new Error(body?.error || 'Server did not queue the Music Vault import.');
+  }
+  return body.jobId;
 };
 
 // Board shape the /api/share endpoint expects, preserving a create-on-demand
@@ -65,13 +137,15 @@ const bodyBoard = (board) => (board ? {
 } : undefined);
 
 export function ShareUploadProvider({ children }) {
-  const { api } = useServer();
+  const { api, getBaseUrl } = useServer();
 
   // Latest `api` in a ref so the async upload loop always uses a live client
   // (its identity changes when serverIP / connection state changes) without
   // capturing a stale closure.
   const apiRef = useRef(api);
   useEffect(() => { apiRef.current = api; }, [api]);
+  const getBaseUrlRef = useRef(getBaseUrl);
+  useEffect(() => { getBaseUrlRef.current = getBaseUrl; }, [getBaseUrl]);
 
   // Source of truth for jobs is a Map in a ref — the async worker reads/writes it
   // directly, immune to stale closures. React state is a rendered snapshot kept
@@ -88,6 +162,8 @@ export function ShareUploadProvider({ children }) {
       total: j.total,
       done: j.done,
       error: j.error,
+      message: j.message,
+      kind: j.kind,
     })));
   }, []);
 
@@ -105,6 +181,14 @@ export function ShareUploadProvider({ children }) {
         FileSystem.deleteAsync(img.localPath, { idempotent: true }).catch(() => {});
       }
     }
+    for (const media of job.media || []) {
+      if (media.localPath) {
+        FileSystem.deleteAsync(media.localPath, { idempotent: true }).catch(() => {});
+      }
+    }
+    if (job.ownedDirectory) {
+      FileSystem.deleteAsync(job.ownedDirectory, { idempotent: true }).catch(() => {});
+    }
   }, []);
 
   const removeJob = useCallback((id) => {
@@ -121,10 +205,92 @@ export function ShareUploadProvider({ children }) {
     if (existing) clearTimeout(existing);
     const t = setTimeout(() => {
       const job = jobsRef.current.get(id);
-      if (job && job.status === 'success') removeJob(id);
+      if (job && (job.status === 'success' || job.status === 'queued')) removeJob(id);
     }, SUCCESS_TOAST_MS);
     autoDismissTimers.current.set(id, t);
   }, [removeJob]);
+
+  const processAudioJob = useCallback(async (id) => {
+    const job = jobsRef.current.get(id);
+    if (!job) return;
+
+    try {
+      if (job.kind === 'audio-url') {
+        const response = await apiRef.current.post('/share', {
+          board: bodyBoard(AUDIO_BOARD),
+          payload: { text: undefined, url: job.url },
+          channel: channelForPlatform(),
+        });
+        if (!response?.success || !response?.downloadJobId) {
+          throw new Error(response?.error || 'Server did not queue the Music Vault import.');
+        }
+        job.backendJobIds = [response.downloadJobId];
+        job.status = 'queued';
+        job.message = AUDIO_QUEUED_MESSAGE;
+        job.error = null;
+        publish();
+        notifyHaptic('success');
+        scheduleAutoDismiss(id);
+        return;
+      }
+
+      const uploadUrl = uploadEndpointOf(getBaseUrlRef.current?.());
+      if (!uploadUrl.startsWith('http')) throw new Error('Turtle server URL is unavailable.');
+
+      let failures = 0;
+      for (const media of job.media) {
+        if (media.sent) continue;
+        try {
+          const result = await streamMultipartUpload({
+            url: uploadUrl,
+            fileUri: media.localPath,
+            mimeType: media.mimeType,
+            parameters: {
+              outputKind: 'audio',
+              album: 'Audio',
+              tags: JSON.stringify(['Audio']),
+              originalName: media.filename,
+            },
+            token: getApiAuthToken(),
+            label: media.filename,
+            onProgress: () => {},
+          });
+          media.backendJobId = acceptedUploadJobId(result);
+          media.sent = true;
+          job.backendJobIds.push(media.backendJobId);
+          job.done += 1;
+          publish();
+          FileSystem.deleteAsync(media.localPath, { idempotent: true }).catch(() => {});
+        } catch (error) {
+          media.error = error.message || 'Upload failed.';
+          failures += 1;
+          console.warn(`[ShareUpload] media ${media.filename} failed:`, media.error);
+        }
+      }
+
+      if (failures === 0) {
+        job.status = 'queued';
+        job.message = AUDIO_QUEUED_MESSAGE;
+        job.error = null;
+        publish();
+        notifyHaptic('success');
+        scheduleAutoDismiss(id);
+      } else {
+        job.status = 'error';
+        job.message = null;
+        job.error = `${failures} of ${job.total} didn't queue.`;
+        publish();
+        notifyHaptic('error');
+      }
+    } catch (error) {
+      console.error('[ShareUpload] Music Vault import failed:', error);
+      job.status = 'error';
+      job.message = null;
+      job.error = error.message || 'Music Vault import failed.';
+      publish();
+      notifyHaptic('error');
+    }
+  }, [publish, scheduleAutoDismiss]);
 
   // The worker. Runs a single job to completion (or first failure). Safe to call
   // again for the same id to RESUME (retry) — it skips already-copied files and
@@ -132,6 +298,9 @@ export function ShareUploadProvider({ children }) {
   const processJob = useCallback(async (id) => {
     const job = jobsRef.current.get(id);
     if (!job) return;
+    if (job.kind === 'audio-url' || job.kind === 'audio-files') {
+      return processAudioJob(id);
+    }
 
     try {
       // 1. Copy the OS temp files into app storage once (cheap byte copy, no
@@ -248,15 +417,44 @@ export function ShareUploadProvider({ children }) {
       publish();
       notifyHaptic('error');
     }
-  }, [ensureDir, publish, scheduleAutoDismiss]);
+  }, [ensureDir, processAudioJob, publish, scheduleAutoDismiss]);
+
+  const stageAudioFiles = useCallback(async (job) => {
+    await ensureDir();
+    const ownedDirectory = `${SHARE_DIR}${job.id}/`;
+    await FileSystem.makeDirectoryAsync(ownedDirectory, { intermediates: true });
+    job.ownedDirectory = ownedDirectory;
+
+    const copies = [];
+    for (let index = 0; index < job.mediaFiles.length; index++) {
+      const file = job.mediaFiles[index];
+      const filename = ownedMediaName(file, index);
+      const itemDirectory = `${ownedDirectory}${index}/`;
+      const destination = `${itemDirectory}${filename}`;
+      await FileSystem.makeDirectoryAsync(itemDirectory, { intermediates: true });
+      await FileSystem.copyAsync({ from: file.path, to: destination });
+      copies.push({
+        localPath: destination,
+        filename,
+        mimeType: file.mimeType,
+        sent: false,
+      });
+    }
+    job.media = copies;
+    job.copied = true;
+  }, [ensureDir]);
 
   // Public: start a share. Returns immediately (fire-and-forget) so the caller
   // can dismiss the share sheet without waiting on the network.
   const enqueueShare = useCallback(({ board, text, url, imageFiles }) => {
+    const files = (Array.isArray(imageFiles) ? imageFiles : [])
+      .filter((file) => classifySharedFile(file) === 'image');
+    if (!text && !url && files.length === 0) return null;
+
     const id = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-    const files = Array.isArray(imageFiles) ? imageFiles : [];
     const job = {
       id,
+      kind: 'standard',
       groupId: id,               // stable per-share id the server groups on
       board,
       text: text || null,
@@ -269,6 +467,7 @@ export function ShareUploadProvider({ children }) {
       copied: false,
       status: 'uploading',
       error: null,
+      message: null,
     };
     jobsRef.current.set(id, job);
     publish();
@@ -276,18 +475,58 @@ export function ShareUploadProvider({ children }) {
     return id;
   }, [publish, processJob]);
 
+  const enqueueAudioShare = useCallback(async ({ mediaFiles, url } = {}) => {
+    const files = supportedAudioVideoFiles(mediaFiles);
+    const importUrl = isHttpImportUrl(url) ? url.trim() : null;
+    if (files.length === 0 && !importUrl) {
+      throw new Error('No supported audio, video, or HTTP(S) URL was shared.');
+    }
+
+    const id = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const job = {
+      id,
+      kind: files.length > 0 ? 'audio-files' : 'audio-url',
+      board: AUDIO_BOARD,
+      url: importUrl,
+      mediaFiles: files,
+      media: [],
+      backendJobIds: [],
+      total: files.length,
+      done: 0,
+      copied: files.length === 0,
+      status: 'uploading',
+      error: null,
+      message: null,
+    };
+    jobsRef.current.set(id, job);
+    publish();
+
+    if (files.length > 0) {
+      try {
+        await stageAudioFiles(job);
+      } catch (error) {
+        removeJob(id);
+        throw new Error(`Could not preserve shared media: ${error.message}`);
+      }
+    }
+
+    processJob(id);
+    return id;
+  }, [processJob, publish, removeJob, stageAudioFiles]);
+
   const retryJob = useCallback((id) => {
     const job = jobsRef.current.get(id);
     if (!job) return;
     job.status = 'uploading';
     job.error = null;
+    job.message = null;
     publish();
-    processJob(id); // re-sends only the images still flagged unsent, same group
+    processJob(id);
   }, [publish, processJob]);
 
   const dismissJob = useCallback((id) => removeJob(id), [removeJob]);
 
-  const value = { jobs, enqueueShare, retryJob, dismissJob };
+  const value = { jobs, enqueueShare, enqueueAudioShare, retryJob, dismissJob };
   return <ShareUploadContext.Provider value={value}>{children}</ShareUploadContext.Provider>;
 }
 

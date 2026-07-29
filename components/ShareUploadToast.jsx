@@ -23,12 +23,17 @@ import { impactHaptic, tapHaptic } from '../utils/haptics';
 const photoWord = (n) => (n === 1 ? 'photo' : 'photos');
 
 function JobCard({ job, theme, onRetry, onDismiss }) {
-  const { board, status, total, done, error } = job;
+  const { board, status, total, done, error, message, kind } = job;
+  const isAudioJob = kind === 'audio-files' || kind === 'audio-url';
   // Null board = the default "save as-is" share straight into the photo vault.
-  const boardName = board?.name || 'Photo vault';
+  const boardName = isAudioJob ? 'Music Vault' : (board?.name || 'Photo vault');
 
   let icon, iconColor, title, subtitle;
-  if (status === 'success') {
+  if (status === 'queued') {
+    icon = 'check-circle';
+    iconColor = theme.colors.accentSuccess;
+    title = message || 'Queued for Music Vault';
+  } else if (status === 'success') {
     icon = 'check-circle';
     iconColor = theme.colors.accentSuccess;
     title = total > 0 ? `Sent ${total} ${photoWord(total)} to ${boardName}` : `Sent to ${boardName}`;
@@ -43,7 +48,7 @@ function JobCard({ job, theme, onRetry, onDismiss }) {
   } else {
     // uploading
     title = `Sending to ${boardName}…`;
-    if (total > 1) subtitle = `${done}/${total} ${photoWord(total)}`;
+    if (total > 1) subtitle = `${done}/${total} ${isAudioJob ? 'files' : photoWord(total)}`;
   }
 
   const progress = total > 0 ? Math.max(0, Math.min(1, done / total)) : 0;
@@ -94,7 +99,7 @@ function JobCard({ job, theme, onRetry, onDismiss }) {
               <Icon name="close" size={18} color={theme.colors.textMuted} />
             </TouchableOpacity>
           </View>
-        ) : status === 'success' ? (
+        ) : status === 'success' || status === 'queued' ? (
           <TouchableOpacity
             onPressIn={() => tapHaptic()}
             onPress={() => onDismiss(job.id)}

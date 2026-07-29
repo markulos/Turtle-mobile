@@ -19,8 +19,9 @@
  *      SKIPPED — no wasted transfer — counted in the final stats, and offered
  *      for deletion alongside the uploaded originals when the batch finishes.
  *
- * The streaming uploader (createUploadTask + two-phase watchdog + retries)
- * moved here VERBATIM from MediaGallery — see the comment on it below.
+ * Native multipart streaming, retries, and the two-phase watchdog live in the
+ * shared streamMultipartUpload service so share-intent imports and vault
+ * batches use one upload loop.
  */
 import React, { createContext, useContext, useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { AppState } from 'react-native';
@@ -31,6 +32,7 @@ import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useServer, getApiAuthToken } from './ServerContext';
 import { notifyUploadComplete, updateUploadProgress, clearUploadProgress } from '../services/uploadNotify';
+import { streamMultipartUpload } from '../services/streamMultipartUpload';
 import { notifyHaptic } from '../utils/haptics';
 
 // Split into three contexts so a consumer only re-renders on the slice it
@@ -48,115 +50,6 @@ const VaultUploadLifecycleContext = createContext(null);
 // resumes instead of restarting. v1 of the shape — bump the key on breaking
 // changes so a stale queue from an old build can't confuse a new one.
 const QUEUE_KEY = 'turtle:vaultUpload:batch:v1';
-
-// ── Streaming media upload (moved from MediaGallery — the large-file fix) ────
-// The old path appended { uri } to a FormData and sent it via XMLHttpRequest.
-// React Native's FormData reads the whole file into a single in-memory blob
-// before sending, so a large video (hundreds of MB) blew the JS heap and the
-// upload "broke consistently". expo-file-system's createUploadTask STREAMS the
-// file from disk in native code (constant memory), which is the real fix.
-//
-// On top of streaming this adds the failsafes the to-do asked for:
-//   • up to 3 attempts with linear backoff (transient network / 5xx / stall),
-//   • a TWO-PHASE stall watchdog — see below,
-//   • verbose, greppable [VaultUpload] logging of size, status, elapsed, attempt.
-// Returns the FileSystemUploadResult on 2xx; throws after exhausting retries.
-//
-// TWO-PHASE WATCHDOG (the real large-file fix):
-//   Phase 1 — transfer: while bytes are still moving up the wire, cancel +
-//     retry if NOTHING moves for UPLOAD_STALL_MS (a dead tunnel socket).
-//   Phase 2 — processing: the instant the last byte is sent, progress
-//     callbacks STOP firing while the server runs sharp / ExifTool / ffmpeg
-//     remux on the file (seconds→minutes for a large video). That expected
-//     silence is NOT a dead socket, so once all bytes are sent we switch to
-//     the much longer UPLOAD_PROCESSING_MS grace before giving up.
-const UPLOAD_MAX_ATTEMPTS = 3;
-const UPLOAD_STALL_MS = 60000;        // transfer phase: no bytes for 60s → dead socket
-const UPLOAD_PROCESSING_MS = 300000;  // processing phase: server may transcode for up to 5 min
-async function streamUploadWithRetry({ url, fileUri, mimeType, parameters, token, label, onProgress }) {
-  let lastErr = null;
-  for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt++) {
-    const startedAt = Date.now();
-    let lastProgressAt = Date.now();
-    // Set to the timestamp the final byte hit the wire — flips the watchdog
-    // from transfer-phase to processing-phase. Reset per attempt.
-    let allSentAt = null;
-    let stallTimer = null;
-    try {
-      const task = FileSystem.createUploadTask(
-        url,
-        fileUri,
-        {
-          httpMethod: 'POST',
-          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-          fieldName: 'media',
-          mimeType,
-          parameters,
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          // DELIBERATELY no sessionType override — the DEFAULT (foreground)
-          // session is the configuration every production upload ran on.
-          // Setting BACKGROUND here broke uploads with HTTP 400 "Unexpected
-          // end of form": expo-file-system's multipart path writes the whole
-          // assembled body to a shared temp file (caches/uploads/<name>, via a
-          // silent `try? data.write`) for the out-of-process background daemon
-          // to read `fromFile`, and that hand-off truncated bodies. App
-          // backgrounding resilience comes from THIS QUEUE instead — the
-          // batch checkpoints after every item and resumes on relaunch.
-        },
-        (p) => {
-          lastProgressAt = Date.now();
-          const total = p.totalBytesExpectedToSend || 0;
-          const sent = p.totalBytesSent || 0;
-          if (total > 0 && onProgress) {
-            onProgress(Math.min(99, Math.round((sent / total) * 100)));
-          }
-          // Last byte on the wire → enter processing phase (once).
-          if (total > 0 && sent >= total && allSentAt === null) {
-            allSentAt = Date.now();
-            const secs = ((allSentAt - startedAt) / 1000).toFixed(1);
-            console.log(`[VaultUpload] ⏳ ${label} · ${(total / (1024 * 1024)).toFixed(1)}MB sent in ${secs}s · awaiting server processing…`);
-          }
-        },
-      );
-
-      const result = await new Promise((resolve, reject) => {
-        stallTimer = setInterval(() => {
-          const idleMs = Date.now() - lastProgressAt;
-          const threshold = allSentAt ? UPLOAD_PROCESSING_MS : UPLOAD_STALL_MS;
-          if (idleMs > threshold) {
-            const phase = allSentAt ? 'server processing' : 'transfer';
-            console.warn(`[VaultUpload] ⏱ ${label} · watchdog tripped during ${phase} (idle ${Math.round(idleMs / 1000)}s)`);
-            task.cancelAsync().catch(() => {});
-            reject(new Error(`stalled during ${phase} — no progress for ${Math.round(threshold / 1000)}s`));
-          }
-        }, 5000);
-        task.uploadAsync().then(resolve, reject);
-      });
-      if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
-
-      const status = result?.status ?? 0;
-      const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
-      if (status >= 200 && status < 300) {
-        if (onProgress) onProgress(100);
-        console.log(`[VaultUpload] ✓ ${label} · ${secs}s · HTTP ${status} (attempt ${attempt})`);
-        return result;
-      }
-      lastErr = new Error(`HTTP ${status}: ${String(result?.body || '').slice(0, 300)}`);
-      console.warn(`[VaultUpload] ✗ ${label} · HTTP ${status} (attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS})`);
-      // Client errors (bad request, auth) won't fix themselves on retry — stop.
-      if (status < 500 && status !== 408 && status !== 429) throw lastErr;
-    } catch (e) {
-      if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
-      lastErr = e;
-      console.warn(`[VaultUpload] ✗ ${label} (attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS}): ${e.message}`);
-      if (/HTTP 4\d\d/.test(e.message) && !/HTTP (408|429)/.test(e.message)) break;
-    }
-    if (attempt < UPLOAD_MAX_ATTEMPTS) {
-      await new Promise((r) => setTimeout(r, attempt * 1500)); // 1.5s, 3s backoff
-    }
-  }
-  throw lastErr || new Error('upload failed');
-}
 
 // Real mime for the streamed part when the picker doesn't report one —
 // passthrough mode returns .mov/HEVC originals the old hardcoded video/mp4
@@ -490,7 +383,7 @@ export function VaultUploadProvider({ children }) {
             publishPctTick();
           };
 
-          await streamUploadWithRetry({
+          await streamMultipartUpload({
             url: uploadEndpoint,
             fileUri: mediaUri,
             mimeType: mediaType,
