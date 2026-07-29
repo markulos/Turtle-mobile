@@ -103,6 +103,9 @@
       ],
       "expo-live-activity"
     ],
+    "experiments": {
+      "tsconfigPaths": false
+    },
     "extra": {
       "eas": {
         "projectId": "d7ce39a1-915a-4ee7-990a-6066708faa03"
