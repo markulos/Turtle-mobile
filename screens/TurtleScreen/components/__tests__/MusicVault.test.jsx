@@ -7,6 +7,8 @@ const mockTogglePlayback = jest.fn();
 const mockPrevious = jest.fn();
 const mockNext = jest.fn();
 const mockSeekTo = jest.fn();
+const mockRefreshLibrary = jest.fn();
+const mockRetrySetup = jest.fn();
 const mockMusicPlayer = {
   tracks: [
     { id: 'one', filename: 'First.mp3', rawUrl: '/media/one.mp3' },
@@ -16,6 +18,8 @@ const mockMusicPlayer = {
   loading: false,
   ready: true,
   error: null,
+  setupError: null,
+  libraryError: null,
   activeTrack: {
     mediaId: 'two',
     title: 'Second',
@@ -29,6 +33,8 @@ const mockMusicPlayer = {
   previous: mockPrevious,
   next: mockNext,
   seekTo: mockSeekTo,
+  refreshLibrary: mockRefreshLibrary,
+  retrySetup: mockRetrySetup,
 };
 
 jest.mock('../../../../context/ThemeContext', () => ({
@@ -51,6 +57,9 @@ jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
+jest.mock('@react-navigation/native', () => ({
+  useFocusEffect: (callback) => callback(),
+}));
 jest.mock('../../../../context/MusicPlayerContext', () => ({
   useMusicPlayer: () => mockMusicPlayer,
 }));
@@ -66,6 +75,8 @@ describe('MusicVault', () => {
     mockMusicPlayer.ready = true;
     mockMusicPlayer.loading = false;
     mockMusicPlayer.error = null;
+    mockMusicPlayer.setupError = null;
+    mockMusicPlayer.libraryError = null;
   });
 
   test('starts the selected media row through the shared provider', async () => {
@@ -120,5 +131,22 @@ describe('MusicVault', () => {
 
     expect(view.getByText('First')).toBeTruthy();
     expect(view.getByText('Unable to refresh music')).toBeTruthy();
+  });
+
+  test('refreshes the library whenever Music Vault opens or regains focus', async () => {
+    await render(<MusicVault onClose={jest.fn()} />);
+
+    expect(mockRefreshLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  test('offers an explicit production retry for player setup failure', async () => {
+    mockMusicPlayer.ready = false;
+    mockMusicPlayer.setupError = 'Native player unavailable';
+    mockMusicPlayer.error = 'Native player unavailable';
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+
+    await fireEvent.press(view.getByText('Retry player'));
+
+    expect(mockRetrySetup).toHaveBeenCalledTimes(1);
   });
 });

@@ -14,7 +14,8 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { AppState } from 'react-native';
 import { io } from 'socket.io-client';
-import { useServer, serverOrigin, getApiAuthToken } from './ServerContext';
+import { useServer, serverOrigin } from './ServerContext';
+import { useAuth } from './AuthContext';
 
 const DownloadsContext = createContext({
   jobs: [], active: 0, mediaVersion: 0,
@@ -38,27 +39,38 @@ const pctOf = (j) =>
 
 export function DownloadsProvider({ children }) {
   const { serverIP, isConnected, api } = useServer();
+  const { isAuthenticated, token, authIdentity, authGeneration } = useAuth();
   const [jobs, setJobs] = useState([]);
   const [mediaVersion, setMediaVersion] = useState(0);
   const socketRef = useRef(null);
+  const authGenerationRef = useRef(authGeneration);
+  authGenerationRef.current = authGeneration;
 
   const refresh = useCallback(async () => {
+    const generation = authGeneration;
+    if (!isAuthenticated || !generation) return;
     try {
       const r = await api.get('/downloads');
+      if (authGenerationRef.current !== generation) return;
       if (r?.jobs) setJobs(r.jobs.map((j) => ({ ...j, percent: pctOf(j) })));
     } catch { /* offline / unauthorized */ }
-  }, [api]);
+  }, [api, authGeneration, isAuthenticated]);
 
   const refreshRef = useRef(refresh);
   useEffect(() => { refreshRef.current = refresh; }, [refresh]);
-  useEffect(() => { if (isConnected) refresh(); }, [isConnected, refresh]);
+  useEffect(() => { if (isAuthenticated && isConnected) refresh(); }, [isAuthenticated, isConnected, refresh]);
 
   useEffect(() => {
-    if (!serverIP) return undefined;
+    setJobs([]);
+    if (!serverIP || !isAuthenticated || !token || !authGeneration) return undefined;
+    const generation = authGeneration;
+    const accountId = String(authIdentity || '').split(':').slice(1).join(':');
+    const isCurrent = () => authGenerationRef.current === generation;
+    const accepts = (payload) =>
+      isCurrent() &&
+      (!payload?.userId || !accountId || String(payload.userId) === accountId);
     const socket = io(serverOrigin(serverIP), {
-      // Same JWT the HTTP api attaches — server verifies it in the handshake
-      // (observe mode today; ready for SOCKET_AUTH_ENFORCE=1).
-      auth: { token: getApiAuthToken() || undefined },
+      auth: { token },
       transports: ['websocket'],
       reconnection: true,
       reconnectionDelay: 2000,
@@ -66,9 +78,10 @@ export function DownloadsProvider({ children }) {
       randomizationFactor: 0.5,
     });
     socketRef.current = socket;
-    socket.on('connect', () => { refreshRef.current(); }); // re-pull /downloads after a (re)connect
+    socket.on('connect', () => { if (isCurrent()) refreshRef.current(); });
 
     socket.on('download:job', (job) => {
+      if (!accepts(job)) return;
       setJobs((prev) => {
         const i = prev.findIndex((j) => j.id === job.id);
         const merged = i === -1 ? { ...job } : { ...prev[i], ...job };
@@ -78,6 +91,7 @@ export function DownloadsProvider({ children }) {
       });
     });
     socket.on('download:progress', (p) => {
+      if (!accepts(p)) return;
       setJobs((prev) => prev.map((j) => {
         if (j.id !== p.id) return j;
         const m = {
@@ -97,13 +111,15 @@ export function DownloadsProvider({ children }) {
     // in-place updates (JIT compress, AI re-understanding). The payload is
     // deliberately empty (unauthenticated surface) — the reload goes through
     // the authenticated list endpoints.
-    const bumpMedia = () => setMediaVersion((v) => v + 1);
+    const bumpMedia = (payload) => {
+      if (accepts(payload)) setMediaVersion((v) => v + 1);
+    };
     socket.on('media:added', bumpMedia);
     socket.on('media:removed', bumpMedia);
     socket.on('media:updated', bumpMedia);
 
     return () => { socket.removeAllListeners(); socket.disconnect(); socketRef.current = null; };
-  }, [serverIP]);
+  }, [authGeneration, authIdentity, isAuthenticated, serverIP, token]);
 
   // Battery: drop the socket while backgrounded, reconnect on return (same
   // pattern as the Claude session socket). Only the stable 'background' /

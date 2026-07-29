@@ -5,10 +5,11 @@
  * authentication state management for the Turtle app.
  */
 
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useMemo } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { useServer, setApiAuthToken, serverOrigin } from './ServerContext';
 import { clearAllCaches } from '../utils/cacheManager';
+import { getAuthIdentity, getAuthTokenGeneration } from '../utils/authIdentity';
 
 const AuthContext = createContext();
 
@@ -23,6 +24,8 @@ export const AuthProvider = ({ children }) => {
   const [loginError, setLoginError] = useState(null);
   
   const { getBaseUrl, serverIP } = useServer();
+  const authIdentity = useMemo(() => getAuthIdentity(token), [token]);
+  const authGeneration = useMemo(() => getAuthTokenGeneration(token), [token]);
 
   // Pre-flight guard shared by login/requestOtp/verifyOtp: with no server
   // address saved, getBaseUrl() is `http://:3000/api` and every fetch dies
@@ -291,6 +294,8 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     token,
+    authIdentity,
+    authGeneration,
     isAuthenticated,
     isLoading,
     loginError,

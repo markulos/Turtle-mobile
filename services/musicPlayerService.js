@@ -1,7 +1,21 @@
-import TrackPlayer, { PlayerCommand } from '@rntp/player';
+import TrackPlayer, { Event, PlayerCommand } from '@rntp/player';
+import { Platform } from 'react-native';
 import { createMusicPlayerController } from './musicPlayerController';
 
 let nativePlayerReady = false;
+
+const setNativeCommands = (nextEnabled) =>
+  Promise.resolve(
+    TrackPlayer.setCommands({
+      capabilities: [
+        PlayerCommand.Previous,
+        PlayerCommand.PlayPause,
+        ...(nextEnabled ? [PlayerCommand.Next] : []),
+        PlayerCommand.Seek,
+      ],
+      handling: 'native',
+    })
+  );
 
 const nativeAdapter = {
   async setup() {
@@ -19,17 +33,7 @@ const nativeAdapter = {
       );
       nativePlayerReady = true;
     }
-    await Promise.resolve(
-      TrackPlayer.setCommands({
-        capabilities: [
-          PlayerCommand.Previous,
-          PlayerCommand.PlayPause,
-          PlayerCommand.Next,
-          PlayerCommand.Seek,
-        ],
-        handling: 'native',
-      })
-    );
+    await setNativeCommands(false);
   },
   setQueue: (items, startIndex) =>
     Promise.resolve(TrackPlayer.setMediaItems(items, startIndex)),
@@ -39,6 +43,23 @@ const nativeAdapter = {
   next: () => Promise.resolve(TrackPlayer.skipToNext()),
   seekTo: (seconds) => Promise.resolve(TrackPlayer.seekTo(seconds)),
   clear: () => Promise.resolve(TrackPlayer.clear()),
+  setNextEnabled: (enabled) => setNativeCommands(enabled),
 };
 
 export const musicPlayerService = createMusicPlayerController(nativeAdapter);
+
+const handleNativePlaybackEvent = async (event) => {
+  if (event?.type === Event.MediaItemTransition) {
+    await musicPlayerService.handleActiveIndexChanged(event.index);
+  } else if (event?.type === Event.RemoteNext) {
+    await musicPlayerService.next();
+  }
+};
+
+TrackPlayer.addEventListener(Event.MediaItemTransition, (event) => {
+  handleNativePlaybackEvent({ type: Event.MediaItemTransition, ...event }).catch(() => {});
+});
+
+if (Platform.OS === 'android') {
+  TrackPlayer.registerBackgroundEventHandler(() => handleNativePlaybackEvent);
+}

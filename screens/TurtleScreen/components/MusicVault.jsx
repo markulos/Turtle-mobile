@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../../context/ThemeContext';
 import { useMusicPlayer } from '../../../context/MusicPlayerContext';
 import { titleOf, sourceOf } from '../../../services/musicTrackMapper';
@@ -25,6 +26,7 @@ export default function MusicVault({ onClose }) {
     loading,
     ready,
     error,
+    setupError,
     activeTrack,
     isPlaying,
     position,
@@ -34,12 +36,20 @@ export default function MusicVault({ onClose }) {
     previous,
     next,
     seekTo,
+    refreshLibrary,
+    retrySetup,
   } = useMusicPlayer();
   const current = tracks.findIndex(
     (item) => String(item.id) === String(activeTrack?.mediaId)
   );
   const nowTrack = current >= 0 ? tracks[current] : null;
   const barWidthRef = useRef(1);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshLibrary();
+    }, [refreshLibrary])
+  );
 
   const playIndex = useCallback(
     (index) => {
@@ -100,9 +110,20 @@ export default function MusicVault({ onClose }) {
       </View>
 
       {error ? (
-        <Text style={[styles.error, { color: c.textSecondary, borderColor: c.border, backgroundColor: c.surfaceElevated }]}>
-          {error}
-        </Text>
+        <View style={[styles.error, { borderColor: c.border, backgroundColor: c.surfaceElevated }]}>
+          <Text style={{ color: c.textSecondary }}>{error}</Text>
+          {setupError ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={retrySetup}
+              style={{ marginTop: 8, alignSelf: 'flex-start' }}
+            >
+              <Text style={{ color: c.accentSuccess || '#4ADE80', fontWeight: '700' }}>
+                Retry player
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
       ) : null}
 
       {loading && tracks.length === 0 ? (
@@ -198,7 +219,7 @@ export default function MusicVault({ onClose }) {
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
   art: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  error: { marginHorizontal: 16, marginBottom: 8, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, fontSize: 13 },
+  error: { marginHorizontal: 16, marginBottom: 8, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
   nowBar: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8 },
   seekHit: { paddingVertical: 8, paddingHorizontal: 16 },
   seekTrack: { height: 4, borderRadius: 2, overflow: 'hidden' },

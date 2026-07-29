@@ -266,17 +266,12 @@ export default function App() {
         <SafeAreaProvider>
           <ThemeProvider>
             <ServerProvider>
-              {/* Owns "Send to Turtle" uploads at the app level so they outlive
-                  the share sheet (ShareTargetScreen) unmounting. Inside
-                  ServerProvider (needs the api client), around the rest. */}
-              <ShareUploadProvider>
-              {/* Owns photo-VAULT upload batches app-level: streams in the
-                  background with a global progress pill, checkpoints to
-                  AsyncStorage after every item, and RESUMES an interrupted
-                  batch on the next launch. Inside ServerProvider (needs the
-                  base URL); outside AppContent so no screen unmount stops it. */}
-              <VaultUploadProvider>
-                <AuthProvider>
+              <AuthProvider>
+                {/* Upload owners consume immutable auth identity while remaining
+                    app-level, so screen/share-sheet unmounts never stop them. */}
+                <ShareUploadProvider>
+                  <VaultUploadProvider>
+                  <DownloadsProvider>
                   <MusicPlayerProvider>
                   <VaultProvider>
                     <ClaudeQueueProvider>
@@ -288,7 +283,6 @@ export default function App() {
                        {/* Owns the ghost-download queue socket + REST app-wide, so
                            the floating DownloadsPill and live gallery refresh work
                            on every screen. */}
-                       <DownloadsProvider>
                         <AppContent />
                         {/* Floating share-upload progress / outcome toast. Rendered
                             here (NOT inside ShareTargetScreen) so it persists after
@@ -309,15 +303,15 @@ export default function App() {
                         {/* Interactive pomodoro end notifications (Start break /
                             Start focus buttons). Renders nothing. */}
                         <PomodoroNotifications />
-                       </DownloadsProvider>
                        </CelebrationProvider>
                       </CommandBusProvider>
                     </ClaudeQueueProvider>
                   </VaultProvider>
                   </MusicPlayerProvider>
-                </AuthProvider>
-              </VaultUploadProvider>
-              </ShareUploadProvider>
+                  </DownloadsProvider>
+                  </VaultUploadProvider>
+                </ShareUploadProvider>
+              </AuthProvider>
             </ServerProvider>
           </ThemeProvider>
         </SafeAreaProvider>

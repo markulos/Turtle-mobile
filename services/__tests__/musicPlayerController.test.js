@@ -10,6 +10,7 @@ function makeAdapter(overrides = {}) {
     next: jest.fn().mockResolvedValue(undefined),
     seekTo: jest.fn().mockResolvedValue(undefined),
     clear: jest.fn().mockResolvedValue(undefined),
+    setNextEnabled: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -64,7 +65,8 @@ describe('musicPlayerController', () => {
   test('routes transport, seek, and clear commands through the adapter', async () => {
     const adapter = makeAdapter();
     const controller = createMusicPlayerController(adapter);
-    await controller.ensureReady();
+    await controller.playQueue([{ mediaId: 'one' }, { mediaId: 'two' }], 0);
+    adapter.play.mockClear();
 
     await controller.togglePlayback(true);
     await controller.togglePlayback(false);
@@ -80,6 +82,48 @@ describe('musicPlayerController', () => {
     expect(adapter.seekTo).toHaveBeenCalledWith(12.5);
     expect(adapter.clear).toHaveBeenCalledTimes(1);
   });
+
+  test('disables native Next for an initial final item and makes Next harmless', async () => {
+    const adapter = makeAdapter();
+    const controller = createMusicPlayerController(adapter);
+
+    await controller.playQueue([{ mediaId: 'only' }], 0);
+    await controller.next();
+
+    expect(adapter.setNextEnabled).toHaveBeenLastCalledWith(false);
+    expect(adapter.next).not.toHaveBeenCalled();
+  });
+
+  test('disables Next after automatic advance reaches the final item', async () => {
+    const adapter = makeAdapter();
+    const controller = createMusicPlayerController(adapter);
+    await controller.playQueue([{ mediaId: 'one' }, { mediaId: 'two' }], 0);
+
+    await controller.handleActiveIndexChanged(1);
+
+    expect(adapter.setNextEnabled).toHaveBeenLastCalledWith(false);
+  });
+
+  test('re-enables Next after moving previous from the final item', async () => {
+    const adapter = makeAdapter();
+    const controller = createMusicPlayerController(adapter);
+    await controller.playQueue([{ mediaId: 'one' }, { mediaId: 'two' }], 1);
+
+    await controller.previous();
+
+    expect(adapter.previous).toHaveBeenCalledTimes(1);
+    expect(adapter.setNextEnabled).toHaveBeenLastCalledWith(true);
+  });
+
+  test('recomputes native Next when the queue is replaced', async () => {
+    const adapter = makeAdapter();
+    const controller = createMusicPlayerController(adapter);
+
+    await controller.playQueue([{ mediaId: 'only' }], 0);
+    await controller.playQueue([{ mediaId: 'one' }, { mediaId: 'two' }], 0);
+
+    expect(adapter.setNextEnabled.mock.calls.map(([enabled]) => enabled)).toEqual([false, true]);
+  });
 });
 
 test('exposes the complete controller contract', () => {
@@ -88,6 +132,7 @@ test('exposes the complete controller contract', () => {
     [
       'clear',
       'ensureReady',
+      'handleActiveIndexChanged',
       'isReady',
       'next',
       'playQueue',
