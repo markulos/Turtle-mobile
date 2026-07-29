@@ -48,6 +48,7 @@ describe('PhotoVaultBoardCard', () => {
   test('exposes useful accessibility and delegates press actions by board name', async () => {
     const onPress = jest.fn();
     const onLongPress = jest.fn();
+    const onPressIn = jest.fn();
     const view = await render(
       <PhotoVaultBoardCard
         board={board}
@@ -56,15 +57,18 @@ describe('PhotoVaultBoardCard', () => {
         resolveCoverUrl={(path) => path}
         onPress={onPress}
         onLongPress={onLongPress}
+        onPressIn={onPressIn}
       />,
     );
 
     const card = view.getByLabelText('Warm interiors, 47 items, updated 2d');
+    await fireEvent(card, 'pressIn');
     await fireEvent.press(card);
     await fireEvent(card, 'longPress');
 
     expect(onPress).toHaveBeenCalledWith('Warm interiors');
     expect(onLongPress).toHaveBeenCalledWith('Warm interiors');
+    expect(onPressIn).toHaveBeenCalledTimes(1);
   });
 
   test('renders a single quiet empty-board placeholder when covers are absent', async () => {
