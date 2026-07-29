@@ -34,16 +34,36 @@ const IMAGE_EXTENSIONS = new Set([
 ]);
 
 const GENERIC_MIME_TYPES = new Set([
-  '',
   '*/*',
   'application/octet-stream',
   'application/unknown',
   'binary/octet-stream',
 ]);
 
-const normalizedMime = (value) => (
-  typeof value === 'string' ? value.split(';', 1)[0].trim().toLowerCase() : ''
-);
+const MIME_TYPE_PATTERN = /^[!#$%&'*+\-.^_`|~0-9a-z]+\/[!#$%&'*+\-.^_`|~0-9a-z]+$/i;
+
+const parseMime = (entry) => {
+  if (!Object.prototype.hasOwnProperty.call(entry, 'mimeType')) {
+    return { state: 'missing', value: '' };
+  }
+
+  if (typeof entry.mimeType !== 'string') {
+    return { state: 'invalid', value: '' };
+  }
+
+  const raw = entry.mimeType.trim();
+  if (!raw) return { state: 'missing', value: '' };
+
+  const value = raw.split(';', 1)[0].trim().toLowerCase();
+  if (!MIME_TYPE_PATTERN.test(value)) {
+    return { state: 'invalid', value };
+  }
+
+  return {
+    state: GENERIC_MIME_TYPES.has(value) ? 'generic' : 'specific',
+    value,
+  };
+};
 
 const extensionOf = (entry) => {
   const value = typeof entry?.fileName === 'string' && entry.fileName.trim()
@@ -59,11 +79,14 @@ export function classifySharedFile(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return 'unsupported';
   if (typeof entry.path !== 'string' || !entry.path.trim()) return 'unsupported';
 
-  const mime = normalizedMime(entry.mimeType);
+  const mimeResult = parseMime(entry);
+  if (mimeResult.state === 'invalid') return 'unsupported';
+
+  const mime = mimeResult.value;
   if (mime.startsWith('audio/')) return 'audio';
   if (mime.startsWith('video/')) return 'video';
   if (mime.startsWith('image/')) return 'image';
-  if (!GENERIC_MIME_TYPES.has(mime)) return 'unsupported';
+  if (mimeResult.state === 'specific') return 'unsupported';
 
   const extension = extensionOf(entry);
   if (AUDIO_EXTENSIONS.has(extension)) return 'audio';

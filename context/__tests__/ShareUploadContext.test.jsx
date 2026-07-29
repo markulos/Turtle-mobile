@@ -105,6 +105,17 @@ const queuedUpload = (jobId) => ({
   body: JSON.stringify({ success: true, queued: true, jobId }),
 });
 
+function audioDestinationOnPress(view) {
+  let fiber = view.getByLabelText('Audio — Save to Music Vault').unstable_fiber;
+  while (fiber) {
+    if (typeof fiber.memoizedProps?.onPress === 'function') {
+      return fiber.memoizedProps.onPress;
+    }
+    fiber = fiber.return;
+  }
+  throw new Error('Expected the Audio destination to expose an onPress handler');
+}
+
 async function renderTarget(shareIntent, { boards } = {}) {
   mockApiGet.mockResolvedValueOnce({
     boards: boards || [
@@ -128,6 +139,7 @@ describe('ShareTargetScreen Audio destination', () => {
   beforeEach(() => {
     latestShareUpload = null;
     jest.clearAllMocks();
+    mockStreamMultipartUpload.mockReset();
     mockGetInfoAsync.mockResolvedValue({ exists: true });
     mockMakeDirectoryAsync.mockResolvedValue(undefined);
     mockCopyAsync.mockResolvedValue(undefined);
@@ -179,6 +191,112 @@ describe('ShareTargetScreen Audio destination', () => {
     });
   });
 
+  test('keeps Audio staging single-flight across rapid and post-success presses', async () => {
+    const copy = deferred();
+    mockCopyAsync.mockReturnValueOnce(copy.promise);
+    mockStreamMultipartUpload.mockResolvedValueOnce(queuedUpload('upload-job-single-flight'));
+    const view = await renderTarget({
+      files: [{ path: 'file:///os/recording.m4a', fileName: 'recording.m4a', mimeType: 'audio/mp4' }],
+    });
+
+    await act(() => {
+      const onPress = audioDestinationOnPress(view);
+      void onPress();
+      void onPress();
+    });
+
+    await waitFor(() => expect(mockCopyAsync).toHaveBeenCalledTimes(1));
+    expect(latestShareUpload.jobs).toHaveLength(1);
+    expect(view.onDismiss).not.toHaveBeenCalled();
+    expect(view.getByLabelText('Audio — Save to Music Vault').props.accessibilityState).toEqual({
+      busy: true,
+      disabled: true,
+    });
+
+    await act(async () => {
+      copy.resolve();
+    });
+    await waitFor(() => expect(latestShareUpload.jobs[0]?.status).toBe('queued'));
+    expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1);
+    expect(view.onDismiss).toHaveBeenCalledTimes(1);
+
+    await act(() => {
+      void audioDestinationOnPress(view)();
+    });
+
+    expect(mockCopyAsync).toHaveBeenCalledTimes(1);
+    expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1);
+    expect(latestShareUpload.jobs).toHaveLength(1);
+    expect(view.onDismiss).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      latestShareUpload.jobs.forEach((job) => latestShareUpload.dismissJob(job.id));
+    });
+  });
+
+  test('re-enables Audio staging after a copy failure so the user can retry', async () => {
+    const firstCopy = deferred();
+    const retryUpload = deferred();
+    mockCopyAsync
+      .mockReturnValueOnce(firstCopy.promise)
+      .mockResolvedValueOnce(undefined);
+    mockStreamMultipartUpload.mockReturnValueOnce(retryUpload.promise);
+    const view = await renderTarget({
+      files: [{ path: 'file:///os/retry.m4a', fileName: 'retry.m4a', mimeType: 'audio/mp4' }],
+    });
+
+    fireEvent.press(view.getByText('Save to Music Vault'));
+    await waitFor(() => expect(mockCopyAsync).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      firstCopy.reject(new Error('copy failed'));
+    });
+    await waitFor(() =>
+      expect(view.getByLabelText('Audio — Save to Music Vault').props.accessibilityState).toEqual({
+        busy: false,
+        disabled: false,
+      })
+    );
+    expect(view.onDismiss).not.toHaveBeenCalled();
+
+    fireEvent.press(view.getByText('Save to Music Vault'));
+    await waitFor(() => expect(view.onDismiss).toHaveBeenCalledTimes(1));
+    expect(mockCopyAsync).toHaveBeenCalledTimes(2);
+    expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      retryUpload.resolve(queuedUpload('upload-job-after-retry'));
+    });
+    await waitFor(() =>
+      expect(latestShareUpload.jobs.some((job) => job.status === 'queued')).toBe(true)
+    );
+    await act(async () => {
+      latestShareUpload.jobs.forEach((job) => latestShareUpload.dismissJob(job.id));
+    });
+  });
+
+  test('ignores late Audio staging completion after the share target unmounts', async () => {
+    const copy = deferred();
+    mockCopyAsync.mockReturnValueOnce(copy.promise);
+    mockStreamMultipartUpload.mockReturnValueOnce(new Promise(() => {}));
+    const view = await renderTarget({
+      files: [{ path: 'file:///os/late.m4a', fileName: 'late.m4a', mimeType: 'audio/mp4' }],
+    });
+
+    fireEvent.press(view.getByText('Save to Music Vault'));
+    await waitFor(() => expect(mockCopyAsync).toHaveBeenCalledTimes(1));
+    await view.rerender(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    await act(async () => {
+      copy.resolve();
+    });
+
+    expect(view.onDismiss).not.toHaveBeenCalled();
+    expect(mockNotifyHaptic).not.toHaveBeenCalledWith('success');
+  });
+
   test('routes URL-only Audio selection through the existing share body and accepts downloadJobId as queued', async () => {
     const pending = deferred();
     mockApiPost.mockReturnValueOnce(pending.promise);
@@ -209,6 +327,7 @@ describe('ShareUploadProvider audio imports', () => {
   beforeEach(() => {
     latestShareUpload = null;
     jest.clearAllMocks();
+    mockStreamMultipartUpload.mockReset();
     mockGetInfoAsync.mockResolvedValue({ exists: true });
     mockMakeDirectoryAsync.mockResolvedValue(undefined);
     mockCopyAsync.mockResolvedValue(undefined);

@@ -38,7 +38,7 @@
  *   - HEIC images from iPhone → passed straight through; the server's
  *     Sharp pipeline already handles HEIC via heic-convert.
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -94,6 +94,17 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const [boardsError, setBoardsError] = useState(null);
   const [query, setQuery] = useState('');
   const [handoffError, setHandoffError] = useState(null);
+  const [audioHandoffBusy, setAudioHandoffBusy] = useState(false);
+  const audioHandoffInFlightRef = useRef(false);
+  const audioHandoffDismissedRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // ── Derived: what is actually being shared? ─────────────────
   // expo-share-intent normalizes the payload across iOS/Android into
@@ -206,19 +217,32 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
     onDismiss?.();
   };
 
-  const pickAudio = async () => {
+  const pickAudio = () => {
+    if (audioHandoffInFlightRef.current) return;
+    audioHandoffInFlightRef.current = true;
+    setAudioHandoffBusy(true);
     setHandoffError(null);
-    try {
-      await enqueueAudioShare({
-        mediaFiles,
-        url: hasImportUrl ? url : null,
-      });
+
+    void (async () => {
+      try {
+        await enqueueAudioShare({
+          mediaFiles,
+          url: hasImportUrl ? url : null,
+        });
+      } catch (error) {
+        audioHandoffInFlightRef.current = false;
+        if (!mountedRef.current) return;
+        setAudioHandoffBusy(false);
+        setHandoffError(error.message || 'Could not preserve the shared media.');
+        notifyHaptic('error');
+        return;
+      }
+
+      if (!mountedRef.current || audioHandoffDismissedRef.current) return;
+      audioHandoffDismissedRef.current = true;
       notifyHaptic('success');
       onDismiss?.();
-    } catch (error) {
-      setHandoffError(error.message || 'Could not preserve the shared media.');
-      notifyHaptic('error');
-    }
+    })();
   };
 
   // ── A single tappable destination row ───────────────────────
@@ -339,13 +363,19 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           <TouchableOpacity
             key="__music_vault__"
             activeOpacity={0.75}
-            onPressIn={() => impactHaptic('medium')}
+            accessibilityLabel="Audio — Save to Music Vault"
+            accessibilityState={{ busy: audioHandoffBusy, disabled: audioHandoffBusy }}
+            disabled={audioHandoffBusy}
+            onPressIn={() => {
+              if (!audioHandoffInFlightRef.current) impactHaptic('medium');
+            }}
             onPress={pickAudio}
             style={[
               styles.boardRow,
               {
                 backgroundColor: theme.colors.surface,
                 borderColor: theme.colors.accentSuccess,
+                opacity: audioHandoffBusy ? 0.65 : 1,
               },
             ]}
           >
@@ -360,7 +390,11 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
                 Save to Music Vault
               </Text>
             </View>
-            <Icon name="chevron-right" size={22} color={theme.colors.accentSuccess} />
+            {audioHandoffBusy ? (
+              <ActivityIndicator size="small" color={theme.colors.accentSuccess} />
+            ) : (
+              <Icon name="chevron-right" size={22} color={theme.colors.accentSuccess} />
+            )}
           </TouchableOpacity>
         )}
 

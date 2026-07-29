@@ -14,8 +14,18 @@ describe('streamMultipartUpload', () => {
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     jest.restoreAllMocks();
   });
+
+  const uploadArgs = {
+    url: 'https://pond.example/api/media/upload',
+    fileUri: 'file:///owned/song.mp3',
+    mimeType: 'audio/mpeg',
+    parameters: { outputKind: 'audio', album: 'Audio' },
+    token: 'token-7',
+    label: 'song.mp3',
+  };
 
   test('streams a native multipart upload with auth, flat parameters, and monotonic completion progress', async () => {
     const onProgress = jest.fn();
@@ -74,5 +84,86 @@ describe('streamMultipartUpload', () => {
     ).rejects.toThrow('HTTP 415');
 
     expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(1);
+  });
+
+  test('retries a transient response after the existing linear backoff and clears timers', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-29T12:00:00Z'));
+    FileSystem.createUploadTask
+      .mockReturnValueOnce({
+        uploadAsync: jest.fn().mockResolvedValue({ status: 500, body: 'temporary' }),
+        cancelAsync: jest.fn().mockResolvedValue(undefined),
+      })
+      .mockReturnValueOnce({
+        uploadAsync: jest.fn().mockResolvedValue({ status: 202, body: '{"queued":true}' }),
+        cancelAsync: jest.fn().mockResolvedValue(undefined),
+      });
+
+    const upload = streamMultipartUpload(uploadArgs);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1499);
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+
+    await expect(upload).resolves.toEqual({ status: 202, body: '{"queued":true}' });
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(2);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  test('cancels a stalled transfer, retries, and leaves no watchdog timer behind', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-29T12:00:00Z'));
+    const firstTask = {
+      uploadAsync: jest.fn(() => new Promise(() => {})),
+      cancelAsync: jest.fn().mockResolvedValue(undefined),
+    };
+    FileSystem.createUploadTask
+      .mockReturnValueOnce(firstTask)
+      .mockReturnValueOnce({
+        uploadAsync: jest.fn().mockResolvedValue({ status: 202, body: '{"queued":true}' }),
+        cancelAsync: jest.fn().mockResolvedValue(undefined),
+      });
+
+    const upload = streamMultipartUpload(uploadArgs);
+    await jest.advanceTimersByTimeAsync(65000);
+
+    expect(firstTask.cancelAsync).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1500);
+    await expect(upload).resolves.toEqual({ status: 202, body: '{"queued":true}' });
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(2);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  test('uses the processing watchdog after all bytes are sent and cleans up its timer', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-29T12:00:00Z'));
+    const firstTask = {
+      uploadAsync: jest.fn(() => new Promise(() => {})),
+      cancelAsync: jest.fn().mockResolvedValue(undefined),
+    };
+    FileSystem.createUploadTask
+      .mockImplementationOnce((url, fileUri, options, progress) => {
+        progress({ totalBytesSent: 10, totalBytesExpectedToSend: 10 });
+        return firstTask;
+      })
+      .mockReturnValueOnce({
+        uploadAsync: jest.fn().mockResolvedValue({ status: 202, body: '{"queued":true}' }),
+        cancelAsync: jest.fn().mockResolvedValue(undefined),
+      });
+
+    const upload = streamMultipartUpload(uploadArgs);
+    await jest.advanceTimersByTimeAsync(65000);
+    expect(firstTask.cancelAsync).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(240000);
+    expect(firstTask.cancelAsync).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1500);
+
+    await expect(upload).resolves.toEqual({ status: 202, body: '{"queued":true}' });
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(2);
+    expect(jest.getTimerCount()).toBe(0);
   });
 });

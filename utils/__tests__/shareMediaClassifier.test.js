@@ -16,6 +16,7 @@ describe('shareMediaClassifier', () => {
   test.each([
     [{ path: 'file:///tmp/VOICE.M4A', mimeType: 'application/octet-stream' }, 'audio'],
     [{ path: 'content://share/clip', fileName: 'HOLIDAY.MOV', mimeType: '*/*' }, 'video'],
+    [{ path: 'file:///tmp/interview.WAV', mimeType: '   ' }, 'audio'],
     [{ path: 'file:///tmp/COVER.JPEG' }, 'image'],
     [{ path: 'file:///tmp/session.OPUS?token=temporary' }, 'audio'],
   ])('falls back to a case-insensitive extension for missing or generic MIME', (entry, expected) => {
@@ -30,6 +31,18 @@ describe('shareMediaClassifier', () => {
         mimeType: 'application/pdf',
       })
     ).toBe('unsupported');
+  });
+
+  test.each([
+    { path: 'file:///tmp/recording.mp3', mimeType: 'audio/' },
+    { path: 'file:///tmp/movie.mov', mimeType: 'video/ ' },
+    { path: 'file:///tmp/recording.mp3', mimeType: 7 },
+    { path: 'file:///tmp/movie.mov', mimeType: { type: 'video/mp4' } },
+    { path: 'file:///tmp/recording.mp3', mimeType: null },
+    { path: 'file:///tmp/movie.mov', mimeType: undefined },
+    { path: 'file:///tmp/recording.mp3', mimeType: 'audio/m peg' },
+  ])('does not use a media extension when a present MIME value is malformed', (entry) => {
+    expect(classifySharedFile(entry)).toBe('unsupported');
   });
 
   test.each([
