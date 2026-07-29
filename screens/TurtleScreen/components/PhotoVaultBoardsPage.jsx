@@ -18,6 +18,8 @@ const SORTS = [
 ];
 
 const CARD_WIDTH = (Dimensions.get('window').width - 20 - 10) / 2;
+const LOAD_ERROR_COPY = 'Unable to load boards';
+const REFRESH_ERROR_COPY = 'Couldn’t refresh boards.';
 
 function BoardSkeleton({ index, theme }) {
   return (
@@ -96,6 +98,19 @@ const PhotoVaultBoardsPage = forwardRef(({
           );
         })}
       </View>
+      {error && boards.length > 0 && (
+        <View style={[styles.retryBanner, { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.border }]}>
+          <Text style={[styles.retryBannerText, { color: theme.colors.textSecondary }]}>{REFRESH_ERROR_COPY}</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading boards"
+            onPress={onRetry}
+            style={styles.retryBannerAction}
+          >
+            <Text style={[styles.retryBannerActionText, { color: theme.colors.primary }]}>Retry</Text>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 
@@ -103,7 +118,7 @@ const PhotoVaultBoardsPage = forwardRef(({
     if (error) {
       return (
         <View style={styles.empty}>
-          <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>{error}</Text>
+          <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>{LOAD_ERROR_COPY}</Text>
           <Pressable onPress={onRetry} style={[styles.emptyAction, { backgroundColor: theme.colors.surfaceElevated }]}>
             <Text style={[styles.emptyActionText, { color: theme.colors.textPrimary }]}>Retry</Text>
           </Pressable>
@@ -168,6 +183,10 @@ const styles = StyleSheet.create({
   sorts: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
   sort: { minHeight: 36, borderWidth: 1, borderRadius: 18, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
   sortLabel: { fontSize: 14, fontWeight: '600' },
+  retryBanner: { marginTop: 12, minHeight: 40, borderWidth: 1, borderRadius: 12, paddingLeft: 12, paddingRight: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  retryBannerText: { fontSize: 14, fontWeight: '600' },
+  retryBannerAction: { minHeight: 32, justifyContent: 'center', paddingHorizontal: 8 },
+  retryBannerActionText: { fontSize: 14, fontWeight: '700' },
   row: { gap: 10 },
   skeletonGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   skeleton: { marginBottom: 20 },

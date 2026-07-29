@@ -2052,7 +2052,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       }
       counts[counts.length - 1] += 1;
     }
-    const countLabels = counts.map((n) => `${n} album${n === 1 ? '' : 's'}`);
+    const countLabels = counts.map((n) => `${n} board${n === 1 ? '' : 's'}`);
     return { starts, labels, countLabels, total, yearMarks: marks };
   }, [boardModels]);
 

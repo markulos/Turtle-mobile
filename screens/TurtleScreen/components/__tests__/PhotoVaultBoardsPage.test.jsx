@@ -98,6 +98,18 @@ describe('PhotoVaultBoardsPage', () => {
     expect(loading.view.getAllByTestId(/board-skeleton-/)).toHaveLength(4);
   });
 
+  test('keeps retained boards visible behind a safe retry banner after a refresh failure', async () => {
+    const unsafeError = 'upstream token=secret failed at https://internal.example';
+    const { props, view } = await renderPage({ error: unsafeError });
+
+    expect(view.getByText('Couldn’t refresh boards.')).toBeTruthy();
+    expect(view.queryByText(unsafeError)).toBeNull();
+    expect(view.getByLabelText('Warm interiors, 47 items, updated 2d')).toBeTruthy();
+
+    await fireEvent.press(view.getByLabelText('Retry loading boards'));
+    expect(props.onRetry).toHaveBeenCalledTimes(1);
+  });
+
   test('prioritizes a load error over initial-load skeletons', async () => {
     const failed = await renderPage({ boards: [], loading: true, error: 'Unable to load boards' });
 
