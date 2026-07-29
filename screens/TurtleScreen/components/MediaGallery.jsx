@@ -835,6 +835,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const [albumLatestDates, setAlbumLatestDates] = useState({});
   const [boardSortMode, setBoardSortMode] = useState('recent');
   const [albumsLoadError, setAlbumsLoadError] = useState(null);
+  const [hasLoadedAlbums, setHasLoadedAlbums] = useState(false);
   const [albumSearchQuery, setAlbumSearchQuery] = useState(''); // Album search filter
   const searchInputRef = useRef(null);
   const [uploadsSearchQuery, setUploadsSearchQuery] = useState(''); // Uploads/All Photos search filter
@@ -2338,6 +2339,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       setAlbumCovers(normalized.coversByName);
       setAlbumCounts(normalized.countsByName);
       setAlbumLatestDates(normalized.latestDatesByName);
+      setHasLoadedAlbums(true);
       setAlbumsLoadError(null);
     } catch (e) {
       setAlbumsLoadError(e?.message || 'Unable to load boards');
@@ -4836,6 +4838,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               boards={boardModels}
               loading={isAlbumsLoading}
               error={albumsLoadError}
+              hasLoadedAlbums={hasLoadedAlbums}
               query={albumSearchQuery}
               sortMode={boardSortMode}
               theme={theme}

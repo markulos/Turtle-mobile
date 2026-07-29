@@ -3,6 +3,7 @@ import {
   Animated,
   Dimensions,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -35,6 +36,7 @@ const PhotoVaultBoardsPage = forwardRef(({
   boards,
   loading,
   error,
+  hasLoadedAlbums = false,
   query,
   sortMode,
   theme,
@@ -51,6 +53,9 @@ const PhotoVaultBoardsPage = forwardRef(({
   onContentSizeChange,
   onLayout,
 }, ref) => {
+  const visibleBoards = hasLoadedAlbums ? boards : [];
+  const onPrimary = theme.colors.onPrimary ?? theme.colors.background;
+
   const renderHeader = () => (
     <View style={[styles.header, { paddingTop: topInset, backgroundColor: theme.colors.background }]}>
       <View style={styles.searchRow}>
@@ -64,6 +69,16 @@ const PhotoVaultBoardsPage = forwardRef(({
             accessibilityLabel="Search your boards"
             style={[styles.searchInput, { color: theme.colors.textPrimary }]}
           />
+          {query ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Clear board search"
+              onPress={() => onQueryChange('')}
+              style={styles.clearSearch}
+            >
+              <Icon name="close-circle" size={21} color={theme.colors.textSecondary} />
+            </Pressable>
+          ) : null}
         </View>
         <Pressable
           accessibilityRole="button"
@@ -74,7 +89,13 @@ const PhotoVaultBoardsPage = forwardRef(({
           <Icon name="plus" size={25} color={theme.colors.background} />
         </Pressable>
       </View>
-      <View style={styles.sorts}>
+      <ScrollView
+        testID="board-sort-scroll"
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.sorts}
+        style={styles.sortScroller}
+      >
         {SORTS.map(({ mode, label, icon }) => {
           const selected = sortMode === mode;
           return (
@@ -87,18 +108,23 @@ const PhotoVaultBoardsPage = forwardRef(({
               style={[
                 styles.sort,
                 {
-                  backgroundColor: selected ? theme.colors.surfaceElevated : theme.colors.surface,
-                  borderColor: selected ? theme.colors.textSecondary : theme.colors.border,
+                  backgroundColor: selected ? theme.colors.primary : theme.colors.surface,
+                  borderColor: selected ? theme.colors.primary : theme.colors.border,
                 },
               ]}
             >
-              <Icon name={icon} size={16} color={selected ? theme.colors.textPrimary : theme.colors.textSecondary} />
-              <Text style={[styles.sortLabel, { color: selected ? theme.colors.textPrimary : theme.colors.textSecondary }]}>{label}</Text>
+              <Icon
+                testID={selected ? `sort-selected-${mode}` : undefined}
+                name={selected ? 'check' : icon}
+                size={16}
+                color={selected ? onPrimary : theme.colors.textSecondary}
+              />
+              <Text style={[styles.sortLabel, { color: selected ? onPrimary : theme.colors.textSecondary }]}>{label}</Text>
             </Pressable>
           );
         })}
-      </View>
-      {error && boards.length > 0 && (
+      </ScrollView>
+      {error && hasLoadedAlbums && (
         <View style={[styles.retryBanner, { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.border }]}>
           <Text style={[styles.retryBannerText, { color: theme.colors.textSecondary }]}>{REFRESH_ERROR_COPY}</Text>
           <Pressable
@@ -115,19 +141,24 @@ const PhotoVaultBoardsPage = forwardRef(({
   );
 
   const renderEmpty = () => {
-    if (error) {
+    if (!hasLoadedAlbums && !error) {
+      return <View style={styles.skeletonGrid}>{[0, 1, 2, 3].map((index) => <BoardSkeleton key={index} index={index} theme={theme} />)}</View>;
+    }
+
+    if (!hasLoadedAlbums) {
       return (
         <View style={styles.empty}>
           <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>{LOAD_ERROR_COPY}</Text>
-          <Pressable onPress={onRetry} style={[styles.emptyAction, { backgroundColor: theme.colors.surfaceElevated }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading boards"
+            onPress={onRetry}
+            style={[styles.emptyAction, { backgroundColor: theme.colors.surfaceElevated }]}
+          >
             <Text style={[styles.emptyActionText, { color: theme.colors.textPrimary }]}>Retry</Text>
           </Pressable>
         </View>
       );
-    }
-
-    if (loading) {
-      return <View style={styles.skeletonGrid}>{[0, 1, 2, 3].map((index) => <BoardSkeleton key={index} index={index} theme={theme} />)}</View>;
     }
 
     return (
@@ -136,7 +167,12 @@ const PhotoVaultBoardsPage = forwardRef(({
           {query ? `No boards match “${query}”.` : 'Create your first board by adding photos.'}
         </Text>
         {!query && (
-          <Pressable onPress={onAdd} style={[styles.emptyAction, { backgroundColor: theme.colors.surfaceElevated }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Add photos to create a board"
+            onPress={onAdd}
+            style={[styles.emptyAction, { backgroundColor: theme.colors.surfaceElevated }]}
+          >
             <Text style={[styles.emptyActionText, { color: theme.colors.textPrimary }]}>Add photos</Text>
           </Pressable>
         )}
@@ -147,7 +183,7 @@ const PhotoVaultBoardsPage = forwardRef(({
   return (
     <Animated.FlatList
       ref={ref}
-      data={boards}
+      data={visibleBoards}
       keyExtractor={(board) => board.name}
       numColumns={2}
       renderItem={({ item }) => (
@@ -164,7 +200,7 @@ const PhotoVaultBoardsPage = forwardRef(({
       ListHeaderComponent={renderHeader}
       ListEmptyComponent={renderEmpty}
       contentContainerStyle={[styles.content, { backgroundColor: theme.colors.background }]}
-      columnWrapperStyle={boards.length ? styles.row : undefined}
+      columnWrapperStyle={visibleBoards.length ? styles.row : undefined}
       keyboardShouldPersistTaps="handled"
       onScroll={onScroll}
       onContentSizeChange={onContentSizeChange}
@@ -179,13 +215,15 @@ const styles = StyleSheet.create({
   searchRow: { flexDirection: 'row', gap: 10 },
   search: { height: 50, flex: 1, borderWidth: 1, borderRadius: 25, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 8 },
   searchInput: { flex: 1, fontSize: 16, height: '100%' },
+  clearSearch: { width: 44, height: 44, marginRight: -12, alignItems: 'center', justifyContent: 'center' },
   addButton: { width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center' },
-  sorts: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
-  sort: { minHeight: 36, borderWidth: 1, borderRadius: 18, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  sortScroller: { marginTop: 12 },
+  sorts: { flexDirection: 'row', gap: 8, paddingRight: 10 },
+  sort: { minHeight: 44, borderWidth: 1, borderRadius: 22, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 6 },
   sortLabel: { fontSize: 14, fontWeight: '600' },
-  retryBanner: { marginTop: 12, minHeight: 40, borderWidth: 1, borderRadius: 12, paddingLeft: 12, paddingRight: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  retryBanner: { marginTop: 12, minHeight: 44, borderWidth: 1, borderRadius: 12, paddingLeft: 12, paddingRight: 4, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   retryBannerText: { fontSize: 14, fontWeight: '600' },
-  retryBannerAction: { minHeight: 32, justifyContent: 'center', paddingHorizontal: 8 },
+  retryBannerAction: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
   retryBannerActionText: { fontSize: 14, fontWeight: '700' },
   row: { gap: 10 },
   skeletonGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
@@ -195,7 +233,7 @@ const styles = StyleSheet.create({
   skeletonMeta: { width: '45%', height: 13, borderRadius: 7, marginTop: 5, marginHorizontal: 2 },
   empty: { alignItems: 'center', paddingTop: 48, paddingHorizontal: 24 },
   emptyText: { fontSize: 15, lineHeight: 22, textAlign: 'center' },
-  emptyAction: { marginTop: 16, borderRadius: 20, paddingHorizontal: 18, minHeight: 40, justifyContent: 'center' },
+  emptyAction: { marginTop: 16, borderRadius: 22, paddingHorizontal: 18, minHeight: 44, justifyContent: 'center' },
   emptyActionText: { fontSize: 15, fontWeight: '700' },
 });
 
