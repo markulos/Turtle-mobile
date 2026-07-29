@@ -1,6 +1,16 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 const collator = new Intl.Collator(undefined, { sensitivity: 'base' });
 
+const objectMap = (value) =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+
+export const normalizeAlbumsPayload = (response = {}) => ({
+  names: Array.isArray(response.albums) ? response.albums : [],
+  coversByName: objectMap(response.covers),
+  countsByName: objectMap(response.counts),
+  latestDatesByName: objectMap(response.latestDate),
+});
+
 export const normalizeBoardSearch = (value) =>
   String(value ?? '').trim().toLowerCase().replace(/[-_\s]+/g, '');
 

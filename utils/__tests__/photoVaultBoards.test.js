@@ -2,6 +2,7 @@ import {
   buildPhotoVaultBoards,
   formatBoardMetadata,
   formatBoardRecency,
+  normalizeAlbumsPayload,
   normalizeBoardSearch,
 } from '../photoVaultBoards';
 
@@ -81,5 +82,26 @@ describe('photoVaultBoards', () => {
       latestDate: 0,
       metadata: '0 items',
     })]);
+  });
+
+  test('normalizes current and older /media/albums payloads', () => {
+    expect(normalizeAlbumsPayload({
+      albums: ['One'],
+      covers: { One: ['/cover'] },
+      counts: { One: 9 },
+      latestDate: { One: 123 },
+    })).toEqual({
+      names: ['One'],
+      coversByName: { One: ['/cover'] },
+      countsByName: { One: 9 },
+      latestDatesByName: { One: 123 },
+    });
+
+    expect(normalizeAlbumsPayload({ albums: ['Legacy'] })).toEqual({
+      names: ['Legacy'],
+      coversByName: {},
+      countsByName: {},
+      latestDatesByName: {},
+    });
   });
 });

@@ -73,6 +73,11 @@ import TimelineScrubber from './TimelineScrubber';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
 import { useMediaVersion } from '../../../context/DownloadsContext';
 import { useTheme } from '../../../context/ThemeContext';
+import PhotoVaultBoardsPage from './PhotoVaultBoardsPage';
+import {
+  buildPhotoVaultBoards,
+  normalizeAlbumsPayload,
+} from '../../../utils/photoVaultBoards';
 
 // Create an animated version of FlashList to match our existing architecture
 const AnimatedFlashList = Animated.createAnimatedComponent(FlashList);
@@ -825,15 +830,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   
   // === ALBUM & TAG STATE ===
   const [globalAlbums, setGlobalAlbums] = useState(['Phone Uploads']);
-  const [albumCovers, setAlbumCovers] = useState({}); // Cover thumbnails for 2x2 grids
+  const [albumCovers, setAlbumCovers] = useState({});
+  const [albumCounts, setAlbumCounts] = useState({});
+  const [albumLatestDates, setAlbumLatestDates] = useState({});
+  const [boardSortMode, setBoardSortMode] = useState('recent');
+  const [albumsLoadError, setAlbumsLoadError] = useState(null);
   const [albumSearchQuery, setAlbumSearchQuery] = useState(''); // Album search filter
-  // Album search bar visibility is its OWN state (not derived from the query),
-  // so a long pull-down on the albums grid can reveal an empty search box.
-  const [albumSearchVisible, setAlbumSearchVisible] = useState(false);
-  const albumSearchVisibleRef = useRef(false);
-  albumSearchVisibleRef.current = albumSearchVisible;
-  // Ref to the unified search TextInput so revealing can pop the keyboard
-  // imperatively (autoFocus only fires on mount, and this input stays mounted).
   const searchInputRef = useRef(null);
   const [uploadsSearchQuery, setUploadsSearchQuery] = useState(''); // Uploads/All Photos search filter
   // Grid date basis: 'original' = when the photo was TAKEN (capture date,
@@ -846,45 +848,18 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const [isUploadsSearchVisible, setIsUploadsSearchVisible] = useState(false);
   const uploadsSearchAnim = useRef(new Animated.Value(0)).current;
 
-  // Animate unified search bar for both uploads and albums. Uses the iOS
+  // Animate the Photos search bar. Uses the iOS
   // Spotlight / sheet-presentation curve (cubic-bezier 0.32, 0.72, 0, 1) so the
   // bar drops in with the same smooth deceleration the keyboard rises on.
   useEffect(() => {
-    const isVisible = isUploadsSearchVisible || (activeTab === 'albums' && albumSearchVisible);
+    const isVisible = isUploadsSearchVisible;
     Animated.timing(uploadsSearchAnim, {
       toValue: isVisible ? 1 : 0,
       duration: isVisible ? 320 : 220,
       easing: Easing.bezier(0.32, 0.72, 0, 1),
       useNativeDriver: true,
     }).start();
-  }, [isUploadsSearchVisible, activeTab, albumSearchVisible, uploadsSearchAnim]);
-
-  // Reveal/hide the album search bar. Revealing focuses it; hiding clears the
-  // query so the grid returns to the full album list.
-  const revealAlbumSearch = useCallback(() => {
-    if (albumSearchVisibleRef.current) return;
-    setAlbumSearchVisible(true);
-    // Pop the keyboard in step with the reveal — focus on the next frame so the
-    // box has laid out (height 0 → auto). The bar's slide + the keyboard's own
-    // iOS curve then rise together, like Spotlight pull-to-search.
-    requestAnimationFrame(() => searchInputRef.current?.focus());
-  }, []);
-  const hideAlbumSearch = useCallback(() => {
-    setAlbumSearchVisible(false);
-    setAlbumSearchQuery('');
-    searchInputRef.current?.blur();
-  }, []);
-
-  // Long pull-down on the albums grid (overscroll past the threshold) reveals
-  // the search bar — the iOS "pull to search" gesture. Threshold is deliberately
-  // deep so a normal bounce doesn't trip it.
-  const ALBUM_PULL_TO_SEARCH = -100;
-  const onAlbumsScroll = useCallback((e) => {
-    const y = e?.nativeEvent?.contentOffset?.y ?? 0;
-    if (y < ALBUM_PULL_TO_SEARCH && !albumSearchVisibleRef.current) {
-      revealAlbumSearch();
-    }
-  }, [revealAlbumSearch]);
+  }, [isUploadsSearchVisible, uploadsSearchAnim]);
   
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [pendingAssets, setPendingAssets] = useState([]);
@@ -1618,6 +1593,23 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     return result;
   }, [albumIndex, albumSearchQuery, activeTab]);
 
+  const boardModels = useMemo(() => buildPhotoVaultBoards({
+    names: albumIndex.map((album) => album.name),
+    coversByName: albumCovers,
+    countsByName: albumCounts,
+    latestDatesByName: albumLatestDates,
+    query: activeTab === 'albums' ? albumSearchQuery : '',
+    sortMode: boardSortMode,
+  }), [
+    albumIndex,
+    albumCovers,
+    albumCounts,
+    albumLatestDates,
+    albumSearchQuery,
+    boardSortMode,
+    activeTab,
+  ]);
+
   // === INSTAGRAM-STYLE EDGE SWIPE PHYSICS ===
   const albumSlideAnim = useRef(new Animated.Value(0)).current;
   // The PanResponder below is created ONCE (useRef), so its onMoveShouldSet
@@ -2033,7 +2025,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // 'A' sits at the rail top). Non-letters (e.g. "Favourites" pinned first, or
   // numeric names) fold into a leading '#' group.
   const albumsScrubData = useMemo(() => {
-    const names = pinnedAlbums || [];
+    const names = boardModels.map((board) => board.name);
     const total = names.length;
     if (total < 2) return { starts: [], labels: [], countLabels: [], total: 0, yearMarks: [] };
     // "Favourites" is pinned to the front out of alphabetical order; give it a
@@ -2062,15 +2054,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
     const countLabels = counts.map((n) => `${n} album${n === 1 ? '' : 's'}`);
     return { starts, labels, countLabels, total, yearMarks: marks };
-  }, [pinnedAlbums]);
+  }, [boardModels]);
 
   // Worth showing only once the album list overflows a couple of screens — an
   // A→Z rail on a handful of albums is noise. Off while searching: those results
   // are relevance-ranked, not alphabetical, so letter groups wouldn't be ordered.
   const albumsScrubEnabled = activeTab === 'albums'
-    && !isSelectMode
+    && boardSortMode === 'alphabetical'
     && !albumSearchQuery.trim()
-    && (pinnedAlbums?.length || 0) >= 20;
+    && boardModels.length >= 20;
 
   // Albums grid is a plain top-down FlatList: a jump maps the fraction straight
   // to a scroll offset (0 = top = 'A' … 1 = bottom = 'Z').
@@ -2088,8 +2080,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     } catch (err) { /* mid-layout — the next jump lands */ }
   }, [albumsScrollYSv]);
 
-  // Albums scroll → feed the shared rail values (and keep the pull-to-search
-  // gesture). Reads contentSize/layoutMeasurement off the scroll event so the
+  // Boards scroll → feed the shared rail values. Reads contentSize/layoutMeasurement off the scroll event so the
   // rail has a live max without a separate measure pass.
   const handleAlbumsScroll = useCallback((e) => {
     const ne = e && e.nativeEvent;
@@ -2098,8 +2089,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     if (ne.layoutMeasurement?.height) albumsLayoutH.current = ne.layoutMeasurement.height;
     albumsScrollYSv.value = (ne.contentOffset && ne.contentOffset.y) || 0;
     albumsMaxScrollSv.value = Math.max(1, albumsContentH.current - albumsLayoutH.current);
-    onAlbumsScroll(e); // pull-to-search reveal
-  }, [onAlbumsScroll, albumsScrollYSv, albumsMaxScrollSv]);
+  }, [albumsScrollYSv, albumsMaxScrollSv]);
 
   // ── Tag×time "jump" ──────────────────────────────────────────────────
   // The tag SEARCH filters the grid in place (and turns OFF the virtual timeline +
@@ -2342,12 +2332,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     setIsAlbumsLoading(true);
     try {
       const res = await api.get('/media/albums');
-      if (res.success) {
-        if (res.albums) setGlobalAlbums(res.albums);
-        if (res.covers) setAlbumCovers(res.covers);
-      }
+      if (!res?.success) throw new Error(res?.error || 'Unable to load boards');
+      const normalized = normalizeAlbumsPayload(res);
+      setGlobalAlbums(normalized.names);
+      setAlbumCovers(normalized.coversByName);
+      setAlbumCounts(normalized.countsByName);
+      setAlbumLatestDates(normalized.latestDatesByName);
+      setAlbumsLoadError(null);
     } catch (e) {
-      // Album fetch failed silently
+      setAlbumsLoadError(e?.message || 'Unable to load boards');
     } finally {
       setIsAlbumsLoading(false);
     }
@@ -4838,53 +4831,36 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 />
               </View>
             )}
-            <Animated.FlatList
+            <PhotoVaultBoardsPage
               ref={albumsRef}
-              data={pinnedAlbums}
-              keyExtractor={(item) => item}
-              numColumns={2}
-              contentContainerStyle={[styles.albumsGridContent, { paddingTop: insets.top + 90 }]}
-              columnWrapperStyle={styles.albumsColumnWrapper}
-              ListEmptyComponent={() => <View style={styles.emptyContainer}><Text style={{ color: theme.colors.textSecondary }}>{albumSearchQuery.trim() ? 'No albums match your search.' : 'No albums created yet.'}</Text></View>}
-
-              // Long pull-down (overscroll) reveals the album search bar — the
-              // gesture replaces pull-to-refresh on this tab. The same handler
-              // also feeds the shared A→Z rail its scroll position + range.
+              boards={boardModels}
+              loading={isAlbumsLoading}
+              error={albumsLoadError}
+              query={albumSearchQuery}
+              sortMode={boardSortMode}
+              theme={theme}
+              topInset={insets.top + 90}
+              resolveCoverUrl={getFullUrl}
+              onQueryChange={setAlbumSearchQuery}
+              onSortModeChange={setBoardSortMode}
+              onAdd={handleUpload}
+              onRetry={fetchAlbums}
+              onOpenBoard={(name) => {
+                setSelectedAlbum(name);
+                handleTabPress('uploads');
+              }}
+              onLongPressBoard={showAlbumOptions}
+              onCardPressIn={hapticTick}
               onScroll={handleAlbumsScroll}
               onContentSizeChange={(w, h) => {
                 albumsContentH.current = h;
                 albumsMaxScrollSv.value = Math.max(1, h - (albumsLayoutH.current || 1));
               }}
-              onLayout={(e) => {
-                albumsLayoutH.current = e.nativeEvent.layout.height;
-                albumsMaxScrollSv.value = Math.max(1, (albumsContentH.current || 1) - albumsLayoutH.current);
-              }}
-              scrollEventThrottle={16}
-
-              renderItem={({ item }) => {
-                const covers = albumCovers[item] || [];
-                const gridItems = [...covers, null, null, null, null].slice(0, 4);
-                return (
-                  <TouchableOpacity
-                    style={styles.albumFolderCard}
-                    activeOpacity={0.9}
-                    onPressIn={() => hapticTick()}
-                    onPress={() => { setSelectedAlbum(item); handleTabPress('uploads'); }}
-                    onLongPress={() => showAlbumOptions(item)}
-                    delayLongPress={500}
-                  >
-                    <View style={styles.albumGridContainer}>
-                      {gridItems.map((coverUrl, index) => (
-                        <View key={index} style={styles.albumGridCell}>
-                          {coverUrl ? <Image source={{ uri: getFullUrl(coverUrl) }} style={styles.albumGridImage} contentFit="cover" transition={200} /> : <View style={styles.albumGridPlaceholder} />}
-                        </View>
-                      ))}
-                    </View>
-                    <LinearGradient colors={['transparent', 'rgba(0,0,0,0.85)']} style={styles.albumGradient}>
-                      <Text style={styles.albumGridName} numberOfLines={1}>{item}</Text>
-                      <Text style={styles.albumItemCount}>{covers.length > 0 ? 'View Album' : 'Empty'}</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
+              onLayout={(event) => {
+                albumsLayoutH.current = event.nativeEvent.layout.height;
+                albumsMaxScrollSv.value = Math.max(
+                  1,
+                  (albumsContentH.current || 1) - albumsLayoutH.current,
                 );
               }}
             />
@@ -5065,29 +5041,16 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               </TouchableOpacity>
             </Animated.View>
 
-            {/* Albums Action: Magnify Icon */}
-            <Animated.View style={{ 
-              position: 'absolute', right: 0, 
-              opacity: pageScrollX.interpolate({ inputRange: [0, width, width * 2], outputRange: [0, 1, 0], extrapolate: 'clamp' }),
-              pointerEvents: activeTab === 'albums' ? 'auto' : 'none' 
-            }}>
-              <TouchableOpacity onPress={() => {
-                if (albumSearchVisible) hideAlbumSearch();
-                else revealAlbumSearch();
-              }} hitSlop={HIT_SLOP_10}>
-                <Icon name="magnify" size={24} color={albumSearchVisible ? theme.colors.primary : theme.colors.textPrimary} />
-              </TouchableOpacity>
-            </Animated.View>
           </View>
         </View>
 
-        {/* Unified Search Bar - switches function based on active tab */}
+        {/* Photos search */}
         <Animated.View style={{
-          height: (isUploadsSearchVisible || (activeTab === 'albums' && albumSearchVisible)) ? 'auto' : 0,
+          height: isUploadsSearchVisible ? 'auto' : 0,
           opacity: uploadsSearchAnim,
           overflow: 'hidden',
           marginHorizontal: 16,
-          marginBottom: (isUploadsSearchVisible || (activeTab === 'albums' && albumSearchVisible)) ? 8 : 0,
+          marginBottom: isUploadsSearchVisible ? 8 : 0,
           transform: [{
             translateY: uploadsSearchAnim.interpolate({
               inputRange: [0, 1],
@@ -5103,11 +5066,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             <TextInput
               ref={searchInputRef}
               style={{ flex: 1, marginLeft: 6, color: theme.colors.textPrimary, fontSize: 15, padding: 0 }}
-              value={activeTab === 'albums' ? albumSearchQuery : uploadsSearchQuery}
-              onChangeText={activeTab === 'albums' ? setAlbumSearchQuery : setUploadsSearchQuery}
-              placeholder={activeTab === 'albums' ? "Search albums..." : "Search by tag..."}
+              value={uploadsSearchQuery}
+              onChangeText={setUploadsSearchQuery}
+              placeholder="Search by tag..."
               placeholderTextColor={theme.colors.textMuted}
-              autoFocus={isUploadsSearchVisible || (activeTab === 'albums' && albumSearchVisible)}
+              autoFocus={isUploadsSearchVisible}
             />
             {/* Jump — leave the filter and scroll the full timeline to where this
                 tag clusters in time (uploads tab only, when a tag is typed). */}
@@ -5130,12 +5093,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               </TouchableOpacity>
             )}
             <TouchableOpacity onPress={() => {
-              if (activeTab === 'albums') {
-                hideAlbumSearch();
-              } else {
-                setUploadsSearchQuery('');
-                setIsUploadsSearchVisible(false);
-              }
+              setUploadsSearchQuery('');
+              setIsUploadsSearchVisible(false);
             }}>
               <Icon name="close-circle" size={18} color={theme.colors.textMuted} />
             </TouchableOpacity>
@@ -5159,7 +5118,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             const activeOp = pageScrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
             const inactiveOp = pageScrollX.interpolate({ inputRange, outputRange: [1, 0, 1], extrapolate: 'clamp' });
             
-            const label = tab === 'uploads' ? 'Photos' : 'Albums';
+            const label = tab === 'uploads' ? 'Photos' : 'Boards';
 
             return (
               <TouchableOpacity
@@ -6052,74 +6011,6 @@ const createStyles = (theme) =>
       fontSize: 13,
       fontWeight: '600',
       color: theme.colors.textPrimary,
-    },
-    // Header & Album Folder Styles
-    albumsGridContent: {
-      padding: 16,
-      paddingBottom: 40,
-    },
-    albumsColumnWrapper: {
-      justifyContent: 'space-between',
-      marginBottom: 16,
-    },
-    albumFolderCard: {
-      width: (width - 48) / 2, // 2 columns with 16 padding on edges and middle
-      aspectRatio: 1, // Perfect square
-      borderRadius: 12,
-      overflow: 'hidden',
-      backgroundColor: theme.colors.surfaceElevated,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.1,
-      shadowRadius: 4,
-      elevation: 3,
-    },
-    albumGridContainer: {
-      width: '100%',
-      height: '100%',
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      justifyContent: 'space-between',
-      alignContent: 'space-between',
-      padding: 1, // Outer border
-      backgroundColor: theme.colors.surfaceElevated,
-    },
-    albumGridCell: {
-      width: '49%', // Leaves roughly a 2px gap in the middle
-      height: '49%',
-      borderRadius: 4,
-      overflow: 'hidden',
-    },
-    albumGridImage: {
-      width: '100%',
-      height: '100%',
-    },
-    albumGridPlaceholder: {
-      width: '100%',
-      height: '100%',
-      backgroundColor: 'rgba(150, 150, 150, 0.15)', // Light grey square
-    },
-    albumGradient: {
-      position: 'absolute',
-      bottom: 0,
-      left: 0,
-      right: 0,
-      height: '50%',
-      justifyContent: 'flex-end',
-      padding: 12,
-    },
-    albumGridName: {
-      color: '#fff',
-      fontSize: 16,
-      fontWeight: 'bold',
-      textShadowColor: 'rgba(0,0,0,0.4)',
-      textShadowOffset: { width: 0, height: 1 },
-      textShadowRadius: 2,
-    },
-    albumItemCount: {
-      color: 'rgba(255,255,255,0.8)',
-      fontSize: 11,
-      marginTop: 1,
     },
     // Large file warning badge
     largeFileBadge: {
