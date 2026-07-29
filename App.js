@@ -40,6 +40,7 @@ import VaultUploadPill from './components/VaultUploadPill';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { VaultProvider } from './context/VaultContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { MusicPlayerProvider } from './context/MusicPlayerContext';
 import { ClaudeQueueProvider } from './context/ClaudeQueueContext';
 import { CommandBusProvider } from './context/CommandBusContext';
 import { CelebrationProvider } from './context/CelebrationContext';
@@ -276,6 +277,7 @@ export default function App() {
                   base URL); outside AppContent so no screen unmount stops it. */}
               <VaultUploadProvider>
                 <AuthProvider>
+                  <MusicPlayerProvider>
                   <VaultProvider>
                     <ClaudeQueueProvider>
                       <CommandBusProvider>
@@ -312,6 +314,7 @@ export default function App() {
                       </CommandBusProvider>
                     </ClaudeQueueProvider>
                   </VaultProvider>
+                  </MusicPlayerProvider>
                 </AuthProvider>
               </VaultUploadProvider>
               </ShareUploadProvider>
