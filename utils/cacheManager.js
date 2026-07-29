@@ -25,6 +25,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { sweepShareUploadStaging } from '../services/shareUploadStaging';
 
 // How often, at most, the persistent expo-image disk cache is wiped when the
 // app is backgrounded. 0 = wipe on every app close; larger = keep it warmer
@@ -98,6 +99,7 @@ export async function sweepTransientCaches() {
         .map((n) => rm(`${base}${n}`)),
     );
   } catch (e) { /* dir may not exist yet */ }
+  await sweepShareUploadStaging();
 }
 
 // Wipe expo-image's persistent disk cache, throttled by max-age. Returns true

@@ -34,8 +34,16 @@
 import React, { createContext, useContext, useRef, useState, useEffect, useCallback } from 'react';
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
-import { useServer, getApiAuthToken } from './ServerContext';
+import * as Crypto from 'expo-crypto';
+import { useServer } from './ServerContext';
+import { useAuth } from './AuthContext';
 import { streamMultipartUpload } from '../services/streamMultipartUpload';
+import {
+  SHARE_UPLOAD_ROOT,
+  assertShareStagingCapacity,
+  sweepShareUploadStaging,
+  writeShareUploadManifest,
+} from '../services/shareUploadStaging';
 import {
   classifySharedFile,
   isHttpImportUrl,
@@ -48,7 +56,7 @@ const ShareUploadContext = createContext(null);
 // Dedicated staging dir for in-flight share copies. Deliberately NOT one of the
 // names cacheManager's background sweep wipes (ImagePicker / full_ / shared_ …),
 // so an upload that spans an app-background isn't deleted out from under itself.
-const SHARE_DIR = `${FileSystem.cacheDirectory || ''}TurtleShareUploads/`;
+const SHARE_DIR = SHARE_UPLOAD_ROOT;
 
 // How long a success toast lingers before auto-dismissing itself.
 const SUCCESS_TOAST_MS = 3500;
@@ -138,6 +146,9 @@ const bodyBoard = (board) => (board ? {
 
 export function ShareUploadProvider({ children }) {
   const { api, getBaseUrl } = useServer();
+  const { isAuthenticated, token, authIdentity, authGeneration } = useAuth();
+  const authRef = useRef({ isAuthenticated, token, authIdentity, authGeneration });
+  authRef.current = { isAuthenticated, token, authIdentity, authGeneration };
 
   // Latest `api` in a ref so the async upload loop always uses a live client
   // (its identity changes when serverIP / connection state changes) without
@@ -153,6 +164,16 @@ export function ShareUploadProvider({ children }) {
   const jobsRef = useRef(new Map());
   const [jobs, setJobs] = useState([]);
   const autoDismissTimers = useRef(new Map());
+  const previousOwnerRef = useRef(authIdentity);
+  const ownsJob = useCallback((job) => {
+    const auth = authRef.current;
+    return !!(
+      job &&
+      auth.isAuthenticated &&
+      job.ownerIdentity === auth.authIdentity &&
+      job.authGeneration === auth.authGeneration
+    );
+  }, []);
 
   const publish = useCallback(() => {
     setJobs(Array.from(jobsRef.current.values()).map((j) => ({
@@ -200,6 +221,65 @@ export function ShareUploadProvider({ children }) {
     publish();
   }, [cleanupJobFiles, publish]);
 
+  const persistAudioManifest = useCallback(async (job) => {
+    if (!job?.ownedDirectory || job.kind !== 'audio-files') return;
+    try {
+      await writeShareUploadManifest(job.ownedDirectory, {
+        id: job.id,
+        ownerIdentity: job.ownerIdentity,
+        authGeneration: job.authGeneration,
+        status: job.status,
+        total: job.total,
+        done: job.done,
+        backendJobIds: job.backendJobIds,
+        media: job.media.map((media) => ({
+          localPath: media.localPath,
+          filename: media.filename,
+          mimeType: media.mimeType,
+          sent: !!media.sent,
+          backendJobId: media.backendJobId || null,
+          clientImportId: media.clientImportId,
+          error: media.error || null,
+        })),
+      });
+    } catch {
+      // The upload may continue; startup will age-sweep a missing manifest.
+    }
+  }, []);
+
+  useEffect(() => {
+    let changed = false;
+    for (const [id, job] of jobsRef.current) {
+      if (ownsJob(job)) continue;
+      job.abortController?.abort();
+      cleanupJobFiles(job);
+      const timer = autoDismissTimers.current.get(id);
+      if (timer) clearTimeout(timer);
+      autoDismissTimers.current.delete(id);
+      jobsRef.current.delete(id);
+      changed = true;
+    }
+    if (changed) publish();
+  }, [authGeneration, authIdentity, cleanupJobFiles, isAuthenticated, ownsJob, publish]);
+
+  useEffect(() => {
+    const previousOwner = previousOwnerRef.current;
+    const activeDirectories = Array.from(jobsRef.current.values())
+      .filter((job) => ownsJob(job) && job.ownedDirectory)
+      .map((job) => job.ownedDirectory);
+    if (previousOwner && previousOwner !== authIdentity) {
+      sweepShareUploadStaging({
+        ownerIdentity: previousOwner,
+        activeDirectories: [],
+        forceOwnerCleanup: true,
+      }).catch(() => {});
+    }
+    if (authIdentity) {
+      sweepShareUploadStaging({ ownerIdentity: authIdentity, activeDirectories }).catch(() => {});
+    }
+    previousOwnerRef.current = authIdentity;
+  }, [authGeneration, authIdentity, ownsJob]);
+
   const scheduleAutoDismiss = useCallback((id) => {
     const existing = autoDismissTimers.current.get(id);
     if (existing) clearTimeout(existing);
@@ -212,15 +292,16 @@ export function ShareUploadProvider({ children }) {
 
   const processAudioJob = useCallback(async (id) => {
     const job = jobsRef.current.get(id);
-    if (!job) return;
+    if (!job || !ownsJob(job)) return;
 
     try {
       if (job.kind === 'audio-url') {
-        const response = await apiRef.current.post('/share', {
+        const response = await job.apiClient.post('/share', {
           board: bodyBoard(AUDIO_BOARD),
           payload: { text: undefined, url: job.url },
           channel: channelForPlatform(),
         });
+        if (!ownsJob(job)) return;
         if (!response?.success || !response?.downloadJobId) {
           throw new Error(response?.error || 'Server did not queue the Music Vault import.');
         }
@@ -228,6 +309,7 @@ export function ShareUploadProvider({ children }) {
         job.status = 'queued';
         job.message = AUDIO_QUEUED_MESSAGE;
         job.error = null;
+        await persistAudioManifest(job);
         publish();
         notifyHaptic('success');
         scheduleAutoDismiss(id);
@@ -240,6 +322,7 @@ export function ShareUploadProvider({ children }) {
       let failures = 0;
       for (const media of job.media) {
         if (media.sent) continue;
+        if (!ownsJob(job)) return;
         try {
           const result = await streamMultipartUpload({
             url: uploadUrl,
@@ -250,18 +333,23 @@ export function ShareUploadProvider({ children }) {
               album: 'Audio',
               tags: JSON.stringify(['Audio']),
               originalName: media.filename,
+              clientImportId: media.clientImportId,
             },
-            token: getApiAuthToken(),
+            token: job.token,
             label: media.filename,
             onProgress: () => {},
+            signal: job.abortController.signal,
           });
+          if (!ownsJob(job)) return;
           media.backendJobId = acceptedUploadJobId(result);
           media.sent = true;
           job.backendJobIds.push(media.backendJobId);
           job.done += 1;
+          await persistAudioManifest(job);
           publish();
           FileSystem.deleteAsync(media.localPath, { idempotent: true }).catch(() => {});
         } catch (error) {
+          if (!ownsJob(job) || job.abortController.signal.aborted) return;
           media.error = error.message || 'Upload failed.';
           failures += 1;
           console.warn(`[ShareUpload] media ${media.filename} failed:`, media.error);
@@ -272,6 +360,7 @@ export function ShareUploadProvider({ children }) {
         job.status = 'queued';
         job.message = AUDIO_QUEUED_MESSAGE;
         job.error = null;
+        await persistAudioManifest(job);
         publish();
         notifyHaptic('success');
         scheduleAutoDismiss(id);
@@ -279,25 +368,28 @@ export function ShareUploadProvider({ children }) {
         job.status = 'error';
         job.message = null;
         job.error = `${failures} of ${job.total} didn't queue.`;
+        await persistAudioManifest(job);
         publish();
         notifyHaptic('error');
       }
     } catch (error) {
+      if (!ownsJob(job) || job.abortController.signal.aborted) return;
       console.error('[ShareUpload] Music Vault import failed:', error);
       job.status = 'error';
       job.message = null;
       job.error = error.message || 'Music Vault import failed.';
+      await persistAudioManifest(job);
       publish();
       notifyHaptic('error');
     }
-  }, [publish, scheduleAutoDismiss]);
+  }, [ownsJob, persistAudioManifest, publish, scheduleAutoDismiss]);
 
   // The worker. Runs a single job to completion (or first failure). Safe to call
   // again for the same id to RESUME (retry) — it skips already-copied files and
   // already-uploaded images via job.copied / job.nextIndex.
   const processJob = useCallback(async (id) => {
     const job = jobsRef.current.get(id);
-    if (!job) return;
+    if (!job || !ownsJob(job)) return;
     if (job.kind === 'audio-url' || job.kind === 'audio-files') {
       return processAudioJob(id);
     }
@@ -329,11 +421,12 @@ export function ShareUploadProvider({ children }) {
 
       // 2. Text / URL-only share → a single plain request (no image group).
       if (job.images.length === 0) {
-        const res = await apiRef.current.post('/share', {
+        const res = await job.apiClient.post('/share', {
           board: bodyBoard(job.board),
           payload: { text: job.text || undefined, url: job.url || undefined },
           channel: channelForPlatform(),
         });
+        if (!ownsJob(job)) return;
         if (!res?.success) throw new Error(res?.error || 'Server rejected the share.');
         job.status = 'success';
         publish();
@@ -353,13 +446,14 @@ export function ShareUploadProvider({ children }) {
       for (let i = 0; i < job.images.length; i++) {
         const img = job.images[i];
         if (img.sent) continue; // already delivered on an earlier pass
+        if (!ownsJob(job)) return;
 
         try {
           let dataBase64 = await FileSystem.readAsStringAsync(img.localPath, { encoding: 'base64' });
           // Attach text/url until it's confirmed delivered, so the note/link is
           // created exactly once regardless of which image lands first.
           const carryText = !job.textConfirmed;
-          const res = await apiRef.current.post('/share', {
+          const res = await job.apiClient.post('/share', {
             board: bodyBoard(job.board),
             groupId: job.groupId,
             imageTotal: job.total,
@@ -374,6 +468,7 @@ export function ShareUploadProvider({ children }) {
             },
             channel: channelForPlatform(),
           });
+          if (!ownsJob(job)) return;
           dataBase64 = null; // release the base64 string ASAP for GC
           // Require the persisted-row ECHO, not just success — the server used
           // to return success even when the media insert failed, and marking
@@ -411,15 +506,17 @@ export function ShareUploadProvider({ children }) {
         notifyHaptic('error');
       }
     } catch (e) {
+      if (!ownsJob(job)) return;
       console.error('[ShareUpload] job failed:', e);
       job.status = 'error';
       job.error = e.message || 'Send failed.';
       publish();
       notifyHaptic('error');
     }
-  }, [ensureDir, processAudioJob, publish, scheduleAutoDismiss]);
+  }, [ensureDir, ownsJob, processAudioJob, publish, scheduleAutoDismiss]);
 
   const stageAudioFiles = useCallback(async (job) => {
+    await assertShareStagingCapacity(job.mediaFiles.map((file) => file.path));
     await ensureDir();
     const ownedDirectory = `${SHARE_DIR}${job.id}/`;
     await FileSystem.makeDirectoryAsync(ownedDirectory, { intermediates: true });
@@ -438,11 +535,13 @@ export function ShareUploadProvider({ children }) {
         filename,
         mimeType: file.mimeType,
         sent: false,
+        clientImportId: Crypto.randomUUID(),
       });
     }
     job.media = copies;
     job.copied = true;
-  }, [ensureDir]);
+    await persistAudioManifest(job);
+  }, [ensureDir, persistAudioManifest]);
 
   // Public: start a share. Returns immediately (fire-and-forget) so the caller
   // can dismiss the share sheet without waiting on the network.
@@ -450,6 +549,8 @@ export function ShareUploadProvider({ children }) {
     const files = (Array.isArray(imageFiles) ? imageFiles : [])
       .filter((file) => classifySharedFile(file) === 'image');
     if (!text && !url && files.length === 0) return null;
+    const auth = authRef.current;
+    if (!auth.isAuthenticated || !auth.authIdentity || !auth.authGeneration) return null;
 
     const id = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     const job = {
@@ -468,6 +569,11 @@ export function ShareUploadProvider({ children }) {
       status: 'uploading',
       error: null,
       message: null,
+      ownerIdentity: auth.authIdentity,
+      authGeneration: auth.authGeneration,
+      token: auth.token,
+      apiClient: apiRef.current,
+      abortController: new AbortController(),
     };
     jobsRef.current.set(id, job);
     publish();
@@ -480,6 +586,10 @@ export function ShareUploadProvider({ children }) {
     const importUrl = isHttpImportUrl(url) ? url.trim() : null;
     if (files.length === 0 && !importUrl) {
       throw new Error('No supported audio, video, or HTTP(S) URL was shared.');
+    }
+    const auth = authRef.current;
+    if (!auth.isAuthenticated || !auth.authIdentity || !auth.authGeneration || !auth.token) {
+      throw new Error('Sign in before importing media.');
     }
 
     const id = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
@@ -497,6 +607,11 @@ export function ShareUploadProvider({ children }) {
       status: 'uploading',
       error: null,
       message: null,
+      ownerIdentity: auth.authIdentity,
+      authGeneration: auth.authGeneration,
+      token: auth.token,
+      apiClient: apiRef.current,
+      abortController: new AbortController(),
     };
     jobsRef.current.set(id, job);
     publish();
@@ -516,13 +631,14 @@ export function ShareUploadProvider({ children }) {
 
   const retryJob = useCallback((id) => {
     const job = jobsRef.current.get(id);
-    if (!job) return;
+    if (!job || !ownsJob(job)) return;
     job.status = 'uploading';
     job.error = null;
     job.message = null;
     publish();
+    persistAudioManifest(job);
     processJob(id);
-  }, [publish, processJob]);
+  }, [ownsJob, persistAudioManifest, publish, processJob]);
 
   const dismissJob = useCallback((id) => removeJob(id), [removeJob]);
 

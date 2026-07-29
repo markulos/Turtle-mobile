@@ -27,10 +27,12 @@ import React, { createContext, useContext, useRef, useState, useEffect, useCallb
 import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Crypto from 'expo-crypto';
 import * as MediaLibrary from 'expo-media-library';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { useServer, getApiAuthToken } from './ServerContext';
+import { useServer } from './ServerContext';
+import { useAuth } from './AuthContext';
 import { notifyUploadComplete, updateUploadProgress, clearUploadProgress } from '../services/uploadNotify';
 import { streamMultipartUpload } from '../services/streamMultipartUpload';
 import { notifyHaptic } from '../utils/haptics';
@@ -49,7 +51,8 @@ const VaultUploadLifecycleContext = createContext(null);
 // One in-flight batch, checkpointed here after every item so a killed app
 // resumes instead of restarting. v1 of the shape — bump the key on breaking
 // changes so a stale queue from an old build can't confuse a new one.
-const QUEUE_KEY = 'turtle:vaultUpload:batch:v1';
+const QUEUE_KEY_PREFIX = 'turtle:vaultUpload:batch:v2:';
+const queueKeyFor = (identity) => `${QUEUE_KEY_PREFIX}${encodeURIComponent(identity || 'none')}`;
 
 // Real mime for the streamed part when the picker doesn't report one —
 // passthrough mode returns .mov/HEVC originals the old hardcoded video/mp4
@@ -85,6 +88,9 @@ function pctOf(batch, currentItemPct) {
 
 export function VaultUploadProvider({ children }) {
   const { getBaseUrl } = useServer();
+  const { isAuthenticated, token, authIdentity, authGeneration } = useAuth();
+  const authRef = useRef({ isAuthenticated, token, authIdentity, authGeneration });
+  authRef.current = { isAuthenticated, token, authIdentity, authGeneration };
   // Live base-URL getter for the async worker (server IP can change mid-batch).
   const getBaseUrlRef = useRef(getBaseUrl);
   useEffect(() => { getBaseUrlRef.current = getBaseUrl; }, [getBaseUrl]);
@@ -93,7 +99,7 @@ export function VaultUploadProvider({ children }) {
   // published snapshot (same pattern as ShareUploadContext — immune to stale
   // closures in the long-running loop).
   const batchRef = useRef(null);
-  const workerBusyRef = useRef(false);
+  const workerBusyRef = useRef(null);
   const currentPctRef = useRef(0);   // live % of the item currently streaming
   const [snapshot, setSnapshot] = useState(null);
   const lastShownPctRef = useRef(-1);
@@ -106,6 +112,15 @@ export function VaultUploadProvider({ children }) {
   // posted — the OS notification is driven ONLY while backgrounded, throttled.
   const appActiveRef = useRef(true);
   const lastNotifRef = useRef({ pct: -1, at: 0 });
+  const ownsBatch = useCallback((batch) => {
+    const auth = authRef.current;
+    return !!(
+      batch &&
+      auth.isAuthenticated &&
+      batch.ownerIdentity === auth.authIdentity &&
+      batch.authGeneration === auth.authGeneration
+    );
+  }, []);
 
   // Drive the OS "dynamic widget" — a live, re-posted-in-place notification —
   // but ONLY while the app is BACKGROUNDED and a batch is actively uploading.
@@ -176,24 +191,27 @@ export function VaultUploadProvider({ children }) {
   const persist = useCallback(async () => {
     const batch = batchRef.current;
     try {
-      if (!batch) { await AsyncStorage.removeItem(QUEUE_KEY); return; }
+      if (!batch) return;
       const lean = {
         ...batch,
         items: batch.items.map(({ meta, ...rest }) => rest),
       };
-      await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(lean));
+      delete lean.token;
+      delete lean.abortController;
+      await AsyncStorage.setItem(queueKeyFor(batch.ownerIdentity), JSON.stringify(lean));
     } catch (e) { /* best-effort — worst case a restart re-uploads one item */ }
   }, []);
 
   const clearBatch = useCallback(() => {
+    const ownerIdentity = batchRef.current?.ownerIdentity || authRef.current.authIdentity;
     batchRef.current = null;
     currentPctRef.current = 0;
     setHidden(false);
     lastNotifRef.current = { pct: -1, at: 0 };
     clearUploadProgress();
     publish();
-    persist();
-  }, [publish, persist]);
+    if (ownerIdentity) AsyncStorage.removeItem(queueKeyFor(ownerIdentity)).catch(() => {});
+  }, [publish]);
 
   // Resolve an item to an uploadable file on THIS launch: prefer the photo
   // library (assetId survives forever), fall back to the stored URI (picker
@@ -233,14 +251,14 @@ export function VaultUploadProvider({ children }) {
   // Best-effort batch duplicate pre-check. Network failure → nobody is marked
   // duplicate (the upload just proceeds — a pre-check must never strand a
   // batch). Also doubles as the reachability probe on resume.
-  const checkDuplicates = async (items) => {
+  const checkDuplicates = async (items, batch) => {
     const base = getBaseUrlRef.current?.();
     if (!base) throw new Error('no server url');
     const endpoint = base.endsWith('/api') ? `${base}/media/check-duplicates` : `${base}/api/media/check-duplicates`;
-    const token = getApiAuthToken();
     const res = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: { 'Content-Type': 'application/json', ...(batch.token ? { Authorization: `Bearer ${batch.token}` } : {}) },
+      signal: batch.abortController.signal,
       body: JSON.stringify({
         items: items.map((it) => ({
           name: it.fileName || '',
@@ -261,8 +279,12 @@ export function VaultUploadProvider({ children }) {
   const processBatch = useCallback(async () => {
     if (workerBusyRef.current) return;
     const batch = batchRef.current;
-    if (!batch || batch.status === 'done') return;
-    workerBusyRef.current = true;
+    if (!batch || batch.status === 'done' || !ownsBatch(batch)) return;
+    const isCurrentBatch = () =>
+      batchRef.current === batch &&
+      ownsBatch(batch) &&
+      !batch.abortController.signal.aborted;
+    workerBusyRef.current = batch;
     batch.status = 'uploading';
     publish();
 
@@ -277,7 +299,9 @@ export function VaultUploadProvider({ children }) {
       //    from the device between sessions) become 'missing'.
       const pending = batch.items.filter((it) => !TERMINAL.has(it.status));
       for (const item of pending) {
+        if (!isCurrentBatch()) return;
         const meta = await resolveItem(item);
+        if (!isCurrentBatch()) return;
         if (!meta) { item.status = 'missing'; continue; }
         item.meta = meta;
       }
@@ -292,7 +316,8 @@ export function VaultUploadProvider({ children }) {
       if (toCheck.length > 0) {
         let results = null;
         for (let attempt = 1; attempt <= 5; attempt++) {
-          try { results = await checkDuplicates(toCheck); break; } catch (e) {
+          try { results = await checkDuplicates(toCheck, batch); break; } catch (e) {
+            if (!isCurrentBatch()) return;
             console.warn(`[VaultUpload] duplicate pre-check unreachable (attempt ${attempt}/5): ${e.message}`);
             if (attempt < 5) await new Promise((r) => setTimeout(r, attempt * 2000));
           }
@@ -321,6 +346,7 @@ export function VaultUploadProvider({ children }) {
       const uploadEndpoint = base.endsWith('/api') ? `${base}/media/upload` : `${base}/api/media/upload`;
       for (const item of batch.items) {
         if (TERMINAL.has(item.status)) continue;
+        if (!isCurrentBatch()) return;
         let tempThumbnailUri = null;
         let tempManipulatedUri = null;
         try {
@@ -369,6 +395,7 @@ export function VaultUploadProvider({ children }) {
           // The streamed part's filename is the cache URI's basename (a UUID),
           // so send the real name explicitly to preserve it server-side.
           parameters.originalName = mediaName;
+          parameters.clientImportId = item.clientImportId;
 
           const sizeMB = (meta.size || 0) / (1024 * 1024);
           console.log(`[VaultUpload] ▶ ${mediaName} · ${sizeMB.toFixed(1)}MB · ${mediaType}${isVideo ? ' (video)' : ''}`);
@@ -388,20 +415,25 @@ export function VaultUploadProvider({ children }) {
             fileUri: mediaUri,
             mimeType: mediaType,
             parameters,
-            token: getApiAuthToken(),
+            token: batch.token,
             label: mediaName,
             onProgress,
+            signal: batch.abortController.signal,
           });
+          if (!isCurrentBatch()) return;
           item.status = 'uploaded';
         } catch (error) {
+          if (!isCurrentBatch()) return;
           console.error(`[VaultUpload] Failed ${item.fileName || item.key}:`, error.message);
           item.status = 'failed';
         } finally {
           if (tempThumbnailUri) FileSystem.deleteAsync(tempThumbnailUri, { idempotent: true }).catch(() => {});
           if (tempManipulatedUri) FileSystem.deleteAsync(tempManipulatedUri, { idempotent: true }).catch(() => {});
-          currentPctRef.current = 0;
-          publish();
-          await persist();
+          if (isCurrentBatch()) {
+            currentPctRef.current = 0;
+            publish();
+            await persist();
+          }
         }
       }
 
@@ -419,6 +451,7 @@ export function VaultUploadProvider({ children }) {
       notifyHaptic(c.failed + c.missing > 0 ? 'warning' : 'success');
       if (c.uploaded > 0) notifyUploadComplete(c.uploaded); // guarded; silent no-op if unavailable
     } catch (e) {
+      if (!isCurrentBatch()) return;
       // Unexpected worker crash: pause (never lose the batch) — resumable.
       console.error('[VaultUpload] worker error:', e);
       if (batchRef.current) {
@@ -427,14 +460,18 @@ export function VaultUploadProvider({ children }) {
         await persist();
       }
     } finally {
-      workerBusyRef.current = false;
+      if (workerBusyRef.current === batch) workerBusyRef.current = null;
     }
-  }, [publish, publishPctTick, persist]);
+  }, [ownsBatch, publish, publishPctTick, persist]);
 
   // Public: start a batch. `assets` are picker/library entries; only plain
   // serializable fields are kept so the queue can persist. Returns false when
   // a batch is already running (one at a time keeps % meaningful).
   const enqueue = useCallback(({ assets, tags }) => {
+    const auth = authRef.current;
+    if (!auth.isAuthenticated || !auth.authIdentity || !auth.authGeneration || !auth.token) {
+      return false;
+    }
     const existing = batchRef.current;
     if (existing && existing.status !== 'done') return false;
     const id = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
@@ -444,6 +481,10 @@ export function VaultUploadProvider({ children }) {
       startedAt: Date.now(),
       finishedAt: null,
       status: 'uploading',
+      ownerIdentity: auth.authIdentity,
+      authGeneration: auth.authGeneration,
+      token: auth.token,
+      abortController: new AbortController(),
       items: (assets || []).map((a, i) => ({
         key: `${id}-${i}`,
         assetId: a.assetId || null,
@@ -455,6 +496,7 @@ export function VaultUploadProvider({ children }) {
         width: a.width || null,
         height: a.height || null,
         status: 'pending',
+        clientImportId: Crypto.randomUUID(),
       })),
     };
     currentPctRef.current = 0;
@@ -509,11 +551,49 @@ export function VaultUploadProvider({ children }) {
     clearUploadProgress();
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(QUEUE_KEY);
+        const auth = authRef.current;
+        const currentKey = auth.authIdentity ? queueKeyFor(auth.authIdentity) : null;
+        const existing = batchRef.current;
+        if (existing && !ownsBatch(existing)) {
+          existing.abortController?.abort();
+          existing.status = existing.status === 'done' ? 'done' : 'paused';
+          await persist();
+          batchRef.current = null;
+          workerBusyRef.current = null;
+          currentPctRef.current = 0;
+          setHidden(false);
+          publish();
+        }
+        if (!auth.isAuthenticated || !auth.authIdentity || !auth.authGeneration || !auth.token) return;
+        if (existing?.ownerIdentity === auth.authIdentity) {
+          existing.authGeneration = auth.authGeneration;
+          existing.token = auth.token;
+          existing.abortController = new AbortController();
+          batchRef.current = existing;
+          if (existing.status !== 'done') {
+            existing.status = 'paused';
+            processBatch();
+          } else {
+            publish();
+          }
+          return;
+        }
+        const raw = await AsyncStorage.getItem(currentKey);
         if (!raw || cancelled) return;
         const saved = JSON.parse(raw);
         if (!saved || !Array.isArray(saved.items) || saved.items.length === 0) return;
+        if (saved.ownerIdentity !== auth.authIdentity) {
+          await AsyncStorage.removeItem(currentKey);
+          return;
+        }
         if (batchRef.current) return; // a new batch beat the restore — keep it
+        saved.authGeneration = auth.authGeneration;
+        saved.token = auth.token;
+        saved.abortController = new AbortController();
+        saved.items = saved.items.map((item) => ({
+          ...item,
+          clientImportId: item.clientImportId || Crypto.randomUUID(),
+        }));
         batchRef.current = saved;
         if (saved.status === 'done') {
           publish();
@@ -527,8 +607,7 @@ export function VaultUploadProvider({ children }) {
       } catch (e) { /* corrupt queue → start clean */ }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authGeneration, authIdentity, isAuthenticated, ownsBatch, persist, processBatch, publish, token]);
 
   // AppState is the OS-notification switch AND the paused-batch retry:
   //   • leaving  → post the live progress notification (in-app UI is gone),

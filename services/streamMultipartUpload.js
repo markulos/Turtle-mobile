@@ -12,13 +12,17 @@ export async function streamMultipartUpload({
   token,
   label,
   onProgress,
+  signal,
 }) {
+  const cancelledError = () => new Error('Upload cancelled');
+  if (signal?.aborted) throw cancelledError();
   let lastErr = null;
   for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt++) {
     const startedAt = Date.now();
     let lastProgressAt = Date.now();
     let allSentAt = null;
     let stallTimer = null;
+    let abortHandler = null;
     try {
       const task = FileSystem.createUploadTask(
         url,
@@ -49,6 +53,21 @@ export async function streamMultipartUpload({
       );
 
       const result = await new Promise((resolve, reject) => {
+        let settled = false;
+        const settle = (callback, value) => {
+          if (settled) return;
+          settled = true;
+          callback(value);
+        };
+        abortHandler = () => {
+          task.cancelAsync().catch(() => {});
+          settle(reject, cancelledError());
+        };
+        signal?.addEventListener('abort', abortHandler, { once: true });
+        if (signal?.aborted) {
+          abortHandler();
+          return;
+        }
         stallTimer = setInterval(() => {
           const idleMs = Date.now() - lastProgressAt;
           const threshold = allSentAt ? UPLOAD_PROCESSING_MS : UPLOAD_STALL_MS;
@@ -58,14 +77,18 @@ export async function streamMultipartUpload({
               `[VaultUpload] ⏱ ${label} · watchdog tripped during ${phase} (idle ${Math.round(idleMs / 1000)}s)`
             );
             task.cancelAsync().catch(() => {});
-            reject(
+            settle(
+              reject,
               new Error(
                 `stalled during ${phase} — no progress for ${Math.round(threshold / 1000)}s`
               )
             );
           }
         }, 5000);
-        task.uploadAsync().then(resolve, reject);
+        task.uploadAsync().then(
+          (value) => settle(resolve, value),
+          (error) => settle(reject, error)
+        );
       });
       if (stallTimer) {
         clearInterval(stallTimer);
@@ -90,12 +113,18 @@ export async function streamMultipartUpload({
         stallTimer = null;
       }
       lastErr = error;
+      if (signal?.aborted || error?.message === 'Upload cancelled') {
+        throw cancelledError();
+      }
       console.warn(
         `[VaultUpload] ✗ ${label} (attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS}): ${error.message}`
       );
       if (/HTTP 4\d\d/.test(error.message) && !/HTTP (408|429)/.test(error.message)) break;
+    } finally {
+      if (abortHandler) signal?.removeEventListener('abort', abortHandler);
     }
     if (attempt < UPLOAD_MAX_ATTEMPTS) {
+      if (signal?.aborted) throw cancelledError();
       await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
     }
   }

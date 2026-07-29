@@ -166,4 +166,46 @@ describe('streamMultipartUpload', () => {
     expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(2);
     expect(jest.getTimerCount()).toBe(0);
   });
+
+  test('cancels the native task and does not retry after account ownership is aborted', async () => {
+    const controller = new AbortController();
+    const task = {
+      uploadAsync: jest.fn(() => new Promise(() => {})),
+      cancelAsync: jest.fn().mockResolvedValue(undefined),
+    };
+    FileSystem.createUploadTask.mockReturnValue(task);
+
+    const upload = streamMultipartUpload({ ...uploadArgs, signal: controller.signal });
+    controller.abort();
+
+    await expect(upload).rejects.toThrow('Upload cancelled');
+    expect(task.cancelAsync).toHaveBeenCalledTimes(1);
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(1);
+  });
+
+  test('reuses the exact clientImportId parameter across transient retries', async () => {
+    jest.useFakeTimers();
+    const parameters = {
+      outputKind: 'audio',
+      clientImportId: 'stable-import-id',
+    };
+    FileSystem.createUploadTask
+      .mockReturnValueOnce({
+        uploadAsync: jest.fn().mockResolvedValue({ status: 500, body: 'lost response' }),
+        cancelAsync: jest.fn().mockResolvedValue(undefined),
+      })
+      .mockReturnValueOnce({
+        uploadAsync: jest.fn().mockResolvedValue({ status: 202, body: '{"queued":true}' }),
+        cancelAsync: jest.fn().mockResolvedValue(undefined),
+      });
+
+    const upload = streamMultipartUpload({ ...uploadArgs, parameters });
+    await jest.advanceTimersByTimeAsync(1500);
+    await upload;
+
+    const firstParameters = FileSystem.createUploadTask.mock.calls[0][2].parameters;
+    const retryParameters = FileSystem.createUploadTask.mock.calls[1][2].parameters;
+    expect(firstParameters.clientImportId).toBe('stable-import-id');
+    expect(retryParameters.clientImportId).toBe('stable-import-id');
+  });
 });

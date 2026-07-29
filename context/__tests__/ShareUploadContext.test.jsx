@@ -12,11 +12,16 @@ const mockMakeDirectoryAsync = jest.fn();
 const mockCopyAsync = jest.fn();
 const mockDeleteAsync = jest.fn();
 const mockReadAsStringAsync = jest.fn();
+const mockWriteAsStringAsync = jest.fn();
+const mockReadDirectoryAsync = jest.fn();
+const mockGetFreeDiskStorageAsync = jest.fn();
 const mockStreamMultipartUpload = jest.fn();
 const mockNotifyHaptic = jest.fn();
 const mockImpactHaptic = jest.fn();
+const mockRandomUUID = jest.fn();
 
 let latestShareUpload;
+let mockAuth;
 
 const mockServer = {
   api: {
@@ -32,6 +37,12 @@ jest.mock('../ServerContext', () => ({
   useServer: () => mockServer,
   getApiAuthToken: () => 'token-7',
 }));
+jest.mock('../AuthContext', () => ({
+  useAuth: () => mockAuth,
+}));
+jest.mock('expo-crypto', () => ({
+  randomUUID: () => mockRandomUUID(),
+}));
 jest.mock('expo-file-system/legacy', () => ({
   cacheDirectory: 'file:///app-cache/',
   EncodingType: { Base64: 'base64' },
@@ -41,6 +52,9 @@ jest.mock('expo-file-system/legacy', () => ({
   copyAsync: (...args) => mockCopyAsync(...args),
   deleteAsync: (...args) => mockDeleteAsync(...args),
   readAsStringAsync: (...args) => mockReadAsStringAsync(...args),
+  writeAsStringAsync: (...args) => mockWriteAsStringAsync(...args),
+  readDirectoryAsync: (...args) => mockReadDirectoryAsync(...args),
+  getFreeDiskStorageAsync: (...args) => mockGetFreeDiskStorageAsync(...args),
 }));
 jest.mock('../../services/streamMultipartUpload', () => ({
   streamMultipartUpload: (...args) => mockStreamMultipartUpload(...args),
@@ -138,13 +152,26 @@ async function renderTarget(shareIntent, { boards } = {}) {
 describe('ShareTargetScreen Audio destination', () => {
   beforeEach(() => {
     latestShareUpload = null;
+    mockAuth = {
+      isAuthenticated: true,
+      token: 'token-7',
+      authIdentity: 'sub:account-a',
+      authGeneration: 'generation-a',
+    };
     jest.clearAllMocks();
+    mockRandomUUID
+      .mockReturnValueOnce('client-import-1')
+      .mockReturnValueOnce('client-import-2')
+      .mockReturnValue('client-import-extra');
     mockStreamMultipartUpload.mockReset();
     mockGetInfoAsync.mockResolvedValue({ exists: true });
     mockMakeDirectoryAsync.mockResolvedValue(undefined);
     mockCopyAsync.mockResolvedValue(undefined);
     mockDeleteAsync.mockResolvedValue(undefined);
     mockReadAsStringAsync.mockResolvedValue('base64-image');
+    mockWriteAsStringAsync.mockResolvedValue(undefined);
+    mockReadDirectoryAsync.mockResolvedValue([]);
+    mockGetFreeDiskStorageAsync.mockResolvedValue(10 * 1024 * 1024 * 1024);
   });
 
   test.each([
@@ -326,12 +353,25 @@ describe('ShareTargetScreen Audio destination', () => {
 describe('ShareUploadProvider audio imports', () => {
   beforeEach(() => {
     latestShareUpload = null;
+    mockAuth = {
+      isAuthenticated: true,
+      token: 'token-7',
+      authIdentity: 'sub:account-a',
+      authGeneration: 'generation-a',
+    };
     jest.clearAllMocks();
+    mockRandomUUID
+      .mockReturnValueOnce('client-import-1')
+      .mockReturnValueOnce('client-import-2')
+      .mockReturnValue('client-import-extra');
     mockStreamMultipartUpload.mockReset();
     mockGetInfoAsync.mockResolvedValue({ exists: true });
     mockMakeDirectoryAsync.mockResolvedValue(undefined);
     mockCopyAsync.mockResolvedValue(undefined);
     mockDeleteAsync.mockResolvedValue(undefined);
+    mockWriteAsStringAsync.mockResolvedValue(undefined);
+    mockReadDirectoryAsync.mockResolvedValue([]);
+    mockGetFreeDiskStorageAsync.mockResolvedValue(10 * 1024 * 1024 * 1024);
   });
 
   test('streams supported audio and video files sequentially with exact Audio multipart parameters', async () => {
@@ -368,10 +408,12 @@ describe('ShareUploadProvider audio imports', () => {
         album: 'Audio',
         tags: '["Audio"]',
         originalName: 'song.m4a',
+        clientImportId: 'client-import-1',
       },
       token: 'token-7',
       label: 'song.m4a',
       onProgress: expect.any(Function),
+      signal: expect.any(Object),
     });
 
     await act(async () => {
@@ -387,10 +429,12 @@ describe('ShareUploadProvider audio imports', () => {
         album: 'Audio',
         tags: '["Audio"]',
         originalName: 'clip.mp4',
+        clientImportId: 'client-import-2',
       },
       token: 'token-7',
       label: 'clip.mp4',
       onProgress: expect.any(Function),
+      signal: expect.any(Object),
     });
     await waitFor(() =>
       expect(latestShareUpload.jobs.find((job) => job.id === id)).toEqual(
@@ -436,6 +480,9 @@ describe('ShareUploadProvider audio imports', () => {
     });
     await waitFor(() => expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(2));
     expect(mockStreamMultipartUpload.mock.calls[1][0].fileUri).toBe(retainedUri);
+    expect(mockStreamMultipartUpload.mock.calls[1][0].parameters.clientImportId).toBe(
+      mockStreamMultipartUpload.mock.calls[0][0].parameters.clientImportId
+    );
     expect(mockCopyAsync).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(latestShareUpload.jobs.find((job) => job.id === id)?.status).toBe('queued')
@@ -444,6 +491,48 @@ describe('ShareUploadProvider audio imports', () => {
       latestShareUpload.dismissJob(id);
     });
     warn.mockRestore();
+  });
+
+  test('aborts Account A transport and clears it instead of using Account B token', async () => {
+    const upload = deferred();
+    mockStreamMultipartUpload.mockReturnValueOnce(upload.promise);
+    const view = await render(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    await act(async () => {
+      await latestShareUpload.enqueueAudioShare({
+        mediaFiles: [
+          { path: 'file:///os/song.mp3', fileName: 'song.mp3', mimeType: 'audio/mpeg' },
+        ],
+      });
+    });
+    await waitFor(() => expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1));
+    const accountAUpload = mockStreamMultipartUpload.mock.calls[0][0];
+    expect(accountAUpload.token).toBe('token-7');
+
+    mockAuth = {
+      isAuthenticated: true,
+      token: 'token-b',
+      authIdentity: 'sub:account-b',
+      authGeneration: 'generation-b',
+    };
+    await view.rerender(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    await waitFor(() => expect(latestShareUpload.jobs).toEqual([]));
+    expect(accountAUpload.signal.aborted).toBe(true);
+
+    await act(async () => {
+      upload.resolve(queuedUpload('late-account-a-job'));
+    });
+    expect(latestShareUpload.jobs).toEqual([]);
+    expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1);
   });
 
   test('does not surface a URL import as queued without downloadJobId', async () => {
@@ -506,12 +595,21 @@ describe('ShareUploadProvider audio imports', () => {
 describe('existing share behavior', () => {
   beforeEach(() => {
     latestShareUpload = null;
+    mockAuth = {
+      isAuthenticated: true,
+      token: 'token-7',
+      authIdentity: 'sub:account-a',
+      authGeneration: 'generation-a',
+    };
     jest.clearAllMocks();
     mockGetInfoAsync.mockResolvedValue({ exists: true });
     mockMakeDirectoryAsync.mockResolvedValue(undefined);
     mockCopyAsync.mockResolvedValue(undefined);
     mockDeleteAsync.mockResolvedValue(undefined);
     mockReadAsStringAsync.mockResolvedValue('base64-image');
+    mockWriteAsStringAsync.mockResolvedValue(undefined);
+    mockReadDirectoryAsync.mockResolvedValue([]);
+    mockGetFreeDiskStorageAsync.mockResolvedValue(10 * 1024 * 1024 * 1024);
   });
 
   test.each([
