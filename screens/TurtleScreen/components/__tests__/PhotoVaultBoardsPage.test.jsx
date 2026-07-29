@@ -45,6 +45,9 @@ const renderPage = async (overrides = {}) => {
     onOpenBoard: jest.fn(),
     onLongPressBoard: jest.fn(),
     onCardPressIn: jest.fn(),
+    onScroll: jest.fn(),
+    onContentSizeChange: jest.fn(),
+    onLayout: jest.fn(),
     ...overrides,
   };
   return { props, view: await render(<PhotoVaultBoardsPage {...props} />) };
@@ -93,5 +96,34 @@ describe('PhotoVaultBoardsPage', () => {
 
     const loading = await renderPage({ boards: [], loading: true });
     expect(loading.view.getAllByTestId(/board-skeleton-/)).toHaveLength(4);
+  });
+
+  test('prioritizes a load error over initial-load skeletons', async () => {
+    const failed = await renderPage({ boards: [], loading: true, error: 'Unable to load boards' });
+
+    expect(failed.view.getByText('Unable to load boards')).toBeTruthy();
+    expect(failed.view.queryAllByTestId(/board-skeleton-/)).toHaveLength(0);
+    await fireEvent.press(failed.view.getByText('Retry'));
+    expect(failed.props.onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  test('forwards the list ref and A–Z scrubber callbacks', async () => {
+    const ref = React.createRef();
+    const { props, view } = await renderPage({ ref });
+    const list = ref.current;
+    const scrollEvent = { nativeEvent: { contentOffset: { y: 240 } } };
+    const layoutEvent = { nativeEvent: { layout: { height: 640, width: 320 } } };
+
+    expect(ref.current).toBeTruthy();
+    expect(list.props.onScroll).toBe(props.onScroll);
+    expect(list.props.onContentSizeChange).toBe(props.onContentSizeChange);
+    expect(list.props.onLayout).toBe(props.onLayout);
+    await list.props.onScroll(scrollEvent);
+    await list.props.onContentSizeChange(320, 1280);
+    await list.props.onLayout(layoutEvent);
+
+    expect(props.onScroll).toHaveBeenCalledWith(scrollEvent);
+    expect(props.onContentSizeChange).toHaveBeenCalledWith(320, 1280);
+    expect(props.onLayout).toHaveBeenCalledWith(layoutEvent);
   });
 });

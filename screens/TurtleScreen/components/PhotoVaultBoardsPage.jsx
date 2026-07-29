@@ -100,10 +100,6 @@ const PhotoVaultBoardsPage = forwardRef(({
   );
 
   const renderEmpty = () => {
-    if (loading) {
-      return <View style={styles.skeletonGrid}>{[0, 1, 2, 3].map((index) => <BoardSkeleton key={index} index={index} theme={theme} />)}</View>;
-    }
-
     if (error) {
       return (
         <View style={styles.empty}>
@@ -113,6 +109,10 @@ const PhotoVaultBoardsPage = forwardRef(({
           </Pressable>
         </View>
       );
+    }
+
+    if (loading) {
+      return <View style={styles.skeletonGrid}>{[0, 1, 2, 3].map((index) => <BoardSkeleton key={index} index={index} theme={theme} />)}</View>;
     }
 
     return (
