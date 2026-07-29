@@ -27,6 +27,8 @@ export function MusicPlayerProvider({ children }) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(null);
   const wasAuthenticated = useRef(false);
+  const sessionGeneration = useRef(0);
+  const libraryRequestGeneration = useRef(0);
   const activeTrack = useActiveMediaItem();
   const isPlaying = useIsPlaying();
   const { position, duration } = useProgress(0.5);
@@ -37,42 +39,60 @@ export function MusicPlayerProvider({ children }) {
 
   const refreshLibrary = useCallback(async () => {
     if (!isAuthenticated) return;
+    const requestGeneration = ++libraryRequestGeneration.current;
+    const currentSession = sessionGeneration.current;
+    const isCurrentRequest = () =>
+      currentSession === sessionGeneration.current &&
+      requestGeneration === libraryRequestGeneration.current;
     setLoading(true);
     try {
       const response = await api.get(
         '/media/gallery?kind=audio&limit=300&order=desc&sortBy=upload'
       );
+      if (!isCurrentRequest()) return;
       setTracks(Array.isArray(response?.items) ? response.items : []);
       setError(null);
     } catch (refreshError) {
+      if (!isCurrentRequest()) return;
       setError(refreshError?.message || 'Unable to load music');
     } finally {
-      setLoading(false);
+      if (isCurrentRequest()) setLoading(false);
     }
   }, [api, isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated) {
+      sessionGeneration.current += 1;
+      libraryRequestGeneration.current += 1;
       if (wasAuthenticated.current) {
         setReady(false);
         setTracks([]);
+        setError(null);
+        setLoading(false);
         musicPlayerService.clear().catch(() => {});
       }
       wasAuthenticated.current = false;
       return;
     }
+    const currentSession = ++sessionGeneration.current;
     wasAuthenticated.current = true;
+    setReady(false);
     musicPlayerService
       .ensureReady()
-      .then(() => setReady(true))
-      .catch((setupError) =>
-        setError(setupError?.message || 'Music player is unavailable')
-      );
+      .then(() => {
+        if (currentSession === sessionGeneration.current) setReady(true);
+      })
+      .catch((setupError) => {
+        if (currentSession === sessionGeneration.current) {
+          setError(setupError?.message || 'Music player is unavailable');
+        }
+      });
     refreshLibrary();
   }, [isAuthenticated, refreshLibrary]);
 
   const playMedia = useCallback(
     async (mediaId) => {
+      if (!ready) return;
       try {
         const { items, startIndex } = buildMusicQueue(tracks, mediaId, mediaBase);
         await musicPlayerService.playQueue(items, startIndex);
@@ -81,8 +101,28 @@ export function MusicPlayerProvider({ children }) {
         setError(playError?.message || 'Unable to play this track');
       }
     },
-    [mediaBase, tracks]
+    [mediaBase, ready, tracks]
   );
+
+  const togglePlayback = useCallback(() => {
+    if (!ready) return;
+    return musicPlayerService.togglePlayback(isPlaying);
+  }, [isPlaying, ready]);
+
+  const previous = useCallback(() => {
+    if (!ready) return;
+    return musicPlayerService.previous();
+  }, [ready]);
+
+  const next = useCallback(() => {
+    if (!ready) return;
+    return musicPlayerService.next();
+  }, [ready]);
+
+  const seekTo = useCallback((seconds) => {
+    if (!ready) return;
+    return musicPlayerService.seekTo(seconds);
+  }, [ready]);
 
   const value = useMemo(
     () => ({
@@ -96,10 +136,10 @@ export function MusicPlayerProvider({ children }) {
       duration,
       refreshLibrary,
       playMedia,
-      togglePlayback: () => musicPlayerService.togglePlayback(isPlaying),
-      previous: () => musicPlayerService.previous(),
-      next: () => musicPlayerService.next(),
-      seekTo: (seconds) => musicPlayerService.seekTo(seconds),
+      togglePlayback,
+      previous,
+      next,
+      seekTo,
     }),
     [
       tracks,
@@ -112,6 +152,10 @@ export function MusicPlayerProvider({ children }) {
       duration,
       refreshLibrary,
       playMedia,
+      togglePlayback,
+      previous,
+      next,
+      seekTo,
     ]
   );
 
