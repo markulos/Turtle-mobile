@@ -107,7 +107,15 @@
           "iosShareExtensionName": "Send to Turtle"
         }
       ],
-      "expo-live-activity"
+      "expo-live-activity",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.0"
+          }
+        }
+      ]
     ],
     "experiments": {
       "tsconfigPaths": false
