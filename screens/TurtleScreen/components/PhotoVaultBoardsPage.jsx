@@ -1,4 +1,4 @@
-import React, { forwardRef } from 'react';
+import React, { forwardRef, useCallback, useRef } from 'react';
 import {
   Animated,
   Dimensions,
@@ -18,7 +18,12 @@ const SORTS = [
   { mode: 'largest', label: 'Largest', icon: 'image-multiple-outline' },
 ];
 
-const CARD_WIDTH = (Dimensions.get('window').width - 20 - 10) / 2;
+// Grid proportions taken from the Pinterest boards reference (1170px wide @3x,
+// i.e. a 390pt screen): cards sit 20px (≈7pt) from the screen edges with the
+// same 20px between columns, which lands each card at ~185pt.
+const EDGE_PAD = 7;
+const COLUMN_GAP = 7;
+const CARD_WIDTH = (Dimensions.get('window').width - EDGE_PAD * 2 - COLUMN_GAP) / 2;
 const LOAD_ERROR_COPY = 'Unable to load boards';
 const REFRESH_ERROR_COPY = 'Couldn’t refresh boards.';
 
@@ -55,6 +60,14 @@ const PhotoVaultBoardsPage = forwardRef(({
 }, ref) => {
   const visibleBoards = hasLoadedAlbums ? boards : [];
   const onPrimary = theme.colors.onPrimary ?? theme.colors.background;
+  const searchRef = useRef(null);
+
+  // Clearing is part of typing, not the end of it — keep the field focused so the
+  // keyboard stays up and the user can retype immediately (standard search UX).
+  const clearSearch = useCallback(() => {
+    onQueryChange('');
+    searchRef.current?.focus();
+  }, [onQueryChange]);
 
   const renderHeader = () => (
     <View style={[styles.header, { paddingTop: topInset, backgroundColor: theme.colors.background }]}>
@@ -62,18 +75,29 @@ const PhotoVaultBoardsPage = forwardRef(({
         <View style={[styles.search, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
           <Icon name="magnify" size={21} color={theme.colors.textMuted} />
           <TextInput
+            ref={searchRef}
             value={query}
             onChangeText={onQueryChange}
             placeholder="Search your boards"
             placeholderTextColor={theme.colors.textMuted}
             accessibilityLabel="Search your boards"
+            // Incremental search: filter as you type, never take the keyboard
+            // away. Submitting is a no-op (blurOnSubmit=false) because results
+            // are already live, and autocorrect/caps only get in the way of
+            // matching board names.
+            autoCorrect={false}
+            autoCapitalize="none"
+            spellCheck={false}
+            returnKeyType="search"
+            blurOnSubmit={false}
+            clearButtonMode="never"
             style={[styles.searchInput, { color: theme.colors.textPrimary }]}
           />
           {query ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Clear board search"
-              onPress={() => onQueryChange('')}
+              onPress={clearSearch}
               style={styles.clearSearch}
             >
               <Icon name="close-circle" size={21} color={theme.colors.textSecondary} />
@@ -197,11 +221,18 @@ const PhotoVaultBoardsPage = forwardRef(({
           onPressIn={onCardPressIn}
         />
       )}
-      ListHeaderComponent={renderHeader}
-      ListEmptyComponent={renderEmpty}
+      // Elements, NOT functions. VirtualizedList renders a function-valued
+      // ListHeaderComponent as `<ListHeaderComponent />`; a header function
+      // defined in this render body is a new identity — and therefore a new
+      // element type — on every render, so React tore down and rebuilt the
+      // header on each keystroke, killing the focused TextInput and dismissing
+      // the keyboard. Passing the rendered element keeps the type stable.
+      ListHeaderComponent={renderHeader()}
+      ListEmptyComponent={renderEmpty()}
       contentContainerStyle={[styles.content, { backgroundColor: theme.colors.background }]}
       columnWrapperStyle={visibleBoards.length ? styles.row : undefined}
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
       onScroll={onScroll}
       onContentSizeChange={onContentSizeChange}
       onLayout={onLayout}
@@ -210,25 +241,25 @@ const PhotoVaultBoardsPage = forwardRef(({
 });
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: 10, paddingBottom: 24 },
-  header: { marginHorizontal: -10, paddingHorizontal: 10, paddingBottom: 18 },
+  content: { paddingHorizontal: EDGE_PAD, paddingBottom: 24 },
+  header: { marginHorizontal: -EDGE_PAD, paddingHorizontal: EDGE_PAD, paddingBottom: 16 },
   searchRow: { flexDirection: 'row', gap: 10 },
-  search: { height: 50, flex: 1, borderWidth: 1, borderRadius: 25, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 8 },
+  search: { height: 46, flex: 1, borderWidth: 1, borderRadius: 23, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 8 },
   searchInput: { flex: 1, fontSize: 16, height: '100%' },
   clearSearch: { width: 44, height: 44, marginRight: -12, alignItems: 'center', justifyContent: 'center' },
-  addButton: { width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center' },
-  sortScroller: { marginTop: 12 },
-  sorts: { flexDirection: 'row', gap: 8, paddingRight: 10 },
+  addButton: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
+  sortScroller: { marginTop: 14 },
+  sorts: { flexDirection: 'row', gap: 8, paddingRight: EDGE_PAD },
   sort: { minHeight: 44, borderWidth: 1, borderRadius: 22, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 6 },
   sortLabel: { fontSize: 14, fontWeight: '600' },
   retryBanner: { marginTop: 12, minHeight: 44, borderWidth: 1, borderRadius: 12, paddingLeft: 12, paddingRight: 4, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   retryBannerText: { fontSize: 14, fontWeight: '600' },
   retryBannerAction: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
   retryBannerActionText: { fontSize: 14, fontWeight: '700' },
-  row: { gap: 10 },
-  skeletonGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  skeleton: { marginBottom: 20 },
-  skeletonCollage: { aspectRatio: 1.28, borderRadius: 18 },
+  row: { gap: COLUMN_GAP },
+  skeletonGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: COLUMN_GAP },
+  skeleton: { marginBottom: 26 },
+  skeletonCollage: { aspectRatio: 1.46, borderRadius: 12 },
   skeletonLine: { width: '68%', height: 16, borderRadius: 8, marginTop: 8, marginHorizontal: 2 },
   skeletonMeta: { width: '45%', height: 13, borderRadius: 7, marginTop: 5, marginHorizontal: 2 },
   empty: { alignItems: 'center', paddingTop: 48, paddingHorizontal: 24 },

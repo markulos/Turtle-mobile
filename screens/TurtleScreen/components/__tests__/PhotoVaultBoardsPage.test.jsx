@@ -67,9 +67,40 @@ describe('PhotoVaultBoardsPage', () => {
     expect(props.onAdd).toHaveBeenCalledTimes(1);
     expect(addButton.props.accessibilityRole).toBe('button');
     expect(StyleSheet.flatten(addButton.props.style)).toEqual(expect.objectContaining({
-      width: 50,
-      height: 50,
+      width: 46,
+      height: 46,
     }));
+  });
+
+  test('keeps the search field mounted across query renders so the keyboard stays up', async () => {
+    // VirtualizedList renders a FUNCTION-valued ListHeaderComponent as
+    // `<ListHeaderComponent />`. A header function defined in the render body has
+    // a new identity every render, so React sees a NEW element type, unmounts the
+    // old header, and mounts a fresh one — killing the focused TextInput and
+    // closing the keyboard on every keystroke. An element keeps the type stable.
+    const ref = React.createRef();
+    await renderPage({ ref });
+    const list = ref.current;
+
+    expect(typeof list.props.ListHeaderComponent).not.toBe('function');
+    expect(React.isValidElement(list.props.ListHeaderComponent)).toBe(true);
+    expect(typeof list.props.ListEmptyComponent).not.toBe('function');
+  });
+
+  test('uses standard incremental-search input and keyboard behaviour', async () => {
+    const ref = React.createRef();
+    const { view } = await renderPage({ ref });
+    const input = view.getByPlaceholderText('Search your boards');
+    const list = ref.current;
+
+    expect(input.props.autoCorrect).toBe(false);
+    expect(input.props.autoCapitalize).toBe('none');
+    expect(input.props.spellCheck).toBe(false);
+    expect(input.props.returnKeyType).toBe('search');
+    expect(input.props.blurOnSubmit).toBe(false);
+    // Tap a board while typing: one tap opens it, keyboard closes on drag.
+    expect(list.props.keyboardShouldPersistTaps).toBe('handled');
+    expect(list.props.keyboardDismissMode).toBe('on-drag');
   });
 
   test('shows an accessible 44-point search-clear button for a non-empty query', async () => {
