@@ -83,6 +83,8 @@ import Reanimated, {
   Easing as REasing,
 } from 'react-native-reanimated';
 import TimelineScrubber from './TimelineScrubber';
+import MusicVault from './MusicVault';
+import EdgeSwipePage from './EdgeSwipePage';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
 import { useMediaVersion } from '../../../context/DownloadsContext';
 import { useTheme } from '../../../context/ThemeContext';
@@ -239,7 +241,16 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const insets = useSafeAreaInsets();
   
   // === TAB & DATA STATE ===
-  const [activeTab, setActiveTab] = useState('uploads');
+  // The pager holds Boards and Music. The photo grid is NOT a pager page any
+  // more: it's a page pushed over the pager (slide in from the right, left-edge
+  // swipe to close), opened by tapping a board.
+  const [pagerTab, setPagerTab] = useState('albums');   // 'albums' | 'music'
+  const [photosOpen, setPhotosOpen] = useState(false);
+  // Derived, not stored. Roughly forty guards below read
+  // `activeTab === 'uploads'` to mean "the photo grid is on screen" — fetching,
+  // video preview, scroll bookkeeping, viewability. Deriving it keeps every one
+  // of those correct now that the grid is a pushed page instead of a tab.
+  const activeTab = photosOpen ? 'uploads' : pagerTab;
   // "Jump to newest" pill — shown once the uploads grid is scrolled a screenful
   // away from the newest item (offset 0 = newest, since the grid is scaleY(-1)).
   // Toggled from handleGridScroll with a functional updater so we only re-render
@@ -1424,49 +1435,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     activeTab,
   ]);
 
-  // === INSTAGRAM-STYLE EDGE SWIPE PHYSICS ===
-  const albumSlideAnim = useRef(new Animated.Value(0)).current;
-  // The PanResponder below is created ONCE (useRef), so its onMoveShouldSet
-  // closure would capture `selectedAlbum` from the first render ('All') forever
-  // — making the `!== 'All'` guard always false, so the album back-swipe never
-  // fired. Mirror the live value into a ref the closure reads instead.
+  // The album back-swipe used to be a hand-rolled PanResponder here, sliding
+  // the uploads pager page rightward. The photo grid is now a pushed
+  // EdgeSwipePage, which owns that gesture — keeping both would put two
+  // competing left-edge responders on the same screen.
   const selectedAlbumRef = useRef(selectedAlbum);
   selectedAlbumRef.current = selectedAlbum;
-
-  const edgeSwipeResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gestureState) => {
-        // Only respond to horizontal right-swipes from strict left edge when inside an album
-        return selectedAlbumRef.current !== 'All' &&
-               gestureState.moveX < 40 &&
-               Math.abs(gestureState.dx) > Math.abs(gestureState.dy) &&
-               gestureState.dx > 10;
-      },
-      onPanResponderMove: (_, gestureState) => {
-        if (gestureState.dx > 0) albumSlideAnim.setValue(gestureState.dx);
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        if (gestureState.dx > width * 0.3 || gestureState.vx > 1) {
-          Animated.timing(albumSlideAnim, {
-            toValue: width, 
-            duration: 150, // 🚀 Reduced from 200ms
-            easing: Easing.bezier(0.05, 0.7, 0.1, 1), // 💎 Google Snappy Curve
-            useNativeDriver: true,
-          }).start(() => {
-            setSelectedAlbum('All');
-            albumSlideAnim.setValue(0); 
-          });
-        } else {
-          Animated.spring(albumSlideAnim, {
-            toValue: 0,
-            useNativeDriver: true,
-            tension: 120, // 🚀 Doubled for instant snap-back
-            friction: 12,
-          }).start();
-        }
-      },
-    })
-  ).current;
 
   // 2. Derive dropdown list instantly from the dictionary + global DB
   const availableAlbums = useMemo(() => {
@@ -2517,10 +2491,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 setGlobalAlbums(prev => prev.filter(a => a !== albumName));
                 fetchAlbums();
                 
-                // If we were viewing this album, switch to 'All'
+                // The board we were inside just disappeared — close the pushed
+                // photos page and fall back to the Boards list behind it.
                 if (selectedAlbum === albumName) {
                   setSelectedAlbum('All');
-                  setActiveTab('uploads');
+                  setPhotosOpen(false);
                 }
               }
             } catch (error) {
@@ -2531,7 +2506,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         }
       ]
     );
-  }, [api, fetchAlbums, selectedAlbum, setGlobalAlbums, setSelectedAlbum, setActiveTab]);
+  }, [api, fetchAlbums, selectedAlbum, setGlobalAlbums, setSelectedAlbum]);
 
   // Album context menu (long-press) - declared after renameAlbum and deleteAlbum
   const showAlbumOptions = useCallback((albumName) => {
@@ -3863,7 +3838,21 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const tabWidth = (width - 32) / 2;
   const pagesScrollRef = useRef(null);
   const pageScrollX = useRef(new Animated.Value(0)).current;
-  const TABS = useMemo(() => ['uploads', 'albums'], []);
+  const TABS = useMemo(() => ['albums', 'music'], []);
+
+  // Push / pop the photos page. Opening sets the board first so the grid's
+  // fetches start against the right filter on its first render.
+  const openPhotosPage = useCallback((boardName) => {
+    setSelectedAlbum(boardName || 'All');
+    setPhotosOpen(true);
+  }, []);
+  const closePhotosPage = useCallback(() => {
+    setPhotosOpen(false);
+    setSelectedAlbum('All');
+    setIsSelectMode(false);
+    setIsUploadsSearchVisible(false);
+    setUploadsSearchQuery('');
+  }, []);
 
   // Pinterest-style underline: a bar the width of the ACTIVE label that slides
   // from title to title. Label widths are measured once by onLayout (text width
@@ -3905,13 +3894,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     const index = TABS.indexOf(tab);
     if (index < 0) return;
 
-    // Re-tapping the active tab: no slide — just jump the Photos grid to newest.
-    if (tab === activeTab) {
-      if (tab === 'uploads' && gridRef.current) {
-        gridRef.current.scrollToOffset({ offset: 0, animated: true });
-      }
-      return;
-    }
+    // Re-tapping the active tab does nothing: both pages are lists that own
+    // their own scroll, and the grid is no longer one of them.
+    if (tab === pagerTab) return;
 
     // Native paging slide — starts instantly and runs buttery-smooth on the UI
     // thread (no JS-thread per-frame work to stutter it). Fire it FIRST and on
@@ -3925,20 +3910,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       pagesScrollRef.current.scrollTo({ x: index * width, animated: true });
     }
     InteractionManager.runAfterInteractions(() => {
-      setActiveTab(tab);
-      if (tab === 'albums') setSelectedAlbum('All');
+      setPagerTab(tab);
     });
-  }, [TABS, activeTab, width]);
+  }, [TABS, pagerTab, width]);
 
   // SWIPE END: The ScrollView tells React it finished moving.
   const commitTab = useCallback((index) => {
     const newTab = TABS[Math.max(0, Math.min(TABS.length - 1, index))];
-    if (newTab && newTab !== activeTab) {
-      setActiveTab(newTab);
-      // Reset back to root Photo Vault when leaving the main Photos tab.
-      if (newTab === 'albums') setSelectedAlbum('All');
-    }
-  }, [activeTab, TABS]);
+    if (newTab && newTab !== pagerTab) setPagerTab(newTab);
+  }, [pagerTab, TABS]);
 
   const handlePageSwipeEnd = useCallback((event) => {
     commitTab(Math.round(event.nativeEvent.contentOffset.x / width));
@@ -4529,7 +4509,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           pagingEnabled
           bounces={false}
           showsHorizontalScrollIndicator={false}
-          scrollEnabled={selectedAlbum === 'All'} // Apple UX: Lock page swiping when viewing a specific album!
+          // The pager only ever holds Boards and Music now, and the photos page
+          // covers it when open, so paging is always free here.
+          scrollEnabled
           onScroll={Animated.event(
             [{ nativeEvent: { contentOffset: { x: pageScrollX } } }],
             { useNativeDriver: true }
@@ -4540,164 +4522,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           style={{ flex: 1, flexDirection: 'row' }}
         >
           
-          {/* PAGE 1: UPLOADS */}
-          <Animated.View 
-            style={{ width, height: '100%', transform: [{ translateX: albumSlideAnim }] }}
-            {...edgeSwipeResponder.panHandlers}
-          >
-            {/* Drag-select responder wraps ONLY the uploads grid: horizontal
-                drags (in select mode, started on a cell) range-select;
-                vertical swipes pass through and scroll normally. The
-                GestureDetector adds two-finger pinch → column count (needs two
-                pointers, so it never fights the one-finger pan/scroll). */}
-            <GestureDetector gesture={gridPinch}>
-            {/* overflow:hidden clips the grid while it's scaled past the
-                viewport — without it the enlarged cells paint over the header
-                and the tab bar mid-pinch. */}
-            <View ref={gridWrapRef} style={{ flex: 1, overflow: 'hidden' }} {...gridDragResponder.panHandlers}>
-            <Reanimated.View style={[{ flex: 1 }, gridPinchStyle]}>
-            <AnimatedFlashList
-              ref={gridRef}
-              data={uploadDisplayItems}
-              // Stable reference + extraData (see renderItem's performance
-              // contract). The old inline arrow handed FlashList a NEW
-              // renderItem on every render of this component — every page
-              // land, progress tick, or selection toggle re-rendered every
-              // visible cell. (Its injected activeTab prop was never read.)
-              renderItem={renderItem}
-              extraData={gridSelectionExtra}
-              // SLOT KEYS: in the virtual library a key identifies the
-              // POSITION (the i-th newest photo) — a fixed slot in a
-              // fixed-length array — not the item that fills it. When a sparse
-              // page lands, the mounted cell keeps its key and re-renders with
-              // its image fading in over the quiet tile; with id-keys it was
-              // unmounted and replaced (the erratic pop-in). Outside virtual
-              // mode (album filter / tag search) items keep id keys.
-              // (The old getItemType skel/thumb pool split is gone: it existed
-              // because the skeleton early-returned ABOVE GridItem's hooks —
-              // the unified cell has one unconditional shape, one pool.)
-              keyExtractor={(item, index) => ((virtualEnabledRef.current || item.isSkeleton) ? `i${index}` : item.id)}
-              numColumns={gridCols}
-              // Mount + start loading cells ~1.5 screens beyond the viewport so
-              // tiles resolve BEFORE they scroll into view (the iCloud feel),
-              // instead of FlashList's default ~250px overdraw.
-              drawDistance={Math.round(height * 1.5)}
-              // Drag-to-dismiss the keyboard when scrolling the grid
-              // while the per-tab search input is up.
-              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-              keyboardShouldPersistTaps="handled"
-              // --- DOUBLE-FLIP WORKAROUND ---
-              // scaleY(-1): inverts vertically so newest sits at the BOTTOM
-              // (load-newest-first pagination, scroll up for older — standard
-              // photo-app vertical order).
-              // scaleX(-1): ALSO mirror horizontally so within each row reading
-              // goes OLD→NEW left-to-right and the newest photo lands
-              // BOTTOM-RIGHT — i.e. the whole grid reads in English order
-              // (oldest top-left → newest bottom-right), like every other photo
-              // app. Each cell + the header/footer carry a matching scaleX(-1)
-              // counter-flip (see renderItem / ListHeader / ListFooter) so only
-              // the cell POSITIONS mirror, not their contents. The drag-select
-              // column math (applyDragRange) negates its X delta to match.
-              style={{ flex: 1, transform: [{ scaleX: -1 }, { scaleY: -1 }] }}
-              // ------------------------------
-              // FlashList v2 turns on maintainVisibleContentPosition by DEFAULT
-              // (a chat-style feature). On this scaleY(-1)-inverted grid its
-              // re-anchor math runs in un-flipped coords while the view is
-              // visually flipped — so when a thumbnail finishes loading and the
-              // cell re-measures, MVCP shoves the item the WRONG way and it
-              // lands offset, overlapping its neighbours. A photo grid never
-              // needs MVCP → disable it to kill the load-time offset.
-              maintainVisibleContentPosition={{ disabled: true }}
-              contentContainerStyle={[styles.gridContent, { paddingBottom: insets.top + 90, paddingTop: insets.bottom + 16 }]}
-              showsVerticalScrollIndicator={false}
-              onRefresh={handleRefresh}
-              refreshing={refreshing}
-              onEndReached={handleLoadMore}
-              onEndReachedThreshold={2.5}
-              // Feed the timeline scrubber: thumb position, month/year bubble,
-              // and the scroll range it maps drags onto.
-              onScroll={handleGridScroll}
-              // Settle triggers — resolve the resting viewport the moment
-              // motion ends (drag release or momentum death), instead of
-              // waiting for the next touch to generate a scroll event.
-              onScrollEndDrag={handleGridScrollSettled}
-              onMomentumScrollEnd={handleGridScrollSettled}
-              scrollEventThrottle={16}
-              // Track the centermost video for the autoplay preview (committed
-              // on settle by handleGridScrollSettled).
-              onViewableItemsChanged={onViewableItemsChanged}
-              viewabilityConfig={viewabilityConfig}
-              onContentSizeChange={(w, h) => {
-                gridContentH.current = h;
-                maxScrollSv.value = Math.max(1, h - (gridLayoutH.current || 1));
-                // Consume a pending tag-jump now that the FULL timeline has laid
-                // out (this fires with the virtual content height, so the fraction
-                // maps to a real offset). virtualEnabledRef guards against firing
-                // while still filtered; defer the scroll one frame so it runs
-                // cleanly outside the layout pass.
-                if (pendingJumpRef.current != null && virtualEnabledRef.current) {
-                  const frac = pendingJumpRef.current;
-                  pendingJumpRef.current = null;
-                  if (pendingJumpClearRef.current) { clearTimeout(pendingJumpClearRef.current); pendingJumpClearRef.current = null; }
-                  requestAnimationFrame(() => handleScrubJump(frac));
-                }
-              }}
-              onLayout={(e) => {
-                const lh = e.nativeEvent.layout.height;
-                gridLayoutH.current = lh;
-                maxScrollSv.value = Math.max(1, (gridContentH.current || 1) - lh);
-              }}
-              ListEmptyComponent={(!loading && !isPaginating && !refreshing) ? renderEmpty : null}
-              ListHeaderComponent={
-                <View style={{ transform: [{ scaleX: -1 }, { scaleY: -1 }] }}>
-                  <View style={[styles.bottomContainer, { paddingBottom: 16 }]}>
-                  <View style={styles.countContainer}>
-                    <Text style={[styles.countText, { color: theme.colors.textSecondary }]}>
-                      {activeTab === 'uploads' && globalUploadsTotal > 0
-                        ? `${globalUploadsTotal.toLocaleString()} Items`
-                        : photoCount > 0 && videoCount > 0
-                          ? `${photoCount} Photos, ${videoCount} Videos`
-                          : photoCount > 0 ? `${photoCount} ${photoCount === 1 ? 'Photo' : 'Photos'}`
-                          : videoCount > 0 ? `${videoCount} ${videoCount === 1 ? 'Video' : 'Videos'}`
-                          : '—'
-                      }
-                    </Text>
-                  </View>
-                  <View style={{ alignItems: 'center', width: '100%', marginTop: 8 }}>
-                    <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-                      <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPressIn={() => impactHaptic('medium')} onPress={handleUpload} disabled={uploadBusy} activeOpacity={0.7}>
-                        <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="image-plus" size={18} color={theme.colors.primary} /></View>
-                        <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Upload</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPress={openLocalSyncGallery} disabled={uploadBusy} activeOpacity={0.7}>
-                        <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="folder-sync" size={18} color={theme.colors.primary} /></View>
-                        <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Smart Sync</Text>
-                      </TouchableOpacity>
-                    </View>
-                    {/* Live progress lives in the global VaultUploadPill. */}
-                  </View>
-                </View>
-                </View>
-              }
-              ListFooterComponent={
-                <View style={{ transform: [{ scaleX: -1 }, { scaleY: -1 }] }}>
-                  <View style={{ paddingTop: 16 }}>
-                    {isPaginating && hasMoreUploads && (
-                      <View style={styles.phantomSkeletonContainer}>
-                        {[...Array(6)].map((_, i) => <ShimmerSkeleton key={`header-skel-${i}`} styles={styles} theme={theme} />)}
-                      </View>
-                    )}
-                  </View>
-                </View>
-              }
-            />
-            </Reanimated.View>
-            </View>
-            </GestureDetector>
 
-          </Animated.View>
-
-          {/* PAGE 2: ALBUMS */}
+          {/* PAGE 1: BOARDS */}
           <View style={{ width, height: '100%' }}>
             {/* Indeterminate loading bar — a 3px monotone segment slides across
                 in a loop since the album fetch has no byte-level progress to
@@ -4749,10 +4575,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               onSortModeChange={setBoardSortMode}
               onAdd={handleUpload}
               onRetry={fetchAlbums}
-              onOpenBoard={(name) => {
-                setSelectedAlbum(name);
-                handleTabPress('uploads');
-              }}
+              onOpenBoard={openPhotosPage}
               onLongPressBoard={showAlbumOptions}
               onCardPressIn={hapticTick}
               onScroll={handleAlbumsScroll}
@@ -4770,23 +4593,25 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             />
           </View>
 
+          {/* PAGE 2: MUSIC — the audio slice of the same vault. It used to be a
+              destination on a chooser screen; as a pager page it's one swipe
+              from Boards. No onClose: there's nothing to go back to from a tab. */}
+          <View style={{ width, height: '100%' }}>
+            <MusicVault />
+          </View>
+
         </Animated.ScrollView>
 
-        {/* Timeline scrubber — ONE worklet-driven rail (see TimelineScrubber.jsx)
-            rendered OUTSIDE the horizontal pager so it stays FIXED on the right
-            edge across the Photos↔Albums swipe; only its parameters change with
-            the active tab:
-              • Photos  — month/year buckets, inverted (newest-first grid).
-              • Albums  — alphabetical A→Z letter groups, top-down.
-            Thumb, bubble, ticks and haptics run on the UI thread off whichever
-            tab's scroll shared values are wired in below. */}
-        {(activeTab === 'uploads' ? scrubEnabled : albumsScrubEnabled) && (
+        {/* Boards A-Z rail. The photo timeline's rail lives on the photos page
+            itself (it is covered by that page when open), so this instance is
+            always the alphabetical, top-down Boards one. */}
+        {albumsScrubEnabled && (
           <TimelineScrubber
-            scrollY={activeTab === 'uploads' ? scrollYSv : albumsScrollYSv}
-            maxScroll={activeTab === 'uploads' ? maxScrollSv : albumsMaxScrollSv}
-            data={activeTab === 'uploads' ? scrubberData : albumsScrubData}
-            onJump={activeTab === 'uploads' ? handleScrubJump : handleAlbumsScrubJump}
-            inverted={activeTab === 'uploads'}
+            scrollY={albumsScrollYSv}
+            maxScroll={albumsMaxScrollSv}
+            data={albumsScrubData}
+            onJump={handleAlbumsScrubJump}
+            inverted={false}
             topInset={(vaultHeaderH || insets.top + 54) + 8}
             bottomInset={insets.bottom + 64}
             accent={theme.colors.primary}
@@ -4794,51 +4619,410 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           />
         )}
 
-        {/* Jump-to-newest pill — bottom-CENTRE so it clears the right-edge
-            scrubber. Only on the Photos tab; fades IN once scrolled a long way
-            from the newest item and fades OUT when back near it (no abrupt pop).
-            Tapping animates back to offset 0 (the visual bottom). */}
-        {activeTab === 'uploads' && (
-          <Animated.View
-            pointerEvents={gridJumpVisible ? 'auto' : 'none'}
-            style={{
-              position: 'absolute',
-              bottom: insets.bottom + 24,
-              alignSelf: 'center',
-              opacity: gridJumpAnim,
-              transform: [{ scale: gridJumpAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] }) }],
-              zIndex: 60,
-            }}
-          >
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() => {
-              gridJumpingRef.current = true; // suppress re-show during the animation
-              if (gridJumpIdleTimer.current) { clearTimeout(gridJumpIdleTimer.current); gridJumpIdleTimer.current = null; }
-              try { gridRef.current?.scrollToOffset?.({ offset: 0, animated: true }); } catch (e) { /* mid-layout */ }
-              setShowGridJump(false);
-            }}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 6,
-              paddingVertical: 9,
-              paddingHorizontal: 16,
-              borderRadius: 22,
-              backgroundColor: theme.colors.primary,
-              shadowColor: '#000',
-              shadowOpacity: 0.3,
-              shadowRadius: 8,
-              shadowOffset: { width: 0, height: 3 },
-              elevation: 6,
-            }}
-          >
-            <Icon name="chevron-double-down" size={18} color={theme.colors.background} />
-            <Text style={{ color: theme.colors.background, fontSize: 13, fontWeight: '700' }}>Latest</Text>
-          </TouchableOpacity>
-          </Animated.View>
-        )}
       </View>
+
+      {/* PHOTOS PAGE — the board's contents as a pushed page over the pager.
+          overlay mode (not the Modal form) is required: the grid opens the
+          viewer, the local picker and the share sheet as Modals, and iOS will
+          not present a sibling Modal over an already-open one. */}
+      <EdgeSwipePage overlay visible={photosOpen} onClose={closePhotosPage} swipeEnabled={!isSelectMode}>
+        <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+          {/* Photos page header — the board title, its edit menu and the photo
+              actions that used to sit in the vault header. Same styling; the
+              left slot is now the page-back affordance for this pushed page. */}
+          <View
+            style={[
+              styles.floatingHeaderContainer,
+              {
+                paddingTop: insets.top,
+                backgroundColor: theme.colors.background,
+                borderBottomWidth: StyleSheet.hairlineWidth,
+                borderBottomColor: theme.colors.border,
+                zIndex: 20,
+              },
+            ]}
+          >
+          {/* Top Row: Title & Actions (Compact) */}
+          <View style={[styles.header, { height: 44, paddingHorizontal: 16 }]}>
+            {/* Back out of the pushed page — the tap equivalent of the
+                left-edge swipe EdgeSwipePage provides. */}
+            <View style={styles.headerLeft}>
+              <TouchableOpacity
+                onPress={closePhotosPage}
+                style={styles.iconButton}
+                accessibilityRole="button"
+                accessibilityLabel="Back to boards"
+              >
+                <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} style={{ marginLeft: -4 }} />
+              </TouchableOpacity>
+            </View>
+  
+            {/* Title — left-aligned, not centred. At the root vault the two
+                words carry a deliberate weight contrast: "Photos" hairline
+                (100 → Thin), "Vault" regular (400), mirroring the web header. */}
+            <View style={styles.headerTitleSlot}>
+              {selectedAlbum !== 'All' ? (
+                // Board detail header: name + live metadata (count / latest) with
+                // the board's edit menu (rename / delete) one tap away — the same
+                // context menu the Boards overview uses on long-press.
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={{ flexShrink: 1 }}>
+                    <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+                      {selectedAlbum}
+                    </Text>
+                    {!!albumCounts[selectedAlbum] && (
+                      <Text style={{ fontSize: 11.5, color: theme.colors.textTertiary, marginTop: 1 }} numberOfLines={1}>
+                        {albumCounts[selectedAlbum]} item{albumCounts[selectedAlbum] === 1 ? '' : 's'}
+                        {albumLatestDates[selectedAlbum]
+                          ? ` · ${new Date(albumLatestDates[selectedAlbum]).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
+                          : ''}
+                      </Text>
+                    )}
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => showAlbumOptions(selectedAlbum)}
+                    hitSlop={HIT_SLOP_10}
+                    accessibilityLabel={`Edit board ${selectedAlbum}`}
+                  >
+                    <Icon name="dots-horizontal-circle-outline" size={20} color={theme.colors.textMuted} />
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                // Reached by opening the unfiltered library rather than a named
+                // board — it's still a board's page, so it gets a board's title.
+                <Text style={[styles.headerTitleLarge, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+                  <Text style={{ fontWeight: '100' }}>All </Text>
+                  <Text style={{ fontWeight: '400' }}>Photos</Text>
+                </Text>
+              )}
+            </View>
+  
+            <View style={[styles.headerRight, { justifyContent: 'center' }]}>
+              {/* Uploads Action: Search & Select Buttons */}
+              {/* Plain View, not Animated: these used to cross-fade with the
+                  pager because the grid was a pager page. On its own page they
+                  are simply always present. */}
+              <View style={{
+                position: 'absolute', right: 0,
+                flexDirection: 'row', alignItems: 'center', gap: 16,
+              }}>
+                {/* Date-basis toggle: camera = grid ordered by CAPTURE date
+                    (default), clock-plus = ordered by when items were ADDED to
+                    Turtle. Both dates are logged on every row — this only
+                    switches which one drives the timeline. */}
+                <TouchableOpacity
+                  onPress={() => setSortMode((m) => (m === 'original' ? 'upload' : 'original'))}
+                  hitSlop={HIT_SLOP_10}
+                  accessibilityRole="button"
+                  accessibilityLabel={sortMode === 'original'
+                    ? 'Sorted by capture date. Switch to date added to Turtle.'
+                    : 'Sorted by date added to Turtle. Switch to capture date.'}
+                >
+                  <Icon
+                    name={sortMode === 'original' ? 'camera-outline' : 'clock-plus-outline'}
+                    size={24}
+                    color={sortMode === 'upload' ? theme.colors.primary : theme.colors.textPrimary}
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setIsUploadsSearchVisible(!isUploadsSearchVisible)}
+                  hitSlop={HIT_SLOP_10}
+                >
+                  <Icon name="magnify" size={24} color={isUploadsSearchVisible || uploadsSearchQuery ? theme.colors.primary : theme.colors.textPrimary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  testID="gallery-select-toggle"
+                  onPress={() => {
+                    if (isSelectMode) { setIsSelectMode(false); setIsBulkTagging(false); setSelectedGridItems(new Set()); setRangeSelectMode(false); setRangeAnchorIdx(null); rangeAnchorRef.current = null; }
+                    else { setIsSelectMode(true); }
+                  }}
+                  hitSlop={HIT_SLOP_10}
+                >
+                  <Text style={{ color: theme.colors.primary, fontWeight: '600', fontSize: 15, letterSpacing: -0.3 }}>
+                    {isSelectMode ? 'Cancel' : 'Select'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+            </View>
+          </View>
+  
+          {/* Photos search */}
+          <Animated.View style={{
+            height: isUploadsSearchVisible ? 'auto' : 0,
+            opacity: uploadsSearchAnim,
+            overflow: 'hidden',
+            marginHorizontal: 16,
+            marginBottom: isUploadsSearchVisible ? 8 : 0,
+            transform: [{
+              translateY: uploadsSearchAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [-20, 0]
+              })
+            }]
+          }}>
+            <View style={[styles.searchContainer, { 
+              backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+              borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, flexDirection: 'row', alignItems: 'center' 
+            }]}>
+              <Icon name="magnify" size={18} color={theme.colors.textMuted} />
+              <TextInput
+                ref={searchInputRef}
+                style={{ flex: 1, marginLeft: 6, color: theme.colors.textPrimary, fontSize: 15, padding: 0 }}
+                value={uploadsSearchQuery}
+                onChangeText={setUploadsSearchQuery}
+                placeholder="Search photos, tags, text…"
+                placeholderTextColor={theme.colors.textMuted}
+                autoFocus={isUploadsSearchVisible}
+              />
+              {/* Jump — leave the filter and scroll the full timeline to where this
+                  tag clusters in time (uploads tab only, when a tag is typed). */}
+              {activeTab === 'uploads' && uploadsSearchQuery.trim() !== '' && (
+                <TouchableOpacity
+                  onPress={handleLocateTag}
+                  disabled={jumpBusy}
+                  hitSlop={HIT_SLOP_10}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginRight: 8 }}
+                  accessibilityLabel={`Jump to where ${uploadsSearchQuery.trim()} clusters in the timeline`}
+                >
+                  {jumpBusy ? (
+                    <ActivityIndicator size="small" color={theme.colors.primary} />
+                  ) : (
+                    <>
+                      <Icon name="calendar-search" size={16} color={theme.colors.primary} />
+                      <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '700' }}>Jump</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={() => {
+                setUploadsSearchQuery('');
+                setIsUploadsSearchVisible(false);
+              }}>
+                <Icon name="close-circle" size={18} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+  
+          </View>
+
+            <Animated.View
+              style={{ width, height: '100%' }}
+            >
+              {/* Drag-select responder wraps ONLY the uploads grid: horizontal
+                  drags (in select mode, started on a cell) range-select;
+                  vertical swipes pass through and scroll normally. The
+                  GestureDetector adds two-finger pinch → column count (needs two
+                  pointers, so it never fights the one-finger pan/scroll). */}
+              <GestureDetector gesture={gridPinch}>
+              {/* overflow:hidden clips the grid while it's scaled past the
+                  viewport — without it the enlarged cells paint over the header
+                  and the tab bar mid-pinch. */}
+              <View ref={gridWrapRef} style={{ flex: 1, overflow: 'hidden' }} {...gridDragResponder.panHandlers}>
+              <Reanimated.View style={[{ flex: 1 }, gridPinchStyle]}>
+              <AnimatedFlashList
+                ref={gridRef}
+                data={uploadDisplayItems}
+                // Stable reference + extraData (see renderItem's performance
+                // contract). The old inline arrow handed FlashList a NEW
+                // renderItem on every render of this component — every page
+                // land, progress tick, or selection toggle re-rendered every
+                // visible cell. (Its injected activeTab prop was never read.)
+                renderItem={renderItem}
+                extraData={gridSelectionExtra}
+                // SLOT KEYS: in the virtual library a key identifies the
+                // POSITION (the i-th newest photo) — a fixed slot in a
+                // fixed-length array — not the item that fills it. When a sparse
+                // page lands, the mounted cell keeps its key and re-renders with
+                // its image fading in over the quiet tile; with id-keys it was
+                // unmounted and replaced (the erratic pop-in). Outside virtual
+                // mode (album filter / tag search) items keep id keys.
+                // (The old getItemType skel/thumb pool split is gone: it existed
+                // because the skeleton early-returned ABOVE GridItem's hooks —
+                // the unified cell has one unconditional shape, one pool.)
+                keyExtractor={(item, index) => ((virtualEnabledRef.current || item.isSkeleton) ? `i${index}` : item.id)}
+                numColumns={gridCols}
+                // Mount + start loading cells ~1.5 screens beyond the viewport so
+                // tiles resolve BEFORE they scroll into view (the iCloud feel),
+                // instead of FlashList's default ~250px overdraw.
+                drawDistance={Math.round(height * 1.5)}
+                // Drag-to-dismiss the keyboard when scrolling the grid
+                // while the per-tab search input is up.
+                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                keyboardShouldPersistTaps="handled"
+                // --- DOUBLE-FLIP WORKAROUND ---
+                // scaleY(-1): inverts vertically so newest sits at the BOTTOM
+                // (load-newest-first pagination, scroll up for older — standard
+                // photo-app vertical order).
+                // scaleX(-1): ALSO mirror horizontally so within each row reading
+                // goes OLD→NEW left-to-right and the newest photo lands
+                // BOTTOM-RIGHT — i.e. the whole grid reads in English order
+                // (oldest top-left → newest bottom-right), like every other photo
+                // app. Each cell + the header/footer carry a matching scaleX(-1)
+                // counter-flip (see renderItem / ListHeader / ListFooter) so only
+                // the cell POSITIONS mirror, not their contents. The drag-select
+                // column math (applyDragRange) negates its X delta to match.
+                style={{ flex: 1, transform: [{ scaleX: -1 }, { scaleY: -1 }] }}
+                // ------------------------------
+                // FlashList v2 turns on maintainVisibleContentPosition by DEFAULT
+                // (a chat-style feature). On this scaleY(-1)-inverted grid its
+                // re-anchor math runs in un-flipped coords while the view is
+                // visually flipped — so when a thumbnail finishes loading and the
+                // cell re-measures, MVCP shoves the item the WRONG way and it
+                // lands offset, overlapping its neighbours. A photo grid never
+                // needs MVCP → disable it to kill the load-time offset.
+                maintainVisibleContentPosition={{ disabled: true }}
+                contentContainerStyle={[styles.gridContent, { paddingBottom: insets.top + 90, paddingTop: insets.bottom + 16 }]}
+                showsVerticalScrollIndicator={false}
+                onRefresh={handleRefresh}
+                refreshing={refreshing}
+                onEndReached={handleLoadMore}
+                onEndReachedThreshold={2.5}
+                // Feed the timeline scrubber: thumb position, month/year bubble,
+                // and the scroll range it maps drags onto.
+                onScroll={handleGridScroll}
+                // Settle triggers — resolve the resting viewport the moment
+                // motion ends (drag release or momentum death), instead of
+                // waiting for the next touch to generate a scroll event.
+                onScrollEndDrag={handleGridScrollSettled}
+                onMomentumScrollEnd={handleGridScrollSettled}
+                scrollEventThrottle={16}
+                // Track the centermost video for the autoplay preview (committed
+                // on settle by handleGridScrollSettled).
+                onViewableItemsChanged={onViewableItemsChanged}
+                viewabilityConfig={viewabilityConfig}
+                onContentSizeChange={(w, h) => {
+                  gridContentH.current = h;
+                  maxScrollSv.value = Math.max(1, h - (gridLayoutH.current || 1));
+                  // Consume a pending tag-jump now that the FULL timeline has laid
+                  // out (this fires with the virtual content height, so the fraction
+                  // maps to a real offset). virtualEnabledRef guards against firing
+                  // while still filtered; defer the scroll one frame so it runs
+                  // cleanly outside the layout pass.
+                  if (pendingJumpRef.current != null && virtualEnabledRef.current) {
+                    const frac = pendingJumpRef.current;
+                    pendingJumpRef.current = null;
+                    if (pendingJumpClearRef.current) { clearTimeout(pendingJumpClearRef.current); pendingJumpClearRef.current = null; }
+                    requestAnimationFrame(() => handleScrubJump(frac));
+                  }
+                }}
+                onLayout={(e) => {
+                  const lh = e.nativeEvent.layout.height;
+                  gridLayoutH.current = lh;
+                  maxScrollSv.value = Math.max(1, (gridContentH.current || 1) - lh);
+                }}
+                ListEmptyComponent={(!loading && !isPaginating && !refreshing) ? renderEmpty : null}
+                ListHeaderComponent={
+                  <View style={{ transform: [{ scaleX: -1 }, { scaleY: -1 }] }}>
+                    <View style={[styles.bottomContainer, { paddingBottom: 16 }]}>
+                    <View style={styles.countContainer}>
+                      <Text style={[styles.countText, { color: theme.colors.textSecondary }]}>
+                        {activeTab === 'uploads' && globalUploadsTotal > 0
+                          ? `${globalUploadsTotal.toLocaleString()} Items`
+                          : photoCount > 0 && videoCount > 0
+                            ? `${photoCount} Photos, ${videoCount} Videos`
+                            : photoCount > 0 ? `${photoCount} ${photoCount === 1 ? 'Photo' : 'Photos'}`
+                            : videoCount > 0 ? `${videoCount} ${videoCount === 1 ? 'Video' : 'Videos'}`
+                            : '—'
+                        }
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'center', width: '100%', marginTop: 8 }}>
+                      <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+                        <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPressIn={() => impactHaptic('medium')} onPress={handleUpload} disabled={uploadBusy} activeOpacity={0.7}>
+                          <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="image-plus" size={18} color={theme.colors.primary} /></View>
+                          <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Upload</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPress={openLocalSyncGallery} disabled={uploadBusy} activeOpacity={0.7}>
+                          <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="folder-sync" size={18} color={theme.colors.primary} /></View>
+                          <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Smart Sync</Text>
+                        </TouchableOpacity>
+                      </View>
+                      {/* Live progress lives in the global VaultUploadPill. */}
+                    </View>
+                  </View>
+                  </View>
+                }
+                ListFooterComponent={
+                  <View style={{ transform: [{ scaleX: -1 }, { scaleY: -1 }] }}>
+                    <View style={{ paddingTop: 16 }}>
+                      {isPaginating && hasMoreUploads && (
+                        <View style={styles.phantomSkeletonContainer}>
+                          {[...Array(6)].map((_, i) => <ShimmerSkeleton key={`header-skel-${i}`} styles={styles} theme={theme} />)}
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                }
+              />
+              </Reanimated.View>
+              </View>
+              </GestureDetector>
+  
+            </Animated.View>
+          {/* Photos scrubber — the base tree keeps its own instance for the
+              Boards A-Z rail; this page is covered by the overlay, so it needs
+              its own rail wired to the grid's shared values. */}
+          {scrubEnabled && (
+            <TimelineScrubber
+              scrollY={scrollYSv}
+              maxScroll={maxScrollSv}
+              data={scrubberData}
+              onJump={handleScrubJump}
+              inverted
+              topInset={(vaultHeaderH || insets.top + 54) + 8}
+              bottomInset={insets.bottom + 64}
+              accent={theme.colors.primary}
+              dark={theme.mode === 'dark'}
+            />
+          )}
+
+          {/* Jump-to-newest pill — bottom-CENTRE so it clears the right-edge
+              scrubber. Only on the Photos tab; fades IN once scrolled a long way
+              from the newest item and fades OUT when back near it (no abrupt pop).
+              Tapping animates back to offset 0 (the visual bottom). */}
+          {activeTab === 'uploads' && (
+            <Animated.View
+              pointerEvents={gridJumpVisible ? 'auto' : 'none'}
+              style={{
+                position: 'absolute',
+                bottom: insets.bottom + 24,
+                alignSelf: 'center',
+                opacity: gridJumpAnim,
+                transform: [{ scale: gridJumpAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] }) }],
+                zIndex: 60,
+              }}
+            >
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => {
+                gridJumpingRef.current = true; // suppress re-show during the animation
+                if (gridJumpIdleTimer.current) { clearTimeout(gridJumpIdleTimer.current); gridJumpIdleTimer.current = null; }
+                try { gridRef.current?.scrollToOffset?.({ offset: 0, animated: true }); } catch (e) { /* mid-layout */ }
+                setShowGridJump(false);
+              }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 6,
+                paddingVertical: 9,
+                paddingHorizontal: 16,
+                borderRadius: 22,
+                backgroundColor: theme.colors.primary,
+                shadowColor: '#000',
+                shadowOpacity: 0.3,
+                shadowRadius: 8,
+                shadowOffset: { width: 0, height: 3 },
+                elevation: 6,
+              }}
+            >
+              <Icon name="chevron-double-down" size={18} color={theme.colors.background} />
+              <Text style={{ color: theme.colors.background, fontSize: 13, fontWeight: '700' }}>Latest</Text>
+            </TouchableOpacity>
+            </Animated.View>
+          )}
+        </View>
+      </EdgeSwipePage>
 
       {/* Notch Shield */}
       <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: theme.colors.background, zIndex: 30 }} />
@@ -4863,169 +5047,16 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         {/* Upload progress bar relocated to the bottom (just above the navbar) —
             see the root-level bar near the end of this render. */}
 
-        {/* Top Row: Title & Actions (Compact) */}
+        {/* Top Row: the vault title. The board title, its edit menu and the
+            photo actions live on the pushed photos page now, not here. */}
         <View style={[styles.header, { height: 44, paddingHorizontal: 16 }]}>
-          {/* Back / close affordance only renders when there's somewhere to
-              go back to. At the root vault there's no left slot at all, so the
-              title sits flush against the left padding instead of being pushed
-              in by an empty placeholder. */}
-          {onClose ? (
-            <View style={styles.headerLeft}>
-              <TouchableOpacity onPress={onClose} style={styles.iconButton}>
-                <Icon name="arrow-left" size={24} color={theme.colors.textPrimary} />
-              </TouchableOpacity>
-            </View>
-          ) : selectedAlbum !== 'All' ? (
-            <View style={styles.headerLeft}>
-              <TouchableOpacity onPress={() => setSelectedAlbum('All')} style={styles.iconButton}>
-                <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} style={{ marginLeft: -4 }} />
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          {/* Title — left-aligned, not centred. At the root vault the two
-              words carry a deliberate weight contrast: "Photos" hairline
-              (100 → Thin), "Vault" regular (400), mirroring the web header. */}
           <View style={styles.headerTitleSlot}>
-            {selectedAlbum !== 'All' ? (
-              // Board detail header: name + live metadata (count / latest) with
-              // the board's edit menu (rename / delete) one tap away — the same
-              // context menu the Boards overview uses on long-press.
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <View style={{ flexShrink: 1 }}>
-                  <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
-                    {selectedAlbum}
-                  </Text>
-                  {!!albumCounts[selectedAlbum] && (
-                    <Text style={{ fontSize: 11.5, color: theme.colors.textTertiary, marginTop: 1 }} numberOfLines={1}>
-                      {albumCounts[selectedAlbum]} item{albumCounts[selectedAlbum] === 1 ? '' : 's'}
-                      {albumLatestDates[selectedAlbum]
-                        ? ` · ${new Date(albumLatestDates[selectedAlbum]).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
-                        : ''}
-                    </Text>
-                  )}
-                </View>
-                <TouchableOpacity
-                  onPress={() => showAlbumOptions(selectedAlbum)}
-                  hitSlop={HIT_SLOP_10}
-                  accessibilityLabel={`Edit board ${selectedAlbum}`}
-                >
-                  <Icon name="dots-horizontal-circle-outline" size={20} color={theme.colors.textMuted} />
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <Text style={[styles.headerTitleLarge, { color: theme.colors.textPrimary }]} numberOfLines={1}>
-                <Text style={{ fontWeight: '100' }}>Photos </Text>
-                <Text style={{ fontWeight: '400' }}>Vault</Text>
-              </Text>
-            )}
-          </View>
-
-          <View style={[styles.headerRight, { justifyContent: 'center' }]}>
-            {/* Uploads Action: Search & Select Buttons */}
-            <Animated.View style={{ 
-              position: 'absolute', right: 0, 
-              flexDirection: 'row', alignItems: 'center', gap: 16,
-              opacity: pageScrollX.interpolate({ inputRange: [0, width], outputRange: [1, 0], extrapolate: 'clamp' }),
-              pointerEvents: activeTab === 'uploads' ? 'auto' : 'none'
-            }}>
-              {/* Date-basis toggle: camera = grid ordered by CAPTURE date
-                  (default), clock-plus = ordered by when items were ADDED to
-                  Turtle. Both dates are logged on every row — this only
-                  switches which one drives the timeline. */}
-              <TouchableOpacity
-                onPress={() => setSortMode((m) => (m === 'original' ? 'upload' : 'original'))}
-                hitSlop={HIT_SLOP_10}
-                accessibilityRole="button"
-                accessibilityLabel={sortMode === 'original'
-                  ? 'Sorted by capture date. Switch to date added to Turtle.'
-                  : 'Sorted by date added to Turtle. Switch to capture date.'}
-              >
-                <Icon
-                  name={sortMode === 'original' ? 'camera-outline' : 'clock-plus-outline'}
-                  size={24}
-                  color={sortMode === 'upload' ? theme.colors.primary : theme.colors.textPrimary}
-                />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setIsUploadsSearchVisible(!isUploadsSearchVisible)}
-                hitSlop={HIT_SLOP_10}
-              >
-                <Icon name="magnify" size={24} color={isUploadsSearchVisible || uploadsSearchQuery ? theme.colors.primary : theme.colors.textPrimary} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                testID="gallery-select-toggle"
-                onPress={() => {
-                  if (isSelectMode) { setIsSelectMode(false); setIsBulkTagging(false); setSelectedGridItems(new Set()); setRangeSelectMode(false); setRangeAnchorIdx(null); rangeAnchorRef.current = null; }
-                  else { setIsSelectMode(true); }
-                }}
-                hitSlop={HIT_SLOP_10}
-              >
-                <Text style={{ color: theme.colors.primary, fontWeight: '600', fontSize: 15, letterSpacing: -0.3 }}>
-                  {isSelectMode ? 'Cancel' : 'Select'}
-                </Text>
-              </TouchableOpacity>
-            </Animated.View>
-
+            <Text style={[styles.headerTitleLarge, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+              <Text style={{ fontWeight: '100' }}>Media </Text>
+              <Text style={{ fontWeight: '400' }}>Vault</Text>
+            </Text>
           </View>
         </View>
-
-        {/* Photos search */}
-        <Animated.View style={{
-          height: isUploadsSearchVisible ? 'auto' : 0,
-          opacity: uploadsSearchAnim,
-          overflow: 'hidden',
-          marginHorizontal: 16,
-          marginBottom: isUploadsSearchVisible ? 8 : 0,
-          transform: [{
-            translateY: uploadsSearchAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [-20, 0]
-            })
-          }]
-        }}>
-          <View style={[styles.searchContainer, { 
-            backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
-            borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, flexDirection: 'row', alignItems: 'center' 
-          }]}>
-            <Icon name="magnify" size={18} color={theme.colors.textMuted} />
-            <TextInput
-              ref={searchInputRef}
-              style={{ flex: 1, marginLeft: 6, color: theme.colors.textPrimary, fontSize: 15, padding: 0 }}
-              value={uploadsSearchQuery}
-              onChangeText={setUploadsSearchQuery}
-              placeholder="Search photos, tags, text…"
-              placeholderTextColor={theme.colors.textMuted}
-              autoFocus={isUploadsSearchVisible}
-            />
-            {/* Jump — leave the filter and scroll the full timeline to where this
-                tag clusters in time (uploads tab only, when a tag is typed). */}
-            {activeTab === 'uploads' && uploadsSearchQuery.trim() !== '' && (
-              <TouchableOpacity
-                onPress={handleLocateTag}
-                disabled={jumpBusy}
-                hitSlop={HIT_SLOP_10}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginRight: 8 }}
-                accessibilityLabel={`Jump to where ${uploadsSearchQuery.trim()} clusters in the timeline`}
-              >
-                {jumpBusy ? (
-                  <ActivityIndicator size="small" color={theme.colors.primary} />
-                ) : (
-                  <>
-                    <Icon name="calendar-search" size={16} color={theme.colors.primary} />
-                    <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '700' }}>Jump</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity onPress={() => {
-              setUploadsSearchQuery('');
-              setIsUploadsSearchVisible(false);
-            }}>
-              <Icon name="close-circle" size={18} color={theme.colors.textMuted} />
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
 
         {/* Bottom Row: Pinterest-style underline tabs. No track, no pill — just
             the labels with a short bar that slides from title to title. The bar
@@ -5048,7 +5079,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             const activeOp = pageScrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
             const inactiveOp = pageScrollX.interpolate({ inputRange, outputRange: [1, 0, 1], extrapolate: 'clamp' });
             
-            const label = tab === 'uploads' ? 'Photos' : 'Boards';
+            const label = tab === 'albums' ? 'Boards' : 'Music';
 
             return (
               <TouchableOpacity
