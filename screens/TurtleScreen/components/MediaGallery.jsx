@@ -4700,21 +4700,22 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           {/* Top Row: Title & Actions (Compact) */}
           <View style={[styles.header, { height: 44, paddingHorizontal: 16 }]}>
             {/* Back out of the pushed page — the tap equivalent of the
-                left-edge swipe EdgeSwipePage provides. */}
-            <View style={styles.headerLeft}>
-              <TouchableOpacity
-                onPress={closePhotosPage}
-                style={styles.iconButton}
-                accessibilityRole="button"
-                accessibilityLabel="Back to boards"
-              >
-                <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} style={{ marginLeft: -4 }} />
-              </TouchableOpacity>
-            </View>
+                left-edge swipe EdgeSwipePage provides. Deliberately NOT in the
+                fixed 70pt headerLeft slot: that slot exists to keep a centred
+                title centred, and it would strand the caret far from the board
+                name. Here the caret reads as part of the title. */}
+            <TouchableOpacity
+              onPress={closePhotosPage}
+              style={styles.headerBackInline}
+              hitSlop={HIT_SLOP_10}
+              accessibilityRole="button"
+              accessibilityLabel="Back to boards"
+            >
+              <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
   
-            {/* Title — left-aligned, not centred. At the root vault the two
-                words carry a deliberate weight contrast: "Photos" hairline
-                (100 → Thin), "Vault" regular (400), mirroring the web header. */}
+            {/* Title — the open board's name, sitting directly after the caret.
+                Falls back to "All Photos" for the unfiltered library. */}
             <View style={styles.headerTitleSlot}>
               {selectedAlbum !== 'All' ? (
                 // Board detail header: name + live metadata (count / latest) with
@@ -5649,6 +5650,17 @@ const createStyles = (theme) =>
     // button and the right-hand actions, anchoring the title to the left.
     headerTitleSlot: {
       flex: 1,
+      alignItems: 'flex-start',
+      justifyContent: 'center',
+    },
+    // Back caret on the photos page: sits immediately before the board name
+    // rather than in the fixed-width headerLeft slot, so the two read as one
+    // unit. Negative margin pulls it back to the container's padding edge.
+    headerBackInline: {
+      width: 30,
+      height: 36,
+      marginLeft: -8,
+      marginRight: 2,
       alignItems: 'flex-start',
       justifyContent: 'center',
     },
