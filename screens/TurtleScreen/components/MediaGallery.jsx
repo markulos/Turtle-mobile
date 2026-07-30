@@ -20,6 +20,7 @@ import {
   Keyboard,
   InputAccessoryView,
   KeyboardAvoidingView,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -415,7 +416,7 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
 };
 
 // Image viewer component with pinch-to-zoom (extracted from main component)
-const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, api, onLoadProgress, onLoadComplete }) => {
+const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, api, onLoadProgress, onLoadComplete, onZoomScaleChange }) => {
   const scrollRef = useRef(null);
   const lastTapRef = useRef(0);
   const isZoomedRef = useRef(false);
@@ -446,6 +447,10 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
     sv.scrollTo?.({ x: 0, y: 0, animated: false });
     isZoomedRef.current = false;
     setZoomed(false);
+    // New image starts at zoom 1 — tell the viewer shell so its zoom guards
+    // (chrome hide, pull-to-dismiss lockout) track reality.
+    onZoomScaleChange?.(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaId]);
   
   const handleDoubleTap = useCallback(() => {
@@ -463,6 +468,7 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
             animated: true,
           });
           setZoomed(true); // want detail → load HD now, skip the dwell wait
+          onZoomScaleChange?.(2);
         } else {
           // Zoom out
           scrollRef.current.scrollResponderZoomTo({
@@ -472,6 +478,7 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
             height: height,
             animated: true,
           });
+          onZoomScaleChange?.(1);
         }
         isZoomedRef.current = !isZoomedRef.current;
       }
@@ -506,6 +513,9 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
         onScroll={(e) => {
           const z = e?.nativeEvent?.zoomScale ?? 1;
           if (z > 1.01) setZoomed(true);
+          // Live zoom report → viewer shell (chrome + gesture guards). Only the
+          // active cell speaks, so a recycled neighbour can't clobber it.
+          if (isActive) onZoomScaleChange?.(z);
         }}
       >
         <Pressable onPress={handleDoubleTap}>
@@ -809,6 +819,24 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     outputRange: [1, 0],
     extrapolate: 'clamp',
   });
+
+  // === ORIGIN-ANCHORED OPEN/CLOSE (grid → viewer continuity) ===
+  // The viewer pops FROM the tapped cell's screen position instead of the dead
+  // centre: originDX/DY hold the tap point's offset from screen centre (set at
+  // open), and popProgress rides the existing scaleAnim (0.85 → 1) so the
+  // translate decays to zero exactly as the pop settles. Close reverses
+  // scaleAnim, so the photo retreats toward the same spot. Pure native-driver
+  // math (multiply of a Value by an interpolation) — no measurement pass, no
+  // snapshot layer, and a plain centre pop when no origin is known (origin 0).
+  const originDX = useRef(new Animated.Value(0)).current;
+  const originDY = useRef(new Animated.Value(0)).current;
+  const popProgress = scaleAnim.interpolate({
+    inputRange: [0.85, 1],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+  const originTranslateX = Animated.multiply(originDX, popProgress);
+  const originTranslateY = Animated.multiply(originDY, popProgress);
   
   // === DRAWER STATE & PHYSICS ===
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -2397,9 +2425,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // Open full-screen viewer with animation and large file warning
-  const openViewer = useCallback((item) => {
+  // Open full-screen viewer with animation and large file warning. `origin`
+  // (optional) is the tap point in window coords ({x, y}) — the pop then
+  // originates from the tapped cell instead of the screen centre.
+  const openViewer = useCallback((item, origin) => {
     const executeOpen = () => {
+      // Anchor the pop at the tap point (offset from screen centre). No origin
+      // (e.g. programmatic open) ⇒ 0/0 ⇒ the old centre pop.
+      originDX.setValue(origin ? origin.x - width / 2 : 0);
+      originDY.setValue(origin ? origin.y - height / 2 : 0);
       // Index into the SAME array the pager walks (and the grid renders), so
       // the tapped photo is found and left/right swipe works across the whole
       // loaded set. Only fall back to the solo viewer if it's genuinely absent.
@@ -2447,7 +2481,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     } else {
       executeOpen();
     }
-  }, [scaleAnim, opacityAnim, scrollX]);
+  }, [scaleAnim, opacityAnim, scrollX, originDX, originDY]);
 
   // Close full-screen viewer.
   // (A zoom-guard branch used to live here, but `zoomScale` was never written
@@ -2463,6 +2497,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     infoOpacityAnim.setValue(1);
     dragY.setValue(0);
     scaleAnim.setValue(0.85);
+    setZoomScale(1); // fresh viewer session starts unzoomed (guards read this)
   }, [infoOpacityAnim, dragY, scaleAnim]);
 
   const closeViewer = useCallback(() => {
@@ -3377,6 +3412,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 api={api}
                 onLoadProgress={handleLoadProgress}
                 onLoadComplete={handleLoadComplete}
+                // Zoom reports drive the shell's chrome-hide + pull-dismiss
+                // lockout; only the active cell gets the channel.
+                onZoomScaleChange={isActive ? setZoomScale : undefined}
               />
             )}
           </Animated.View>
@@ -3535,11 +3573,14 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         animationType="none"
         onRequestClose={closeViewer}
       >
-        <Pressable 
+        <Pressable
           style={styles.viewerContainer}
           onPress={toggleInfoVisibility}
           {...swipeResponder.panHandlers}
         >
+          {/* Status bar folds away with the chrome (iOS Photos): visible while
+              the info layer shows, gone in the immersive state. */}
+          <StatusBar hidden={!infoVisible} animated />
           {/* Black background — also fades as the photo is pulled down so the
               grid behind reads through (iOS Photos dismiss). */}
           <Animated.View
@@ -3767,7 +3808,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               styles.viewerFlatListContainer,
               {
                 transform: [
-                  { translateY: dragY },
+                  // Origin-anchored pop: translate decays to 0 as scaleAnim
+                  // settles, so open grows OUT of the tapped cell and close
+                  // retreats back toward it. dragY stacks on top for the
+                  // pull-to-dismiss track.
+                  { translateX: originTranslateX },
+                  { translateY: Animated.add(dragY, originTranslateY) },
                   { scale: Animated.multiply(scaleAnim, dragScale) },
                 ],
                 opacity: opacityAnim,
@@ -5397,7 +5443,12 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
       // Stable hook for the batch-share E2E flow (.maestro/batch-share.yaml).
       testID={isSkeleton ? undefined : `gallery-cell-${gridIndex}`}
       style={[styles.thumbnailContainer, { backgroundColor: cellBase }, isSelectMode && isSelected && { opacity: 0.8 }]}
-      onPress={() => isSelectMode ? onToggleSelect(item.id, gridIndex) : openViewer(item)}
+      onPress={(e) => isSelectMode
+        ? onToggleSelect(item.id, gridIndex)
+        // Tap point (window coords) anchors the viewer's pop at this cell.
+        // pageX/pageY are physical screen coords, so the mirrored grid
+        // transform doesn't distort them.
+        : openViewer(item, { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY })}
       onPressIn={(e) => onTouchDown?.(gridIndex, e.nativeEvent.pageX, e.nativeEvent.pageY)}
       onLongPress={() => !isSelectMode && handleDelete(item.id)}
       activeOpacity={0.8}
