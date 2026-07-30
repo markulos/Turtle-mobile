@@ -116,7 +116,8 @@
             "deploymentTarget": "16.0"
           }
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "tsconfigPaths": false
