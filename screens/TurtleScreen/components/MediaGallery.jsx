@@ -4244,6 +4244,21 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             <Animated.View style={[styles.selectBezel, {
               alignSelf: 'center', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 30, gap: 8,
             }]}>
+              {/* Live selection count — the bar's actions read against it. */}
+              <View style={{
+                minWidth: 26, height: 26, borderRadius: 13, paddingHorizontal: 7,
+                alignItems: 'center', justifyContent: 'center',
+                backgroundColor: selectedGridItems.size > 0 ? theme.colors.primary : (theme.mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)'),
+                marginRight: 4,
+              }}>
+                <Text style={{
+                  fontSize: 13, fontWeight: '700',
+                  color: selectedGridItems.size > 0 ? theme.colors.background : theme.colors.textMuted,
+                }}>
+                  {selectedGridItems.size}
+                </Text>
+              </View>
+              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.borderStrong, marginHorizontal: 4 }} />
               <TouchableOpacity
                 testID="gallery-share-button"
                 accessibilityLabel="Share selected photos"
