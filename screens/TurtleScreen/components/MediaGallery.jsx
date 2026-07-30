@@ -4670,7 +4670,16 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       {/* PHOTOS PAGE — the board's contents as a pushed page over the pager.
           overlay mode (not the Modal form) is required: the grid opens the
           viewer, the local picker and the share sheet as Modals, and iOS will
-          not present a sibling Modal over an already-open one. */}
+          not present a sibling Modal over an already-open one.
+
+          The zIndex is load-bearing. The vault header (zIndex 20) and the notch
+          shield (zIndex 30) are LATER siblings in this same container, so
+          without it they paint over the page: you'd see the base header sitting
+          on top of the page with the page's own header buried under it.
+          box-none on the wrapper so that, when the page is closed and
+          EdgeSwipePage renders nothing, this full-screen View doesn't swallow
+          taps meant for the pager beneath. */}
+      <View style={[StyleSheet.absoluteFillObject, { zIndex: 40 }]} pointerEvents="box-none">
       <EdgeSwipePage overlay visible={photosOpen} onClose={closePhotosPage} swipeEnabled={!isSelectMode}>
         <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
           {/* Photos page header — the board title, its edit menu and the photo
@@ -5069,6 +5078,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           )}
         </View>
       </EdgeSwipePage>
+      </View>
 
       {/* Notch Shield */}
       <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: theme.colors.background, zIndex: 30 }} />
