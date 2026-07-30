@@ -5109,6 +5109,20 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         {/* Top Row: the vault title. The board title, its edit menu and the
             photo actions live on the pushed photos page now, not here. */}
         <View style={[styles.header, { height: 44, paddingHorizontal: 16 }]}>
+          {/* Only when the vault was opened as an overlay (from the Turtle
+              chat), which passes onClose. As a tab there is nothing to go back
+              to, so the title sits flush against the padding instead. */}
+          {onClose ? (
+            <TouchableOpacity
+              onPress={onClose}
+              style={styles.headerBackInline}
+              hitSlop={HIT_SLOP_10}
+              accessibilityRole="button"
+              accessibilityLabel="Close the vault"
+            >
+              <Icon name="arrow-left" size={24} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+          ) : null}
           <View style={styles.headerTitleSlot}>
             <Text style={[styles.headerTitleLarge, { color: theme.colors.textPrimary }]} numberOfLines={1}>
               <Text style={{ fontWeight: '100' }}>Media </Text>
