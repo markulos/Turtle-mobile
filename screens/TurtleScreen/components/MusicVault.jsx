@@ -186,9 +186,7 @@ export default function MusicVault({ onClose, topInset = 0 }) {
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel="Previous track"
-              onPress={() => {
-                previous();
-              }}
+              onPress={previous}
               disabled={!ready || current <= 0}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
@@ -197,9 +195,7 @@ export default function MusicVault({ onClose, topInset = 0 }) {
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
-              onPress={() => {
-                togglePlayback();
-              }}
+              onPress={togglePlayback}
               disabled={!ready}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
@@ -208,9 +204,7 @@ export default function MusicVault({ onClose, topInset = 0 }) {
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel="Next track"
-              onPress={() => {
-                next();
-              }}
+              onPress={next}
               disabled={!ready || current >= tracks.length - 1}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
