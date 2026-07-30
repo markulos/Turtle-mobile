@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -73,7 +73,15 @@ const getRNShare = () => {
 // was the recurring console noise the user was seeing. Consolidated here.
 import { useServer } from '../../../context/ServerContext';
 import { FlashList } from '@shopify/flash-list';
-import { useSharedValue } from 'react-native-reanimated';
+import Reanimated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  runOnJS,
+  // Aliased: react-native exports its own Easing, imported above for the
+  // legacy Animated timings in this file.
+  Easing as REasing,
+} from 'react-native-reanimated';
 import TimelineScrubber from './TimelineScrubber';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
 import { useMediaVersion } from '../../../context/DownloadsContext';
@@ -589,23 +597,128 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   gridColsRef.current = gridCols;
   // Cell pitch = one cell + its margins; derived per-call from the live count.
   const cellPitch = () => width / gridColsRef.current;
-  const pinchSteppedRef = useRef(false); // one column step per pinch gesture
+  // ── Pinch animation (iOS Photos feel) ──────────────────────────────────
+  // The gesture runs as a WORKLET on the UI thread: the grid scales live under
+  // the fingers at 60fps with no JS involvement (the old handler was
+  // .runOnJS(true) and stepped columns mid-gesture, so the layout just snapped).
+  // The column swap is committed on RELEASE, so you can pinch past the threshold
+  // and back out without changing anything — same as iOS.
+  const pinchScale = useSharedValue(1);
+  const pinchOpacity = useSharedValue(1);
+  const pinchFocalX = useSharedValue(0);
+  const pinchFocalY = useSharedValue(0);
+  // Column count mirrored into a shared value so the worklet can clamp at the
+  // min/max without reaching into JS state. Written in the layout effect below,
+  // never during render — Reanimated warns on render-phase shared-value writes.
+  const gridColsSv = useSharedValue(3);
+  // Focal Y of the last committed pinch — the anchor for the scroll correction.
+  const pinchFocalYRef = useRef(0);
+  // Scroll offset to apply once the new column layout is committed.
+  const pendingAnchorOffsetRef = useRef(null);
+
+  // Keep the cell under the fingers in place across the column change. Without
+  // this the grid keeps its pixel offset, so a taller/shorter layout slides the
+  // photo you were pinching off-screen.
+  // Offset that keeps the cell under the fingers in place across the column
+  // change. Without it the grid holds its pixel offset, so a taller/shorter
+  // layout slides the photo you were pinching off-screen.
+  const anchorOffsetForColumnChange = useCallback((oldCols, newCols, focalY) => {
+    const oldPitch = width / oldCols;
+    const newPitch = width / newCols;
+    const contentY = (scrubLastY.current || 0) + focalY;   // content-space y under the fingers
+    const itemIndex = (contentY / oldPitch) * oldCols;      // fractional index at that point
+    return Math.max(0, (itemIndex / newCols) * newPitch - focalY);
+  }, [width]);
+
+  // JS side of the commit. Reads the live count from the ref rather than a
+  // setState updater: the updater can be invoked more than once, and haptics /
+  // scroll anchoring must fire exactly once per gesture.
+  const commitPinchColumns = useCallback((dir) => {
+    const cols = gridColsRef.current;
+    const next = Math.max(GRID_COL_MIN, Math.min(GRID_COL_MAX, cols + dir));
+    if (next === cols) {
+      // Clamped at 2 or 5 — nothing to commit, so just release the visual state.
+      pinchScale.value = withTiming(1, { duration: 160, easing: REasing.out(REasing.quad) });
+      pinchOpacity.value = withTiming(1, { duration: 160 });
+      return;
+    }
+    impactHaptic('light');
+    // Applied in the layout effect, not here: scrolling before the relayout
+    // would land the offset in the OLD layout's coordinate space.
+    pendingAnchorOffsetRef.current = anchorOffsetForColumnChange(cols, next, pinchFocalYRef.current);
+    setGridCols(next);
+  }, [anchorOffsetForColumnChange, pinchScale, pinchOpacity]);
+
+  // The swap frame. The new layout mounts at scale 1 and is already the size the
+  // scaled old layout had reached, so the two are continuous; the short fade
+  // covers the one frame where FlashList relays out.
+  useLayoutEffect(() => {
+    gridColsSv.value = gridCols;
+    if (pendingAnchorOffsetRef.current != null) {
+      gridRef.current?.scrollToOffset({ offset: pendingAnchorOffsetRef.current, animated: false });
+      pendingAnchorOffsetRef.current = null;
+    }
+    pinchScale.value = 1;
+    pinchOpacity.value = withTiming(1, { duration: 150 });
+    // Shared values and refs are stable; this must run only on a column change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gridCols]);
+
+  const rememberFocalY = useCallback((y) => { pinchFocalYRef.current = y; }, []);
+
   const gridPinch = useMemo(() => (
     Gesture.Pinch()
-      .runOnJS(true)
-      .onStart(() => { pinchSteppedRef.current = false; })
-      .onUpdate((e) => {
-        if (pinchSteppedRef.current) return;
-        const dir = e.scale > 1.25 ? -1 : e.scale < 0.8 ? 1 : 0; // apart→fewer cols
-        if (!dir) return;
-        pinchSteppedRef.current = true;
-        setGridCols((c) => {
-          const next = Math.max(GRID_COL_MIN, Math.min(GRID_COL_MAX, c + dir));
-          if (next !== c) impactHaptic('light');
-          return next;
-        });
+      .onStart((e) => {
+        'worklet';
+        pinchFocalX.value = e.focalX;
+        pinchFocalY.value = e.focalY;
+        runOnJS(rememberFocalY)(e.focalY);
       })
-  ), []);
+      .onUpdate((e) => {
+        'worklet';
+        // Resist past the column limits so the grid can't be stretched into a
+        // step it will never take.
+        const atMax = gridColsSv.value >= GRID_COL_MAX && e.scale < 1;
+        const atMin = gridColsSv.value <= GRID_COL_MIN && e.scale > 1;
+        const resisted = atMax || atMin ? 1 + (e.scale - 1) * 0.25 : e.scale;
+        pinchScale.value = Math.max(0.55, Math.min(1.9, resisted));
+        pinchFocalX.value = e.focalX;
+        pinchFocalY.value = e.focalY;
+      })
+      .onEnd(() => {
+        'worklet';
+        const s = pinchScale.value;
+        const dir = s > 1.25 ? -1 : s < 0.8 ? 1 : 0;   // apart → fewer columns
+        if (!dir) {
+          // Below threshold: glide back, commit nothing.
+          pinchScale.value = withTiming(1, { duration: 180, easing: REasing.out(REasing.quad) });
+          return;
+        }
+        const cols = gridColsSv.value;
+        const next = Math.max(GRID_COL_MIN, Math.min(GRID_COL_MAX, cols + dir));
+        // Grow/shrink the CURRENT layout until its cells are exactly the size the
+        // destination layout will draw them (cell size scales as 1/columns), then
+        // swap. That equality is what makes the transition read as continuous.
+        const target = cols / next;
+        pinchOpacity.value = withTiming(0.35, { duration: 150 });
+        pinchScale.value = withTiming(
+          target,
+          { duration: 150, easing: REasing.out(REasing.quad) },
+          (finished) => { if (finished) runOnJS(commitPinchColumns)(dir); },
+        );
+      })
+  ), [commitPinchColumns, rememberFocalY, pinchScale, pinchOpacity, pinchFocalX, pinchFocalY, gridColsSv]);
+
+  // Scale about the pinch focal point rather than the container's centre, so the
+  // grid grows out of the fingers instead of sliding under them.
+  const gridPinchStyle = useAnimatedStyle(() => ({
+    opacity: pinchOpacity.value,
+    transform: [
+      { translateX: pinchFocalX.value * (1 - pinchScale.value) },
+      { translateY: pinchFocalY.value * (1 - pinchScale.value) },
+      { scale: pinchScale.value },
+    ],
+  }));
 
   // ── Section Select (tap first + tap last) ──────────────────────────────
   const rangeSelectModeRef = useRef(rangeSelectMode);
@@ -4438,7 +4551,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 GestureDetector adds two-finger pinch → column count (needs two
                 pointers, so it never fights the one-finger pan/scroll). */}
             <GestureDetector gesture={gridPinch}>
-            <View ref={gridWrapRef} style={{ flex: 1 }} {...gridDragResponder.panHandlers}>
+            {/* overflow:hidden clips the grid while it's scaled past the
+                viewport — without it the enlarged cells paint over the header
+                and the tab bar mid-pinch. */}
+            <View ref={gridWrapRef} style={{ flex: 1, overflow: 'hidden' }} {...gridDragResponder.panHandlers}>
+            <Reanimated.View style={[{ flex: 1 }, gridPinchStyle]}>
             <AnimatedFlashList
               ref={gridRef}
               data={uploadDisplayItems}
@@ -4574,6 +4691,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 </View>
               }
             />
+            </Reanimated.View>
             </View>
             </GestureDetector>
 
