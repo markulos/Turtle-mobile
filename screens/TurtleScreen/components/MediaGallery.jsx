@@ -114,6 +114,10 @@ const GRID_JUMP_IDLE_MS = 1500;
 
 // Constants for hitSlop to prevent re-renders
 const HIT_SLOP_10 = { top: 10, bottom: 10, left: 10, right: 10 };
+// Breathing room between the vault header (title + Boards/Music picker) and the
+// content of whichever page is showing. Both pager pages use it so they start on
+// the same line; PhotoVaultBoardsPage applies the same value internally.
+const VAULT_PICKER_GAP = 14;
 const HIT_SLOP_15 = { top: 15, bottom: 15, left: 15, right: 15 };
 const HIT_SLOP_20 = { top: 20, bottom: 20, left: 20, right: 20 };
 
@@ -4597,7 +4601,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               destination on a chooser screen; as a pager page it's one swipe
               from Boards. No onClose: there's nothing to go back to from a tab. */}
           <View style={{ width, height: '100%' }}>
-            <MusicVault />
+            {/* Clear the vault header by its MEASURED height plus the same gap
+                the Boards page leaves under the picker, so the two pages start
+                at the same line and no track card slides under the tabs. */}
+            <MusicVault topInset={(vaultHeaderH || insets.top + 90) + VAULT_PICKER_GAP} />
           </View>
 
         </Animated.ScrollView>

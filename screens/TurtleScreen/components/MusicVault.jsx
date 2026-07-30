@@ -17,7 +17,17 @@ const fmtTime = (sec) => {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 };
 
-export default function MusicVault({ onClose }) {
+/**
+ * topInset — height to clear at the top. As a page of the vault's pager the
+ * component sits UNDER that screen's absolutely-positioned header (title + the
+ * Boards/Music picker), so the caller passes the header's measured height plus
+ * the gap; without it the first track cards render behind the picker.
+ *
+ * onClose — only supplied when MusicVault is pushed as its own screen. In the
+ * pager there is nothing to go back to and the vault header already names the
+ * page, so the internal back/title row is omitted.
+ */
+export default function MusicVault({ onClose, topInset = 0 }) {
   const { theme } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
@@ -98,16 +108,18 @@ export default function MusicVault({ onClose }) {
   }, [c, current, isPlaying, playIndex, ready]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: insets.top + 6, paddingBottom: 8, paddingHorizontal: 10 }}>
-        <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }} accessibilityLabel="Back">
-          <Icon name="chevron-left" size={28} color={c.textPrimary} />
-        </TouchableOpacity>
-        <Text style={{ fontSize: 22, color: c.textPrimary }}>
-          <Text style={{ fontWeight: '100' }}>Music </Text>
-          <Text style={{ fontWeight: '400' }}>Vault</Text>
-        </Text>
-      </View>
+    <View style={{ flex: 1, backgroundColor: c.background, paddingTop: topInset }}>
+      {onClose ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: insets.top + 6, paddingBottom: 8, paddingHorizontal: 10 }}>
+          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }} accessibilityLabel="Back">
+            <Icon name="chevron-left" size={28} color={c.textPrimary} />
+          </TouchableOpacity>
+          <Text style={{ fontSize: 22, color: c.textPrimary }}>
+            <Text style={{ fontWeight: '100' }}>Music </Text>
+            <Text style={{ fontWeight: '400' }}>Vault</Text>
+          </Text>
+        </View>
+      ) : null}
 
       {error ? (
         <View style={[styles.error, { borderColor: c.border, backgroundColor: c.surfaceElevated }]}>
