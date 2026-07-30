@@ -3369,12 +3369,47 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           
           {/* Date/Resolution overlays moved inside ViewerItem for proper positioning */}
 
-          {/* Top Right Actions: Edit, Tags, Close */}
-          <Animated.View 
+          {/* Gradient chrome header (iOS Photos). A soft black-to-transparent
+              wash behind the top controls so white icons stay legible over a
+              bright photo without a hard bar. box-none so taps that miss the
+              back arrow still fall through to the chrome toggle, and it fades
+              with the same opacity the rest of the chrome uses. */}
+          <Animated.View
+            pointerEvents="box-none"
+            style={{
+              position: 'absolute', top: 0, left: 0, right: 0,
+              height: insets.top + 68,
+              opacity: zoomScale > 1.05 ? 0 : opacityAnim,
+              zIndex: 5,
+            }}
+          >
+            <LinearGradient
+              pointerEvents="none"
+              colors={['rgba(0,0,0,0.62)', 'rgba(0,0,0,0.26)', 'transparent']}
+              locations={[0, 0.55, 1]}
+              style={StyleSheet.absoluteFillObject}
+            />
+            <TouchableOpacity
+              onPress={closeViewer}
+              hitSlop={HIT_SLOP_15}
+              activeOpacity={0.6}
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+              style={{
+                position: 'absolute', left: 8, top: insets.top + 6,
+                width: 44, height: 44, alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <Icon name="chevron-left" size={32} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.45)', textShadowRadius: 4 }} />
+            </TouchableOpacity>
+          </Animated.View>
+
+          {/* Top Right Actions: Edit, Tags */}
+          <Animated.View
             style={[
-              styles.premiumBezel,
-              styles.viewerCloseButton, 
-              { 
+              styles.viewerCloseButton,
+              {
+                zIndex: 6,
                 top: insets.top + 16,
                 opacity: zoomScale > 1.05 ? 0 : opacityAnim,
                 flexDirection: 'row',
@@ -3406,16 +3441,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               accessibilityLabel="Edit tags"
             >
               <Icon name="tag-multiple" size={26} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={closeViewer}
-              activeOpacity={0.6}
-              hitSlop={HIT_SLOP_15}
-              accessibilityRole="button"
-              accessibilityLabel="Close viewer"
-            >
-              <Icon name="close" size={28} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
             </TouchableOpacity>
           </Animated.View>
 
