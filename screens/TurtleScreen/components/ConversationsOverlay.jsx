@@ -358,6 +358,14 @@ export default function ConversationsOverlay({ visible, onClose, onOpenClaude })
             renderItem={renderItem}
             keyExtractor={(b) => b.name}
             contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+            // This list lives inside EdgeSwipePage — a transparent Modal whose
+            // content sits in a translateX'd Animated.View. iOS lays the scroll
+            // indicator out against the untransformed frame, so it drifted in
+            // from the right edge and read as floating mid-list. An explicit
+            // indicator inset pins it back to the trailing edge.
+            showsVerticalScrollIndicator
+            scrollIndicatorInsets={{ right: 1, top: 0, bottom: insets.bottom }}
+            indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
             ItemSeparatorComponent={() => (
               <View style={{ height: 1, backgroundColor: c.border, marginLeft: 72 }} />
             )}
