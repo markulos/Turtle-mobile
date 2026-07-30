@@ -117,7 +117,7 @@ const styles = StyleSheet.create({
   // Board title deliberately quiet: 12pt at medium weight, so the collage
   // carries the card and the name reads as a caption under it.
   name: { fontSize: 12, lineHeight: 16, fontWeight: '500', marginTop: 9, paddingHorizontal: 2 },
-  metadata: { fontSize: 14, lineHeight: 19, marginTop: 2, paddingHorizontal: 2 },
+  metadata: { fontSize: 11, lineHeight: 15, marginTop: 2, paddingHorizontal: 2 },
 });
 
 export default memo(PhotoVaultBoardCard);

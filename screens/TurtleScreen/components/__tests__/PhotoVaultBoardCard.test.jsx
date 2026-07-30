@@ -99,7 +99,10 @@ describe('PhotoVaultBoardCard', () => {
     const title = StyleSheet.flatten(view.getByText('Warm interiors').props.style);
     expect(title.fontSize).toBe(12);
     expect(Number(title.fontWeight)).toBeLessThan(700);
-    expect(StyleSheet.flatten(view.getByText('47 items · 2d').props.style).fontSize).toBe(14);
+    // Metadata stays a step below the title so the hierarchy reads title-first.
+    const meta = StyleSheet.flatten(view.getByText('47 items · 2d').props.style);
+    expect(meta.fontSize).toBe(11);
+    expect(meta.fontSize).toBeLessThan(title.fontSize);
   });
 
   test('renders a single quiet empty-board placeholder when covers are absent', async () => {
