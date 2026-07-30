@@ -11,7 +11,7 @@
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, Pressable, ScrollView, TouchableOpacity, Animated, Dimensions,
+  View, Text, StyleSheet, Pressable, ScrollView, TouchableOpacity, Animated, Dimensions, Easing,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
