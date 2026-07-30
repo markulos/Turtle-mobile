@@ -114,7 +114,9 @@ const styles = StyleSheet.create({
   topPane: { height: '50%', borderBottomWidth: 2 },
   bottomPane: { height: '50%' },
   emptyCover: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  name: { fontSize: 16, lineHeight: 21, fontWeight: '700', marginTop: 9, paddingHorizontal: 2 },
+  // Board title deliberately quiet: 0.6x the previous 16pt and a medium weight,
+  // so the collage carries the card and the name reads as a caption under it.
+  name: { fontSize: 9.6, lineHeight: 13, fontWeight: '500', marginTop: 9, paddingHorizontal: 2 },
   metadata: { fontSize: 14, lineHeight: 19, marginTop: 2, paddingHorizontal: 2 },
 });
 

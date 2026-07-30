@@ -96,7 +96,9 @@ describe('PhotoVaultBoardCard', () => {
     expect(collage.overflow).toBe('hidden');
     expect(hero.width).toBe('65%');
     expect(card.marginBottom).toBe(26);
-    expect(StyleSheet.flatten(view.getByText('Warm interiors').props.style).fontSize).toBe(16);
+    const title = StyleSheet.flatten(view.getByText('Warm interiors').props.style);
+    expect(title.fontSize).toBeCloseTo(9.6, 2);
+    expect(Number(title.fontWeight)).toBeLessThan(700);
     expect(StyleSheet.flatten(view.getByText('47 items · 2d').props.style).fontSize).toBe(14);
   });
 
