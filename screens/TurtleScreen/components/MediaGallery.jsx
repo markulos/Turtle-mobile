@@ -3769,18 +3769,19 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const fallbackLabelWidth = Math.min(tabWidth * 0.45, 72);
   const labelWidthFor = (tab) => tabLabelWidths[tab] || fallbackLabelWidth;
 
-  // Both the bar's width and its x-position interpolate across the swipe, so
-  // it grows/shrinks into the next label instead of jumping at the end.
-  const tabUnderlineWidth = pageScrollX.interpolate({
-    inputRange: [0, width],
-    outputRange: [labelWidthFor(TABS[0]), labelWidthFor(TABS[1])],
-    extrapolate: 'clamp',
-  });
+  // The bar's WIDTH is a plain style, not an animated one: pageScrollX is fed by
+  // an Animated.event with useNativeDriver, and the native animated module only
+  // handles transforms and opacity — interpolating `width` off it throws
+  // "Style property 'width' is not supported by native animated module".
+  // scaleX would be native-safe but scales the 2pt border radius with it, so the
+  // rounded ends would smear into a lens. A single fixed width sized to the
+  // widest label, moved by translateX, keeps both the native driver and the caps.
+  const tabUnderlineWidth = Math.max(...TABS.map(labelWidthFor));
   const tabUnderlineX = pageScrollX.interpolate({
     inputRange: [0, width],
     outputRange: [
-      tabWidth * 0.5 - labelWidthFor(TABS[0]) / 2,          // centred under tab 0
-      tabWidth * 1.5 - labelWidthFor(TABS[1]) / 2,          // centred under tab 1
+      tabWidth * 0.5 - tabUnderlineWidth / 2,          // centred under tab 0
+      tabWidth * 1.5 - tabUnderlineWidth / 2,          // centred under tab 1
     ],
     extrapolate: 'clamp',
   });
