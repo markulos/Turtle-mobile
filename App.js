@@ -51,6 +51,7 @@ import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
 import { tapHaptic } from './utils/haptics';
+import { useAppFonts } from './utils/fonts';
 
 // App-wide snappy touch feel: every TouchableOpacity gets a light press-in
 // haptic + a crisper press fade. Installed once, before the tree renders.
@@ -171,6 +172,10 @@ function TabNavigator() {
 function AppContent() {
   const { isDark, theme } = useTheme();
   const { isAuthenticated, isLoading } = useAuth();
+  // App typeface. Held behind the SAME startup gate as the auth check below, so
+  // no screen ever paints in the system face and then reflows when Figtree
+  // lands. Costs nothing extra at launch: it loads while the token is checked.
+  const fontsLoaded = useAppFonts();
 
   // Share-intent hook from expo-share-intent. When the OS launches us
   // via the share sheet, `hasShareIntent` is true and `shareIntent`
@@ -194,8 +199,8 @@ function AppContent() {
     return () => sub.remove();
   }, []);
 
-  // Show loading spinner while checking for saved token
-  if (isLoading) {
+  // Show loading spinner while checking for saved token / loading the typeface
+  if (isLoading || !fontsLoaded) {
     return (
       <View style={{
         flex: 1,

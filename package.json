@@ -16,6 +16,7 @@
     "test:music": "jest --runInBand services/__tests__ context/__tests__ screens/TurtleScreen/components/__tests__/MusicVault.test.jsx"
   },
   "dependencies": {
+    "@expo-google-fonts/figtree": "^0.4.1",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.1.17",
     "@react-navigation/native": "^7.1.17",
@@ -24,6 +25,7 @@
     "buffer": "^6.0.3",
     "crypto-js": "^4.2.0",
     "expo": "~54.0.35",
+    "expo-asset": "~12.0.13",
     "expo-blur": "~15.0.8",
     "expo-build-properties": "~1.0.10",
     "expo-camera": "~17.0.10",
@@ -78,7 +80,7 @@
   "jest": {
     "preset": "jest-expo",
     "transformIgnorePatterns": [
-      "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@rntp/.*|@react-navigation/.*|react-native-vector-icons)"
+      "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|@rntp/.*|@react-navigation/.*|react-native-vector-icons)"
     ]
   }
 }

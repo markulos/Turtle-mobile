@@ -2,6 +2,7 @@ import React, { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { FONTS } from '../../../utils/fonts';
 
 const Cover = ({ path, slot, resolveCoverUrl }) => (
   <Image
@@ -116,8 +117,10 @@ const styles = StyleSheet.create({
   emptyCover: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   // Caption block under the collage, scaled 1.3x off the 12/11pt pass. Medium
   // weight keeps the collage leading the card; metadata stays below the title.
-  name: { fontSize: 14.04, lineHeight: 19, fontWeight: '500', marginTop: 9, paddingHorizontal: 2 },
-  metadata: { fontSize: 12.87, lineHeight: 16, marginTop: 0, paddingHorizontal: 2 },
+  // Custom faces carry their own weight: RN ignores fontWeight once fontFamily
+  // names a bundled font, so the bold title uses the Bold family directly.
+  name: { fontSize: 14.04, lineHeight: 19, fontFamily: FONTS.bold, marginTop: 9, paddingHorizontal: 2 },
+  metadata: { fontSize: 12.87, lineHeight: 16, fontFamily: FONTS.regular, marginTop: 0, paddingHorizontal: 2 },
 });
 
 export default memo(PhotoVaultBoardCard);
