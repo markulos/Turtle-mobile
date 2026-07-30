@@ -50,7 +50,6 @@ import CommandConsole from './components/CommandConsole';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
-import { tapHaptic } from './utils/haptics';
 import { useAppFonts } from './utils/fonts';
 
 // App-wide snappy touch feel: every TouchableOpacity gets a light press-in
@@ -67,9 +66,8 @@ function TabNavigator() {
   return (
     <>
     <Tab.Navigator
-      // Instant selection tick the moment a tab is tapped — the switch feels
-      // tactile rather than silent. Fires for every tab via one listener.
-      screenListeners={{ tabPress: () => tapHaptic() }}
+      // No tabPress haptic: tab switching is silent by request. (There used to
+      // be a selection tick here for every tab.)
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
           // Turtle tab uses the web app's custom PNG mark so the

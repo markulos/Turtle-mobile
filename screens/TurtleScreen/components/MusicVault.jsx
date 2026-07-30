@@ -8,7 +8,6 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../../context/ThemeContext';
 import { useMusicPlayer } from '../../../context/MusicPlayerContext';
 import { titleOf, sourceOf } from '../../../services/musicTrackMapper';
-import { tapHaptic, impactHaptic } from '../../../utils/haptics';
 
 const fmtTime = (sec) => {
   if (!Number.isFinite(sec) || sec < 0) return '0:00';
@@ -82,8 +81,7 @@ export default function MusicVault({ onClose, topInset = 0 }) {
     return (
       <TouchableOpacity
         activeOpacity={0.7}
-        disabled={!ready}
-        onPressIn={() => tapHaptic()}
+        disabled={!ready}
         onPress={() => playIndex(index)}
         style={styles.row}
       >
@@ -188,8 +186,7 @@ export default function MusicVault({ onClose, topInset = 0 }) {
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel="Previous track"
-              onPress={() => {
-                impactHaptic('light');
+              onPress={() => {
                 previous();
               }}
               disabled={!ready || current <= 0}
@@ -200,8 +197,7 @@ export default function MusicVault({ onClose, topInset = 0 }) {
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
-              onPress={() => {
-                impactHaptic('medium');
+              onPress={() => {
                 togglePlayback();
               }}
               disabled={!ready}
@@ -212,8 +208,7 @@ export default function MusicVault({ onClose, topInset = 0 }) {
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel="Next track"
-              onPress={() => {
-                impactHaptic('light');
+              onPress={() => {
                 next();
               }}
               disabled={!ready || current >= tracks.length - 1}

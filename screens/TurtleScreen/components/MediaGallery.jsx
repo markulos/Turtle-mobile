@@ -36,7 +36,6 @@ import * as Sharing from 'expo-sharing';
 import { sweepTransientCaches } from '../../../utils/cacheManager';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { tapHaptic as hapticTick, impactHaptic } from '../../../utils/haptics';
 
 // react-native-share (unlike expo-sharing) can hand the OS a whole ARRAY of
 // files in ONE share sheet — so sharing many vault photos matches the native
@@ -144,8 +143,9 @@ const formatDuration = (seconds) => {
 };
 
 const { width, height } = Dimensions.get('window');
-// hapticTick is the shared selection-tick (imported above, aliased from
-// utils/haptics) so the gallery buzzes identically to the rest of the app.
+// The vault is deliberately haptic-free: touch feedback on the grid, the
+// board cards, the pinch column step and the toolbar buttons was removed on
+// request. Don't reintroduce per-tap buzzes here.
 
 // Month/year from a 'YYYY-MM' bucket key → "June 2026".
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -601,8 +601,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
 
   // ── Pinch-to-change-columns (iOS Photos) ───────────────────────────────
   // The grid's column count is live state: pinch OUT (fingers apart) = bigger
-  // cells = fewer columns, pinch IN = more. One step per gesture, haptic on
-  // change. Every piece of column-dependent math below (drag-select ranges,
+  // cells = fewer columns, pinch IN = more. One step per gesture. Every piece of column-dependent math below (drag-select ranges,
   // sparse-region windows, cell sizing) reads gridColsRef so stable callbacks
   // never see a stale count.
   const GRID_COL_MIN = 2;
@@ -646,8 +645,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   }, [width]);
 
   // JS side of the commit. Reads the live count from the ref rather than a
-  // setState updater: the updater can be invoked more than once, and haptics /
-  // scroll anchoring must fire exactly once per gesture.
+  // setState updater: the updater can be invoked more than once, and the
+  // scroll anchoring must run exactly once per gesture.
   const commitPinchColumns = useCallback((dir) => {
     const cols = gridColsRef.current;
     const next = Math.max(GRID_COL_MIN, Math.min(GRID_COL_MAX, cols + dir));
@@ -657,7 +656,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       pinchOpacity.value = withTiming(1, { duration: 160 });
       return;
     }
-    impactHaptic('light');
     // Applied in the layout effect, not here: scrolling before the relayout
     // would land the offset in the OLD layout's coordinate space.
     pendingAnchorOffsetRef.current = anchorOffsetForColumnChange(cols, next, pinchFocalYRef.current);
@@ -3245,7 +3243,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           <TouchableOpacity
             style={[styles.uploadButton, { backgroundColor: selectedLocalAssets.size > 0 ? theme.colors.primary : theme.colors.surface }]}
             disabled={selectedLocalAssets.size === 0}
-            onPressIn={() => impactHaptic('medium')}
             onPress={queueSelectedForUpload}
           >
             <Icon name="cloud-upload" size={20} color={selectedLocalAssets.size > 0 ? theme.colors.background : theme.colors.textMuted} />
@@ -3494,7 +3491,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               </TouchableOpacity>
 
               <TouchableOpacity
-                onPressIn={() => hapticTick()}
                 onPress={toggleFavourite}
                 hitSlop={HIT_SLOP_20}
                 activeOpacity={0.6}
@@ -3523,7 +3519,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                   <TouchableOpacity
                     style={styles.shareSheetOption}
                     activeOpacity={0.7}
-                    onPressIn={() => hapticTick()}
                     onPress={() => { const m = shareChooser; setShareChooser(null); doShare(m, 'regular'); }}
                   >
                     <Icon name="image-outline" size={22} color={theme.colors.accentInfo} />
@@ -3535,7 +3530,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                   <TouchableOpacity
                     style={styles.shareSheetOption}
                     activeOpacity={0.7}
-                    onPressIn={() => hapticTick()}
                     onPress={() => { const m = shareChooser; setShareChooser(null); doShare(m, 'full'); }}
                   >
                     <Icon name="image-size-select-actual" size={22} color={theme.colors.primary} />
@@ -3787,7 +3781,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                               onPress={() => {
                                 // Functional + idempotent: a stale closure or a
                                 // rapid double-tap can't duplicate the tag.
-                                hapticTick();
                                 setEditingTags(prev => prev.includes(album) ? prev : [...prev, album]);
                                 setTagInputValue('');
                               }}
@@ -3811,7 +3804,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                         style={[styles.quickSelectChip, editingTags.includes(album) && { backgroundColor: theme.colors.primary }]}
                         onPress={() => {
                           // Functional toggle: atomic + dedup-safe under lag.
-                          hapticTick();
                           setEditingTags(prev => prev.includes(album) ? prev.filter(t => t !== album) : [...prev, album]);
                         }}
                       >
@@ -3829,7 +3821,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary }]}
-                      onPressIn={() => impactHaptic('medium')}
                       onPress={() => {
                         // Resolve the tag set (chips + whatever's still typed),
                         // then close the editor INSTANTLY. Persistence runs in
@@ -4330,7 +4321,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                     <TouchableOpacity
                       key={album} style={[styles.quickSelectChip, { borderWidth: 1, borderColor: theme.colors.border }]}
                       onPress={() => {
-                        hapticTick();
                         setEditingTags(prev => prev.includes(album) ? prev : [...prev, album]);
                         setTagInputValue('');
                       }}
@@ -4345,7 +4335,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                     <TouchableOpacity
                       key={album} style={[styles.quickSelectChip, editingTags.includes(album) && { backgroundColor: theme.colors.primary }]}
                       onPress={() => {
-                        hapticTick();
                         setEditingTags(prev => prev.includes(album) ? prev.filter(t => t !== album) : [...prev, album]);
                       }}
                     >
@@ -4462,7 +4451,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                         onPress={() => {
                           // Keep the keyboard up so the user can keep typing the
                           // next tag; selection is instant local state.
-                          hapticTick();
                           setSelectedTags(prev => prev.includes(album) ? prev : [...prev, album]);
                           setTagInputValue('');
                         }}
@@ -4485,7 +4473,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                   key={album}
                   style={[styles.quickSelectChip, selectedTags.includes(album) && { backgroundColor: theme.colors.primary }]}
                   onPress={() => {
-                    hapticTick();
                     setSelectedTags(prev => prev.includes(album) ? prev.filter(t => t !== album) : [...prev, album]);
                   }}
                 >
@@ -4503,7 +4490,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.uploadModalButton, { backgroundColor: theme.colors.primary, opacity: uploadBusy ? 0.6 : 1 }]}
-                onPressIn={() => impactHaptic('medium')}
                 onPress={executeUpload}
                 disabled={uploadBusy}
               >
@@ -4606,7 +4592,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               onRetry={fetchAlbums}
               onOpenBoard={openPhotosPage}
               onLongPressBoard={showAlbumOptions}
-              onCardPressIn={hapticTick}
               onScroll={handleAlbumsScroll}
               onContentSizeChange={(w, h) => {
                 albumsContentH.current = h;
@@ -4961,7 +4946,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                     </View>
                     <View style={{ alignItems: 'center', width: '100%', marginTop: 8 }}>
                       <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-                        <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPressIn={() => impactHaptic('medium')} onPress={handleUpload} disabled={uploadBusy} activeOpacity={0.7}>
+                        <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPress={handleUpload} disabled={uploadBusy} activeOpacity={0.7}>
                           <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="image-plus" size={18} color={theme.colors.primary} /></View>
                           <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Upload</Text>
                         </TouchableOpacity>
