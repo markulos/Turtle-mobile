@@ -15,13 +15,14 @@
  * Loading is centralised in App.js behind the existing startup gate, so no
  * screen ever paints text in a face that isn't ready.
  */
-import {
-  useFonts,
-  Figtree_400Regular,
-  Figtree_500Medium,
-  Figtree_600SemiBold,
-  Figtree_700Bold,
-} from '@expo-google-fonts/figtree';
+// Per-weight subpaths, NOT the package root. The root index re-exports all
+// fourteen Figtree variants, so importing from it bundles every one of them
+// (~570 kB of TTFs) even though four are used. Verified with `expo export`.
+import { useFonts } from 'expo-font';
+import { Figtree_400Regular } from '@expo-google-fonts/figtree/400Regular';
+import { Figtree_500Medium } from '@expo-google-fonts/figtree/500Medium';
+import { Figtree_600SemiBold } from '@expo-google-fonts/figtree/600SemiBold';
+import { Figtree_700Bold } from '@expo-google-fonts/figtree/700Bold';
 
 export const FONTS = {
   regular: 'Figtree_400Regular',
