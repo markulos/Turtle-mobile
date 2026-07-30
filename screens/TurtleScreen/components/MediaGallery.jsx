@@ -651,7 +651,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     const cols = gridColsRef.current;
     const next = Math.max(GRID_COL_MIN, Math.min(GRID_COL_MAX, cols + dir));
     if (next === cols) {
-      // Clamped at 2 or 5 — nothing to commit, so just release the visual state.
+      // Clamped at 2 or 5 — no swap happens, so nothing will fade the layout
+      // back in. Restore it here instead.
       pinchScale.value = withTiming(1, { duration: 160, easing: REasing.out(REasing.quad) });
       pinchOpacity.value = withTiming(1, { duration: 160 });
       return;
@@ -662,9 +663,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     setGridCols(next);
   }, [anchorOffsetForColumnChange, pinchScale, pinchOpacity]);
 
-  // The swap frame. The new layout mounts at scale 1 and is already the size the
-  // scaled old layout had reached, so the two are continuous; the short fade
-  // covers the one frame where FlashList relays out.
+  // The swap frame — second half of the cross-fade. The outgoing layout has
+  // already faded to zero, so the new column count mounts invisible at scale 1
+  // and fades up. Neither layout is ever seen mid-relayout.
   useLayoutEffect(() => {
     gridColsSv.value = gridCols;
     if (pendingAnchorOffsetRef.current != null) {
@@ -672,7 +673,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       pendingAnchorOffsetRef.current = null;
     }
     pinchScale.value = 1;
-    pinchOpacity.value = withTiming(1, { duration: 150 });
+    pinchOpacity.value = 0;                                  // mount invisible…
+    pinchOpacity.value = withTiming(1, { duration: 170, easing: REasing.out(REasing.quad) });  // …then fade up
     // Shared values and refs are stable; this must run only on a column change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gridCols]);
@@ -707,16 +709,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           pinchScale.value = withTiming(1, { duration: 180, easing: REasing.out(REasing.quad) });
           return;
         }
-        const cols = gridColsSv.value;
-        const next = Math.max(GRID_COL_MIN, Math.min(GRID_COL_MAX, cols + dir));
-        // Grow/shrink the CURRENT layout until its cells are exactly the size the
-        // destination layout will draw them (cell size scales as 1/columns), then
-        // swap. That equality is what makes the transition read as continuous.
-        const target = cols / next;
-        pinchOpacity.value = withTiming(0.35, { duration: 150 });
-        pinchScale.value = withTiming(
-          target,
-          { duration: 150, easing: REasing.out(REasing.quad) },
+        // Double cross-fade: the outgoing layout fades to zero while settling
+        // back to its natural scale, the column count is swapped while nothing
+        // is visible, and the incoming layout fades up from zero (second half
+        // in the layout effect above). Replaces the earlier scale-continuity
+        // settle, so no layout is ever shown at a size it doesn't own.
+        pinchScale.value = withTiming(1, { duration: 140, easing: REasing.out(REasing.quad) });
+        pinchOpacity.value = withTiming(
+          0,
+          { duration: 140, easing: REasing.out(REasing.quad) },
           (finished) => { if (finished) runOnJS(commitPinchColumns)(dir); },
         );
       })
