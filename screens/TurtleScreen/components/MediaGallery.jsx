@@ -1420,14 +1420,14 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       result = ['Favourites', ...result.slice(0, favIndex), ...result.slice(favIndex + 1)];
     }
     return result;
-  }, [albumIndex, albumSearchQuery, activeTab]);
+  }, [albumIndex, albumSearchQuery, pagerTab]);
 
   const boardModels = useMemo(() => buildPhotoVaultBoards({
     names: albumIndex.map((album) => album.name),
     coversByName: albumCovers,
     countsByName: albumCounts,
     latestDatesByName: albumLatestDates,
-    query: activeTab === 'albums' ? albumSearchQuery : '',
+    query: pagerTab === 'albums' ? albumSearchQuery : '',
     sortMode: boardSortMode,
   }), [
     albumIndex,
@@ -1436,7 +1436,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     albumLatestDates,
     albumSearchQuery,
     boardSortMode,
-    activeTab,
+    pagerTab,
   ]);
 
   // "All Photos" — the whole library presented as a board, pinned above the
@@ -1460,12 +1460,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   }, [uploadItems, globalUploadsTotal]);
 
 
-  // The album back-swipe used to be a hand-rolled PanResponder here, sliding
-  // the uploads pager page rightward. The photo grid is now a pushed
-  // EdgeSwipePage, which owns that gesture — keeping both would put two
-  // competing left-edge responders on the same screen.
-  const selectedAlbumRef = useRef(selectedAlbum);
-  selectedAlbumRef.current = selectedAlbum;
 
   // 2. Derive dropdown list instantly from the dictionary + global DB
   const availableAlbums = useMemo(() => {
@@ -1882,7 +1876,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // Worth showing only once the album list overflows a couple of screens — an
   // A→Z rail on a handful of albums is noise. Off while searching: those results
   // are relevance-ranked, not alphabetical, so letter groups wouldn't be ordered.
-  const albumsScrubEnabled = activeTab === 'albums'
+  // pagerTab, not activeTab: the A-Z rail belongs to the Boards page, which
+  // stays mounted underneath while the photos page is pushed over it.
+  const albumsScrubEnabled = pagerTab === 'albums'
     && boardSortMode === 'alphabetical'
     && !albumSearchQuery.trim()
     && boardModels.length >= 20;
@@ -2176,8 +2172,14 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const albumsTabEffectFirstRun = useRef(true);
   useEffect(() => {
     if (albumsTabEffectFirstRun.current) { albumsTabEffectFirstRun.current = false; return; }
+    // Only when the Boards page is what you're actually looking at. Keying this
+    // on activeTab meant every board OPEN refetched the albums (activeTab flips
+    // to 'uploads') and every close refetched them again — two wasted requests
+    // per visit. Closing the photos page still refetches, which is wanted: the
+    // counts may have changed while you were in there.
+    if (pagerTab !== 'albums' || photosOpen) return;
     fetchAlbums();
-  }, [activeTab, fetchAlbums]);
+  }, [pagerTab, photosOpen, fetchAlbums]);
 
   // Handle pull-to-refresh — refresh albums on the Albums tab, otherwise the
   // Photos grid.
@@ -4613,7 +4615,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               query={albumSearchQuery}
               sortMode={boardSortMode}
               theme={theme}
-              topInset={insets.top + 90}
+              topInset={vaultHeaderH || insets.top + 90}
               resolveCoverUrl={getFullUrl}
               onQueryChange={setAlbumSearchQuery}
               onSortModeChange={setBoardSortMode}
