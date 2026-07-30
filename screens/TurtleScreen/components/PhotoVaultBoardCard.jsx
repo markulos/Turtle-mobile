@@ -114,10 +114,10 @@ const styles = StyleSheet.create({
   topPane: { height: '50%', borderBottomWidth: 2 },
   bottomPane: { height: '50%' },
   emptyCover: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  // Board title deliberately quiet: 12pt at medium weight, so the collage
-  // carries the card and the name reads as a caption under it.
-  name: { fontSize: 12, lineHeight: 16, fontWeight: '500', marginTop: 9, paddingHorizontal: 2 },
-  metadata: { fontSize: 11, lineHeight: 15, marginTop: 2, paddingHorizontal: 2 },
+  // Caption block under the collage, scaled 1.3x off the 12/11pt pass. Medium
+  // weight keeps the collage leading the card; metadata stays below the title.
+  name: { fontSize: 15.6, lineHeight: 21, fontWeight: '500', marginTop: 9, paddingHorizontal: 2 },
+  metadata: { fontSize: 14.3, lineHeight: 19, marginTop: 2, paddingHorizontal: 2 },
 });
 
 export default memo(PhotoVaultBoardCard);
