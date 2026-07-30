@@ -890,6 +890,33 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       useNativeDriver: true,
     }).start();
   }, [isUploadsSearchVisible, uploadsSearchAnim]);
+
+  // Server FTS search. The instant client-side filter below only sees LOADED
+  // items — in the sparse virtual library that's a small fraction of the
+  // collection — so a debounced /media/search (FTS5 over filename, tags, AI
+  // labels, OCR text, and summaries; same row shape as /gallery) supplies the
+  // authoritative result set for the whole library. The client filter still
+  // paints instantly and covers the debounce gap + offline. Audio rows are
+  // dropped (they belong to the Music slice, not the photo vault).
+  const [serverSearch, setServerSearch] = useState(null); // { query, items } | null
+  useEffect(() => {
+    const q = uploadsSearchQuery.trim();
+    if (q.length < 2) { setServerSearch(null); return undefined; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const r = await api.get(
+          `/media/search?q=${encodeURIComponent(q)}&limit=200&offset=0&sortBy=${sortModeRef.current}`,
+        );
+        if (cancelled) return;
+        const items = (Array.isArray(r?.items) ? r.items : []).filter((it) => it.type !== 'audio');
+        setServerSearch({ query: q, items });
+      } catch (e) {
+        // Offline / older server — the client filter keeps working on its own.
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [uploadsSearchQuery, api]);
   
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [pendingAssets, setPendingAssets] = useState([]);
@@ -1751,15 +1778,23 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       return Array.from({ length: 21 }, (_, i) => slotAt(i));
     }
 
-    // Filter by tag search query
+    // Filter by search query. Once the server FTS round-trip for THIS query
+    // lands it becomes the display set (whole-library coverage: filename, tags,
+    // AI labels, OCR, summaries); until then — and on failure — the instant
+    // client-side tag filter over loaded items stands in.
     let filtered = uploadItems || [];
-    if (uploadsSearchQuery.trim()) {
-      const query = uploadsSearchQuery.toLowerCase().replace(/[-_\s]/g, '');
-      filtered = filtered.filter(item =>
-        tagsOf(item).some(tag =>
-          tag.toLowerCase().replace(/[-_\s]/g, '').includes(query)
-        )
-      );
+    const trimmedQuery = uploadsSearchQuery.trim();
+    if (trimmedQuery) {
+      if (serverSearch && serverSearch.query === trimmedQuery) {
+        filtered = serverSearch.items;
+      } else {
+        const query = trimmedQuery.toLowerCase().replace(/[-_\s]/g, '');
+        filtered = filtered.filter(item =>
+          tagsOf(item).some(tag =>
+            tag.toLowerCase().replace(/[-_\s]/g, '').includes(query)
+          )
+        );
+      }
     }
 
     prefixLenRef.current = filtered.length;
@@ -1786,7 +1821,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uploadItems, loading, uploadsSearchQuery, selectedAlbum, uploadTimeline.total, sparseVersion]);
+  }, [uploadItems, loading, uploadsSearchQuery, serverSearch, selectedAlbum, uploadTimeline.total, sparseVersion]);
   // Keep the drag-select range math reading the SAME array the grid renders.
   uploadItemsForDragRef.current = uploadDisplayItems;
 
@@ -3285,11 +3320,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // Render empty state (Inverted grids need scaleY: -1 to render right-side up)
   const renderEmpty = () => (
     <View style={[styles.emptyContainer, styles.cellFlip]}>
-      <Icon name="image-off" size={64} color={theme.colors.textMuted} />
+      <Icon name={uploadsSearchQuery.trim() ? 'magnify-close' : 'image-off'} size={64} color={theme.colors.textMuted} />
       <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
-        No uploads yet
+        {uploadsSearchQuery.trim() ? `No matches for “${uploadsSearchQuery.trim()}”` : 'No uploads yet'}
       </Text>
-      {activeTab === 'uploads' && (
+      {activeTab === 'uploads' && !uploadsSearchQuery.trim() && (
         <Text style={[styles.emptySubtext, { color: theme.colors.textMuted }]}>
           Tap "Upload Photos" to add photos and videos
         </Text>
@@ -5159,7 +5194,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               style={{ flex: 1, marginLeft: 6, color: theme.colors.textPrimary, fontSize: 15, padding: 0 }}
               value={uploadsSearchQuery}
               onChangeText={setUploadsSearchQuery}
-              placeholder="Search by tag..."
+              placeholder="Search photos, tags, text…"
               placeholderTextColor={theme.colors.textMuted}
               autoFocus={isUploadsSearchVisible}
             />
