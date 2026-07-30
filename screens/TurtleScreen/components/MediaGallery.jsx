@@ -90,6 +90,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import PhotoVaultBoardsPage from './PhotoVaultBoardsPage';
 import {
   buildPhotoVaultBoards,
+  formatBoardMetadata,
   normalizeAlbumsPayload,
 } from '../../../utils/photoVaultBoards';
 
@@ -1437,6 +1438,27 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     boardSortMode,
     activeTab,
   ]);
+
+  // "All Photos" — the whole library presented as a board, pinned above the
+  // user's own on the Boards page. Its covers are the newest loaded thumbnails
+  // (no extra request; the timeline has already fetched them) and its count is
+  // the server's true total, not the number currently in memory.
+  const allPhotosBoard = useMemo(() => {
+    const covers = [];
+    for (const item of uploadItems) {
+      if (!item || item.isSkeleton) continue;
+      const path = item.thumbnailUrl || item.url;
+      if (path) covers.push(path);
+      if (covers.length === 3) break;
+    }
+    return {
+      name: 'All Photos',
+      covers,
+      count: globalUploadsTotal,
+      metadata: formatBoardMetadata(globalUploadsTotal, 0),
+    };
+  }, [uploadItems, globalUploadsTotal]);
+
 
   // The album back-swipe used to be a hand-rolled PanResponder here, sliding
   // the uploads pager page rightward. The photo grid is now a pushed
@@ -3874,6 +3896,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     setIsUploadsSearchVisible(false);
     setUploadsSearchQuery('');
   }, []);
+  // 'All' is the unfiltered library, which is exactly what the All Photos board
+  // is. Declared here rather than beside allPhotosBoard so it sits AFTER
+  // openPhotosPage — a const referenced before its declaration would throw.
+  const openAllPhotos = useCallback(() => openPhotosPage('All'), [openPhotosPage]);
 
   // Pinterest-style underline: a bar the width of the ACTIVE label that slides
   // from title to title. Label widths are measured once by onLayout (text width
@@ -4579,6 +4605,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             <PhotoVaultBoardsPage
               ref={albumsRef}
               boards={boardModels}
+              allPhotos={allPhotosBoard}
+              onOpenAllPhotos={openAllPhotos}
               loading={isAlbumsLoading}
               error={albumsLoadError}
               hasLoadedAlbums={hasLoadedAlbums}

@@ -117,6 +117,26 @@ describe('PhotoVaultBoardsPage', () => {
     expect(props.onQueryChange).toHaveBeenCalledWith('');
   });
 
+  test('pins All Photos above the grid, outside search and sort', async () => {
+    const onOpenAllPhotos = jest.fn();
+    const allPhotos = { name: 'All Photos', covers: [], count: 12480, metadata: '12480 items' };
+    // A query that matches no user board: the pinned card must survive it,
+    // because it is a fixed entry point rather than a search result.
+    const { view } = await renderPage({ allPhotos, onOpenAllPhotos, boards: [], query: 'zzz' });
+
+    const card = view.getByLabelText(/^All Photos, 12480 items/);
+    expect(card).toBeTruthy();
+    expect(view.getByText('No boards match “zzz”.')).toBeTruthy();
+
+    await fireEvent.press(card);
+    expect(onOpenAllPhotos).toHaveBeenCalledWith('All Photos');
+  });
+
+  test('omits the All Photos card when the caller supplies none', async () => {
+    const { view } = await renderPage();
+    expect(view.queryByLabelText(/^All Photos/)).toBeNull();
+  });
+
   test('renders sort chips in a horizontal non-wrapping scroller', async () => {
     const { props, view } = await renderPage();
     const sortScroll = view.getByTestId('board-sort-scroll');

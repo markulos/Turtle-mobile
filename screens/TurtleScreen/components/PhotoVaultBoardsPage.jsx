@@ -27,6 +27,8 @@ const COLUMN_GAP = 7;
 // search field. `topInset` only clears the header's height, so without this the
 // search field sits flush against the tab underline.
 const PICKER_GAP = 14;
+// Long-press does nothing on All Photos: it is not renameable or deletable.
+const NOOP = () => {};
 const CARD_WIDTH = (Dimensions.get('window').width - EDGE_PAD * 2 - COLUMN_GAP) / 2;
 const LOAD_ERROR_COPY = 'Unable to load boards';
 const REFRESH_ERROR_COPY = 'Couldn’t refresh boards.';
@@ -43,6 +45,8 @@ function BoardSkeleton({ index, theme }) {
 
 const PhotoVaultBoardsPage = forwardRef(({
   boards,
+  allPhotos,
+  onOpenAllPhotos,
   loading,
   error,
   hasLoadedAlbums = false,
@@ -165,6 +169,24 @@ const PhotoVaultBoardsPage = forwardRef(({
           </Pressable>
         </View>
       )}
+
+      {/* All Photos — the whole library as a board, pinned above the user's own.
+          Deliberately outside the grid data: it is never filtered by the search
+          field and never reordered by the sort chips, because it is a fixed
+          entry point rather than content. Full width so it reads as the parent
+          of the two-column boards below. */}
+      {allPhotos ? (
+        <View style={styles.allPhotosSlot}>
+          <PhotoVaultBoardCard
+            board={allPhotos}
+            width={CARD_WIDTH * 2 + COLUMN_GAP}
+            theme={theme}
+            resolveCoverUrl={resolveCoverUrl}
+            onPress={onOpenAllPhotos}
+            onLongPress={NOOP}
+          />
+        </View>
+      ) : null}
     </View>
   );
 
@@ -253,6 +275,7 @@ const styles = StyleSheet.create({
   clearSearch: { width: 44, height: 44, marginRight: -12, alignItems: 'center', justifyContent: 'center' },
   addButton: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
   sortScroller: { marginTop: 14 },
+  allPhotosSlot: { marginTop: 16 },
   sorts: { flexDirection: 'row', gap: 8, paddingRight: EDGE_PAD },
   sort: { minHeight: 44, borderWidth: 1, borderRadius: 22, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 6 },
   sortLabel: { fontSize: 14, fontWeight: '600' },
