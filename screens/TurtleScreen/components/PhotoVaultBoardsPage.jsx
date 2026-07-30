@@ -23,6 +23,10 @@ const SORTS = [
 // same 20px between columns, which lands each card at ~185pt.
 const EDGE_PAD = 7;
 const COLUMN_GAP = 7;
+// Breathing room between the tab picker in the fixed header above and the
+// search field. `topInset` only clears the header's height, so without this the
+// search field sits flush against the tab underline.
+const PICKER_GAP = 14;
 const CARD_WIDTH = (Dimensions.get('window').width - EDGE_PAD * 2 - COLUMN_GAP) / 2;
 const LOAD_ERROR_COPY = 'Unable to load boards';
 const REFRESH_ERROR_COPY = 'Couldn’t refresh boards.';
@@ -70,7 +74,7 @@ const PhotoVaultBoardsPage = forwardRef(({
   }, [onQueryChange]);
 
   const renderHeader = () => (
-    <View style={[styles.header, { paddingTop: topInset, backgroundColor: theme.colors.background }]}>
+    <View style={[styles.header, { paddingTop: topInset + PICKER_GAP, backgroundColor: theme.colors.background }]}>
       <View style={styles.searchRow}>
         <View style={[styles.search, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
           <Icon name="magnify" size={21} color={theme.colors.textMuted} />
