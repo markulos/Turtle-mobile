@@ -5110,9 +5110,31 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               (100 → Thin), "Vault" regular (400), mirroring the web header. */}
           <View style={styles.headerTitleSlot}>
             {selectedAlbum !== 'All' ? (
-              <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
-                {selectedAlbum}
-              </Text>
+              // Board detail header: name + live metadata (count / latest) with
+              // the board's edit menu (rename / delete) one tap away — the same
+              // context menu the Boards overview uses on long-press.
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{ flexShrink: 1 }}>
+                  <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+                    {selectedAlbum}
+                  </Text>
+                  {!!albumCounts[selectedAlbum] && (
+                    <Text style={{ fontSize: 11.5, color: theme.colors.textTertiary, marginTop: 1 }} numberOfLines={1}>
+                      {albumCounts[selectedAlbum]} item{albumCounts[selectedAlbum] === 1 ? '' : 's'}
+                      {albumLatestDates[selectedAlbum]
+                        ? ` · ${new Date(albumLatestDates[selectedAlbum]).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
+                        : ''}
+                    </Text>
+                  )}
+                </View>
+                <TouchableOpacity
+                  onPress={() => showAlbumOptions(selectedAlbum)}
+                  hitSlop={HIT_SLOP_10}
+                  accessibilityLabel={`Edit board ${selectedAlbum}`}
+                >
+                  <Icon name="dots-horizontal-circle-outline" size={20} color={theme.colors.textMuted} />
+                </TouchableOpacity>
+              </View>
             ) : (
               <Text style={[styles.headerTitleLarge, { color: theme.colors.textPrimary }]} numberOfLines={1}>
                 <Text style={{ fontWeight: '100' }}>Photos </Text>
