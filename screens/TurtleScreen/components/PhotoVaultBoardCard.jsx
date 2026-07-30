@@ -51,6 +51,7 @@ function PhotoVaultBoardCard({
         {covers.length ? (
           <>
             <View
+              testID="board-hero-pane"
               style={[
                 styles.pane,
                 styles.heroPane,
@@ -94,23 +95,27 @@ function PhotoVaultBoardCard({
   );
 }
 
+// Proportions measured off the Pinterest boards reference (1170px @3x = 390pt):
+// a 555x380px collage (1.46 aspect, noticeably wider than tall), a 360px hero
+// pane (65% of the card), ~6px internal gutters, and ~85px (26pt) of breathing
+// room under the metadata before the next row of cards.
 const styles = StyleSheet.create({
-  card: { marginBottom: 20 },
+  card: { marginBottom: 26 },
   collage: {
     width: '100%',
-    aspectRatio: 1.28,
-    borderRadius: 18,
+    aspectRatio: 1.46,
+    borderRadius: 12,
     overflow: 'hidden',
     flexDirection: 'row',
   },
   pane: { overflow: 'hidden' },
-  heroPane: { width: '64%', height: '100%', borderRightWidth: 2 },
-  sideColumn: { width: '36%', height: '100%' },
+  heroPane: { width: '65%', height: '100%', borderRightWidth: 2 },
+  sideColumn: { width: '35%', height: '100%' },
   topPane: { height: '50%', borderBottomWidth: 2 },
   bottomPane: { height: '50%' },
   emptyCover: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  name: { fontSize: 16, lineHeight: 21, fontWeight: '700', marginTop: 8, paddingHorizontal: 2 },
-  metadata: { fontSize: 13, lineHeight: 18, marginTop: 1, paddingHorizontal: 2 },
+  name: { fontSize: 16, lineHeight: 21, fontWeight: '700', marginTop: 9, paddingHorizontal: 2 },
+  metadata: { fontSize: 14, lineHeight: 19, marginTop: 2, paddingHorizontal: 2 },
 });
 
 export default memo(PhotoVaultBoardCard);

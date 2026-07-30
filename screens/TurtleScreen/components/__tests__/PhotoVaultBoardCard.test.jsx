@@ -1,4 +1,5 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 import PhotoVaultBoardCard from '../PhotoVaultBoardCard';
 
@@ -69,6 +70,34 @@ describe('PhotoVaultBoardCard', () => {
     expect(onPress).toHaveBeenCalledWith('Warm interiors');
     expect(onLongPress).toHaveBeenCalledWith('Warm interiors');
     expect(onPressIn).toHaveBeenCalledTimes(1);
+  });
+
+  test('matches the reference board proportions', async () => {
+    // Measured off the Pinterest boards reference (1170px wide @3x = 390pt):
+    // collage 555x380px = 1.46 aspect, hero pane 360/555 = 65%, ~20px (7pt)
+    // outer/column spacing, ~85px (28pt) between stacked rows.
+    const view = await render(
+      <PhotoVaultBoardCard
+        board={board}
+        width={185}
+        theme={theme}
+        resolveCoverUrl={(path) => path}
+        onPress={jest.fn()}
+        onLongPress={jest.fn()}
+      />,
+    );
+
+    const collage = StyleSheet.flatten(view.getByTestId('board-collage').props.style);
+    const hero = StyleSheet.flatten(view.getByTestId('board-hero-pane').props.style);
+    const card = StyleSheet.flatten(view.getByLabelText(/^Warm interiors/).props.style);
+
+    expect(collage.aspectRatio).toBeCloseTo(1.46, 2);
+    expect(collage.borderRadius).toBe(12);
+    expect(collage.overflow).toBe('hidden');
+    expect(hero.width).toBe('65%');
+    expect(card.marginBottom).toBe(26);
+    expect(StyleSheet.flatten(view.getByText('Warm interiors').props.style).fontSize).toBe(16);
+    expect(StyleSheet.flatten(view.getByText('47 items · 2d').props.style).fontSize).toBe(14);
   });
 
   test('renders a single quiet empty-board placeholder when covers are absent', async () => {
