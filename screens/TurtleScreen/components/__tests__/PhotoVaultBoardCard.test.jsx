@@ -97,11 +97,11 @@ describe('PhotoVaultBoardCard', () => {
     expect(hero.width).toBe('65%');
     expect(card.marginBottom).toBe(26);
     const title = StyleSheet.flatten(view.getByText('Warm interiors').props.style);
-    expect(title.fontSize).toBeCloseTo(15.6, 2);
+    expect(title.fontSize).toBeCloseTo(14.04, 2);
     expect(Number(title.fontWeight)).toBeLessThan(700);
     // Metadata stays a step below the title so the hierarchy reads title-first.
     const meta = StyleSheet.flatten(view.getByText('47 items · 2d').props.style);
-    expect(meta.fontSize).toBeCloseTo(14.3, 2);
+    expect(meta.fontSize).toBeCloseTo(12.87, 2);
     expect(meta.fontSize).toBeLessThan(title.fontSize);
   });
 

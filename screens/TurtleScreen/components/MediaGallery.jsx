@@ -3746,21 +3746,47 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     );
   };
 
-  // === NATIVE 1:1 SWIPE PAGINATION & BEZIER INDICATOR ===
+  // === NATIVE 1:1 SWIPE PAGINATION & UNDERLINE INDICATOR ===
   const tabWidth = (width - 32) / 2;
   const pagesScrollRef = useRef(null);
   const pageScrollX = useRef(new Animated.Value(0)).current;
   const TABS = useMemo(() => ['uploads', 'albums'], []);
 
-  // The background pill perfectly tracks the ScrollView 1:1
-  const tabIndicatorX = pageScrollX.interpolate({
+  // Pinterest-style underline: a bar the width of the ACTIVE label that slides
+  // from title to title. Label widths are measured once by onLayout (text width
+  // depends on font metrics and the user's font scale, so it can't be computed).
+  // Until both are measured, fall back to a proportion of the tab slot so the
+  // bar is never zero-width on first paint.
+  const [tabLabelWidths, setTabLabelWidths] = useState({});
+  const measureTabLabel = useCallback((tab, w) => {
+    const next = Math.round(w);
+    if (!next) return;
+    // Functional update + no-op guard: onLayout fires on every re-measure
+    // (rotation, font scale), and an unconditional setState here would loop.
+    setTabLabelWidths((prev) => (prev[tab] === next ? prev : { ...prev, [tab]: next }));
+  }, []);
+
+  const fallbackLabelWidth = Math.min(tabWidth * 0.45, 72);
+  const labelWidthFor = (tab) => tabLabelWidths[tab] || fallbackLabelWidth;
+
+  // Both the bar's width and its x-position interpolate across the swipe, so
+  // it grows/shrinks into the next label instead of jumping at the end.
+  const tabUnderlineWidth = pageScrollX.interpolate({
     inputRange: [0, width],
-    outputRange: [0, tabWidth],
-    extrapolate: 'clamp'
+    outputRange: [labelWidthFor(TABS[0]), labelWidthFor(TABS[1])],
+    extrapolate: 'clamp',
+  });
+  const tabUnderlineX = pageScrollX.interpolate({
+    inputRange: [0, width],
+    outputRange: [
+      tabWidth * 0.5 - labelWidthFor(TABS[0]) / 2,          // centred under tab 0
+      tabWidth * 1.5 - labelWidthFor(TABS[1]) / 2,          // centred under tab 1
+    ],
+    extrapolate: 'clamp',
   });
 
   // IMPERATIVE TAB PRESS: We tell the ScrollView to move. 
-  // Because tabIndicatorX is bound to pageScrollX, the indicator will slide automatically!
+  // Because the underline is bound to pageScrollX, the indicator slides automatically!
   const handleTabPress = useCallback((tab) => {
     const index = TABS.indexOf(tab);
     if (index < 0) return;
@@ -4882,15 +4908,19 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           </View>
         </Animated.View>
 
-        {/* Bottom Row: Bezier Segmented Control */}
-        <View style={{ marginHorizontal: 16, marginBottom: 8, height: 32, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)', borderRadius: 8, flexDirection: 'row', position: 'relative' }}>
-          {/* Animated Slider Background */}
+        {/* Bottom Row: Pinterest-style underline tabs. No track, no pill — just
+            the labels with a short bar that slides from title to title. The bar
+            is sized to the ACTIVE label (measured via onLayout) and interpolated
+            off the same pageScrollX as before, so it still tracks the pager 1:1
+            through a swipe instead of snapping at the end. */}
+        <View style={{ marginHorizontal: 16, marginBottom: 8, height: 34, flexDirection: 'row', position: 'relative' }}>
+          {/* Animated Underline */}
           <Animated.View style={{
-            position: 'absolute', top: 2, bottom: 2, left: 2, width: tabWidth - 4,
-            backgroundColor: theme.mode === 'dark' ? '#333' : '#FFF',
-            borderRadius: 6,
-            shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2,
-            transform: [{ translateX: tabIndicatorX }]
+            position: 'absolute', bottom: 0, left: 0, height: 3,
+            width: tabUnderlineWidth,
+            backgroundColor: theme.colors.textPrimary,
+            borderRadius: 2,
+            transform: [{ translateX: tabUnderlineX }],
           }} />
 
           {TABS.map((tab, index) => {
@@ -4907,18 +4937,24 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 style={{ flex: 1, justifyContent: 'center', alignItems: 'center', zIndex: 1 }}
                 onPress={() => handleTabPress(tab)}
               >
-                {/* Active Bold Text */}
-                <Animated.Text style={{ 
-                  position: 'absolute', fontSize: 13, fontWeight: '600', 
-                  color: theme.colors.textPrimary, opacity: activeOp 
-                }}>
+                {/* Active Bold Text — also the width source for the underline.
+                    Measured on the ACTIVE copy because it's the bolder of the
+                    two, so the bar never ends up narrower than the text it
+                    sits under. */}
+                <Animated.Text
+                  onLayout={(e) => measureTabLabel(tab, e.nativeEvent.layout.width)}
+                  style={{
+                    position: 'absolute', fontSize: 15, fontWeight: '700',
+                    color: theme.colors.textPrimary, opacity: activeOp,
+                  }}
+                >
                   {label}
                 </Animated.Text>
-                
+
                 {/* Inactive Regular Text */}
-                <Animated.Text style={{ 
-                  fontSize: 13, fontWeight: '500', 
-                  color: theme.colors.textSecondary, opacity: inactiveOp 
+                <Animated.Text style={{
+                  fontSize: 15, fontWeight: '500',
+                  color: theme.colors.textSecondary, opacity: inactiveOp
                 }}>
                   {label}
                 </Animated.Text>
