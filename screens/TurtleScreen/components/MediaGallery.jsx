@@ -22,6 +22,7 @@ import {
   KeyboardAvoidingView,
   StatusBar,
 } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -935,7 +936,37 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const dragTouchRef = useRef(null);  // { index, x, y } — last touch-down on a cell
   const dragBaseRef = useRef(null);   // selection Set snapshot at drag start
   const dragLastIdxRef = useRef(-1);
-  const CELL_PITCH = width / 3;       // THUMBNAIL_SIZE + its 0.25 margins
+
+  // ── Pinch-to-change-columns (iOS Photos) ───────────────────────────────
+  // The grid's column count is live state: pinch OUT (fingers apart) = bigger
+  // cells = fewer columns, pinch IN = more. One step per gesture, haptic on
+  // change. Every piece of column-dependent math below (drag-select ranges,
+  // sparse-region windows, cell sizing) reads gridColsRef so stable callbacks
+  // never see a stale count.
+  const GRID_COL_MIN = 2;
+  const GRID_COL_MAX = 5;
+  const [gridCols, setGridCols] = useState(3);
+  const gridColsRef = useRef(3);
+  gridColsRef.current = gridCols;
+  // Cell pitch = one cell + its margins; derived per-call from the live count.
+  const cellPitch = () => width / gridColsRef.current;
+  const pinchSteppedRef = useRef(false); // one column step per pinch gesture
+  const gridPinch = useMemo(() => (
+    Gesture.Pinch()
+      .runOnJS(true)
+      .onStart(() => { pinchSteppedRef.current = false; })
+      .onUpdate((e) => {
+        if (pinchSteppedRef.current) return;
+        const dir = e.scale > 1.25 ? -1 : e.scale < 0.8 ? 1 : 0; // apart→fewer cols
+        if (!dir) return;
+        pinchSteppedRef.current = true;
+        setGridCols((c) => {
+          const next = Math.max(GRID_COL_MIN, Math.min(GRID_COL_MAX, c + dir));
+          if (next !== c) impactHaptic('light');
+          return next;
+        });
+      })
+  ), []);
 
   // ── Section Select (tap first + tap last) ──────────────────────────────
   const rangeSelectModeRef = useRef(rangeSelectMode);
@@ -978,13 +1009,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // inverted grid: finger UP = older = +rows. Auto-scroll moves the content
     // under the finger, so fold the scroll-offset delta in too: offset grows
     // toward the OLDEST (= higher data index), same sign as finger-up.
-    const fingerRows = Math.round((start.y - curY) / CELL_PITCH);
-    const scrollRows = Math.round((scrubLastY.current - start.scroll) / CELL_PITCH);
-    const startCol = start.index % 3;
+    const cols = gridColsRef.current;
+    const pitch = cellPitch();
+    const fingerRows = Math.round((start.y - curY) / pitch);
+    const scrollRows = Math.round((scrubLastY.current - start.scroll) / pitch);
+    const startCol = start.index % cols;
     // scaleX(-1)-mirrored grid: visual LEFT = higher data column, so finger
     // moving RIGHT (curX up) maps to a LOWER data index — negate the X delta.
-    const col = Math.max(0, Math.min(2, startCol - Math.round((curX - start.x) / CELL_PITCH)));
-    let cur = start.index + (fingerRows + scrollRows) * 3 + (col - startCol);
+    const col = Math.max(0, Math.min(cols - 1, startCol - Math.round((curX - start.x) / pitch)));
+    let cur = start.index + (fingerRows + scrollRows) * cols + (col - startCol);
     cur = Math.max(0, Math.min(items.length - 1, cur));
     if (cur === dragLastIdxRef.current) return; // same cell — skip the re-set
     dragLastIdxRef.current = cur;
@@ -1888,13 +1921,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // and after scrub jumps — the "load once the scroll stops moving" behavior.
   const ensureVisibleRegionNow = useCallback(() => {
     if (!virtualEnabledRef.current) return;
-    const rowFirst = Math.floor(scrubLastY.current / CELL_PITCH);
-    const rowsVisible = Math.ceil((gridLayoutH.current || height) / CELL_PITCH);
+    const cols = gridColsRef.current;
+    const pitch = cellPitch();
+    const rowFirst = Math.floor(scrubLastY.current / pitch);
+    const rowsVisible = Math.ceil((gridLayoutH.current || height) / pitch);
     // One viewport behind + two ahead in index space — generous prefetch so
     // flung scrolling lands on already-loading pages.
-    const first = Math.max(0, (rowFirst - rowsVisible) * 3);
-    const last = (rowFirst + rowsVisible * 2) * 3;
-    ensureSparseRegion(first, last, rowFirst * 3);
+    const first = Math.max(0, (rowFirst - rowsVisible) * cols);
+    const last = (rowFirst + rowsVisible * 2) * cols;
+    ensureSparseRegion(first, last, rowFirst * cols);
     // Warm thumbnails for whatever loaded pages now sit around the viewport.
     // Runs on every (rAF-throttled) scroll frame incl. momentum, so as a fling
     // decelerates onto already-loaded pages their images request immediately —
@@ -3231,16 +3266,19 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           gridIndex={index}
           onTouchDown={onCellTouchDown}
           isActiveVideo={GRID_VIDEO_PREVIEW && activeVideoIdRef.current === item.id}
+          // Pinch-to-zoom columns: cell edge tracks the live column count.
+          cellSize={width / gridCols - 0.5}
         />
       </View>
     );
-  }, [activeTab, openViewer, handleDelete, getFullUrl, getBaseUrl, styles, theme, isSelectMode, handleSelectPress, onCellTouchDown]);
+  }, [activeTab, openViewer, handleDelete, getFullUrl, getBaseUrl, styles, theme, isSelectMode, handleSelectPress, onCellTouchDown, gridCols]);
 
   // Identity changes exactly when selection state does — drives the lists'
-  // extraData (see the contract on renderItem above).
+  // extraData (see the contract on renderItem above). gridCols rides along so a
+  // pinch column change re-renders every visible cell at its new size.
   const gridSelectionExtra = useMemo(
-    () => ({ isSelectMode, selectedGridItems, activeVideoId }),
-    [isSelectMode, selectedGridItems, activeVideoId],
+    () => ({ isSelectMode, selectedGridItems, activeVideoId, gridCols }),
+    [isSelectMode, selectedGridItems, activeVideoId, gridCols],
   );
 
   // Render empty state
@@ -4701,7 +4739,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           >
             {/* Drag-select responder wraps ONLY the uploads grid: horizontal
                 drags (in select mode, started on a cell) range-select;
-                vertical swipes pass through and scroll normally. */}
+                vertical swipes pass through and scroll normally. The
+                GestureDetector adds two-finger pinch → column count (needs two
+                pointers, so it never fights the one-finger pan/scroll). */}
+            <GestureDetector gesture={gridPinch}>
             <View ref={gridWrapRef} style={{ flex: 1 }} {...gridDragResponder.panHandlers}>
             <AnimatedFlashList
               ref={gridRef}
@@ -4724,7 +4765,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               // because the skeleton early-returned ABOVE GridItem's hooks —
               // the unified cell has one unconditional shape, one pool.)
               keyExtractor={(item, index) => ((virtualEnabledRef.current || item.isSkeleton) ? `i${index}` : item.id)}
-              numColumns={3}
+              numColumns={gridCols}
               // Mount + start loading cells ~1.5 screens beyond the viewport so
               // tiles resolve BEFORE they scroll into view (the iCloud feel),
               // instead of FlashList's default ~250px overdraw.
@@ -4839,6 +4880,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               }
             />
             </View>
+            </GestureDetector>
 
           </Animated.View>
 
@@ -5308,7 +5350,7 @@ const GridVideoPreview = ({ uri }) => {
   );
 };
 
-const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBaseUrl, activeTab, styles, theme, isSelectMode, isSelected, onToggleSelect, gridIndex, onTouchDown, isActiveVideo }) => {
+const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBaseUrl, activeTab, styles, theme, isSelectMode, isSelected, onToggleSelect, gridIndex, onTouchDown, isActiveVideo, cellSize }) => {
   // UNIFIED CELL: a slot renders the SAME component before and after its data
   // arrives — no early-return into a separate skeleton component. The old
   // early return also sat ABOVE the hooks (conditional hooks!), which is the
@@ -5442,7 +5484,13 @@ const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl, getBa
       disabled={isSkeleton}
       // Stable hook for the batch-share E2E flow (.maestro/batch-share.yaml).
       testID={isSkeleton ? undefined : `gallery-cell-${gridIndex}`}
-      style={[styles.thumbnailContainer, { backgroundColor: cellBase }, isSelectMode && isSelected && { opacity: 0.8 }]}
+      style={[
+        styles.thumbnailContainer,
+        // Dynamic pinch-column size; falls back to the stylesheet's 3-col size.
+        cellSize != null && { width: cellSize, height: cellSize },
+        { backgroundColor: cellBase },
+        isSelectMode && isSelected && { opacity: 0.8 },
+      ]}
       onPress={(e) => isSelectMode
         ? onToggleSelect(item.id, gridIndex)
         // Tap point (window coords) anchors the viewer's pop at this cell.
