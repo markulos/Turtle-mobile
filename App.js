@@ -189,6 +189,25 @@ function TabNavigator() {
           // two can't disagree about where a slot sits.
           paddingHorizontal: clusterPadding(windowWidth - CARD_MARGIN_H * 2, tabCount),
         },
+        // Force each tab button to FILL the bar's inner box and centre its glyph
+        // in it. Without this the icons are only as centred as v7's own item
+        // padding happens to be — it reserves label space and applies its own
+        // vertical padding even with tabBarShowLabel:false, which is what left
+        // the glyphs sitting off the dock's centre line. Owning the item box
+        // here makes the icon's centre and the dock's centre the same point.
+        tabBarItemStyle: {
+          height: '100%',
+          paddingTop: 0,
+          paddingBottom: 0,
+          justifyContent: 'center',
+          alignItems: 'center',
+        },
+        // The icon is the item's only child, so it must not add its own margins
+        // on top of that centring.
+        tabBarIconStyle: {
+          flex: 0,
+          margin: 0,
+        },
         // One accent pill that SLIDES between tabs, painted behind the buttons.
         // tabBarBackground is composited under navigation's own tab buttons, so
         // this adds the indicator without touching their layout or a11y.
