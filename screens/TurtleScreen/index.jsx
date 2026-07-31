@@ -50,7 +50,7 @@ import MediaGallery from './components/MediaGallery';
 import { usePomodoroSocket } from './hooks/usePomodoroSocket';
 import { useClaudeSession } from './hooks/useClaudeSession';
 import { useTerminalSession } from './hooks/useTerminalSession';
-import ClaudeConsole, { PANEL_GAP } from './components/ClaudeConsole';
+import ClaudeConsole from './components/ClaudeConsole';
 import TerminalConsole from './components/TerminalConsole';
 import FriendCard from './components/FriendCard';
 import EdgeSwipePage from './components/EdgeSwipePage';
@@ -401,7 +401,10 @@ export default function TurtleScreen() {
   // own paddingBottom (see the inputArea render below), so the bar's blur+tint
   // fills the margin instead of leaving bare chat showing through. Static, so
   // it never animates and stays identical whether the keyboard is open or closed.
-  const COMPOSER_MARGIN = 12;
+  // Matches the Claude console's own gap above the composer (PANEL_GAP), so
+  // composer→console, composer→dock and composer→keyboard are all the same
+  // distance rather than three values that merely look similar.
+  const COMPOSER_MARGIN = 8;
   // True whenever the Claude console is on screen (a live session OR the login
   // flow).
   const inClaudeSession = !!claudeUiMode;
@@ -2376,12 +2379,11 @@ export default function TurtleScreen() {
         // is the ONLY thing that tracks the keyboard — it lifts on its own while
         // the background stays still. In normal chat the whole column already
         // lifts the dock, so no transform of its own there.
-        // Clears the floating tab card (which reserves no layout space, so a
-        // dock at bottom: 0 would be partly under it) by the SAME gap the Claude
-        // console keeps above the composer — so composer→console, composer→dock
-        // and, once the column lifts, composer→keyboard are all one value.
-        // Applied here because createStyles has no hook access.
-        style={[styles.bottomDock, { bottom: tabBarHeight + PANEL_GAP }, sessionDockLift]}
+        // bottom: 0 — the card clearance is applied ONCE, by the composer's own
+        // marginBottom (dockOccupied + COMPOSER_MARGIN) further down. Reserving
+        // it here as well double-counted it and left the composer floating a
+        // card's height too high.
+        style={[styles.bottomDock, sessionDockLift]}
         onLayout={(e) => {
           const h = Math.round(e.nativeEvent.layout.height);
           if (h === dockHeight) return;
