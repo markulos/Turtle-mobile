@@ -125,13 +125,13 @@ function TabNavigator() {
             </TabBarIcon>
           );
         },
-        // The active glyph sits on the WHITE chip in both themes, so it is
-        // painted black rather than in the Settings highlight colour: black on
-        // white is the maximum-contrast pairing, and it keeps the chip itself
-        // (not the glyph's tint) as the thing that signals selection. The
-        // highlight colour still leads everywhere else in the app.
-        tabBarActiveTintColor: '#000000',
-        tabBarInactiveTintColor: theme.colors.textMuted,
+        // Fixed rather than theme-derived, because the dock is a LIGHT frosted
+        // capsule in both themes: the theme's textMuted is white-ish on dark and
+        // would vanish against it. Active sits on the accent-coloured chip so it
+        // goes white; inactive is a dark grey that reads on the frost without
+        // competing with the chip.
+        tabBarActiveTintColor: '#FFFFFF',
+        tabBarInactiveTintColor: 'rgba(0,0,0,0.45)',
         // Icons only — no text labels. Cleaner look and lets the
         // larger turtle icon breathe without crowding from a label
         // sitting under it.
