@@ -1554,6 +1554,31 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // Keep the drag-select range math reading the SAME array the grid renders.
   uploadItemsForDragRef.current = uploadDisplayItems;
 
+  // ── Data-driven scrubber extent (Instagram-style index bar) ─────────────
+  // The rail/thumb/jump math used to depend ONLY on measured layout
+  // (onContentSizeChange/onLayout), so until the first real layout pass the
+  // scrubber ran against maxScroll=1 — a stubby, wrong-length index bar on a
+  // fresh mount. But every grid cell is a fixed square (pitch = width/cols),
+  // so the content height is fully KNOWN from the data: seed the extent
+  // analytically the moment the rendered count or column count changes. The
+  // measured values still overwrite when layout lands (they add the list
+  // header's height, which the estimate omits) — the seed just guarantees the
+  // index bar is full-length and jumpable instantly, layout or not.
+  const scrubExtentKeyRef = useRef('');
+  useEffect(() => {
+    const len = uploadDisplayItems.length;
+    if (!len) return;
+    const key = `${len}:${gridCols}`;
+    // Re-seed only when the grid's shape actually changed — never fight a
+    // real measurement while the shape is stable.
+    if (scrubExtentKeyRef.current === key && gridContentH.current > 0) return;
+    scrubExtentKeyRef.current = key;
+    const pitch = width / gridCols;
+    const expected = Math.ceil(len / gridCols) * pitch + (insets.top + 90) + (insets.bottom + 16);
+    gridContentH.current = expected;
+    maxScrollSv.value = Math.max(1, expected - (gridLayoutH.current || height));
+  }, [uploadDisplayItems, gridCols, insets.top, insets.bottom, maxScrollSv]);
+
   // The array the full-screen pager walks. It MUST be the same set the grid
   // renders, or a tapped photo won't be found in it and the pager collapses to
   // a single, un-swipeable item (the regression that broke left/right swipe).

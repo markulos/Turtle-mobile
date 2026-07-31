@@ -69,17 +69,12 @@ function TabNavigator() {
       // No tabPress haptic: tab switching is silent by request. (There used to
       // be a selection tick here for every tab.)
       screenOptions={({ route }) => ({
-        // Tab-switch feel (instant taps): every screen stays MOUNTED
-        // (lazy:false — the mount cost is paid once at boot behind the
-        // splash/login, not on your first tap of each tab) and FROZEN while
-        // hidden (react-freeze via react-native-screens): blurred tabs stop
-        // re-rendering while the app's contexts tick (pomodoro socket, upload
-        // progress, music position), so a tab press only unfreezes an
-        // already-built tree instead of mounting or re-rendering one. Pure
-        // scheduling — screens still fetch, effects still run, focus/blur
-        // events still fire, state still updates (UI catches up on unfreeze).
-        lazy: false,
-        freezeOnBlur: true,
+        // NOTE: lazy:false + freezeOnBlur:true were tried here for instant tab
+        // switches and REVERTED — screens mounted hidden at boot measure their
+        // layouts wrong (zero-height grids, mis-sized scrubbers) and freeze
+        // masked the re-measure. Components that need instant readiness must
+        // derive their geometry from DATA, not layout (see MediaGallery's
+        // analytic scrubber extent).
         tabBarIcon: ({ focused, color, size }) => {
           // Turtle tab uses the web app's custom PNG mark so the
           // brand visual matches across platforms. We recolor the
