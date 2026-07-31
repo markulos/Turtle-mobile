@@ -4,6 +4,7 @@ import Reanimated, {
   useAnimatedStyle,
   withSpring,
 } from 'react-native-reanimated';
+import { PILL_SIZE } from './tabBarLayout';
 
 /**
  * TabBarIcon — the bottom nav's active-state treatment.
@@ -49,9 +50,11 @@ export default function TabBarIcon({ focused, brand = false, children }) {
 const styles = StyleSheet.create({
   // Sized to the largest glyph (the 36pt turtle) so every tab's icon sits on
   // the same baseline and the highlights line up across the bar.
+  // The SAME square as the chip — imported, not a matching literal, so the two
+  // cannot drift apart when the chip is resized.
   slot: {
-    width: 57,
-    height: 57,
+    width: PILL_SIZE,
+    height: PILL_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
   },

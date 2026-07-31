@@ -60,5 +60,10 @@ export const BAR_CONTENT_HEIGHT = PILL_SIZE + BAR_VERTICAL_PAD * 2;
 // chat composer's glass card, which uses the same 10pt side margin. The bottom
 // gap sits ON TOP of the safe-area inset so the card clears the home indicator
 // instead of resting on it.
+// Chip's vertical position inside the card, derived from the card's own height
+// rather than assumed equal to the padding — this is the value that puts the
+// chip's CENTRE on the card's centre line, whatever the padding happens to be.
+export const PILL_TOP = Math.round((BAR_CONTENT_HEIGHT - PILL_SIZE) / 2);
+
 export const CARD_MARGIN_H = 10;
 export const CARD_GAP_BOTTOM = 8;

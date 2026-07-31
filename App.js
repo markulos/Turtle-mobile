@@ -141,7 +141,16 @@ function TabNavigator() {
         // which pushed every icon 5pt below the chip's top edge — the icon slot
         // and the chip are both PILL_SIZE tall, so with the padding stripped
         // they share an origin and line up exactly.
-        tabBarItemStyle: { paddingVertical: 0 },
+        // Centre the glyph on both axes. react-navigation's default item style
+        // is justifyContent: 'flex-start' with padding: 5, which top-aligns the
+        // icon and offsets it; centring explicitly (and dropping the vertical
+        // padding) puts the icon slot's centre on the row's centre, which is the
+        // chip's centre too since both are PILL_SIZE squares in the same row.
+        tabBarItemStyle: {
+          paddingVertical: 0,
+          justifyContent: 'center',
+          alignItems: 'center',
+        },
         tabBarStyle: {
           // Floating bar: absolutely positioned so the page runs UNDERNEATH it
           // (Pinterest-style) instead of being pushed above it, with a

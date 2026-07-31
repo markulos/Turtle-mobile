@@ -8,7 +8,7 @@ import Reanimated, {
   withSpring,
 } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
-import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, BAR_VERTICAL_PAD, clusterStart } from './tabBarLayout';
+import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, clusterStart } from './tabBarLayout';
 
 /**
  * TabBarPill — ONE pill that slides from tab to tab behind the icons.
@@ -108,10 +108,9 @@ const styles = StyleSheet.create({
   },
   pill: {
     position: 'absolute',
-    // Top of the bar's inner content box, which the bar pads symmetrically to
-    // exactly PILL_SIZE — so this square and navigation's centred icon slot are
-    // the SAME square and the glyph lands dead centre (see tabBarLayout).
-    top: BAR_VERTICAL_PAD,
+    // Centre line of the card (see PILL_TOP). The icon slot is the same square
+    // and centres itself in the same row, so chip and glyph share one centre.
+    top: PILL_TOP,
     left: 0,
     width: PILL_SIZE,
     height: PILL_SIZE,
