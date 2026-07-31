@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
   View, TouchableOpacity, ScrollView, StyleSheet, useWindowDimensions, BackHandler, Pressable, StatusBar,
 } from 'react-native';
@@ -19,6 +19,8 @@ import { useVideoPlayer, VideoView } from 'expo-video';
  * Android). Video: expo-video with native controls. Tap the backdrop / the X /
  * Android back to close.
  */
+const HIT_SLOP_12 = { top: 12, bottom: 12, left: 12, right: 12 };
+
 function LightboxVideo({ uri }) {
   const player = useVideoPlayer(uri || null, (p) => { p.loop = false; p.play(); });
   return <VideoView player={player} style={styles.media} contentFit="contain" nativeControls />;
@@ -37,6 +39,15 @@ export default function MediaLightbox({ visible, uri, isVideo = false, onClose }
     return () => sub.remove();
   }, [visible, onClose]);
 
+  // Viewport-sized styles memoized per dimension change (rotation/resize) —
+  // the render otherwise allocated three fresh objects per render. Declared
+  // before the early return (hooks rule).
+  const fullSize = useMemo(() => ({ width, height }), [width, height]);
+  const contentCenter = useMemo(
+    () => ({ width, height, alignItems: 'center', justifyContent: 'center' }),
+    [width, height],
+  );
+
   if (!visible || !uri) return null;
 
   return (
@@ -50,7 +61,7 @@ export default function MediaLightbox({ visible, uri, isVideo = false, onClose }
       ) : (
         <ScrollView
           style={StyleSheet.absoluteFill}
-          contentContainerStyle={{ width, height, alignItems: 'center', justifyContent: 'center' }}
+          contentContainerStyle={contentCenter}
           maximumZoomScale={4}
           minimumZoomScale={1}
           centerContent
@@ -61,10 +72,10 @@ export default function MediaLightbox({ visible, uri, isVideo = false, onClose }
               covers the backdrop Pressable, so a stationary tap must be caught
               here. A two-finger pinch is still handled by the parent
               ScrollView's native zoom recogniser, so zoom is preserved. */}
-          <Pressable onPress={onClose} style={{ width, height }}>
+          <Pressable onPress={onClose} style={fullSize}>
             <Image
               source={{ uri }}
-              style={{ width, height }}
+              style={fullSize}
               contentFit="contain"
               transition={120}
               cachePolicy="memory-disk"
@@ -77,7 +88,7 @@ export default function MediaLightbox({ visible, uri, isVideo = false, onClose }
       <TouchableOpacity
         onPress={onClose}
         style={[styles.closeBtn, { top: insets.top + 8 }]}
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        hitSlop={HIT_SLOP_12}
         accessibilityRole="button"
         accessibilityLabel="Close image"
       >

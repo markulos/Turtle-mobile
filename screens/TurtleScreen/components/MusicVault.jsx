@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList, ActivityIndicator, StyleSheet, Pressable,
 } from 'react-native';
@@ -76,6 +76,21 @@ export default function MusicVault({ onClose, topInset = 0 }) {
     [duration, seekTo]
   );
 
+  // Track-row styles hoisted out of renderTrack — the old inline objects
+  // allocated five styles per row whenever the rows re-rendered (play/pause,
+  // track change). Theme-keyed; active/idle title is a precomputed pair.
+  const trackStyles = useMemo(() => {
+    const accent = c.accentSuccess || '#4ADE80';
+    return StyleSheet.create({
+      artTint: { backgroundColor: accent + '22' },
+      body: { flex: 1 },
+      titleActive: { fontSize: 15, fontWeight: '600', color: accent },
+      titleIdle: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+      source: { fontSize: 12, color: c.textTertiary, marginTop: 1 },
+      duration: { fontSize: 12, color: c.textTertiary },
+    });
+  }, [c]);
+
   const renderTrack = useCallback(({ item, index }) => {
     const active = index === current;
     return (
@@ -85,25 +100,25 @@ export default function MusicVault({ onClose, topInset = 0 }) {
         onPress={() => playIndex(index)}
         style={styles.row}
       >
-        <View style={[styles.art, { backgroundColor: (c.accentSuccess || '#4ADE80') + '22' }]}>
+        <View style={[styles.art, trackStyles.artTint]}>
           <Icon
             name={active && isPlaying ? 'pause' : 'music-note'}
             size={20}
             color={active ? (c.accentSuccess || '#4ADE80') : c.textSecondary}
           />
         </View>
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 15, fontWeight: '600', color: active ? (c.accentSuccess || '#4ADE80') : c.textPrimary }} numberOfLines={1}>
+        <View style={trackStyles.body}>
+          <Text style={active ? trackStyles.titleActive : trackStyles.titleIdle} numberOfLines={1}>
             {titleOf(item)}
           </Text>
-          <Text style={{ fontSize: 12, color: c.textTertiary, marginTop: 1 }} numberOfLines={1}>
+          <Text style={trackStyles.source} numberOfLines={1}>
             {sourceOf(item) || 'Audio'}
           </Text>
         </View>
-        {item.duration ? <Text style={{ fontSize: 12, color: c.textTertiary }}>{fmtTime(item.duration)}</Text> : null}
+        {item.duration ? <Text style={trackStyles.duration}>{fmtTime(item.duration)}</Text> : null}
       </TouchableOpacity>
     );
-  }, [c, current, isPlaying, playIndex, ready]);
+  }, [c, trackStyles, current, isPlaying, playIndex, ready]);
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background, paddingTop: topInset }}>
@@ -176,7 +191,7 @@ export default function MusicVault({ onClose, topInset = 0 }) {
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, gap: 12 }}>
-            <View style={[styles.art, { backgroundColor: (c.accentSuccess || '#4ADE80') + '22' }]}>
+            <View style={[styles.art, trackStyles.artTint]}>
               <Icon name="music-note" size={20} color={c.accentSuccess || '#4ADE80'} />
             </View>
             <View style={{ flex: 1 }}>
