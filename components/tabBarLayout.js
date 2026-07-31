@@ -91,7 +91,18 @@ export const dockOccupied = (insetsBottom = 0) =>
 // Chip's vertical position inside the card, derived from the card's own height
 // rather than assumed equal to the padding — this is the value that puts the
 // chip's CENTRE on the card's centre line, whatever the padding happens to be.
-export const PILL_TOP = Math.round((BAR_CONTENT_HEIGHT - PILL_SIZE) / 2);
+// Vertical correction between the chip and the glyphs.
+//
+// The chip is placed inside tabBarBackground, which spans the WHOLE card, while
+// the glyphs are centred inside the tab BUTTONS, which live in the bar's inner
+// content box. Those two boxes are only concentric if react-navigation adds no
+// padding of its own — and it does add the safe-area inset on an absolutely
+// positioned bar, which lifts the button row relative to the card and leaves
+// the chip sitting low. This is that difference, isolated as one number.
+export const CHIP_Y_NUDGE = -8;
+
+export const PILL_TOP =
+  Math.round((BAR_CONTENT_HEIGHT - PILL_SIZE) / 2) + CHIP_Y_NUDGE;
 
 export const CARD_MARGIN_H = 10;
 export const CARD_GAP_BOTTOM = 8;
