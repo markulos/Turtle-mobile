@@ -123,12 +123,10 @@ function TabNavigator() {
             </TabBarIcon>
           );
         },
-        // The active glyph sits ON the solid pill, so it takes the bar's
-        // BACKGROUND colour — which is the exact inverse of the pill in either
-        // mode (black icon on a white pill in dark, white on black in light).
-        // Using the background token rather than a hardcoded pair keeps the two
-        // in step if the theme's base colours ever move.
-        tabBarActiveTintColor: theme.colors.background,
+        // The active glyph sits on a white chip in both themes, so it carries
+        // the highlight colour chosen in Settings — the one place in the bar
+        // where the accent is a FILL rather than a rule.
+        tabBarActiveTintColor: theme.colors.accent,
         tabBarInactiveTintColor: theme.colors.textMuted,
         // Icons only — no text labels. Cleaner look and lets the
         // larger turtle icon breathe without crowding from a label

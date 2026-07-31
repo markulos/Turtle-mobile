@@ -73,14 +73,12 @@ export default function TabBarPill() {
         style={[
           styles.pill,
           {
-            // SOLID and fully inverted against the bar: white on dark, black on
-            // light. The active icon flips with it (tabBarActiveTintColor is
-            // the theme background, which is the exact inverse in both modes),
-            // so the selected tab reads as a knocked-out chip rather than a
-            // tinted wash. Neutral rather than accent-coloured on purpose — the
-            // accent's job in this bar is the hairline above it, and colouring
-            // both would leave the active tab competing with its own divider.
-            backgroundColor: isDark ? '#FFFFFF' : '#000000',
+            // A white card in BOTH themes, carrying the accent-coloured glyph.
+            // The shadow is what makes that work on light, where a white chip on
+            // a near-white bar would otherwise have no edge at all — so it is
+            // load-bearing there, not decoration. On dark it reads as the chip
+            // lifting off the black bar.
+            shadowOpacity: isDark ? 0.45 : 0.16,
           },
           pillStyle,
         ]}
@@ -104,7 +102,13 @@ const styles = StyleSheet.create({
     // a squircle from a rounded square. iOS-only; Android ignores it and falls
     // back to the plain radius, which still reads correctly.
     borderCurve: 'continuous',
-    // No border: a solid chip needs no outline, and one at this contrast would
-    // only muddy its edge.
+    backgroundColor: '#FFFFFF',
+    // Subtle lift. Offset is small and the radius soft so it reads as a card
+    // resting on the bar rather than floating above it; opacity is set per
+    // theme where the chip is rendered.
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+    elevation: 4,
   },
 });
