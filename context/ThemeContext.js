@@ -35,6 +35,21 @@ export const DEFAULT_ACCENT = 'orange';
 const accentColorFor = (key) =>
   (ACCENTS.find((a) => a.key === key) || ACCENTS[0]).color;
 
+/**
+ * '#F97316' + alpha → 'rgba(249, 115, 22, a)'.
+ *
+ * Written out rather than appending a hex alpha suffix to the token: the
+ * palette below is a MIX of hex and rgba() strings, and '#RRGGBB' + 'AA' only
+ * works for the former — the rgba ones would silently produce an invalid colour
+ * (and invalid colours in RN render as nothing, which is hard to spot).
+ */
+const withAlpha = (hex, alpha) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return hex;
+  const int = parseInt(m[1], 16);
+  return `rgba(${(int >> 16) & 255}, ${(int >> 8) & 255}, ${int & 255}, ${alpha})`;
+};
+
 // Golden Ratio - 1.618
 const PHI = 1.618;
 
@@ -355,8 +370,18 @@ export const ThemeProvider = ({ children }) => {
       // Existing screens already reach for accentInfo as "the highlight";
       // repointing it is what carries the choice across the app.
       accentInfo: accentColor,
+      // Every RULE in the app takes a wash of the accent: the hairline over the
+      // tab bar, card and input outlines, list separators, section dividers.
+      // These two tokens are what the whole app already draws lines with, so
+      // tinting them here is what makes the choice reach everywhere at once.
+      //
+      // The alphas are low on purpose — a line should read as "the accent is
+      // in the room", not as a coloured border. They're a touch stronger on
+      // light backgrounds, where a tint of the same alpha disappears.
+      border: withAlpha(accentColor, isDark ? 0.22 : 0.28),
+      borderStrong: withAlpha(accentColor, isDark ? 0.4 : 0.45),
     },
-  }), [baseTheme, accentColor]);
+  }), [baseTheme, accentColor, isDark]);
 
   // Memoize the context value so consumers only re-render when something they
   // actually read changes. Without this, a fresh object literal every render

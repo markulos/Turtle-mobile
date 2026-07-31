@@ -35,7 +35,7 @@ const PILL_HEIGHT = 34;
 const SLOT_INSET = 10;
 
 export default function TabBarPill() {
-  const { theme } = useTheme();
+  const { isDark } = useTheme();
   const [barWidth, setBarWidth] = useState(0);
 
   // Read straight from the navigator: `index` is the focused tab and `routes`
@@ -67,10 +67,13 @@ export default function TabBarPill() {
           styles.pill,
           {
             width,
-            // The accent chosen in Settings, at a low alpha so it reads as a
-            // tint behind the glyph rather than a solid button.
-            backgroundColor: theme.colors.accent + '2E',
-            borderColor: theme.colors.accent + '4D',
+            // Neutral, not accent: the accent's job in this bar is the hairline
+            // above it, and colouring both would leave the active tab competing
+            // with its own divider. On dark this is white, as asked; on light a
+            // white pill on a white bar would be invisible, so it inverts to the
+            // same tint in black.
+            backgroundColor: isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)',
+            borderColor: isDark ? 'rgba(255,255,255,0.20)' : 'rgba(0,0,0,0.12)',
           },
           pillStyle,
         ]}
