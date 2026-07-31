@@ -2563,7 +2563,13 @@ export default function TurtleScreen() {
             2) frost tint — a translucent colour so it reads as a real surface
           Both are absolute layers behind the content; overflow:hidden +
           the rounded top corners clip them to the bar shape. */}
-      <View style={[styles.inputArea, { marginBottom: COMPOSER_MARGIN }]}>
+      {/* Rests ABOVE the floating tab bar. The composer is pinned — it can't be
+          scrolled out from under the bar the way the transcript can — so its
+          margin carries the bar's height. This is also what the keyboard lift
+          has always assumed: it moves the composer by
+          (keyboardHeight − tabBarHeight), which only lands correctly if the
+          resting position is tabBarHeight above the window bottom. */}
+      <View style={[styles.inputArea, { marginBottom: COMPOSER_MARGIN + tabBarHeight }]}>
         <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
         {/* Autocomplete Dropdown */}

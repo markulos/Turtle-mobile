@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback, useContext } from 'react';
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import {
   View,
   Text,
@@ -1800,8 +1801,15 @@ export const CalendarView = ({
   // active month actually paints its title into it — see renderMonth.
   // Falls back to the static MONTH_HEIGHT / CELL_HEIGHT until first layout.
   const [calAreaH, setCalAreaH] = useState(0);
+  // The bottom strip the calendar must keep clear now includes the FLOATING tab
+  // bar: the day-panel peek, the jump-to-today button and the swipe hint all
+  // live in it, and none of them can be scrolled out from under the bar the way
+  // list content can. Read from the context (not useBottomTabBarHeight) so the
+  // calendar still renders outside a tab navigator; absent ⇒ 0, unchanged.
+  const tabBarH = useContext(BottomTabBarHeightContext) ?? 0;
+  const peekReserve = SHEET_PEEK_RESERVE + tabBarH;
   const { monthH, cellH } = useMemo(() => {
-    const usable = calAreaH > 0 ? calAreaH - SHEET_PEEK_RESERVE - HINT_STRIP : 0;
+    const usable = calAreaH > 0 ? calAreaH - peekReserve - HINT_STRIP : 0;
     if (usable <= 0) return { monthH: MONTH_HEIGHT, cellH: CELL_HEIGHT };
     const gridH = usable - MONTH_TITLE_HEIGHT - DAYS_HEADER_HEIGHT - GRID_PADDING_TOP;
     // Never shrink below the original cell size; only grow to fill.
@@ -1810,7 +1818,7 @@ export const CalendarView = ({
       monthH: MONTH_TITLE_HEIGHT + DAYS_HEADER_HEIGHT + GRID_PADDING_TOP + 6 * cell,
       cellH: cell,
     };
-  }, [calAreaH]);
+  }, [calAreaH, peekReserve]);
 
   // Faint swipe-hint carets (up = previous month, down = next month).
   // A single shared value loops 0→1→0; the two chevrons read it with
@@ -2585,7 +2593,7 @@ export const CalendarView = ({
             updateCellsBatchingPeriod={30}
             initialNumToRender={3}
             removeClippedSubviews
-            style={{ height: monthH, marginTop: HINT_STRIP, marginBottom: SHEET_PEEK_RESERVE }}
+            style={{ height: monthH, marginTop: HINT_STRIP, marginBottom: peekReserve }}
           />
 
           {/* Faint animated swipe-hint carets — up = previous month, down = next
@@ -2598,7 +2606,7 @@ export const CalendarView = ({
           <Reanimated.View pointerEvents="none" style={[styles.swipeHintTop, hintTopStyle]}>
             <Icon name="chevron-up" size={28} color={theme.colors.textSecondary} />
           </Reanimated.View>
-          <Reanimated.View pointerEvents="none" style={[styles.swipeHintBottom, hintBottomStyle]}>
+          <Reanimated.View pointerEvents="none" style={[styles.swipeHintBottom, { bottom: peekReserve + 2 }, hintBottomStyle]}>
             <Icon name="chevron-down" size={28} color={theme.colors.textSecondary} />
           </Reanimated.View>
 
@@ -2610,7 +2618,9 @@ export const CalendarView = ({
               in each month header, but always in the same fixed spot. */}
           {(currentMonthIndex !== monthIndexOf(new Date()) || selectedStr !== todayStr) && (
             <TouchableOpacity
-              style={styles.todayJumpBtn}
+              // Lifted clear of the floating tab bar — pinned, so it can't be
+              // scrolled out from under it.
+              style={[styles.todayJumpBtn, { bottom: peekReserve + 8 }]}
               onPressIn={() => tapHaptic()}
               onPress={goToToday}
               activeOpacity={0.8}
