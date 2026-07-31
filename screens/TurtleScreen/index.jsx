@@ -2375,7 +2375,11 @@ export default function TurtleScreen() {
         // is the ONLY thing that tracks the keyboard — it lifts on its own while
         // the background stays still. In normal chat the whole column already
         // lifts the dock, so no transform of its own there.
-        style={[styles.bottomDock, sessionDockLift]}
+        // bottom: tabBarHeight rests the dock ON TOP of the floating tab card.
+        // The card reserves no layout space, so anything pinned to bottom: 0 is
+        // overlapped by it — for the composer that means part of the input is
+        // unreachable. Applied here because createStyles has no hook access.
+        style={[styles.bottomDock, { bottom: tabBarHeight }, sessionDockLift]}
         onLayout={(e) => {
           const h = Math.round(e.nativeEvent.layout.height);
           if (h === dockHeight) return;

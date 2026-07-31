@@ -32,11 +32,20 @@ import { PILL_SIZE } from './tabBarLayout';
 // Low bounce: this is a control, so it should settle rather than wobble.
 const SELECT_SPRING = { damping: 18, stiffness: 260, mass: 0.6 };
 
+// Downward nudge for the glyph inside its slot.
+//
+// Why this is needed at all: react-navigation lays each tab button out for an
+// icon AND a label. With labels hidden the reserved label space stays in the
+// box, so a glyph centred in that box sits visibly high of the chip behind it.
+// Rather than fight the button's internals, the glyph is offset by half its own
+// height, which is the gap the reserved label row leaves.
+const ICON_NUDGE_Y = 12;
+
 export default function TabBarIcon({ focused, brand = false, children }) {
   const iconStyle = useAnimatedStyle(() => ({
     transform: [
       { scale: withSpring(focused ? 1.04 : 1, SELECT_SPRING) },
-      { translateY: withSpring(focused ? -1 : 0, SELECT_SPRING) },
+      { translateY: ICON_NUDGE_Y + withSpring(focused ? -1 : 0, SELECT_SPRING) },
     ],
   }), [focused]);
 

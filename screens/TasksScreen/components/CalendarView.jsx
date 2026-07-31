@@ -1775,8 +1775,17 @@ export const CalendarView = ({
   // translateY travel = how far the sheet slides between docked and
   // raised. At sheet=1 translateY=0 (full up); at sheet=0 translateY=travel
   // (pushed down so only the header strip shows).
+  // live in it, and none of them can be scrolled out from under the bar the way
+  // list content can. Read from the context (not useBottomTabBarHeight) so the
+  // calendar still renders outside a tab navigator; absent ⇒ 0, unchanged.
+  const tabBarH = useContext(BottomTabBarHeightContext) ?? 0;
+  const peekReserve = SHEET_PEEK_RESERVE + tabBarH;
+
   const sheetStyle = useAnimatedStyle(() => {
-    const travel = Math.max(0, containerH.value - headerH.value);
+    // Closed, the sheet rests with its header peeking at the bottom — minus the
+    // floating tab card's height, or the card would sit ON the peek and make
+    // today's task list unreachable.
+    const travel = Math.max(0, containerH.value - headerH.value - tabBarH);
     return { transform: [{ translateY: travel * (1 - sheet.value) }] };
   });
   // Calendar fades out as the sheet covers it, so it isn't visible through
@@ -1803,11 +1812,6 @@ export const CalendarView = ({
   const [calAreaH, setCalAreaH] = useState(0);
   // The bottom strip the calendar must keep clear now includes the FLOATING tab
   // bar: the day-panel peek, the jump-to-today button and the swipe hint all
-  // live in it, and none of them can be scrolled out from under the bar the way
-  // list content can. Read from the context (not useBottomTabBarHeight) so the
-  // calendar still renders outside a tab navigator; absent ⇒ 0, unchanged.
-  const tabBarH = useContext(BottomTabBarHeightContext) ?? 0;
-  const peekReserve = SHEET_PEEK_RESERVE + tabBarH;
   const { monthH, cellH } = useMemo(() => {
     const usable = calAreaH > 0 ? calAreaH - peekReserve - HINT_STRIP : 0;
     if (usable <= 0) return { monthH: MONTH_HEIGHT, cellH: CELL_HEIGHT };
