@@ -777,7 +777,14 @@ export default function TasksScreen() {
   const [orderEpoch, setOrderEpoch] = useState(0);
   const bumpOrderEpoch = useCallback(() => setOrderEpoch((e) => e + 1), []);
   useEffect(() => {
-    const unsub = navigation.addListener('focus', bumpOrderEpoch);
+    // Deferred one frame: the focus re-snapshot (re-files ✓ rows into history)
+    // used to run synchronously INSIDE the tab-switch frame, so every return
+    // to this tab paid a full agendaOrder rebuild before anything painted.
+    // rAF lets the already-rendered tab appear instantly; the rebuild lands on
+    // the next frame — same behavior, imperceptibly later.
+    const unsub = navigation.addListener('focus', () => {
+      requestAnimationFrame(bumpOrderEpoch);
+    });
     return unsub;
   }, [navigation, bumpOrderEpoch]);
 
