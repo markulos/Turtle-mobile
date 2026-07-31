@@ -48,6 +48,7 @@ import { DownloadsProvider } from './context/DownloadsContext';
 import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
+import TabBarPill from './components/TabBarPill';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
@@ -66,8 +67,6 @@ function TabNavigator() {
   // Active-tab highlight tints. Kept as explicit rgba rather than a hex+alpha
   // suffix on a theme token: those tokens are a MIX of hex and rgba strings, and
   // appending '14' to an rgba() value yields an invalid colour.
-  const tabHighlight = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)';
-  const tabHighlightBrand = isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.10)';
 
   return (
     <>
@@ -95,7 +94,7 @@ function TabNavigator() {
           // utility surfaces leading up to it.
           if (route.name === 'Turtle') {
             return (
-              <TabBarIcon focused={focused} brand highlightColor={tabHighlightBrand}>
+              <TabBarIcon focused={focused} brand>
                 <Image
                   source={TURTLE_TAB_ICON}
                   style={{
@@ -119,7 +118,7 @@ function TabNavigator() {
           else if (route.name === 'Photos') iconName = focused ? 'image' : 'image-outline';
           else if (route.name === 'Vault') iconName = focused ? 'shield-lock' : 'shield-lock-outline';
           return (
-            <TabBarIcon focused={focused} highlightColor={tabHighlight}>
+            <TabBarIcon focused={focused}>
               <Icon name={iconName} size={24} color={color} />
             </TabBarIcon>
           );
@@ -142,6 +141,10 @@ function TabNavigator() {
           paddingBottom: insets.bottom,
           paddingTop: 6,
         },
+        // One accent pill that SLIDES between tabs, painted behind the buttons.
+        // tabBarBackground is composited under navigation's own tab buttons, so
+        // this adds the indicator without touching their layout or a11y.
+        tabBarBackground: () => <TabBarPill />,
         headerShown: false, // Hide default header
       })}
     >

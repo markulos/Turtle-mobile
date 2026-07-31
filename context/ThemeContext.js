@@ -6,6 +6,34 @@ const TIME_FORMAT_STORAGE_KEY = '@connected_pass_time_format';
 const HIDE_VAULT_BUTTON_KEY = '@connected_pass_hide_vault_button';
 const CALENDAR_DAY_TASKS_KEY = '@connected_pass_calendar_day_tasks';
 const CALENDAR_FREE_SCROLL_KEY = '@connected_pass_calendar_free_scroll';
+const ACCENT_KEY = '@connected_pass_accent';
+
+/**
+ * The app-wide highlight colour, chosen in Settings.
+ *
+ * It lands on `theme.colors.accent` — the token new surfaces should reach for —
+ * and ALSO overrides `accentInfo`, which is what the existing screens already
+ * use for links, active chips and affirmative actions. That override is what
+ * makes the choice permeate without editing every screen.
+ *
+ * `primary` is deliberately NOT overridden: in this theme it is the
+ * foreground/contrast colour (white on dark, black on light) and dozens of
+ * components pair it with `onPrimary` for filled controls. Repointing it at an
+ * accent would put orange text on orange fills.
+ */
+export const ACCENTS = [
+  { key: 'orange', label: 'Orange', color: '#F97316' },
+  { key: 'blue', label: 'Blue', color: '#3B82F6' },
+  { key: 'green', label: 'Green', color: '#22C55E' },
+  { key: 'violet', label: 'Violet', color: '#8B5CF6' },
+  { key: 'pink', label: 'Pink', color: '#EC4899' },
+  { key: 'amber', label: 'Amber', color: '#F59E0B' },
+  { key: 'teal', label: 'Teal', color: '#14B8A6' },
+  { key: 'red', label: 'Red', color: '#EF4444' },
+];
+export const DEFAULT_ACCENT = 'orange';
+const accentColorFor = (key) =>
+  (ACCENTS.find((a) => a.key === key) || ACCENTS[0]).color;
 
 // Golden Ratio - 1.618
 const PHI = 1.618;
@@ -215,6 +243,7 @@ export const ThemeProvider = ({ children }) => {
   const [hideVaultButton, setHideVaultButtonState] = useState(false);
   const [showCalendarDayTasks, setShowCalendarDayTasksState] = useState(false);
   const [calendarFreeScroll, setCalendarFreeScrollState] = useState(false);
+  const [accent, setAccentState] = useState(DEFAULT_ACCENT);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -238,6 +267,10 @@ export const ThemeProvider = ({ children }) => {
       const savedDayTasks = await AsyncStorage.getItem(CALENDAR_DAY_TASKS_KEY);
       if (savedDayTasks !== null) {
         setShowCalendarDayTasksState(savedDayTasks === 'true');
+      }
+      const savedAccent = await AsyncStorage.getItem(ACCENT_KEY);
+      if (savedAccent && ACCENTS.some((a) => a.key === savedAccent)) {
+        setAccentState(savedAccent);
       }
       const savedFreeScroll = await AsyncStorage.getItem(CALENDAR_FREE_SCROLL_KEY);
       if (savedFreeScroll !== null) {
@@ -290,6 +323,16 @@ export const ThemeProvider = ({ children }) => {
     }
   };
 
+  const setAccent = async (key) => {
+    const next = ACCENTS.some((a) => a.key === key) ? key : DEFAULT_ACCENT;
+    setAccentState(next);
+    try {
+      await AsyncStorage.setItem(ACCENT_KEY, next);
+    } catch (error) {
+      console.error('Error saving accent:', error);
+    }
+  };
+
   const toggleTheme = async () => {
     const newIsDark = !isDark;
     setIsDark(newIsDark);
@@ -300,7 +343,20 @@ export const ThemeProvider = ({ children }) => {
     }
   };
 
-  const theme = isDark ? DARK_THEME : LIGHT_THEME;
+  // The chosen accent is folded into the palette here, once, so every consumer
+  // of useTheme() picks it up with no change at the call site.
+  const accentColor = accentColorFor(accent);
+  const baseTheme = isDark ? DARK_THEME : LIGHT_THEME;
+  const theme = useMemo(() => ({
+    ...baseTheme,
+    colors: {
+      ...baseTheme.colors,
+      accent: accentColor,
+      // Existing screens already reach for accentInfo as "the highlight";
+      // repointing it is what carries the choice across the app.
+      accentInfo: accentColor,
+    },
+  }), [baseTheme, accentColor]);
 
   // Memoize the context value so consumers only re-render when something they
   // actually read changes. Without this, a fresh object literal every render
@@ -310,11 +366,12 @@ export const ThemeProvider = ({ children }) => {
   const value = useMemo(
     () => ({
       theme, isDark, toggleTheme, timeFormat, setTimeFormat,
+      accent, setAccent, accentColor,
       hideVaultButton, setHideVaultButton,
       showCalendarDayTasks, setShowCalendarDayTasks,
       calendarFreeScroll, setCalendarFreeScroll,
     }),
-    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll],
+    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, accent, accentColor],
   );
 
   if (isLoading) {

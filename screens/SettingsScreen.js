@@ -22,7 +22,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
 import SidecarStatusCard from '../components/SidecarStatusCard';
 import { useServer } from '../context/ServerContext';
-import { useTheme } from '../context/ThemeContext';
+import { useTheme, ACCENTS } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import * as SecureStore from 'expo-secure-store';
 import { clearAllCaches, getCacheSizeBytes, formatBytes } from '../utils/cacheManager';
@@ -32,7 +32,7 @@ const MASTER_KEY_STORE = 'vault_master_key';
 const SALT_STORE = 'vault_salt';
 
 export default function SettingsScreen({ active = true }) {
-  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll } = useTheme();
+  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll, accent, setAccent } = useTheme();
   const { serverIP, isConnected, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
   const [isHealing, setIsHealing] = useState(false);
   const [isClearingCache, setIsClearingCache] = useState(false);
@@ -635,6 +635,44 @@ export default function SettingsScreen({ active = true }) {
                   thumbColor={isDark ? theme.colors.textPrimary : theme.colors.textTertiary}
                 />
               </View>
+
+              {/* Highlight colour — the accent the whole app draws with: the
+                  sliding tab pill, links, active chips, affirmative actions.
+                  Chosen here rather than per-surface so one pick carries
+                  everywhere (see ThemeContext's accent handling). */}
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Highlight colour</Text>
+                  <Text style={styles.settingDescription}>
+                    Used across the app for the active tab, links and highlights
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.accentRow}>
+                {ACCENTS.map((option) => {
+                  const selected = accent === option.key;
+                  return (
+                    <TouchableOpacity
+                      key={option.key}
+                      onPress={() => setAccent(option.key)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={`${option.label} highlight colour`}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={[
+                        styles.accentSwatch,
+                        {
+                          backgroundColor: option.color,
+                          // The ring, not a tick, carries selection: a check
+                          // mark on a saturated swatch is hard to read across
+                          // eight different hues.
+                          borderColor: selected ? theme.colors.textPrimary : 'transparent',
+                        },
+                      ]}
+                    />
+                  );
+                })}
+              </View>
             </View>
 
             )}
@@ -1185,6 +1223,21 @@ const createStyles = (theme) => StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: theme.colors.textPrimary,
+  },
+  // Highlight-colour swatches. The ring is the selection cue; a tick would be
+  // unreadable across eight saturated hues.
+  accentRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    paddingHorizontal: 4,
+    paddingBottom: 8,
+  },
+  accentSwatch: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 2.5,
   },
   settingRow: {
     flexDirection: 'row',
