@@ -316,6 +316,8 @@ export default function NotesScreen() {
   const hasMoreNotesRef = useRef(true);
   const loadingMoreRef = useRef(false);      // in-flight guard; a fast scroll fires onEndReached repeatedly
   const [loadingMore, setLoadingMore] = useState(false);
+  // Server-side totals for the filter tabs; null until the first response.
+  const [serverCounts, setServerCounts] = useState(null);
 
   const refresh = useCallback(async () => {
     if (!isConnected) return;
@@ -333,6 +335,20 @@ export default function NotesScreen() {
       setError(e.message || 'Failed to load notes');
     } finally {
       setLoading(false);
+    }
+  }, [api, isConnected]);
+
+  // Authoritative tab counts, refreshed alongside the first page and after any
+  // mutation that changes the totals. Cheap: one grouped COUNT server-side.
+  const refreshCounts = useCallback(async () => {
+    if (!isConnected) return;
+    try {
+      const res = await api.get('/turtle/notes/counts');
+      if (res?.success) {
+        setServerCounts({ all: res.all || 0, note: res.note || 0, todo: res.todo || 0 });
+      }
+    } catch {
+      // Non-fatal — the tabs fall back to counting the loaded rows.
     }
   }, [api, isConnected]);
 
@@ -365,7 +381,7 @@ export default function NotesScreen() {
     }
   }, [api, isConnected]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); void refreshCounts(); }, [refresh, refreshCounts]);
 
   // ── Mutations ───────────────────────────────────────────
   const createNote = async ({ content, description, type, tags }) => {
@@ -385,6 +401,7 @@ export default function NotesScreen() {
       });
       if (res?.success !== false) {
         await refresh();
+        void refreshCounts();
         return true;
       }
       return false;
@@ -407,6 +424,7 @@ export default function NotesScreen() {
       });
       if (res?.success !== false) {
         await refresh();
+        void refreshCounts();
         return true;
       }
       return false;
@@ -435,6 +453,8 @@ export default function NotesScreen() {
     try {
       await api.delete(`/turtle/notes/${note.id}`);
       setNotes((cur) => cur.filter((n) => n.id !== note.id));
+      // Totals changed — the tabs read the server count, not the loaded rows.
+      void refreshCounts();
     } catch (e) {
       Alert.alert('Delete failed', e.message || String(e));
     }
@@ -599,7 +619,12 @@ export default function NotesScreen() {
     return list;
   }, [notes, filter, selectedTopic]);
 
+  // Tab counts. The list is paged, so counting loaded rows undercounts until
+  // the whole library has been scrolled — the server's grouped COUNT is the
+  // authority. Loaded rows are the fallback until it lands (and if it fails),
+  // so the tabs are never blank.
   const counts = useMemo(() => {
+    if (serverCounts) return serverCounts;
     const c = { all: notes.length, note: 0, todo: 0 };
     for (const n of notes) {
       const t = n.type || 'note';
@@ -607,7 +632,7 @@ export default function NotesScreen() {
       else c.note += 1;
     }
     return c;
-  }, [notes]);
+  }, [notes, serverCounts]);
 
   // Unique tags already used across all notes/todos, so the composer can offer
   // them as tap-to-select chips (rather than making the user retype/remember a
