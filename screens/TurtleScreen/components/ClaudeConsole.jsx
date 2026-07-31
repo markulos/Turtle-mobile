@@ -52,6 +52,11 @@ const EXPANDED_MAX_HEIGHT = Math.round(SCREEN_HEIGHT * 0.72);
 // Never let the panel collapse below this, even if the keyboard leaves almost
 // no room — a small scrollable panel beats a vanished one.
 const MIN_PANEL_HEIGHT = 140;
+// The panel's breathing room, used on BOTH edges: as the margin above the
+// composer below it, and as headroom subtracted from the available height so a
+// fully expanded panel stops the same distance under the chat header instead of
+// butting straight against it. One constant so the two can never drift apart.
+const PANEL_GAP = 8;
 
 /**
  * ClaudeConsole — a dedicated live panel for the `/claude` session.
@@ -260,7 +265,10 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
     // it. `belowFromBottom` = whatever sits below the panel (composer + banners)
     // resting on the keyboard's top edge when up, else above the tab bar.
     const belowFromBottom = Math.max(kb, tabBarHeight) + spaceBelow;
-    const avail = SCREEN_HEIGHT - spaceAbove - belowFromBottom;
+    // PANEL_GAP is the same margin the panel keeps above the composer, applied
+    // here as headroom under the header — so the expanded log sits between two
+    // equal gaps rather than touching the header.
+    const avail = SCREEN_HEIGHT - spaceAbove - PANEL_GAP - belowFromBottom;
     const cap = Math.max(MIN_PANEL_HEIGHT, avail);
     const expandedH = Math.min(EXPANDED_MAX_HEIGHT, cap);
     const compactH = Math.min(COMPACT_MAX_HEIGHT, cap);
@@ -467,7 +475,9 @@ const MONO = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
 const createStyles = (theme) => StyleSheet.create({
   panel: {
     marginHorizontal: 8,
-    marginBottom: 8,
+    // Matched by the same value of headroom under the chat header (see the
+    // height cap in animatedPanelStyle).
+    marginBottom: PANEL_GAP,
     // Transparent: the BlurView + frost tint + gloss gradient (rendered as
     // absolute layers inside) provide the glassy surface. overflow:hidden clips
     // those layers to the (now square) card edges.
