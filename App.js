@@ -49,7 +49,7 @@ import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
-import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD } from './components/tabBarLayout';
+import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM } from './components/tabBarLayout';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
@@ -157,21 +157,28 @@ function TabNavigator() {
           // thinnest renderable line (StyleSheet.hairlineWidth, ~0.5px) in the
           // faint theme border colour, so the bar reads as its own surface,
           // just barely separated from the content above it.
-          borderTopWidth: StyleSheet.hairlineWidth,
-          borderTopColor: theme.colors.border,
-          height: BAR_CONTENT_HEIGHT + insets.bottom, // sized from the chip, + safe area
+          // No top border: the bar is a detached CARD now, so its edge is the
+          // card's own hairline (drawn in tabBarBackground) rather than a rule
+          // spanning the screen.
+          borderTopWidth: 0,
+          // Floats clear of the screen bottom, like the chat composer: the
+          // safe-area inset becomes a MARGIN under the card instead of padding
+          // inside it, which is what detaches it from the home indicator.
+          height: BAR_CONTENT_HEIGHT,
+          marginHorizontal: CARD_MARGIN_H,
+          marginBottom: insets.bottom + CARD_GAP_BOTTOM,
           // SYMMETRIC vertical padding — this is what makes the icons land dead
           // centre on the chip. The inner content box is left exactly PILL_SIZE
           // tall, so navigation's centred icon and the top-anchored chip occupy
           // the same square instead of drifting apart (see tabBarLayout).
           paddingTop: BAR_VERTICAL_PAD,
-          paddingBottom: insets.bottom + BAR_VERTICAL_PAD,
+          paddingBottom: BAR_VERTICAL_PAD,
           // Pull the tabs into a CENTRED CLUSTER of fixed-width slots instead of
           // stretching them edge to edge — the Pinterest nav's proportions. The
           // items still flex, so narrowing the row is what tightens the spacing;
           // the sliding chip reads the same geometry from tabBarLayout, so the
           // two can't disagree about where a slot sits.
-          paddingHorizontal: clusterPadding(windowWidth, tabCount),
+          paddingHorizontal: clusterPadding(windowWidth - CARD_MARGIN_H * 2, tabCount),
         },
         // One accent pill that SLIDES between tabs, painted behind the buttons.
         // tabBarBackground is composited under navigation's own tab buttons, so

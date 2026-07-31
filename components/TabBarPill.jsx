@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useNavigationState } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
+import { blurProps, frostOverlayColor, frostBorderColor } from '../utils/frostedChat';
 import Reanimated, {
   useAnimatedStyle,
   withSpring,
@@ -35,7 +36,7 @@ const SLIDE_SPRING = { damping: 20, stiffness: 220, mass: 0.7 };
 // icons can never disagree about where a slot is.
 
 export default function TabBarPill() {
-  const { isDark } = useTheme();
+  const { theme, isDark } = useTheme();
   const [barWidth, setBarWidth] = useState(0);
 
   // Read straight from the navigator: `index` is the focused tab and `routes`
@@ -65,16 +66,18 @@ export default function TabBarPill() {
         setBarWidth((prev) => (prev === w ? prev : w));
       }}
     >
-      {/* The bar floats OVER the page, so its own surface is a blur rather than
-          an opaque fill — content scrolls up behind it and stays readable
-          through the frost instead of disappearing under a solid band. This is
-          also why the bar's backgroundColor is transparent: an opaque colour
-          here would defeat the whole effect. */}
-      <BlurView
-        intensity={isDark ? 42 : 60}
-        tint={isDark ? 'dark' : 'light'}
-        style={StyleSheet.absoluteFill}
-      />
+      {/* The bar is a floating CARD, built from the same frosted chrome as the
+          chat composer — utils/frostedChat is the single source for the blur
+          params, the translucent tint over it and the hairline, so the two
+          surfaces can't drift apart. Rounded + clipped here rather than on the
+          bar itself, because this layer is what actually paints the surface. */}
+      <View style={[styles.card, { borderColor: frostBorderColor(theme) }]}>
+        <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
+        <View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]}
+        />
+      </View>
       <Reanimated.View
         style={[
           styles.pill,
@@ -94,6 +97,15 @@ export default function TabBarPill() {
 }
 
 const styles = StyleSheet.create({
+  // The floating card itself: same 28pt radius and hairline as the composer's
+  // glass card. overflow clips the blur and tint to the rounded corners.
+  card: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 28,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
+  },
   pill: {
     position: 'absolute',
     // Top of the bar's inner content box, which the bar pads symmetrically to

@@ -55,3 +55,10 @@ export const BAR_VERTICAL_PAD = 6;
 // it (the old paddingTop-only layout put the icons 3pt low). Sizing the box to
 // PILL_SIZE makes "dead centre" true by construction at any inset or scale.
 export const BAR_CONTENT_HEIGHT = PILL_SIZE + BAR_VERTICAL_PAD * 2;
+
+// The bar is a floating card, detached from the screen edges — matching the
+// chat composer's glass card, which uses the same 10pt side margin. The bottom
+// gap sits ON TOP of the safe-area inset so the card clears the home indicator
+// instead of resting on it.
+export const CARD_MARGIN_H = 10;
+export const CARD_GAP_BOTTOM = 8;
