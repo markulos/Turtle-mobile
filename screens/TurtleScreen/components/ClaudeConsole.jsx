@@ -56,7 +56,10 @@ const MIN_PANEL_HEIGHT = 140;
 // composer below it, and as headroom subtracted from the available height so a
 // fully expanded panel stops the same distance under the chat header instead of
 // butting straight against it. One constant so the two can never drift apart.
-const PANEL_GAP = 8;
+// Exported: TurtleScreen uses the SAME value for the gap under the composer
+// (above the tab dock, and above the keyboard when it is up), so all three
+// seams in that stack are one number rather than three that happen to match.
+export const PANEL_GAP = 8;
 
 /**
  * ClaudeConsole — a dedicated live panel for the `/claude` session.

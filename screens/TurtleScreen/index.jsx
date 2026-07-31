@@ -49,7 +49,7 @@ import MediaGallery from './components/MediaGallery';
 import { usePomodoroSocket } from './hooks/usePomodoroSocket';
 import { useClaudeSession } from './hooks/useClaudeSession';
 import { useTerminalSession } from './hooks/useTerminalSession';
-import ClaudeConsole from './components/ClaudeConsole';
+import ClaudeConsole, { PANEL_GAP } from './components/ClaudeConsole';
 import TerminalConsole from './components/TerminalConsole';
 import FriendCard from './components/FriendCard';
 import EdgeSwipePage from './components/EdgeSwipePage';
@@ -2375,11 +2375,12 @@ export default function TurtleScreen() {
         // is the ONLY thing that tracks the keyboard — it lifts on its own while
         // the background stays still. In normal chat the whole column already
         // lifts the dock, so no transform of its own there.
-        // bottom: tabBarHeight rests the dock ON TOP of the floating tab card.
-        // The card reserves no layout space, so anything pinned to bottom: 0 is
-        // overlapped by it — for the composer that means part of the input is
-        // unreachable. Applied here because createStyles has no hook access.
-        style={[styles.bottomDock, { bottom: tabBarHeight }, sessionDockLift]}
+        // Clears the floating tab card (which reserves no layout space, so a
+        // dock at bottom: 0 would be partly under it) by the SAME gap the Claude
+        // console keeps above the composer — so composer→console, composer→dock
+        // and, once the column lifts, composer→keyboard are all one value.
+        // Applied here because createStyles has no hook access.
+        style={[styles.bottomDock, { bottom: tabBarHeight + PANEL_GAP }, sessionDockLift]}
         onLayout={(e) => {
           const h = Math.round(e.nativeEvent.layout.height);
           if (h === dockHeight) return;
