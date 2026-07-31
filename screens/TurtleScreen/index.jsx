@@ -410,7 +410,14 @@ export default function TurtleScreen() {
   // with word suggestions turned off there is no candidate strip to clear
   // either. Subtracted from the resting margin by the lift worklets.
   const KEYBOARD_GAP = 2;
+  // SUBTRACTED from the lift, not added: the lift moves the column UP, so
+  // adding to it widens the gap instead of closing it.
   const KEYBOARD_GAP_TRIM = COMPOSER_MARGIN - KEYBOARD_GAP;
+  // The lift MUST cancel exactly what the composer's margin reserves. That
+  // margin is dockOccupied (card + float gap + safe area); subtracting the
+  // navigator's smaller tabBarHeight instead left the difference — ~40pt — as a
+  // permanent gap over the keyboard, which is why 2pt never appeared.
+  const dockH = dockOccupied(insets.bottom);
   // True whenever the Claude console is on screen (a live session OR the login
   // flow).
   const inClaudeSession = !!claudeUiMode;
@@ -460,7 +467,7 @@ export default function TurtleScreen() {
     // this returns 0 there — handed off atomically via sessionSV.
     const kb = keyboard.height.value;
     const trim = kb > 0 ? KEYBOARD_GAP_TRIM : 0;
-    const lift = sessionSV.value ? 0 : Math.max(kb - tabBarHeight, 0) + trim;
+    const lift = sessionSV.value ? 0 : Math.max(kb - dockH - trim, 0);
     return {
       transform: [{ translateY: -lift }],
     };
@@ -485,7 +492,7 @@ export default function TurtleScreen() {
     // stay in lockstep.
     const kb = keyboard.height.value;
     const trim = kb > 0 ? KEYBOARD_GAP_TRIM : 0;
-    const lift = sessionSV.value ? 0 : Math.max(kb - tabBarHeight, 0) + trim;
+    const lift = sessionSV.value ? 0 : Math.max(kb - dockH - trim, 0);
     return {
       transform: [{ translateY: lift }],
     };
@@ -507,7 +514,7 @@ export default function TurtleScreen() {
     // is unchanged and it never jumps.
     const kb = keyboard.height.value;
     const trim = kb > 0 ? KEYBOARD_GAP_TRIM : 0;
-    const lift = sessionSV.value ? Math.max(kb - tabBarHeight, 0) + trim : 0;
+    const lift = sessionSV.value ? Math.max(kb - dockH - trim, 0) : 0;
     return {
       transform: [{ translateY: -lift }],
     };
