@@ -24,6 +24,7 @@ import Reanimated, {
   Easing as ReEasing,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { FlashList } from '@shopify/flash-list';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useServer } from '../../context/ServerContext';
@@ -479,6 +480,8 @@ function FourColorBoardsIcon({ size = 18, gap = 2 }) {
 export default function TasksScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
+  // The tab bar floats over the page now, so lists clear it themselves.
+  const tabBarHeight = useBottomTabBarHeight();
   const { isConnected, api } = useServer();
   const { celebrate } = useCelebration();
   const navigation = useNavigation();
@@ -2259,7 +2262,9 @@ export default function TasksScreen() {
             contentContainerStyle={{
               // FlashList accepts padding-only container styles; styles.list
               // was paddingBottom-only, folded in here.
-              paddingBottom: Math.max(100, keyboardHeight + 20),
+              // Clears the floating tab bar (which no longer reserves space)
+              // or the keyboard, whichever is taller.
+              paddingBottom: Math.max(tabBarHeight + 24, keyboardHeight + 20),
             }}
             // NO RefreshControl — the pull/scroll up is plain native motion
             // into the preloaded skeleton zone; data still refreshes on focus,

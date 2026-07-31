@@ -9,6 +9,7 @@ import {
   AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useServer } from '../../context/ServerContext';
 import { useTheme } from '../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -26,6 +27,8 @@ import {
 export default function PasswordsScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
+  // The tab bar floats over the page now, so lists clear it themselves.
+  const tabBarHeight = useBottomTabBarHeight();
   const { isConnected, getBaseUrl } = useServer();
   
   const {
@@ -159,7 +162,8 @@ export default function PasswordsScreen() {
           windowing for. */}
       <FlatList
         style={styles.list}
-        contentContainerStyle={styles.listContent}
+        // Clears the floating tab bar, which no longer reserves space.
+        contentContainerStyle={[styles.listContent, { paddingBottom: tabBarHeight + 24 }]}
         data={filteredEntries}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={

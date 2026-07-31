@@ -50,8 +50,8 @@ const styles = StyleSheet.create({
   // Sized to the largest glyph (the 36pt turtle) so every tab's icon sits on
   // the same baseline and the highlights line up across the bar.
   slot: {
-    width: 46,
-    height: 38,
+    width: 57,
+    height: 57,
     alignItems: 'center',
     justifyContent: 'center',
   },

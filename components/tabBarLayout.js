@@ -14,15 +14,15 @@
 
 // One tab's footprint. Wide enough for the 38pt chip plus breathing room, tight
 // enough that the group stays a cluster instead of a bar.
-export const TAB_SLOT = 52;
+export const TAB_SLOT = 67;
 
-// The chip itself: a perfect square, sized to the icon slot so the glyph lands
-// dead centre in it.
-export const PILL_SIZE = 38;
+// The chip itself: a perfect square, 1.5x the original 38pt so it reads as a
+// card carrying the glyph rather than a tight highlight around it.
+export const PILL_SIZE = 57;
 
 // Corner softness. The base is the iOS continuous-corner ratio — Apple's
 // squircle sits at ~22.4% of the side, and 1/φ³ = 0.236 lands on the same
-// curve — scaled 1.5x for a rounder chip: 13pt on a 38pt square, ~34% of the
+// curve — scaled 1.5x for a rounder chip: 20pt on a 57pt square, ~34% of the
 // side. Still well short of the 50% that would turn it back into a circle.
 const PHI = 1.618;
 const RADIUS_SCALE = 1.5;
@@ -39,3 +39,9 @@ export const clusterStart = (barWidth, count) =>
 /** Horizontal padding the BAR needs so its flex items form that same cluster. */
 export const clusterPadding = (screenWidth, count) =>
   clusterStart(screenWidth, count);
+
+// Bar height WITHOUT the safe-area inset. The chip is the tallest thing in it,
+// so the bar is sized from the chip rather than the old fixed 49pt: 6pt above
+// it (matching the bar's paddingTop) and the same below, so the chip sits
+// optically centred in the bar's content box.
+export const BAR_CONTENT_HEIGHT = PILL_SIZE + 12;

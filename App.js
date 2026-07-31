@@ -49,7 +49,7 @@ import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
-import { clusterPadding } from './components/tabBarLayout';
+import { clusterPadding, BAR_CONTENT_HEIGHT } from './components/tabBarLayout';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
@@ -135,14 +135,23 @@ function TabNavigator() {
         // sitting under it.
         tabBarShowLabel: false,
         tabBarStyle: {
-          backgroundColor: theme.colors.background,
+          // Floating bar: absolutely positioned so the page runs UNDERNEATH it
+          // (Pinterest-style) instead of being pushed above it, with a
+          // transparent surface so the blur in tabBarBackground is what you see
+          // through. Screens keep their content clear of it with
+          // useBottomTabBarHeight(), which reports this bar's real height.
+          position: 'absolute',
+          backgroundColor: 'transparent',
+          // Elevation would paint an opaque Android shadow surface under the
+          // bar, defeating the underlay.
+          elevation: 0,
           // A hairline along the TOP edge of the bottom nav — the device's
           // thinnest renderable line (StyleSheet.hairlineWidth, ~0.5px) in the
           // faint theme border colour, so the bar reads as its own surface,
           // just barely separated from the content above it.
           borderTopWidth: StyleSheet.hairlineWidth,
           borderTopColor: theme.colors.border,
-          height: 49 + insets.bottom, // Standard iOS tab bar 49pt + safe area
+          height: BAR_CONTENT_HEIGHT + insets.bottom, // sized from the chip, + safe area
           paddingBottom: insets.bottom,
           paddingTop: 6,
           // Pull the tabs into a CENTRED CLUSTER of fixed-width slots instead of

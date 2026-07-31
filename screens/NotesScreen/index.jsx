@@ -268,6 +268,8 @@ function SharedByLine({ note, style }) {
 }
 
 export default function NotesScreen() {
+  // The tab bar floats over the page, so the list clears it itself.
+  const tabBarHeight = useBottomTabBarHeight();
   const { theme, isDark } = useTheme();
   const { api, isConnected } = useServer();
   const { enqueueNote } = useClaudeQueue();
@@ -731,7 +733,9 @@ export default function NotesScreen() {
         data={data}
         keyExtractor={(item) => item.id}
         style={{ flex: 1 }}
-        contentContainerStyle={[styles.list, data.length === 0 && { flexGrow: 1 }]}
+        // paddingBottom clears the floating tab bar, which no longer reserves
+        // space for itself.
+        contentContainerStyle={[styles.list, { paddingBottom: tabBarHeight + 28 }, data.length === 0 && { flexGrow: 1 }]}
         // No ListHeaderComponent: the chrome is fixed above the pager now, so
         // it neither scrolls away with the notes nor swipes with the pages.
         // flexGrow still lets the empty state centre in the space below it.

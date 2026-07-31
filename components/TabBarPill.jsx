@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useNavigationState } from '@react-navigation/native';
+import { BlurView } from 'expo-blur';
 import Reanimated, {
   useAnimatedStyle,
   withSpring,
@@ -64,6 +65,16 @@ export default function TabBarPill() {
         setBarWidth((prev) => (prev === w ? prev : w));
       }}
     >
+      {/* The bar floats OVER the page, so its own surface is a blur rather than
+          an opaque fill — content scrolls up behind it and stays readable
+          through the frost instead of disappearing under a solid band. This is
+          also why the bar's backgroundColor is transparent: an opaque colour
+          here would defeat the whole effect. */}
+      <BlurView
+        intensity={isDark ? 42 : 60}
+        tint={isDark ? 'dark' : 'light'}
+        style={StyleSheet.absoluteFill}
+      />
       <Reanimated.View
         style={[
           styles.pill,
