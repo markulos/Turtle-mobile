@@ -136,6 +136,12 @@ function TabNavigator() {
         // larger turtle icon breathe without crowding from a label
         // sitting under it.
         tabBarShowLabel: false,
+        // Align each glyph to the chip sliding underneath it. react-navigation's
+        // default item style adds padding: 5 with justifyContent: 'flex-start',
+        // which pushed every icon 5pt below the chip's top edge — the icon slot
+        // and the chip are both PILL_SIZE tall, so with the padding stripped
+        // they share an origin and line up exactly.
+        tabBarItemStyle: { paddingVertical: 0 },
         tabBarStyle: {
           // Floating bar: absolutely positioned so the page runs UNDERNEATH it
           // (Pinterest-style) instead of being pushed above it, with a
