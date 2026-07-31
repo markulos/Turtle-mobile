@@ -29,10 +29,15 @@ import { useTheme } from '../context/ThemeContext';
 // Settles rather than wobbles: this tracks a selection, it isn't a flourish.
 const SLIDE_SPRING = { damping: 20, stiffness: 220, mass: 0.7 };
 
-const PILL_HEIGHT = 34;
-// Inset from each slot's edges, so the pill is a touch narrower than the tab it
-// sits under and neighbouring pills never look like one continuous bar.
-const SLOT_INSET = 10;
+// A PERFECT SQUARE, sized to the icon slot so the glyph sits dead centre in it.
+const PILL_SIZE = 38;
+// iOS-style corner. Apple's continuous ("squircle") corners sit at ~22.4% of
+// the side; 1/φ³ = 0.236 lands on the same curve, which is why the golden
+// division reads as the familiar iOS shape rather than an arbitrary radius.
+// borderCurve: 'continuous' then swaps the circular arc for the superellipse
+// iOS actually draws — the difference between a rounded square and a squircle.
+const PHI = 1.618;
+const PILL_RADIUS = Math.round(PILL_SIZE / (PHI * PHI * PHI));
 
 export default function TabBarPill() {
   const { isDark } = useTheme();
@@ -44,14 +49,16 @@ export default function TabBarPill() {
   const count = useNavigationState((state) => state?.routes?.length ?? 1);
 
   const slot = count > 0 ? barWidth / count : 0;
-  const width = Math.max(0, slot - SLOT_INSET * 2);
+  // Centred in its slot rather than inset from the edges: the square is a fixed
+  // size, so it has to be placed by the slot's midpoint, not by its margins.
+  const offset = Math.max(0, (slot - PILL_SIZE) / 2);
 
   const pillStyle = useAnimatedStyle(() => ({
     // Nothing to place until the bar has been measured; staying invisible
-    // avoids a pill flashing at x=0 on the first frame.
+    // avoids the square flashing at x=0 on the first frame.
     opacity: withSpring(slot > 0 ? 1 : 0, SLIDE_SPRING),
-    transform: [{ translateX: withSpring(slot * index + SLOT_INSET, SLIDE_SPRING) }],
-  }), [slot, index]);
+    transform: [{ translateX: withSpring(slot * index + offset, SLIDE_SPRING) }],
+  }), [slot, index, offset]);
 
   return (
     <View
@@ -66,7 +73,6 @@ export default function TabBarPill() {
         style={[
           styles.pill,
           {
-            width,
             // SOLID and fully inverted against the bar: white on dark, black on
             // light. The active icon flips with it (tabBarActiveTintColor is
             // the theme background, which is the exact inverse in both modes),
@@ -87,11 +93,17 @@ const styles = StyleSheet.create({
   pill: {
     position: 'absolute',
     // Sits against the top of the bar's content box, under the icon row. The
-    // bar reserves paddingTop: 6 above this.
+    // bar reserves paddingTop: 6 above this, and the icon slot is the same 38pt
+    // square, so the glyph lands dead centre.
     top: 6,
     left: 0,
-    height: PILL_HEIGHT,
-    borderRadius: PILL_HEIGHT / 2,
+    width: PILL_SIZE,
+    height: PILL_SIZE,
+    borderRadius: PILL_RADIUS,
+    // The iOS superellipse rather than a circular arc — this is what separates
+    // a squircle from a rounded square. iOS-only; Android ignores it and falls
+    // back to the plain radius, which still reads correctly.
+    borderCurve: 'continuous',
     // No border: a solid chip needs no outline, and one at this contrast would
     // only muddy its edge.
   },
