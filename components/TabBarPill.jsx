@@ -7,7 +7,7 @@ import Reanimated, {
   withSpring,
 } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
-import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, clusterStart } from './tabBarLayout';
+import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, BAR_VERTICAL_PAD, clusterStart } from './tabBarLayout';
 
 /**
  * TabBarPill — ONE pill that slides from tab to tab behind the icons.
@@ -96,10 +96,10 @@ export default function TabBarPill() {
 const styles = StyleSheet.create({
   pill: {
     position: 'absolute',
-    // Sits against the top of the bar's content box, under the icon row. The
-    // bar reserves paddingTop: 6 above this, and the icon slot is the same 38pt
-    // square, so the glyph lands dead centre.
-    top: 6,
+    // Top of the bar's inner content box, which the bar pads symmetrically to
+    // exactly PILL_SIZE — so this square and navigation's centred icon slot are
+    // the SAME square and the glyph lands dead centre (see tabBarLayout).
+    top: BAR_VERTICAL_PAD,
     left: 0,
     width: PILL_SIZE,
     height: PILL_SIZE,

@@ -40,8 +40,18 @@ export const clusterStart = (barWidth, count) =>
 export const clusterPadding = (screenWidth, count) =>
   clusterStart(screenWidth, count);
 
+// Breathing room above AND below the chip inside the bar. Applied as the bar's
+// paddingTop and (on top of the safe-area inset) its paddingBottom, so the
+// bar's inner content box is EXACTLY PILL_SIZE tall.
+export const BAR_VERTICAL_PAD = 6;
+
 // Bar height WITHOUT the safe-area inset. The chip is the tallest thing in it,
-// so the bar is sized from the chip rather than the old fixed 49pt: 6pt above
-// it (matching the bar's paddingTop) and the same below, so the chip sits
-// optically centred in the bar's content box.
-export const BAR_CONTENT_HEIGHT = PILL_SIZE + 12;
+// so the bar is sized from the chip rather than the old fixed 49pt.
+//
+// Why the padding has to be symmetric: navigation centres each tab button's
+// icon inside this inner box, while the chip is positioned from the box's top.
+// Those two agree ONLY when the box is exactly the chip's height — otherwise
+// the glyph centres in a taller box than the chip and sits a few points below
+// it (the old paddingTop-only layout put the icons 3pt low). Sizing the box to
+// PILL_SIZE makes "dead centre" true by construction at any inset or scale.
+export const BAR_CONTENT_HEIGHT = PILL_SIZE + BAR_VERTICAL_PAD * 2;

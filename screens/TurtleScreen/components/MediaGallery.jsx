@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useContext, useRef, useMemo } from 'react';
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import {
   View,
   Text,
@@ -242,7 +243,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const { theme } = useTheme();
   const { api, getBaseUrl, getMediaBaseUrl } = useServer();
   const insets = useSafeAreaInsets();
-  
+  // Height of the FLOATING tab bar this screen runs underneath. Fixed controls
+  // (the bulk-select console, the jump pill, the scrubber rail, the music
+  // transport) must clear it: unlike the photo grid — which you can scroll out
+  // from under the bar — a pinned control covered by the bar is simply
+  // unreachable. Read from the CONTEXT rather than useBottomTabBarHeight()
+  // because this component also renders outside a tab (the share target and the
+  // chat's /vault page), where the hook throws; absent ⇒ 0, nothing reserved.
+  const tabBarH = useContext(BottomTabBarHeightContext) ?? 0;
+
   // === TAB & DATA STATE ===
   // The pager holds Boards and Music. The photo grid is NOT a pager page any
   // more: it's a page pushed over the pager (slide in from the right, left-edge
@@ -1574,10 +1583,14 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     if (scrubExtentKeyRef.current === key && gridContentH.current > 0) return;
     scrubExtentKeyRef.current = key;
     const pitch = width / gridCols;
-    const expected = Math.ceil(len / gridCols) * pitch + (insets.top + 90) + (insets.bottom + 16);
+    // Paddings must mirror the grid's contentContainerStyle exactly, tab-bar
+    // reservation included, or the analytic extent drifts from the real one.
+    const expected = Math.ceil(len / gridCols) * pitch
+      + (insets.top + 90)
+      + Math.max(insets.bottom + 16, tabBarH + 16);
     gridContentH.current = expected;
     maxScrollSv.value = Math.max(1, expected - (gridLayoutH.current || height));
-  }, [uploadDisplayItems, gridCols, insets.top, insets.bottom, maxScrollSv]);
+  }, [uploadDisplayItems, gridCols, insets.top, insets.bottom, tabBarH, maxScrollSv]);
 
   // The array the full-screen pager walks. It MUST be the same set the grid
   // renders, or a tapped photo won't be found in it and the pager collapses to
@@ -4039,7 +4052,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       {isSelectMode && (
         <KeyboardAvoidingView 
           behavior={Platform.OS === 'ios' ? 'position' : undefined}
-          style={{ position: 'absolute', bottom: insets.bottom + 24, left: 16, right: 16, zIndex: 50 }}
+          // Sits ABOVE the floating tab bar — these are the bulk actions
+          // (share / tag / delete) and they can't be scrolled out from under it.
+          style={{ position: 'absolute', bottom: Math.max(insets.bottom + 24, tabBarH + 12), left: 16, right: 16, zIndex: 50 }}
           pointerEvents="box-none"
         >
           {!isBulkTagging ? (
@@ -4681,7 +4696,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             {/* Clear the vault header by its MEASURED height plus the same gap
                 the Boards page leaves under the picker, so the two pages start
                 at the same line and no track card slides under the tabs. */}
-            <MusicVault topInset={(vaultHeaderH || insets.top + 90) + VAULT_PICKER_GAP} />
+            <MusicVault
+              topInset={(vaultHeaderH || insets.top + 90) + VAULT_PICKER_GAP}
+              bottomInset={tabBarH}
+            />
           </View>
 
         </Animated.ScrollView>
@@ -4697,7 +4715,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             onJump={handleAlbumsScrubJump}
             inverted={false}
             topInset={(vaultHeaderH || insets.top + 54) + 8}
-            bottomInset={insets.bottom + 64}
+            bottomInset={Math.max(insets.bottom + 64, tabBarH + 24)}
             accent={theme.colors.primary}
             dark={theme.mode === 'dark'}
           />
@@ -4966,7 +4984,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 // lands offset, overlapping its neighbours. A photo grid never
                 // needs MVCP → disable it to kill the load-time offset.
                 maintainVisibleContentPosition={{ disabled: true }}
-                contentContainerStyle={[styles.gridContent, { paddingBottom: insets.top + 90, paddingTop: insets.bottom + 16 }]}
+                // Inverted grid: paddingTop is the VISUAL BOTTOM. It reserves the
+                // floating tab bar's height so the newest row can be scrolled
+                // clear of the bar — a photo permanently pinned under it could
+                // never be tapped, which is the whole point of the underlay
+                // being allowed only on scrollable content.
+                contentContainerStyle={[styles.gridContent, { paddingBottom: insets.top + 90, paddingTop: Math.max(insets.bottom + 16, tabBarH + 16) }]}
                 showsVerticalScrollIndicator={false}
                 onRefresh={handleRefresh}
                 refreshing={refreshing}
@@ -5065,7 +5088,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               onJump={handleScrubJump}
               inverted
               topInset={(vaultHeaderH || insets.top + 54) + 8}
-              bottomInset={insets.bottom + 64}
+              // The rail's grab area has to end above the tab bar, or its lowest
+              // stretch (newest photos) is untouchable.
+              bottomInset={Math.max(insets.bottom + 64, tabBarH + 24)}
               accent={theme.colors.primary}
               dark={theme.mode === 'dark'}
             />
@@ -5080,7 +5105,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               pointerEvents={gridJumpVisible ? 'auto' : 'none'}
               style={{
                 position: 'absolute',
-                bottom: insets.bottom + 24,
+                // Clears the floating tab bar — a pinned control under it can't
+                // be tapped and can't be scrolled away from.
+                bottom: Math.max(insets.bottom + 24, tabBarH + 12),
                 alignSelf: 'center',
                 opacity: gridJumpAnim,
                 transform: [{ scale: gridJumpAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] }) }],

@@ -49,7 +49,7 @@ import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
-import { clusterPadding, BAR_CONTENT_HEIGHT } from './components/tabBarLayout';
+import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD } from './components/tabBarLayout';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
@@ -125,10 +125,12 @@ function TabNavigator() {
             </TabBarIcon>
           );
         },
-        // The active glyph sits on a white chip in both themes, so it carries
-        // the highlight colour chosen in Settings — the one place in the bar
-        // where the accent is a FILL rather than a rule.
-        tabBarActiveTintColor: theme.colors.accent,
+        // The active glyph sits on the WHITE chip in both themes, so it is
+        // painted black rather than in the Settings highlight colour: black on
+        // white is the maximum-contrast pairing, and it keeps the chip itself
+        // (not the glyph's tint) as the thing that signals selection. The
+        // highlight colour still leads everywhere else in the app.
+        tabBarActiveTintColor: '#000000',
         tabBarInactiveTintColor: theme.colors.textMuted,
         // Icons only — no text labels. Cleaner look and lets the
         // larger turtle icon breathe without crowding from a label
@@ -152,8 +154,12 @@ function TabNavigator() {
           borderTopWidth: StyleSheet.hairlineWidth,
           borderTopColor: theme.colors.border,
           height: BAR_CONTENT_HEIGHT + insets.bottom, // sized from the chip, + safe area
-          paddingBottom: insets.bottom,
-          paddingTop: 6,
+          // SYMMETRIC vertical padding — this is what makes the icons land dead
+          // centre on the chip. The inner content box is left exactly PILL_SIZE
+          // tall, so navigation's centred icon and the top-anchored chip occupy
+          // the same square instead of drifting apart (see tabBarLayout).
+          paddingTop: BAR_VERTICAL_PAD,
+          paddingBottom: insets.bottom + BAR_VERTICAL_PAD,
           // Pull the tabs into a CENTRED CLUSTER of fixed-width slots instead of
           // stretching them edge to edge — the Pinterest nav's proportions. The
           // items still flex, so narrowing the row is what tightens the spacing;

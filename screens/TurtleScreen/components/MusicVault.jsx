@@ -27,7 +27,7 @@ const fmtTime = (sec) => {
  * pager there is nothing to go back to and the vault header already names the
  * page, so the internal back/title row is omitted.
  */
-export default function MusicVault({ onClose, topInset = 0 }) {
+export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
   const { theme } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
@@ -98,7 +98,7 @@ export default function MusicVault({ onClose, topInset = 0 }) {
       <TouchableOpacity
         {...TAP_ONLY}
         activeOpacity={0.7}
-        disabled={!ready}
+        disabled={!ready}
         onPress={() => playIndex(index)}
         style={styles.row}
       >
@@ -175,8 +175,11 @@ export default function MusicVault({ onClose, topInset = 0 }) {
         />
       )}
 
+      {/* The transport (play/pause, skip, scrub) is PINNED, so it must end
+          above the floating tab bar — `bottomInset` carries that height from
+          the vault. Falls back to the safe-area inset when there's no bar. */}
       {nowTrack && (
-        <View style={[styles.nowBar, { backgroundColor: c.surfaceElevated, borderTopColor: c.border, paddingBottom: insets.bottom + 8 }]}>
+        <View style={[styles.nowBar, { backgroundColor: c.surfaceElevated, borderTopColor: c.border, paddingBottom: Math.max(insets.bottom, bottomInset) + 8 }]}>
           <Pressable
             disabled={!ready}
             onLayout={(e) => { barWidthRef.current = e.nativeEvent.layout.width || 1; }}
