@@ -405,14 +405,6 @@ export default function TurtleScreen() {
   // composer→console, composer→dock and composer→keyboard are all the same
   // distance rather than three values that merely look similar.
   const COMPOSER_MARGIN = 8;
-  // With the keyboard UP the composer needs less breathing room than it does
-  // above the dock: the keyboard's own top edge is a hard, flat boundary, and
-  // with word suggestions turned off there is no candidate strip to clear
-  // either. Subtracted from the resting margin by the lift worklets.
-  const KEYBOARD_GAP = 2;
-  // SUBTRACTED from the lift, not added: the lift moves the column UP, so
-  // adding to it widens the gap instead of closing it.
-  const KEYBOARD_GAP_TRIM = COMPOSER_MARGIN - KEYBOARD_GAP;
   // The lift MUST cancel exactly what the composer's margin reserves. That
   // margin is dockOccupied (card + float gap + safe area); subtracting the
   // navigator's smaller tabBarHeight instead left the difference — ~40pt — as a
@@ -466,8 +458,7 @@ export default function TurtleScreen() {
     // In a Claude session the column stays static (the dock lifts instead), so
     // this returns 0 there — handed off atomically via sessionSV.
     const kb = keyboard.height.value;
-    const trim = kb > 0 ? KEYBOARD_GAP_TRIM : 0;
-    const lift = sessionSV.value ? 0 : Math.max(kb - dockH - trim, 0);
+    const lift = sessionSV.value ? 0 : Math.max(kb - dockH, 0);
     return {
       transform: [{ translateY: -lift }],
     };
@@ -491,8 +482,7 @@ export default function TurtleScreen() {
     // needed and this returns 0. Same sessionSV gate as the column, so the two
     // stay in lockstep.
     const kb = keyboard.height.value;
-    const trim = kb > 0 ? KEYBOARD_GAP_TRIM : 0;
-    const lift = sessionSV.value ? 0 : Math.max(kb - dockH - trim, 0);
+    const lift = sessionSV.value ? 0 : Math.max(kb - dockH, 0);
     return {
       transform: [{ translateY: lift }],
     };
@@ -513,8 +503,7 @@ export default function TurtleScreen() {
     // dock and onto the column in the SAME frame — the composer's net position
     // is unchanged and it never jumps.
     const kb = keyboard.height.value;
-    const trim = kb > 0 ? KEYBOARD_GAP_TRIM : 0;
-    const lift = sessionSV.value ? Math.max(kb - dockH - trim, 0) : 0;
+    const lift = sessionSV.value ? Math.max(kb - dockH, 0) : 0;
     return {
       transform: [{ translateY: -lift }],
     };
