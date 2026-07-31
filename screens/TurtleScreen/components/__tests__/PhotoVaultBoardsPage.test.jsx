@@ -66,10 +66,12 @@ describe('PhotoVaultBoardsPage', () => {
     expect(props.onQueryChange).toHaveBeenCalledWith('warm');
     expect(props.onAdd).toHaveBeenCalledTimes(1);
     expect(addButton.props.accessibilityRole).toBe('button');
-    expect(StyleSheet.flatten(addButton.props.style)).toEqual(expect.objectContaining({
-      width: 46,
-      height: 46,
-    }));
+    // A bare glyph in the reference, not a filled circle — so the visible box
+    // is under 44pt and the accessible target comes from hitSlop instead.
+    const addBox = StyleSheet.flatten(addButton.props.style);
+    expect(addBox.backgroundColor).toBeUndefined();
+    expect(addBox.width).toBe(44);
+    expect(addButton.props.hitSlop).toEqual({ top: 8, bottom: 8, left: 8, right: 8 });
   });
 
   test('keeps the search field mounted across query renders so the keyboard stays up', async () => {
@@ -150,7 +152,7 @@ describe('PhotoVaultBoardsPage', () => {
     expect(props.onSortModeChange).toHaveBeenNthCalledWith(2, 'largest');
   });
 
-  test('uses a high-contrast checked selected chip and 44-point labeled sort targets', async () => {
+  test('uses a high-contrast checked selected chip and 44-point sort targets via hitSlop', async () => {
     const { view } = await renderPage();
     const selected = view.getByLabelText('Sort boards by recent');
     const alphabetical = view.getByLabelText('Sort boards by alphabetical');
@@ -158,16 +160,21 @@ describe('PhotoVaultBoardsPage', () => {
 
     expect(view.getByLabelText('Sort boards by recent').props.accessibilityState).toEqual({ selected: true });
     expect(selected.props.accessibilityRole).toBe('button');
+    // 34pt visible pill (reference proportions) + 8pt hitSlop per side = a 50pt
+    // target, so matching the design never shrank the tap area.
     expect(StyleSheet.flatten(selected.props.style)).toEqual(expect.objectContaining({
-      minHeight: 44,
+      height: 34,
       backgroundColor: theme.colors.primary,
     }));
+    expect(selected.props.hitSlop).toEqual({ top: 8, bottom: 8, left: 8, right: 8 });
     expect(StyleSheet.flatten(view.getByText('Recent').props.style).color).toBe(theme.colors.onPrimary);
     expect(view.getByTestId('sort-selected-recent')).toBeTruthy();
 
     for (const chip of [alphabetical, largest]) {
       expect(chip.props.accessibilityRole).toBe('button');
-      expect(StyleSheet.flatten(chip.props.style).minHeight).toBeGreaterThanOrEqual(44);
+      const box = StyleSheet.flatten(chip.props.style);
+      expect(box.height + chip.props.hitSlop.top + chip.props.hitSlop.bottom).toBeGreaterThanOrEqual(44);
+      expect(box.borderWidth).toBeUndefined();   // borderless: the fill carries the chip
     }
   });
 

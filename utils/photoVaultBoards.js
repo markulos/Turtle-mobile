@@ -34,9 +34,16 @@ export const formatBoardRecency = (timestamp, now = Date.now()) => {
   return `${Math.floor(days / 365)}y`;
 };
 
-export const formatBoardMetadata = (count, latestDate, now = Date.now()) => {
+export const formatBoardItemLabel = (count) => {
   const safe = safeCount(count);
-  const itemLabel = `${safe} item${safe === 1 ? '' : 's'}`;
+  return `${safe} item${safe === 1 ? '' : 's'}`;
+};
+
+// Single string, used for the accessibility label and by any caller that wants
+// one blob. The CARD renders itemLabel and recency separately so the count and
+// the age can carry different weights, as in the reference design.
+export const formatBoardMetadata = (count, latestDate, now = Date.now()) => {
+  const itemLabel = formatBoardItemLabel(count);
   const recency = formatBoardRecency(latestDate, now);
   return recency ? `${itemLabel} · ${recency}` : itemLabel;
 };
@@ -73,6 +80,8 @@ export const buildPhotoVaultBoards = ({
           : [],
         count,
         latestDate,
+        itemLabel: formatBoardItemLabel(count),
+        recency: formatBoardRecency(latestDate, now),
         metadata: formatBoardMetadata(count, latestDate, now),
       };
     })

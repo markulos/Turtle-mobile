@@ -29,6 +29,10 @@ const COLUMN_GAP = 7;
 const PICKER_GAP = 14;
 // Long-press does nothing on All Photos: it is not renameable or deletable.
 const NOOP = () => {};
+// Restores the 44pt accessible target for controls whose VISIBLE height is
+// smaller (bare add glyph, 34pt sort chips) — the reference's proportions
+// without giving up hit area.
+const HIT_SLOP_8 = { top: 8, bottom: 8, left: 8, right: 8 };
 const CARD_WIDTH = (Dimensions.get('window').width - EDGE_PAD * 2 - COLUMN_GAP) / 2;
 const LOAD_ERROR_COPY = 'Unable to load boards';
 const REFRESH_ERROR_COPY = 'Couldn’t refresh boards.';
@@ -116,9 +120,10 @@ const PhotoVaultBoardsPage = forwardRef(({
           accessibilityRole="button"
           accessibilityLabel="Add photos to a board"
           onPress={onAdd}
-          style={[styles.addButton, { backgroundColor: theme.colors.primary }]}
+          hitSlop={HIT_SLOP_8}
+          style={styles.addButton}
         >
-          <Icon name="plus" size={25} color={theme.colors.background} />
+          <Icon name="plus" size={28} color={theme.colors.textPrimary} />
         </Pressable>
       </View>
       <ScrollView
@@ -137,12 +142,12 @@ const PhotoVaultBoardsPage = forwardRef(({
               accessibilityLabel={`Sort boards by ${mode}`}
               accessibilityState={{ selected }}
               onPress={() => onSortModeChange(mode)}
+              hitSlop={HIT_SLOP_8}
               style={[
                 styles.sort,
-                {
-                  backgroundColor: selected ? theme.colors.primary : theme.colors.surface,
-                  borderColor: selected ? theme.colors.primary : theme.colors.border,
-                },
+                // Filled, borderless pills as in the reference — the unselected
+                // fill does the work the border used to.
+                { backgroundColor: selected ? theme.colors.primary : theme.colors.surfaceElevated },
               ]}
             >
               <Icon
@@ -270,15 +275,22 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: EDGE_PAD, paddingBottom: 24 },
   header: { marginHorizontal: -EDGE_PAD, paddingHorizontal: EDGE_PAD, paddingBottom: 16 },
   searchRow: { flexDirection: 'row', gap: 10 },
-  search: { height: 46, flex: 1, borderWidth: 1, borderRadius: 23, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 8 },
-  searchInput: { flex: 1, fontSize: 16, height: '100%' },
+  // Reference: a 114px (38pt) hairline-bordered pill on a transparent fill —
+  // not a filled surface. The search field reads as an outline, and the fill
+  // comes from the page behind it.
+  search: { height: 38, flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: 19, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 },
+  searchInput: { flex: 1, fontSize: 15, height: '100%' },
   clearSearch: { width: 44, height: 44, marginRight: -12, alignItems: 'center', justifyContent: 'center' },
-  addButton: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
+  // A bare glyph in the reference, not a filled circle. Keeps a 44pt touch
+  // target without drawing a button.
+  addButton: { width: 44, height: 38, alignItems: 'center', justifyContent: 'center' },
   sortScroller: { marginTop: 14 },
   allPhotosSlot: { marginTop: 16 },
   sorts: { flexDirection: 'row', gap: 8, paddingRight: EDGE_PAD },
-  sort: { minHeight: 44, borderWidth: 1, borderRadius: 22, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  sortLabel: { fontSize: 14, fontWeight: '600' },
+  // Filled grey pills, no border, ~32pt tall as in the reference. The 44pt
+  // accessible target comes from hitSlop rather than the visible height.
+  sort: { height: 34, borderRadius: 17, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  sortLabel: { fontSize: 15, fontWeight: '600' },
   retryBanner: { marginTop: 12, minHeight: 44, borderWidth: 1, borderRadius: 12, paddingLeft: 12, paddingRight: 4, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   retryBannerText: { fontSize: 14, fontWeight: '600' },
   retryBannerAction: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },

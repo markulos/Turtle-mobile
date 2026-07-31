@@ -74,8 +74,9 @@ describe('PhotoVaultBoardCard', () => {
 
   test('matches the reference board proportions', async () => {
     // Measured off the Pinterest boards reference (1170px wide @3x = 390pt):
-    // collage 555x380px = 1.46 aspect, hero pane 360/555 = 65%, ~20px (7pt)
-    // outer/column spacing, ~85px (28pt) between stacked rows.
+    // collage 557x375px = 1.48 aspect on a 186pt card, hero pane 65%, a ~23px
+    // corner arc, ~20px (7pt) outer/column spacing, and a 15pt semibold title
+    // over 13.5pt metadata.
     const view = await render(
       <PhotoVaultBoardCard
         board={board}
@@ -91,20 +92,20 @@ describe('PhotoVaultBoardCard', () => {
     const hero = StyleSheet.flatten(view.getByTestId('board-hero-pane').props.style);
     const card = StyleSheet.flatten(view.getByLabelText(/^Warm interiors/).props.style);
 
-    expect(collage.aspectRatio).toBeCloseTo(1.46, 2);
-    expect(collage.borderRadius).toBe(12);
+    expect(collage.aspectRatio).toBeCloseTo(1.48, 2);
+    expect(collage.borderRadius).toBe(9);
     expect(collage.overflow).toBe('hidden');
     expect(hero.width).toBe('65%');
     expect(card.marginBottom).toBe(26);
     const title = StyleSheet.flatten(view.getByText('Warm interiors').props.style);
-    expect(title.fontSize).toBeCloseTo(14.04, 2);
-    // Bold comes from the family, not fontWeight — RN ignores fontWeight once a
-    // custom fontFamily is set, so a numeric weight here would silently do nothing.
-    expect(title.fontFamily).toBe('Figtree_700Bold');
+    expect(title.fontSize).toBe(15);
+    // Weight comes from the family, not fontWeight — RN ignores fontWeight once
+    // a custom fontFamily is set, so a numeric weight would silently do nothing.
+    expect(title.fontFamily).toBe('Figtree_600SemiBold');
     expect(title.fontWeight).toBeUndefined();
     // Metadata stays a step below the title so the hierarchy reads title-first.
     const meta = StyleSheet.flatten(view.getByText('47 items · 2d').props.style);
-    expect(meta.fontSize).toBeCloseTo(12.87, 2);
+    expect(meta.fontSize).toBeCloseTo(13.5, 2);
     expect(meta.fontSize).toBeLessThan(title.fontSize);
   });
 

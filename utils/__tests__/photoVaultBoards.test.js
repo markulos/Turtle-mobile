@@ -45,6 +45,10 @@ describe('photoVaultBoards', () => {
       covers: ['/one', '/two', '/three', '/four'],
       count: 47,
       latestDate: NOW - 2 * day,
+      // Count and age are also exposed separately so the card can weight them
+      // differently; `metadata` remains the joined form for accessibility.
+      itemLabel: '47 items',
+      recency: '2d',
       metadata: '47 items · 2d',
     }]);
   });

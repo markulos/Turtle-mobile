@@ -89,8 +89,17 @@ function PhotoVaultBoardCard({
       <Text style={[styles.name, { color: theme.colors.textPrimary }]} numberOfLines={1}>
         {board.name}
       </Text>
-      <Text style={[styles.metadata, { color: theme.colors.textSecondary }]} numberOfLines={1}>
-        {board.metadata}
+      {/* Two-tone meta, as in the reference: the count carries the primary
+          weight and the age trails it in muted text, with no separator dot.
+          Falls back to the single metadata string for boards built before the
+          model split the two. */}
+      <Text style={[styles.metadata, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+        {board.itemLabel ?? board.metadata}
+        {board.recency ? (
+          <Text style={{ color: theme.colors.textTertiary ?? theme.colors.textSecondary }}>
+            {`  ${board.recency}`}
+          </Text>
+        ) : null}
       </Text>
     </Pressable>
   );
@@ -104,8 +113,11 @@ const styles = StyleSheet.create({
   card: { marginBottom: 26 },
   collage: {
     width: '100%',
-    aspectRatio: 1.46,
-    borderRadius: 12,
+    // Re-measured off the reference (1170px @3x): a 557x375px collage on a
+    // 186pt card, and a corner arc of ~23px rather than the softer radius the
+    // first pass used.
+    aspectRatio: 1.48,
+    borderRadius: 9,
     overflow: 'hidden',
     flexDirection: 'row',
   },
@@ -119,8 +131,8 @@ const styles = StyleSheet.create({
   // weight keeps the collage leading the card; metadata stays below the title.
   // Custom faces carry their own weight: RN ignores fontWeight once fontFamily
   // names a bundled font, so the bold title uses the Bold family directly.
-  name: { fontSize: 14.04, lineHeight: 19, fontFamily: FONTS.bold, marginTop: 9, paddingHorizontal: 2 },
-  metadata: { fontSize: 12.87, lineHeight: 16, fontFamily: FONTS.regular, marginTop: 0, paddingHorizontal: 2 },
+  name: { fontSize: 15, lineHeight: 20, fontFamily: FONTS.semibold, marginTop: 9, paddingHorizontal: 2 },
+  metadata: { fontSize: 13.5, lineHeight: 18, fontFamily: FONTS.medium, marginTop: 1, paddingHorizontal: 2 },
 });
 
 export default memo(PhotoVaultBoardCard);
