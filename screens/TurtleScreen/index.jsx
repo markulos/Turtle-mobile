@@ -101,6 +101,14 @@ const DEBUG_TOGGLE_HEIGHT = 44;
 // both for the bar itself and as the inverted message list's visual-top inset
 // so the oldest visible message clears the bar instead of hiding behind it.
 const CHAT_HEADER_BAR_HEIGHT = 44;
+// Frozen at module scope: FlashList treats this as layout configuration, and an
+// object literal in the render body hands it a new identity on EVERY render of
+// this screen — which includes every keystroke in the composer and every frame
+// the dock settles after the keyboard opens.
+const CHAT_MAINTAIN_POSITION = {
+  startRenderingFromBottom: true,
+  autoscrollToBottomThreshold: 0.2,
+};
 
 // Format a completion epoch (ms) for the "finished" banner. Same-day shows just
 // the clock time ("3:45 PM"); an older completion (e.g. finished while the app
@@ -1577,6 +1585,18 @@ export default function TurtleScreen() {
   // render (i.e. every keystroke) was pure waste. theme is identity-stable
   // per ThemeContext; insets changes only on rotation/inset changes.
   const styles = useMemo(() => createStyles(theme, insets), [theme, insets]);
+  // Padding is layout-affecting, so a fresh object per render makes FlashList
+  // re-measure the list on renders that changed nothing about it. Only these
+  // three values matter; dockHeight is already gated to one update after the
+  // keyboard settles rather than one per frame.
+  const chatContentStyle = useMemo(() => ({
+    // Chronological (non-inverted) list: paddingTop reserves room for the chat
+    // header bar above; paddingBottom is clearance under the composer dock so
+    // the newest message isn't hidden behind it.
+    paddingHorizontal: theme.spacing.sm,
+    paddingTop: insets.top + CHAT_HEADER_BAR_HEIGHT,
+    paddingBottom: dockHeight,
+  }), [theme.spacing.sm, insets.top, dockHeight]);
 
   // Stable chat renderItem — an inline arrow gave the FlashList a NEW
   // renderItem identity every render (every keystroke), defeating the
@@ -2208,25 +2228,13 @@ export default function TurtleScreen() {
       <View style={styles.messagesContainer}>
       <FlashList
         ref={scrollViewRef}
-        contentContainerStyle={{
-          // Chronological (non-inverted) list: paddingTop reserves room for the
-          // chat header bar above; paddingBottom is clearance under the composer
-          // dock so the newest message isn't hidden behind it.
-          // (FlashList's contentContainerStyle only supports padding — the rest
-          // of styles.messagesContent was just flexGrow + horizontal padding.)
-          paddingHorizontal: theme.spacing.sm,
-          paddingTop: insets.top + CHAT_HEADER_BAR_HEIGHT,
-          paddingBottom: dockHeight,
-        }}
+        contentContainerStyle={chatContentStyle}
         showsVerticalScrollIndicator={false}
         // FlashList v2 has no `inverted`; this keeps the newest message pinned to
         // the bottom like every messenger. Starts rendering from the bottom, and
         // auto-scrolls to the newest message when one arrives and the user is
         // already near the bottom (won't yank them up while reading history).
-        maintainVisibleContentPosition={{
-          startRenderingFromBottom: true,
-          autoscrollToBottomThreshold: 0.2,
-        }}
+        maintainVisibleContentPosition={CHAT_MAINTAIN_POSITION}
         // Instagram / iMessage-style keyboard handling:
         //   - "interactive" on iOS lets the keyboard slide down proportionally
         //     as the user drags the message list, then snap closed.
