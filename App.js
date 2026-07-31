@@ -47,6 +47,7 @@ import { CelebrationProvider } from './context/CelebrationContext';
 import { DownloadsProvider } from './context/DownloadsContext';
 import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
+import TabBarButton from './components/TabBarButton';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
@@ -101,12 +102,20 @@ function TabNavigator() {
             );
           }
           let iconName;
-          if (route.name === 'Tasks') iconName = focused ? 'checkbox-marked-circle' : 'checkbox-marked-circle-outline';
+          // Glyph pairs are chosen so the filled and outline forms share one
+          // silhouette — becoming active should read as the SAME icon gaining
+          // weight, not as a swap to a different mark. check-circle replaces
+          // checkbox-marked-circle and shield-lock replaces shield-key for the
+          // same reason: same meaning, far less internal detail at 24pt.
+          if (route.name === 'Tasks') iconName = focused ? 'check-circle' : 'check-circle-outline';
           else if (route.name === 'Notes') iconName = focused ? 'note-text' : 'note-text-outline';
           else if (route.name === 'Photos') iconName = focused ? 'image' : 'image-outline';
-          else if (route.name === 'Vault') iconName = focused ? 'shield-key' : 'shield-key-outline';
+          else if (route.name === 'Vault') iconName = focused ? 'shield-lock' : 'shield-lock-outline';
           return <Icon name={iconName} size={24} color={color} />;
         },
+        // Custom button: springs a highlight pill in behind the active glyph
+        // and dips on press. The Turtle tab gets the circular brand variant.
+        tabBarButton: (props) => <TabBarButton {...props} brand={route.name === 'Turtle'} />,
         tabBarActiveTintColor: theme.colors.textPrimary,
         tabBarInactiveTintColor: theme.colors.textMuted,
         // Icons only — no text labels. Cleaner look and lets the
