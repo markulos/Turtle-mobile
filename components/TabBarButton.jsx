@@ -43,11 +43,21 @@ export default function TabBarButton({
   onPress,
   onLongPress,
   accessibilityState,
+  // react-navigation v7 reports selection as `aria-selected`, not through
+  // accessibilityState. Reading only the latter left `focused` permanently
+  // false, so the active highlight could never appear. Both are accepted so
+  // this keeps working if the contract changes back.
+  'aria-selected': ariaSelected,
+  // MUST be kept and composed, not replaced: react-navigation passes the `flex`
+  // that distributes the bar's width across the tabs in here (see
+  // BottomTabItem's `style: [styles.tab, { flex, ... }]`). Dropping it collapsed
+  // every button to zero width, so the whole bar rendered empty.
+  style,
   brand = false,
   ...rest
 }) {
   const { theme } = useTheme();
-  const focused = !!(accessibilityState && accessibilityState.selected);
+  const focused = !!(ariaSelected ?? (accessibilityState && accessibilityState.selected));
 
   const pressed = useSharedValue(0);
   // `focused` drives the springs from inside the style worklets rather than
@@ -89,13 +99,15 @@ export default function TabBarButton({
       {...rest}
       onPress={onPress}
       onLongPress={onLongPress}
-      accessibilityState={accessibilityState}
+      // Re-emit both forms so assistive tech still hears the selected state.
+      aria-selected={focused}
+      accessibilityState={{ ...(accessibilityState || {}), selected: focused }}
       onPressIn={onPressIn}
       onPressOut={onPressOut}
       // A tab is a stationary target — a press here can never be the start of a
       // scroll, so it takes the immediate feedback rather than the tap-only
       // delay the scrolling surfaces use.
-      style={styles.button}
+      style={[style, styles.button]}
     >
       <Reanimated.View
         pointerEvents="none"
@@ -115,12 +127,12 @@ export default function TabBarButton({
 }
 
 const styles = StyleSheet.create({
+  // Composed ON TOP of navigation's own style, which owns the flex sizing and
+  // padding. This layer only centres the glyph over the highlight — it must not
+  // set flex, or it would override the width distribution it is meant to keep.
   button: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    // The highlight is absolutely positioned behind the glyph, so the button
-    // keeps the exact footprint react-navigation laid out for it.
     position: 'relative',
   },
   highlight: {
