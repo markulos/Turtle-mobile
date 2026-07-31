@@ -56,6 +56,34 @@ export const BAR_VERTICAL_PAD = 6;
 // PILL_SIZE makes "dead centre" true by construction at any inset or scale.
 export const BAR_CONTENT_HEIGHT = PILL_SIZE + BAR_VERTICAL_PAD * 2;
 
+// react-navigation v7's BottomTabItem hard-codes `padding: 5` and
+// `justifyContent: 'flex-start'` on its INNER pressable, and `tabBarItemStyle`
+// only reaches the OUTER wrapper — so neither value can be overridden. The icon
+// is therefore stacked from the top of the item with 5pt above it, always.
+//
+// That is fixable from our side by SIZING for it: give the icon slot the box
+// height minus that padding on both sides. The button then measures exactly
+// PILL_SIZE (5 + slot + 5), the slot sits 5pt down inside it, and the glyph's
+// centre lands on the box's centre — dead centre on the chip and on the dock,
+// without fighting the library.
+export const TAB_ITEM_PADDING = 5;
+export const TAB_ICON_SLOT = PILL_SIZE - TAB_ITEM_PADDING * 2;
+
+/**
+ * How much space the dock ACTUALLY occupies, measured up from the window's
+ * bottom edge: the card itself, the gap it floats above the screen edge, and
+ * the safe-area inset under that.
+ *
+ * Anything positioning itself relative to the dock must use THIS, not
+ * `useBottomTabBarHeight()`. The card's clearance is a MARGIN, and what that
+ * hook reports for a margin-based floating bar is ambiguous — screens using it
+ * ended up with a too-wide gap above the dock (the chat composer) and a day
+ * sheet that didn't rise far enough to clear it. One formula, one source of
+ * truth, so every surface agrees with where the dock really is.
+ */
+export const dockOccupied = (insetsBottom = 0) =>
+  BAR_CONTENT_HEIGHT + CARD_GAP_BOTTOM + insetsBottom;
+
 // The bar is a floating card, detached from the screen edges — matching the
 // chat composer's glass card, which uses the same 10pt side margin. The bottom
 // gap sits ON TOP of the safe-area inset so the card clears the home indicator

@@ -35,6 +35,7 @@ import { BlurView } from 'expo-blur';
 import { frostBorderColor, FROST_OVERLAP, blurProps, frostOverlayColor } from '../../utils/frostedChat';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../utils/haptics';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { dockOccupied } from '../../components/tabBarLayout';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
 import { useServer } from '../../context/ServerContext';
@@ -2584,8 +2585,14 @@ export default function TurtleScreen() {
           margin carries the bar's height. This is also what the keyboard lift
           has always assumed: it moves the composer by
           (keyboardHeight − tabBarHeight), which only lands correctly if the
-          resting position is tabBarHeight above the window bottom. */}
-      <View style={[styles.inputArea, { marginBottom: COMPOSER_MARGIN + tabBarHeight }]}>
+          resting position clears the dock.
+
+          The clearance is computed from the dock's OWN constants
+          (dockOccupied = card + float gap + safe area) rather than
+          useBottomTabBarHeight(), which over-reported for the margin-based
+          floating card and left a visibly wide gap. Now the composer sits
+          exactly COMPOSER_MARGIN above the card's top edge. */}
+      <View style={[styles.inputArea, { marginBottom: dockOccupied(insets.bottom) + COMPOSER_MARGIN }]}>
         <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
         {/* Autocomplete Dropdown */}

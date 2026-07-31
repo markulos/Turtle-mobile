@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback, useContext } from 'react';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { dockOccupied } from '../../../components/tabBarLayout';
 import {
   View,
   Text,
@@ -1779,13 +1781,22 @@ export const CalendarView = ({
   // list content can. Read from the context (not useBottomTabBarHeight) so the
   // calendar still renders outside a tab navigator; absent ⇒ 0, unchanged.
   const tabBarH = useContext(BottomTabBarHeightContext) ?? 0;
-  const peekReserve = SHEET_PEEK_RESERVE + tabBarH;
+  const insets = useSafeAreaInsets();
+  // Exact dock occupancy from the dock's own constants — see dockOccupied.
+  // Zero when there's no tab bar (the calendar also renders outside one).
+  const dockH = tabBarH > 0 ? dockOccupied(insets.bottom) : 0;
+  const peekReserve = SHEET_PEEK_RESERVE + dockH;
 
   const sheetStyle = useAnimatedStyle(() => {
     // Closed, the sheet rests with its header peeking at the bottom — minus the
     // floating tab card's height, or the card would sit ON the peek and make
     // today's task list unreachable.
-    const travel = Math.max(0, containerH.value - headerH.value - tabBarH);
+    // Uses the dock's REAL occupancy (card + float gap + safe area), not the
+    // tab-bar hook — under-reporting here is what left the header sitting
+    // partly behind the dock instead of fully above it. Closed, the sheet shows
+    // its whole header ABOVE the dock; the horizontal list below it is free to
+    // tuck under the dock until you pull up.
+    const travel = Math.max(0, containerH.value - headerH.value - dockH);
     return { transform: [{ translateY: travel * (1 - sheet.value) }] };
   });
   // Calendar fades out as the sheet covers it, so it isn't visible through

@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
+import { TAB_ICON_SLOT } from './tabBarLayout';
 import Reanimated, {
   useAnimatedStyle,
   withSpring,
@@ -45,8 +46,6 @@ export default function TabBarIcon({ focused, brand = false, children }) {
   // dropped the -50%/-50% the moment this animated style applied.
   const iconStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateX: '-50%' },
-      { translateY: '-50%' },
       { scale: withSpring(focused ? 1.04 : 1, SELECT_SPRING) },
       { translateY: withSpring(focused ? -1 : 0, SELECT_SPRING) },
     ],
@@ -54,22 +53,27 @@ export default function TabBarIcon({ focused, brand = false, children }) {
 
   return (
     <View style={styles.slot} pointerEvents="none">
-      <Reanimated.View style={[styles.centred, iconStyle]}>{children}</Reanimated.View>
+      <Reanimated.View style={iconStyle}>{children}</Reanimated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  // Fills the tab button's box rather than being a fixed square inside it, so
-  // the centring below is relative to the button itself.
+  // A REAL, in-flow square — this is the load-bearing part.
+  //
+  // The previous version made this absoluteFill so it would "fill the button".
+  // An absolutely-positioned child contributes NO layout size, so v7's button
+  // (justifyContent: 'flex-start', padding: 5) had no in-flow content and
+  // collapsed to 10pt tall, pinned to the top of the bar — which is exactly why
+  // the glyphs kept sitting high however the bar was padded.
+  //
+  // Giving the slot a real TAB_ICON_SLOT square makes the button measure
+  // 5 + slot + 5 = PILL_SIZE: it fills the bar's inner box, and the glyph
+  // centres inside it. Dead centre on the chip AND on the dock.
   slot: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  // Dead centre of that box: pinned at 50%/50% and pulled back by half its own
-  // size. Independent of the button's padding or any reserved label row.
-  centred: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
+    width: TAB_ICON_SLOT,
+    height: TAB_ICON_SLOT,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
