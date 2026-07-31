@@ -16,6 +16,7 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { useMusicPlayer } from '../../../context/MusicPlayerContext';
 
 const { width, height } = Dimensions.get('window');
 
@@ -24,9 +25,16 @@ const FullScreenVideoPlayer = ({ sourceUrl, isActive, styles, insets }) => {
   const player = useVideoPlayer(sourceUrl, player => {
     player.loop = true;
     player.muted = true;
+    // Opening a photo or a silent video preview must NOT stop whatever is
+    // playing in the music player. expo-video's default mixing mode is 'auto',
+    // which claims the audio session as soon as the player starts — muted or
+    // not — so simply browsing the vault killed the music. Muted playback mixes;
+    // taking the session is deferred to the moment the user asks for sound.
+    player.audioMixingMode = 'mixWithOthers';
   });
   const [isPlaying, setIsPlaying] = useState(isActive);
   const [isMuted, setIsMuted] = useState(true);
+  const { pause: pauseMusic } = useMusicPlayer();
 
   useEffect(() => {
     if (isActive) { player.play(); setIsPlaying(true); } 
@@ -34,7 +42,18 @@ const FullScreenVideoPlayer = ({ sourceUrl, isActive, styles, insets }) => {
   }, [isActive, player]);
 
   const togglePlay = () => { isPlaying ? player.pause() : player.play(); setIsPlaying(!isPlaying); };
-  const toggleMute = () => { player.muted = !isMuted; setIsMuted(!isMuted); };
+  // Unmuting is the ONLY thing that stops the music: the user has explicitly
+  // asked to hear this video, so the video takes the audio session and the
+  // music player is stopped outright rather than left to be interrupted by the
+  // OS (which on Android would leave it "playing" into silence). Re-muting
+  // hands the session back so anything started afterwards can mix again.
+  const toggleMute = () => {
+    const nextMuted = !isMuted;
+    player.muted = nextMuted;
+    player.audioMixingMode = nextMuted ? 'mixWithOthers' : 'doNotMix';
+    if (!nextMuted) pauseMusic();
+    setIsMuted(nextMuted);
+  };
 
   return (
     <Pressable onPress={togglePlay} style={styles.viewerVideoContainer}>

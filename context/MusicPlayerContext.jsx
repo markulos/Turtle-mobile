@@ -250,6 +250,15 @@ export function MusicPlayerProvider({ children }) {
     [isPlaying, runCommand]
   );
 
+  // Unconditional pause, for callers that need the music to stop regardless of
+  // its current state — e.g. unmuting a video in the photo viewer, which takes
+  // the audio session. togglePlayback can't serve that: it would START playback
+  // if the player happened to be paused already.
+  const pause = useCallback(
+    () => runCommand(() => musicPlayerService.pause()),
+    [runCommand]
+  );
+
   const previous = useCallback(
     () => runCommand(() => musicPlayerService.previous()),
     [runCommand]
@@ -283,6 +292,7 @@ export function MusicPlayerProvider({ children }) {
       retrySetup,
       playMedia,
       togglePlayback,
+      pause,
       previous,
       next,
       seekTo,
@@ -302,6 +312,7 @@ export function MusicPlayerProvider({ children }) {
       retrySetup,
       playMedia,
       togglePlayback,
+      pause,
       previous,
       next,
       seekTo,

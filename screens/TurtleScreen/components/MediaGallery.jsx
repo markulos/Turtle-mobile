@@ -5316,7 +5316,15 @@ const GridVideoPreview = ({ uri }) => {
   // driver → free; only ever one of these is mounted at a time.
   const fade = useRef(new Animated.Value(0)).current;
   const player = useVideoPlayer(uri, (p) => {
-    try { p.loop = true; p.muted = true; p.play(); } catch (_) {}
+    try {
+      p.loop = true;
+      p.muted = true;
+      // Silent autoplay preview: never claim the audio session, or scrolling
+      // the grid would stop the music player (expo-video's default 'auto'
+      // mixing mode takes the session even for a muted player).
+      p.audioMixingMode = 'mixWithOthers';
+      p.play();
+    } catch (_) {}
   });
   useEffect(() => {
     const anim = Animated.timing(fade, { toValue: 1, duration: 220, useNativeDriver: true });
