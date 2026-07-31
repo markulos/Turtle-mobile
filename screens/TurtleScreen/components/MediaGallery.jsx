@@ -81,6 +81,7 @@ import Reanimated, {
   runOnJS,
 } from 'react-native-reanimated';
 import TimelineScrubber from './TimelineScrubber';
+import { dockOccupied } from '../../../components/tabBarLayout';
 import MusicVault from './MusicVault';
 import EdgeSwipePage from './EdgeSwipePage';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
@@ -250,7 +251,13 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // unreachable. Read from the CONTEXT rather than useBottomTabBarHeight()
   // because this component also renders outside a tab (the share target and the
   // chat's /vault page), where the hook throws; absent ⇒ 0, nothing reserved.
-  const tabBarH = useContext(BottomTabBarHeightContext) ?? 0;
+  const navBarH = useContext(BottomTabBarHeightContext) ?? 0;
+  // How much room the floating dock actually occupies: card + float gap + safe
+  // area. Preferred over the navigator's reported height, which does not
+  // describe a margin-based floating card (it left the chat composer a whole
+  // card-height too high). Zero when this screen renders outside a tab — the
+  // share target and the chat's /vault page — where there is no dock at all.
+  const tabBarH = navBarH > 0 ? dockOccupied(insets.bottom) : 0;
 
   // === TAB & DATA STATE ===
   // The pager holds Boards and Music. The photo grid is NOT a pager page any
