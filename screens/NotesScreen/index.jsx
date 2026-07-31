@@ -731,9 +731,9 @@ export default function NotesScreen() {
         keyExtractor={(item) => item.id}
         style={{ flex: 1 }}
         contentContainerStyle={[styles.list, data.length === 0 && { flexGrow: 1 }]}
-        // Header chrome scrolls with the notes (see renderChrome). flexGrow lets
-        // the empty state centre in the space below it.
-        ListHeaderComponent={renderChrome()}
+        // No ListHeaderComponent: the chrome is fixed above the pager now, so
+        // it neither scrolls away with the notes nor swipes with the pages.
+        // flexGrow still lets the empty state centre in the space below it.
         ListEmptyComponent={empty}
         ListFooterComponent={loadingMore ? (
           <View style={styles.listFooter}>
@@ -956,7 +956,14 @@ export default function NotesScreen() {
         </View>
       )}
 
-      {/* Body — swipeable pager (one page per filter); the pill tracks scroll */}
+      {/* Header chrome — FIXED, exactly like the Media Vault: the title, the
+          tab labels and the topic rail stay put while only the lists below
+          translate. It used to ride as each page's ListHeaderComponent, so all
+          three copies swiped sideways with the pager and scrolled away with the
+          notes. Rendered once here instead of three times inside the pages. */}
+      {renderChrome()}
+
+      {/* Body — swipeable pager (one page per filter); the underline tracks scroll */}
       {error ? (
         <View style={styles.center}>
           <Icon name="cloud-off-outline" size={32} color={theme.colors.textMuted} />
@@ -2606,9 +2613,11 @@ const createStyles = (theme, isDark) => StyleSheet.create({
   // (header included); this negative margin cancels it so the banner / pill /
   // rail span edge-to-edge and their own paddings position exactly as they did
   // when the chrome was a fixed overlay.
-  chrome: {
-    marginHorizontal: -16,
-  },
+  // The negative margin here used to cancel the list's paddingHorizontal:16
+  // back out, because the chrome rode inside the list as its header. It is a
+  // direct child of the screen now, so it must not pull itself off the edges —
+  // its own rows carry their insets.
+  chrome: {},
   center: {
     flex: 1,
     alignItems: 'center',
