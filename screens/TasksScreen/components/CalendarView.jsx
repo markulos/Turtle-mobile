@@ -346,7 +346,15 @@ const getPriorityColor = (priority, theme) => {
 //   • dueDateOnly=false — the date-agnostic backlog: every incomplete task,
 //     full stop (`dateStr` ignored). No longer reached from the calendar, but
 //     left intact for any future caller.
-const taskOccursOn = (task, dateStr, dueDateOnly) => {
+// `hideCompletedOccurrences` — the global "incomplete only" filter. It cannot be
+// applied task-wide for a RECURRING task, because completion is per-occurrence
+// (meta.completedDates): ticking Monday must hide Monday and leave Tuesday
+// alone. So the filter has to be evaluated here, per day, rather than in the
+// date-agnostic filteredTasks list.
+// Exported for unit tests: the per-day occurrence rules are where the
+// "incomplete only" filter has to be enforced for recurring tasks, and that is
+// worth pinning without mounting this 3,500-line screen.
+export const taskOccursOn = (task, dateStr, dueDateOnly, hideCompletedOccurrences = false) => {
   // Birthdays recur every year (unless their yearly flag was turned off): a
   // birthday belongs to ANY date whose month+day matches its stored date, so
   // it lights up the calendar on the same day every year. This is mode-agnostic
@@ -366,7 +374,9 @@ const taskOccursOn = (task, dateStr, dueDateOnly) => {
     // A ticked recurring occurrence stays visible (and renders checked) on its
     // own day even though dueDate advanced past it — completion is additive
     // (meta.completedDates), not destructive. Mirrors web's taskOccursOnDate.
-    if (isOccurrenceCompleted(task, dateStr)) return true;
+    // Under "incomplete only" that day is exactly what should disappear, while
+    // the series' other days keep matching below.
+    if (isOccurrenceCompleted(task, dateStr)) return !hideCompletedOccurrences;
     // Real base instance — the task's own scheduled day.
     if (task.dueDate === dateStr) return true;
     // Virtual recurring occurrence: a repeating task ALSO belongs on every
@@ -400,7 +410,7 @@ const EMPTY_DAY_TASKS = Object.freeze([]);
 // (through the same matchesRecurrence oracle, so semantics can't drift).
 // Cell task-order matches the old filter exactly: tasks are pushed in list
 // order, so each day's array is the original order.
-const buildMonthCells = (filteredTasks, targetDate) => {
+export const buildMonthCells = (filteredTasks, targetDate, hideCompletedOccurrences = false) => {
   const year = targetDate.getFullYear();
   const month = targetDate.getMonth();
   const keyPrefix = `${year}-${month}`;
@@ -414,6 +424,11 @@ const buildMonthCells = (filteredTasks, targetDate) => {
     const seen = new Set(); // day numbers this task already occupies (dedupe)
     const pushDateStr = (dateStr) => {
       if (typeof dateStr !== 'string' || !dateStr.startsWith(prefix)) return;
+      // "Incomplete only": drop the DAYS this task was ticked on, not the task.
+      // Guarding here covers all three ways a day gets pushed below (the stored
+      // dueDate, the completedDates replay, and the recurrence expansion), and
+      // keeps this builder in step with taskOccursOn.
+      if (hideCompletedOccurrences && isOccurrenceCompleted(task, dateStr)) return;
       const day = Number(dateStr.slice(8, 10));
       if (!Number.isInteger(day) || day < 1 || day > daysInMonth || seen.has(day)) return;
       seen.add(day);
@@ -2123,11 +2138,11 @@ export const CalendarView = ({
       const key = `${targetDate.getFullYear()}-${targetDate.getMonth()}`;
       const hit = cache.get(key);
       if (hit) return hit;
-      const days = buildMonthCells(filteredTasks, targetDate);
+      const days = buildMonthCells(filteredTasks, targetDate, showIncompleteOnly);
       cache.set(key, days);
       return days;
     };
-  }, [filteredTasks]);
+  }, [filteredTasks, showIncompleteOnly]);
 
   // One day's tasks, ordered earliest-time-first — the same predicates the
   // month cells use, so what lights up in the grid matches the day's list.
@@ -2139,7 +2154,7 @@ export const CalendarView = ({
       const hit = cache.get(dateStr);
       if (hit) return hit;
       const list = filteredTasks
-        .filter(t => taskOccursOn(t, dateStr, true))
+        .filter(t => taskOccursOn(t, dateStr, true, showIncompleteOnly))
         .sort((a, b) => {
           if (a.time && b.time) return a.time.localeCompare(b.time);
           if (a.time) return -1;
@@ -2149,7 +2164,7 @@ export const CalendarView = ({
       cache.set(dateStr, list);
       return list;
     };
-  }, [filteredTasks]);
+  }, [filteredTasks, showIncompleteOnly]);
 
   // Tasks for the selected date — same cache the day panes read.
   const selectedDateTasks = getDayTasks(toDateString(selectedDate));
