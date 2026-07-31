@@ -125,10 +125,38 @@ export const ServerProvider = ({ children }) => {
   // device trusts the cert; otherwise it is byte-for-byte the current http path.
   const getMediaBaseUrl = () => `${mediaOrigin || serverOrigin(serverIP)}/api`;
 
-  const apiGet = async (endpoint) => {
-    const response = await fetch(`${getBaseUrl()}${endpoint}`, { headers: { ...authHeader() } });
-    if (!response.ok) throw new Error('API Error');
-    return response.json();
+  // GET with a deadline and a diagnosable error.
+  //
+  // Two problems this fixes. RN's fetch has NO default timeout, so a request
+  // made over a dead tunnel or to a sleeping host never settles — the caller
+  // sits in its loading state forever with nothing to retry. And the old
+  // `new Error('API Error')` discarded the status and body, so a 401, a 404 and
+  // a 500 all surfaced as the same three words with no way to tell them apart
+  // from a log.
+  //
+  // The timeout is generous (20s) because a few endpoints legitimately do real
+  // work on a large library; pass timeoutMs to shorten it for interactive reads.
+  const apiGet = async (endpoint, { timeoutMs = 20000 } = {}) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${getBaseUrl()}${endpoint}`, {
+        headers: { ...authHeader() },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`API ${response.status} on GET ${endpoint}${body ? ` — ${body.slice(0, 200)}` : ''}`);
+      }
+      return response.json();
+    } catch (e) {
+      if (e && e.name === 'AbortError') {
+        throw new Error(`GET ${endpoint} timed out after ${timeoutMs}ms`);
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   const apiPost = async (endpoint, data, customHeaders = {}) => {

@@ -269,6 +269,9 @@ export default function TurtleScreen() {
   const [historyOffset, setHistoryOffset] = useState(0);
   const [hasMoreHistory, setHasMoreHistory] = useState(true);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  // Set when the FIRST page of history fails, cleared the moment one lands.
+  // Drives the inline retry strip below the header.
+  const [historyError, setHistoryError] = useState(null);
   
   // Vault overlay state
   const [isVaultOpen, setIsVaultOpen] = useState(false);
@@ -932,6 +935,7 @@ export default function TurtleScreen() {
       const res = await api.get(`/turtle/chat/history?limit=50&offset=${currentOffset}`);
       
       if (res && res.success) {
+        setHistoryError(null);
         // DO NOT .reverse() - Keep newest messages first for inverted list
         const formattedMessages = res.messages
           // Board-scoped conversation turns (source 'app' + a board) live in
@@ -957,6 +961,12 @@ export default function TurtleScreen() {
       }
     } catch (error) {
       console.error('[TurtleChat] Failed to load history:', error);
+      // Surface it. This used to log and nothing else, so a failed first page
+      // left an empty chat with no explanation and no way to retry short of
+      // leaving the tab — which is exactly what "failed to load" looks like to
+      // a user. Only the FIRST page reports; a failed older-page fetch just
+      // leaves the history where it is and retries on the next scroll.
+      if (!isLoadMore) setHistoryError(error?.message || 'Could not reach the pond');
     } finally {
       setIsLoadingHistory(false);
     }
@@ -1804,6 +1814,27 @@ export default function TurtleScreen() {
           </TouchableOpacity>
         </View>
       </Reanimated.View>
+
+      {/* History failed to load — an inline strip under the header rather than
+          an alert, so it never blocks a chat that is otherwise usable (you can
+          still send; the socket delivers new messages regardless). Disappears
+          the moment a page lands. */}
+      {historyError && messages.length === 0 && (
+        <View style={[styles.historyErrorStrip, { top: insets.top + CHAT_HEADER_BAR_HEIGHT }]}>
+          <Icon name="cloud-off-outline" size={16} color={theme.colors.textTertiary} />
+          <Text style={styles.historyErrorText} numberOfLines={2}>
+            Couldn’t load chat history.
+          </Text>
+          <TouchableOpacity
+            onPress={() => { setHistoryError(null); fetchChatHistory(false); }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading chat history"
+          >
+            <Text style={styles.historyErrorRetry}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Friends — a pushed PAGE (slides in from the right; swipe the left edge
           to go back to the Turtle tab), org members + a search box + invites. */}
@@ -3044,6 +3075,24 @@ const createStyles = (theme, insets) =>
       color: theme.colors.textPrimary,
       marginLeft: theme.spacing.xs,
     },
+    // Inline "history didn't load" strip, pinned just under the chat header.
+    historyErrorStrip: {
+      position: 'absolute',
+      left: 12,
+      right: 12,
+      zIndex: 100,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 12,
+      backgroundColor: theme.colors.surfaceElevated,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border,
+    },
+    historyErrorText: { flex: 1, fontSize: 13, color: theme.colors.textSecondary },
+    historyErrorRetry: { fontSize: 13, fontWeight: '700', color: theme.colors.accentInfo },
     messagesContainer: {
       flex: 1,
     },
