@@ -6,6 +6,7 @@ import Reanimated, {
   withSpring,
 } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
+import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, clusterStart } from './tabBarLayout';
 
 /**
  * TabBarPill — ONE pill that slides from tab to tab behind the icons.
@@ -29,15 +30,8 @@ import { useTheme } from '../context/ThemeContext';
 // Settles rather than wobbles: this tracks a selection, it isn't a flourish.
 const SLIDE_SPRING = { damping: 20, stiffness: 220, mass: 0.7 };
 
-// A PERFECT SQUARE, sized to the icon slot so the glyph sits dead centre in it.
-const PILL_SIZE = 38;
-// iOS-style corner. Apple's continuous ("squircle") corners sit at ~22.4% of
-// the side; 1/φ³ = 0.236 lands on the same curve, which is why the golden
-// division reads as the familiar iOS shape rather than an arbitrary radius.
-// borderCurve: 'continuous' then swaps the circular arc for the superellipse
-// iOS actually draws — the difference between a rounded square and a squircle.
-const PHI = 1.618;
-const PILL_RADIUS = Math.round(PILL_SIZE / (PHI * PHI * PHI));
+// Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
+// icons can never disagree about where a slot is.
 
 export default function TabBarPill() {
   const { isDark } = useTheme();
@@ -48,17 +42,18 @@ export default function TabBarPill() {
   const index = useNavigationState((state) => state?.index ?? 0);
   const count = useNavigationState((state) => state?.routes?.length ?? 1);
 
-  const slot = count > 0 ? barWidth / count : 0;
-  // Centred in its slot rather than inset from the edges: the square is a fixed
-  // size, so it has to be placed by the slot's midpoint, not by its margins.
-  const offset = Math.max(0, (slot - PILL_SIZE) / 2);
+  // The tabs are a CENTRED CLUSTER of fixed-width slots, not items stretched
+  // across the bar, so the chip is placed from the cluster's left edge — the
+  // same edge the bar's own padding creates.
+  const start = clusterStart(barWidth, count);
+  const offset = start + (TAB_SLOT - PILL_SIZE) / 2;
 
   const pillStyle = useAnimatedStyle(() => ({
     // Nothing to place until the bar has been measured; staying invisible
     // avoids the square flashing at x=0 on the first frame.
-    opacity: withSpring(slot > 0 ? 1 : 0, SLIDE_SPRING),
-    transform: [{ translateX: withSpring(slot * index + offset, SLIDE_SPRING) }],
-  }), [slot, index, offset]);
+    opacity: withSpring(barWidth > 0 ? 1 : 0, SLIDE_SPRING),
+    transform: [{ translateX: withSpring(TAB_SLOT * index + offset, SLIDE_SPRING) }],
+  }), [barWidth, index, offset]);
 
   return (
     <View

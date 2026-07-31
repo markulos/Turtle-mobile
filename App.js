@@ -10,7 +10,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { View, ActivityIndicator, Image, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, Image, StyleSheet, useWindowDimensions } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 // Same turtle artwork the web app uses for its Chat nav icon
@@ -49,6 +49,7 @@ import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
+import { clusterPadding } from './components/tabBarLayout';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
@@ -63,10 +64,11 @@ const Tab = createBottomTabNavigator();
 function TabNavigator() {
   const { theme, isDark, hideVaultButton } = useTheme();
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  // Tabs actually rendered. The Vault tab is optional, and the cluster has to
+  // narrow with it or the group would sit off-centre.
+  const tabCount = hideVaultButton ? 4 : 5;
   const [consoleOpen, setConsoleOpen] = useState(false);
-  // Active-tab highlight tints. Kept as explicit rgba rather than a hex+alpha
-  // suffix on a theme token: those tokens are a MIX of hex and rgba strings, and
-  // appending '14' to an rgba() value yields an invalid colour.
 
   return (
     <>
@@ -143,6 +145,12 @@ function TabNavigator() {
           height: 49 + insets.bottom, // Standard iOS tab bar 49pt + safe area
           paddingBottom: insets.bottom,
           paddingTop: 6,
+          // Pull the tabs into a CENTRED CLUSTER of fixed-width slots instead of
+          // stretching them edge to edge — the Pinterest nav's proportions. The
+          // items still flex, so narrowing the row is what tightens the spacing;
+          // the sliding chip reads the same geometry from tabBarLayout, so the
+          // two can't disagree about where a slot sits.
+          paddingHorizontal: clusterPadding(windowWidth, tabCount),
         },
         // One accent pill that SLIDES between tabs, painted behind the buttons.
         // tabBarBackground is composited under navigation's own tab buttons, so
