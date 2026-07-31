@@ -1006,7 +1006,8 @@ export default function NotesScreen() {
       {/* FAB */}
       <TouchableOpacity
         accessibilityLabel="Add note"
-        style={styles.fab}
+        // Fixed control: clears the floating tab card, which reserves no space.
+        style={[styles.fab, { bottom: tabBarHeight + 20 }]}
         onPressIn={() => tapHaptic()}
         onPress={() => { setEditingNote(null); setComposerOpen(true); }}
         activeOpacity={0.85}

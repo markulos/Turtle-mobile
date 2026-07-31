@@ -3522,7 +3522,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 position: 'absolute', 
                 left: 24, 
                 right: 24, 
-                bottom: insets.bottom + 24, 
+                // Clears the floating tab card (which reserves no space) rather
+                // than just the safe area.
+                bottom: tabBarH + 20,
                 flexDirection: 'row', 
                 justifyContent: 'space-between', 
                 alignItems: 'flex-end',

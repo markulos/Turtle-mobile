@@ -32,6 +32,11 @@ import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, clusterStart } from './tabB
 // Settles rather than wobbles: this tracks a selection, it isn't a flourish.
 const SLIDE_SPRING = { damping: 20, stiffness: 220, mass: 0.7 };
 
+// The app's own dark frost tint, taken from the shared module by asking it for
+// the dark theme — rather than copying the rgba literal, which would then need
+// hand-updating whenever the app's frost is retuned.
+const DARK_FROST_OVERLAY = frostOverlayColor({ mode: 'dark' });
+
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
 
@@ -66,16 +71,22 @@ export default function TabBarPill() {
         setBarWidth((prev) => (prev === w ? prev : w));
       }}
     >
-      {/* The bar is a floating CARD, built from the same frosted chrome as the
-          chat composer — utils/frostedChat is the single source for the blur
-          params, the translucent tint over it and the hairline, so the two
-          surfaces can't drift apart. Rounded + clipped here rather than on the
-          bar itself, because this layer is what actually paints the surface. */}
+      {/* BLACK frosted dock. The blur params are the app's shared ones
+          (utils/frostedChat, also used by the chat composer and the Claude
+          console), so it is the same material — but pinned to the DARK variant
+          in both themes rather than following the theme. The chip on top is
+          white with a black glyph, and that pairing needs a constant dark
+          backdrop; a light frost would leave it washed out on the light theme. */}
       <View style={[styles.card, { borderColor: frostBorderColor(theme) }]}>
-        <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
+        <BlurView
+          pointerEvents="none"
+          style={StyleSheet.absoluteFill}
+          {...blurProps(theme)}
+          tint="dark"
+        />
         <View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]}
+          style={[StyleSheet.absoluteFill, { backgroundColor: DARK_FROST_OVERLAY }]}
         />
       </View>
       <Reanimated.View
