@@ -67,13 +67,14 @@ export default function TabBarPill() {
           styles.pill,
           {
             width,
-            // Neutral, not accent: the accent's job in this bar is the hairline
-            // above it, and colouring both would leave the active tab competing
-            // with its own divider. On dark this is white, as asked; on light a
-            // white pill on a white bar would be invisible, so it inverts to the
-            // same tint in black.
-            backgroundColor: isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)',
-            borderColor: isDark ? 'rgba(255,255,255,0.20)' : 'rgba(0,0,0,0.12)',
+            // SOLID and fully inverted against the bar: white on dark, black on
+            // light. The active icon flips with it (tabBarActiveTintColor is
+            // the theme background, which is the exact inverse in both modes),
+            // so the selected tab reads as a knocked-out chip rather than a
+            // tinted wash. Neutral rather than accent-coloured on purpose — the
+            // accent's job in this bar is the hairline above it, and colouring
+            // both would leave the active tab competing with its own divider.
+            backgroundColor: isDark ? '#FFFFFF' : '#000000',
           },
           pillStyle,
         ]}
@@ -91,6 +92,7 @@ const styles = StyleSheet.create({
     left: 0,
     height: PILL_HEIGHT,
     borderRadius: PILL_HEIGHT / 2,
-    borderWidth: StyleSheet.hairlineWidth,
+    // No border: a solid chip needs no outline, and one at this contrast would
+    // only muddy its edge.
   },
 });
