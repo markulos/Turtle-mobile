@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
@@ -250,31 +250,42 @@ export default function ConversationsOverlay({ visible, onClose, onOpenClaude })
     return q ? boards.filter((b) => b.name.toLowerCase().includes(q)) : boards;
   }, [boards, query]);
 
+  // Row styles hoisted out of renderItem — the inbox can hold dozens of board
+  // rows, and the old inline objects re-allocated five styles per row per
+  // render. Theme-keyed; per-row values (avatar tint) stay put as props.
+  const rowStyles = useMemo(() => StyleSheet.create({
+    row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
+    body: { flex: 1 },
+    name: { fontSize: 16, fontWeight: '600', color: c.textPrimary },
+    preview: { fontSize: 13, color: c.textTertiary, marginTop: 1 },
+    stamp: { fontSize: 12, color: c.textTertiary },
+  }), [c]);
+
   const renderItem = useCallback(({ item }) => {
     const tint = boardColor(item.name);
     return (
       <TouchableOpacity
         activeOpacity={0.7}
         onPress={() => { tapHaptic(); setOpenBoard(item.name); }}
-        style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 12 }}
+        style={rowStyles.row}
         accessibilityRole="button"
         accessibilityLabel={`Open ${item.name} board`}
       >
         <BoardAvatar name={item.name} thumbs={avatars[item.name]} base={mediaBase} tint={tint} />
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 16, fontWeight: '600', color: c.textPrimary }} numberOfLines={1}>{item.name}</Text>
-          <Text style={{ fontSize: 13, color: c.textTertiary, marginTop: 1 }} numberOfLines={1}>
+        <View style={rowStyles.body}>
+          <Text style={rowStyles.name} numberOfLines={1}>{item.name}</Text>
+          <Text style={rowStyles.preview} numberOfLines={1}>
             {item.latest ? previewOf(item.latest) : 'Board conversation'}
           </Text>
         </View>
         {item.lastTs ? (
-          <Text style={{ fontSize: 12, color: c.textTertiary }}>{timeAgo(item.lastTs)}</Text>
+          <Text style={rowStyles.stamp}>{timeAgo(item.lastTs)}</Text>
         ) : (
           <Icon name="chevron-right" size={22} color={c.textTertiary} />
         )}
       </TouchableOpacity>
     );
-  }, [c, avatars, mediaBase]);
+  }, [c, rowStyles, avatars, mediaBase]);
 
   return (
     <EdgeSwipePage visible={visible} onClose={onClose}>

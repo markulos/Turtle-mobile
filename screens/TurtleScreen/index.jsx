@@ -1192,7 +1192,6 @@ export default function TurtleScreen() {
     const vaultMatch = currentInput.match(VAULT_COMMAND_REGEX);
     if (vaultMatch) {
       const password = vaultMatch[1] || null;
-      console.log('[Turtle] Vault command detected');
       
       setMessages(prev => [{
         id: generateId(),
@@ -1223,7 +1222,6 @@ export default function TurtleScreen() {
 
     // Check for /pomodoro commands
     if (currentInput === '/pomodoro focus' || currentInput.startsWith('/pomodoro focus ')) {
-      console.log('[Turtle] Pomodoro focus command detected');
       
       setMessages(prev => [{
         id: generateId(),
@@ -1239,7 +1237,6 @@ export default function TurtleScreen() {
     }
     
     if (currentInput === '/pomodoro break' || currentInput.startsWith('/pomodoro break ')) {
-      console.log('[Turtle] Pomodoro break command detected');
       
       setMessages(prev => [{
         id: generateId(),
@@ -1255,7 +1252,6 @@ export default function TurtleScreen() {
     }
     
     if (currentInput === '/pomodoro stop') {
-      console.log('[Turtle] Pomodoro stop command detected');
       
       setMessages(prev => [{
         id: generateId(),
@@ -1271,7 +1267,6 @@ export default function TurtleScreen() {
     }
     
     if (currentInput === '/pomodoro settings') {
-      console.log('[Turtle] Pomodoro settings command detected');
 
       setMessages(prev => [{
         id: generateId(),
@@ -1294,7 +1289,6 @@ export default function TurtleScreen() {
     }
 
     if (currentInput === '/pomodoro stats') {
-      console.log('[Turtle] Pomodoro stats command detected');
 
       setMessages(prev => [{
         id: generateId(),
@@ -1331,7 +1325,6 @@ export default function TurtleScreen() {
     
     // Check for /photos commands
     if (currentInput === '/photos') {
-      console.log('[Turtle] Photos command detected');
       
       setMessages(prev => [{
         id: generateId(),
@@ -1356,7 +1349,6 @@ export default function TurtleScreen() {
     
     // Check for /photos upload command - opens gallery in upload mode
     if (currentInput === '/photos upload') {
-      console.log('[Turtle] Photos upload command detected');
       
       setMessages(prev => [{
         id: generateId(),

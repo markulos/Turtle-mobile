@@ -31,7 +31,7 @@
  *   Retry picks up where it left off WITHOUT re-opening the OS share sheet.
  *   Only images or staged media files that have not been accepted are retried.
  */
-import React, { createContext, useContext, useRef, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
@@ -686,7 +686,14 @@ export function ShareUploadProvider({ children }) {
 
   const dismissJob = useCallback((id) => removeJob(id), [removeJob]);
 
-  const value = { jobs, enqueueShare, enqueueAudioShare, retryJob, dismissJob };
+  // Memoized: every member is already referentially stable (state + useCallback),
+  // so without this the bare object literal handed consumers a NEW context value
+  // on every provider render — re-rendering the toast + every subscriber even
+  // when nothing they read had changed.
+  const value = useMemo(
+    () => ({ jobs, enqueueShare, enqueueAudioShare, retryJob, dismissJob }),
+    [jobs, enqueueShare, enqueueAudioShare, retryJob, dismissJob],
+  );
   return <ShareUploadContext.Provider value={value}>{children}</ShareUploadContext.Provider>;
 }
 

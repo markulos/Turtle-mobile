@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, ActivityIndicator,
-  KeyboardAvoidingView, Platform, Alert,
+  KeyboardAvoidingView, Platform, Alert, StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -262,6 +262,59 @@ export default function BoardTimeline({ visible, board, onClose }) {
     }
   }, [api, board, recentChatHistory]);
 
+  // Per-row styles hoisted OUT of renderItem: the old inline objects allocated
+  // a dozen fresh style objects per cell per render pass. Static parts live in
+  // one theme-keyed StyleSheet; per-item variants are precomputed pairs
+  // (user/assistant, failed, done) so a row render only picks references.
+  const rowStyles = useMemo(() => StyleSheet.create({
+    chatWrapUser: { paddingHorizontal: 14, paddingVertical: 3, alignItems: 'flex-end' },
+    chatWrapAI: { paddingHorizontal: 14, paddingVertical: 3, alignItems: 'flex-start' },
+    bubbleUser: {
+      maxWidth: '82%', borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9,
+      backgroundColor: c.accentInfo, borderBottomRightRadius: 5, borderBottomLeftRadius: 18,
+    },
+    bubbleUserFailed: {
+      maxWidth: '82%', borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9,
+      backgroundColor: c.accentError + '33', borderBottomRightRadius: 5, borderBottomLeftRadius: 18,
+    },
+    bubbleAI: {
+      maxWidth: '82%', borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9,
+      backgroundColor: c.surfaceElevated, borderBottomRightRadius: 18, borderBottomLeftRadius: 5,
+    },
+    bubbleSending: { opacity: 0.65 },
+    fromUser: { fontSize: 11, fontWeight: '700', color: '#ffffffB0', marginBottom: 2 },
+    fromAI: { fontSize: 11, fontWeight: '700', color: c.accentSuccess, marginBottom: 2 },
+    bodyUser: { fontSize: 15, lineHeight: 20, color: '#fff' },
+    bodyAI: { fontSize: 15, lineHeight: 20, color: c.textPrimary },
+    stampUser: { fontSize: 10, marginTop: 3, alignSelf: 'flex-end', color: '#ffffff99' },
+    stampAI: { fontSize: 10, marginTop: 3, alignSelf: 'flex-end', color: c.textTertiary },
+    mediaWrap: { paddingHorizontal: 14, paddingVertical: 4, alignItems: 'flex-start' },
+    mediaCard: { maxWidth: '74%', borderRadius: 16, overflow: 'hidden', backgroundColor: c.surfaceElevated },
+    mediaImg: { width: 210, height: 210 },
+    mediaMissing: { width: 210, height: 150, alignItems: 'center', justifyContent: 'center' },
+    videoBadge: {
+      position: 'absolute', top: 8, right: 8, width: 26, height: 26, borderRadius: 13,
+      backgroundColor: '#000000A6', alignItems: 'center', justifyContent: 'center',
+    },
+    mediaMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6 },
+    mediaMetaText: { flex: 1, fontSize: 12, color: c.textSecondary },
+    mediaStamp: { fontSize: 10, color: c.textTertiary },
+    feedRow: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8, alignItems: 'flex-start', gap: 12 },
+    feedIcon: {
+      width: 30, height: 30, borderRadius: 15, marginTop: 1,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    feedBody: { flex: 1 },
+    feedTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    feedTitle: { flex: 1, fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    feedTitleDone: {
+      flex: 1, fontSize: 14, fontWeight: '600', color: c.textPrimary,
+      textDecorationLine: 'line-through', opacity: 0.6,
+    },
+    feedStamp: { fontSize: 11, color: c.textTertiary },
+    feedSubtitle: { fontSize: 12, color: c.textSecondary, marginTop: 1 },
+  }), [c]);
+
   const renderItem = useCallback(({ item }) => {
     // Chat rows render as real bubbles; everything else stays a compact feed
     // event (the "X added a task" texture between messages).
@@ -271,35 +324,26 @@ export default function BoardTimeline({ visible, board, onClose }) {
       const from = !isUser
         ? 'Turtle'
         : (item.source && item.source !== 'app' ? item.source : null);
+      const bubble = isUser
+        ? (item.failed ? rowStyles.bubbleUserFailed : rowStyles.bubbleUser)
+        : rowStyles.bubbleAI;
       return (
         <TouchableOpacity
           activeOpacity={item.failed ? 0.6 : 1}
           disabled={!item.failed}
           onPress={() => item.failed && sendBoardMessage(body, item.id)}
-          style={{
-            paddingHorizontal: 14, paddingVertical: 3,
-            alignItems: isUser ? 'flex-end' : 'flex-start',
-          }}
+          style={isUser ? rowStyles.chatWrapUser : rowStyles.chatWrapAI}
         >
-          <View style={{
-            maxWidth: '82%', borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9,
-            backgroundColor: isUser ? (item.failed ? c.accentError + '33' : c.accentInfo) : c.surfaceElevated,
-            borderBottomRightRadius: isUser ? 5 : 18,
-            borderBottomLeftRadius: isUser ? 18 : 5,
-            opacity: item.local && !item.failed ? 0.65 : 1,
-          }}>
+          <View style={item.local && !item.failed ? [bubble, rowStyles.bubbleSending] : bubble}>
             {!!from && (
-              <Text style={{ fontSize: 11, fontWeight: '700', color: isUser ? '#ffffffB0' : c.accentSuccess, marginBottom: 2 }}>
+              <Text style={isUser ? rowStyles.fromUser : rowStyles.fromAI}>
                 {from}
               </Text>
             )}
-            <Text style={{ fontSize: 15, lineHeight: 20, color: isUser ? '#fff' : c.textPrimary }}>
+            <Text style={isUser ? rowStyles.bodyUser : rowStyles.bodyAI}>
               {body}
             </Text>
-            <Text style={{
-              fontSize: 10, marginTop: 3, alignSelf: 'flex-end',
-              color: isUser ? '#ffffff99' : c.textTertiary,
-            }}>
+            <Text style={isUser ? rowStyles.stampUser : rowStyles.stampAI}>
               {item.failed ? 'Failed — tap to retry' : item.local ? 'sending…' : timeAgo(item.ts)}
             </Text>
           </View>
@@ -314,42 +358,35 @@ export default function BoardTimeline({ visible, board, onClose }) {
       const uri = getFullUrl(item.thumbnailUrl || item.rawUrl);
       const isVideo = item.mediaType && item.mediaType !== 'image';
       return (
-        <View style={{ paddingHorizontal: 14, paddingVertical: 4, alignItems: 'flex-start' }}>
-          <View style={{
-            maxWidth: '74%', borderRadius: 16, overflow: 'hidden',
-            backgroundColor: c.surfaceElevated,
-          }}>
+        <View style={rowStyles.mediaWrap}>
+          <View style={rowStyles.mediaCard}>
             <TouchableOpacity activeOpacity={0.9} disabled={!uri} onPress={() => openLightbox(item)}>
               {uri ? (
                 <Image
                   source={{ uri }}
-                  style={{ width: 210, height: 210 }}
+                  style={rowStyles.mediaImg}
                   contentFit="cover"
                   transition={150}
                   recyclingKey={uri}
                   cachePolicy="memory-disk"
                 />
               ) : (
-                <View style={{ width: 210, height: 150, alignItems: 'center', justifyContent: 'center' }}>
+                <View style={rowStyles.mediaMissing}>
                   <Icon name="image-off-outline" size={28} color={c.textTertiary} />
                 </View>
               )}
               {isVideo && !!uri && (
-                <View style={{
-                  position: 'absolute', top: 8, right: 8,
-                  width: 26, height: 26, borderRadius: 13,
-                  backgroundColor: '#000000A6', alignItems: 'center', justifyContent: 'center',
-                }}>
+                <View style={rowStyles.videoBadge}>
                   <Icon name="play" size={16} color="#fff" />
                 </View>
               )}
             </TouchableOpacity>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
+            <View style={rowStyles.mediaMetaRow}>
               <Icon name="image-outline" size={13} color={c.textTertiary} />
-              <Text style={{ flex: 1, fontSize: 12, color: c.textSecondary }} numberOfLines={1}>
+              <Text style={rowStyles.mediaMetaText} numberOfLines={1}>
                 {item.title || 'Photo'}
               </Text>
-              <Text style={{ fontSize: 10, color: c.textTertiary }}>{timeAgo(item.ts)}</Text>
+              <Text style={rowStyles.mediaStamp}>{timeAgo(item.ts)}</Text>
             </View>
           </View>
         </View>
@@ -360,37 +397,30 @@ export default function BoardTimeline({ visible, board, onClose }) {
     const tint = c[meta.tint] || c.textSecondary;
     const done = item.kind === 'task' && item.completed;
     return (
-      <View style={{ flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8, alignItems: 'flex-start', gap: 12 }}>
-        <View style={{
-          width: 30, height: 30, borderRadius: 15, marginTop: 1,
-          alignItems: 'center', justifyContent: 'center',
-          backgroundColor: tint + '22',
-        }}>
+      <View style={rowStyles.feedRow}>
+        {/* Icon tint varies per KIND — only the backgroundColor stays inline. */}
+        <View style={[rowStyles.feedIcon, { backgroundColor: tint + '22' }]}>
           <Icon name={done ? 'check' : meta.icon} size={16} color={tint} />
         </View>
-        <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View style={rowStyles.feedBody}>
+          <View style={rowStyles.feedTitleRow}>
             <Text
-              style={{
-                flex: 1, fontSize: 14, fontWeight: '600', color: c.textPrimary,
-                textDecorationLine: done ? 'line-through' : 'none',
-                opacity: done ? 0.6 : 1,
-              }}
+              style={done ? rowStyles.feedTitleDone : rowStyles.feedTitle}
               numberOfLines={2}
             >
               {item.title || '(untitled)'}
             </Text>
-            <Text style={{ fontSize: 11, color: c.textTertiary }}>{timeAgo(item.ts)}</Text>
+            <Text style={rowStyles.feedStamp}>{timeAgo(item.ts)}</Text>
           </View>
           {!!item.subtitle && (
-            <Text style={{ fontSize: 12, color: c.textSecondary, marginTop: 1 }} numberOfLines={2}>
+            <Text style={rowStyles.feedSubtitle} numberOfLines={2}>
               {item.subtitle}
             </Text>
           )}
         </View>
       </View>
     );
-  }, [c, sendBoardMessage, getFullUrl, openLightbox]);
+  }, [c, rowStyles, sendBoardMessage, getFullUrl, openLightbox]);
 
   const keyExtractor = useCallback((it, i) => `${it.kind}:${it.id ?? i}`, []);
 
