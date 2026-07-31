@@ -7,6 +7,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
 import { tapHaptic } from '../../../utils/haptics';
 import EdgeSwipePage from './EdgeSwipePage';
+import { TAP_ONLY } from '../../../utils/pressBehavior';
 import BoardTimeline from './BoardTimeline';
 
 // "Conversation boards" (Phases 1+3): a messenger-style inbox of the user's
@@ -265,6 +266,7 @@ export default function ConversationsOverlay({ visible, onClose, onOpenClaude })
     const tint = boardColor(item.name);
     return (
       <TouchableOpacity
+        {...TAP_ONLY}
         activeOpacity={0.7}
         onPress={() => { tapHaptic(); setOpenBoard(item.name); }}
         style={rowStyles.row}

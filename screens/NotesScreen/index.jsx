@@ -76,6 +76,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useServer } from '../../context/ServerContext';
 import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
+import { TAP_ONLY } from '../../utils/pressBehavior';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
 // Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
 import { fuzzyRank } from '../../utils/trigram';
@@ -1348,6 +1349,7 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
     : null;
   return (
     <TouchableOpacity
+      {...TAP_ONLY}
       activeOpacity={0.8}
       // Single tap opens the note/todo for editing right away. Long-press still
       // opens the action sheet (kept as the path to Delete).
@@ -1606,6 +1608,7 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, theme, isDark }) {
       {/* Media region — thumbnail, inline player, or a graceful fallback while
           the unfurl is still pending (no thumb yet). */}
       <TouchableOpacity
+      {...TAP_ONLY}
         activeOpacity={0.92}
         onPress={onMediaPress}
         onLongPress={() => onLongPress(note)}
@@ -1652,6 +1655,7 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, theme, isDark }) {
 
       {/* Text region — headline + description; tapping opens the original. */}
       <TouchableOpacity
+      {...TAP_ONLY}
         activeOpacity={0.8}
         onPress={openOriginal}
         onLongPress={() => onLongPress(note)}

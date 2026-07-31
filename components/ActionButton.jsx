@@ -1,13 +1,15 @@
 import React, { useCallback } from 'react';
 import { TouchableOpacity } from 'react-native';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../utils/haptics';
+import { TAP_ONLY } from '../utils/pressBehavior';
 
 /**
  * ActionButton — a drop-in replacement for TouchableOpacity that makes an
  * action button feel instantly responsive.
  *
  * Two things every plain TouchableOpacity in this app was missing:
- *   1. A haptic the MOMENT you touch it. We fire on `onPressIn`, not `onPress`,
+ *   1. A haptic on finger-down (onPressIn, not onPress) once the touch has
+ *      held still long enough to be a tap rather than the start of a scroll,
  *      so the confirmation lands on finger-down (before release, before the
  *      network call) — the button feels like it reacted immediately.
  *   2. A consistent, slightly snappier press dim. RN's default activeOpacity is
@@ -53,6 +55,10 @@ export const ActionButton = ({
 
   return (
     <TouchableOpacity
+      // Tap-only semantics first, so a scroll that happens to start on this
+      // button never fires its press-in haptic. Spread before `rest` so a
+      // caller can still override the delay for a stationary control.
+      {...TAP_ONLY}
       activeOpacity={activeOpacity}
       disabled={disabled}
       onPressIn={handlePressIn}

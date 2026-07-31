@@ -8,6 +8,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../../context/ThemeContext';
 import { useMusicPlayer } from '../../../context/MusicPlayerContext';
 import { titleOf, sourceOf } from '../../../services/musicTrackMapper';
+import { TAP_ONLY } from '../../../utils/pressBehavior';
 
 const fmtTime = (sec) => {
   if (!Number.isFinite(sec) || sec < 0) return '0:00';
@@ -95,6 +96,7 @@ export default function MusicVault({ onClose, topInset = 0 }) {
     const active = index === current;
     return (
       <TouchableOpacity
+        {...TAP_ONLY}
         activeOpacity={0.7}
         disabled={!ready}
         onPress={() => playIndex(index)}

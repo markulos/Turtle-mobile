@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, PixelRatio } from 'react-native';
+import { TAP_ONLY } from '../../../utils/pressBehavior';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { itemTypeOf, formatDueDate } from '../utils/taskHelpers';
@@ -238,6 +239,7 @@ export const TimelineTaskRow = ({ item, onPress, onLongPress, onToggleComplete, 
 
       {/* Card */}
       <TouchableOpacity
+        {...TAP_ONLY}
         onPress={() => onPress?.(item)}
         onLongPress={() => onLongPress?.(item)}
         activeOpacity={0.75}

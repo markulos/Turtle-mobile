@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { FONTS } from '../../../utils/fonts';
+import { TAP_ONLY_PRESSABLE } from '../../../utils/pressBehavior';
 
 const Cover = ({ path, slot, resolveCoverUrl }) => (
   <Image
@@ -31,6 +32,10 @@ function PhotoVaultBoardCard({
 
   return (
     <Pressable
+      // A board card fills most of the screen, so almost every vertical scroll
+      // starts on one. Without the tap-only delay the card dims the instant you
+      // begin scrolling the grid.
+      {...TAP_ONLY_PRESSABLE}
       accessibilityRole="button"
       accessibilityLabel={`${board.name}, ${board.count} item${board.count === 1 ? '' : 's'}${updated}`}
       onPress={() => onPress(board.name)}
