@@ -125,13 +125,12 @@ function TabNavigator() {
             </TabBarIcon>
           );
         },
-        // Fixed rather than theme-derived, because the dock is a LIGHT frosted
-        // capsule in both themes: the theme's textMuted is white-ish on dark and
-        // would vanish against it. Active sits on the accent-coloured chip so it
-        // goes white; inactive is a dark grey that reads on the frost without
-        // competing with the chip.
+        // Active sits on the accent chip, so white in both themes. Inactive
+        // has to follow the dock, which is now dark-frosted on dark and
+        // light-frosted on light — a single fixed grey disappeared into one of
+        // them.
         tabBarActiveTintColor: '#FFFFFF',
-        tabBarInactiveTintColor: 'rgba(0,0,0,0.45)',
+        tabBarInactiveTintColor: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.45)',
         // Icons only — no text labels. Cleaner look and lets the
         // larger turtle icon breathe without crowding from a label
         // sitting under it.

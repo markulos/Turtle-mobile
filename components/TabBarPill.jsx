@@ -45,8 +45,11 @@ const SLIDE_SPRING = { damping: 20, stiffness: 220, mass: 0.7 };
 //             defined rim on light backgrounds too;
 //   chip    — the Settings highlight colour, which is the one saturated element
 //             and therefore what the eye tracks as it slides.
-const DOCK_SURFACE = 'rgba(246,246,249,0.72)';
-const DOCK_EDGE = 'rgba(0,0,0,0.10)';
+// Light mode keeps the white-with-a-grey-cast surface; dark mode uses the
+// app's own dark frost, so the dock reads like the chat composer in each theme
+// rather than being light in both.
+const LIGHT_DOCK_SURFACE = 'rgba(246,246,249,0.72)';
+const DOCK_EDGE_LIGHT = 'rgba(0,0,0,0.10)';
 
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
@@ -86,16 +89,16 @@ export default function TabBarPill() {
           frost module so it is the same material as the chat composer; only the
           tint and the overlay differ, because this dock is light in BOTH themes
           rather than following the theme. */}
-      <View style={[styles.card, { borderColor: DOCK_EDGE }]}>
+      <View style={[styles.card, { borderColor: theme.mode === "dark" ? frostBorderColor(theme) : DOCK_EDGE_LIGHT }]}>
         <BlurView
           pointerEvents="none"
           style={StyleSheet.absoluteFill}
           {...blurProps(theme)}
-          tint="light"
+          tint={theme.mode === "dark" ? "dark" : "light"}
         />
         <View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: DOCK_SURFACE }]}
+          style={[StyleSheet.absoluteFill, { backgroundColor: theme.mode === "dark" ? frostOverlayColor(theme) : LIGHT_DOCK_SURFACE }]}
         />
       </View>
       <Reanimated.View

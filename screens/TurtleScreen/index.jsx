@@ -405,6 +405,12 @@ export default function TurtleScreen() {
   // composer→console, composer→dock and composer→keyboard are all the same
   // distance rather than three values that merely look similar.
   const COMPOSER_MARGIN = 8;
+  // With the keyboard UP the composer needs less breathing room than it does
+  // above the dock: the keyboard's own top edge is a hard, flat boundary, and
+  // with word suggestions turned off there is no candidate strip to clear
+  // either. Subtracted from the resting margin by the lift worklets.
+  const KEYBOARD_GAP = 2;
+  const KEYBOARD_GAP_TRIM = COMPOSER_MARGIN - KEYBOARD_GAP;
   // True whenever the Claude console is on screen (a live session OR the login
   // flow).
   const inClaudeSession = !!claudeUiMode;
@@ -452,7 +458,9 @@ export default function TurtleScreen() {
     // the pill ends up exactly COMPOSER_MARGIN above the keyboard's top edge.
     // In a Claude session the column stays static (the dock lifts instead), so
     // this returns 0 there — handed off atomically via sessionSV.
-    const lift = sessionSV.value ? 0 : Math.max(keyboard.height.value - tabBarHeight, 0);
+    const kb = keyboard.height.value;
+    const trim = kb > 0 ? KEYBOARD_GAP_TRIM : 0;
+    const lift = sessionSV.value ? 0 : Math.max(kb - tabBarHeight, 0) + trim;
     return {
       transform: [{ translateY: -lift }],
     };
@@ -475,7 +483,9 @@ export default function TurtleScreen() {
     // lifts (normal chat). In a session the column is static, so no counter is
     // needed and this returns 0. Same sessionSV gate as the column, so the two
     // stay in lockstep.
-    const lift = sessionSV.value ? 0 : Math.max(keyboard.height.value - tabBarHeight, 0);
+    const kb = keyboard.height.value;
+    const trim = kb > 0 ? KEYBOARD_GAP_TRIM : 0;
+    const lift = sessionSV.value ? 0 : Math.max(kb - tabBarHeight, 0) + trim;
     return {
       transform: [{ translateY: lift }],
     };
@@ -495,7 +505,9 @@ export default function TurtleScreen() {
     // column/header, so when the session is minimized the lift moves off the
     // dock and onto the column in the SAME frame — the composer's net position
     // is unchanged and it never jumps.
-    const lift = sessionSV.value ? Math.max(keyboard.height.value - tabBarHeight, 0) : 0;
+    const kb = keyboard.height.value;
+    const trim = kb > 0 ? KEYBOARD_GAP_TRIM : 0;
+    const lift = sessionSV.value ? Math.max(kb - tabBarHeight, 0) + trim : 0;
     return {
       transform: [{ translateY: -lift }],
     };
