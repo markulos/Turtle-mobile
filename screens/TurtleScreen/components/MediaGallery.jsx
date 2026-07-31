@@ -37,6 +37,7 @@ import * as Sharing from 'expo-sharing';
 import { sweepTransientCaches } from '../../../utils/cacheManager';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { BlurView } from 'expo-blur';
 import { impactHaptic } from '../../../utils/haptics';
 
 // react-native-share (unlike expo-sharing) can hand the OS a whole ARRAY of
@@ -5159,13 +5160,25 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           styles.floatingHeaderContainer,
           {
             paddingTop: insets.top,
-            backgroundColor: theme.colors.background,
+            // Transparent — the surface is the BlurView below. The header has
+            // always floated over the grid (content pads by vaultHeaderH), so
+            // frosting it lets the photos read through as they scroll under,
+            // matching the tab bar's material.
+            backgroundColor: 'transparent',
+            overflow: 'hidden',
             borderBottomWidth: StyleSheet.hairlineWidth,
-            borderBottomColor: theme.colors.border,
+            // White edge where the header ends — the frosted-chrome convention.
+            borderBottomColor: '#FFFFFF',
             zIndex: 20,
           }
         ]}
       >
+        <BlurView
+          pointerEvents="none"
+          intensity={theme.mode === 'dark' ? 42 : 60}
+          tint={theme.mode === 'dark' ? 'dark' : 'light'}
+          style={StyleSheet.absoluteFill}
+        />
         {/* Upload progress bar relocated to the bottom (just above the navbar) —
             see the root-level bar near the end of this render. */}
 

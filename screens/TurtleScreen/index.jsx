@@ -1744,6 +1744,17 @@ export default function TurtleScreen() {
           visible message clears the bar. zIndex stays 101 (below the vault
           overlay at 200, so the vault still covers the header). */}
       <Reanimated.View style={[styles.chatHeader, { paddingTop: insets.top }, headerCounterStyle]}>
+        {/* Frosted surface, matching the floating tab bar: the header has always
+            overlaid the transcript (it's absolute, and the list already pads by
+            insets.top + CHAT_HEADER_BAR_HEIGHT), so swapping its opaque fill for
+            a blur lets the chat read through it as it scrolls under — same
+            material top and bottom. Behind the content, non-interactive. */}
+        <BlurView
+          pointerEvents="none"
+          intensity={theme.mode === 'dark' ? 42 : 60}
+          tint={theme.mode === 'dark' ? 'dark' : 'light'}
+          style={StyleSheet.absoluteFill}
+        />
         {/* Left cluster: Friends + Conversations. Both side clusters share a
             fixed width (styles.headerSideWrap) so the flex:1 title between
             them stays dead-centre despite the uneven icon counts. */}
@@ -2856,9 +2867,15 @@ const createStyles = (theme, insets) =>
       justifyContent: 'space-between',
       paddingHorizontal: 12,
       paddingBottom: 6,
-      backgroundColor: theme.colors.surface,
+      // Transparent: the surface is the BlurView rendered behind the content
+      // (see the render site). An opaque fill here would defeat the underlay.
+      backgroundColor: 'transparent',
+      // Clip the blur to the header's box.
+      overflow: 'hidden',
+      // The edge that ENDS the header — white, like the frosted chrome elsewhere,
+      // so the boundary reads as a lit edge rather than a grey rule.
       borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: theme.colors.border,
+      borderBottomColor: '#FFFFFF',
     },
     // Equal-width side clusters flanking the flex:1 title, so the brand stays
     // dead-centre even though the left holds two icons and the right one.
