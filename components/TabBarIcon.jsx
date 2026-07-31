@@ -4,7 +4,6 @@ import Reanimated, {
   useAnimatedStyle,
   withSpring,
 } from 'react-native-reanimated';
-import { PILL_SIZE } from './tabBarLayout';
 
 /**
  * TabBarIcon — the bottom nav's active-state treatment.
@@ -32,39 +31,45 @@ import { PILL_SIZE } from './tabBarLayout';
 // Low bounce: this is a control, so it should settle rather than wobble.
 const SELECT_SPRING = { damping: 18, stiffness: 260, mass: 0.6 };
 
-// Downward nudge for the glyph inside its slot.
-//
-// Why this is needed at all: react-navigation lays each tab button out for an
-// icon AND a label. With labels hidden the reserved label space stays in the
-// box, so a glyph centred in that box sits visibly high of the chip behind it.
-// Rather than fight the button's internals, the glyph is offset by half its own
-// height, which is the gap the reserved label row leaves.
-const ICON_NUDGE_Y = 12;
+// The glyph is centred GEOMETRICALLY rather than by a tuned offset: the wrapper
+// fills the tab button's box absolutely and pins the icon at 50%/50% with a
+// -50%/-50% transform. That is dead centre of whatever box navigation gives us,
+// so it no longer depends on the button's internal padding or on whether it
+// reserves a row for the (hidden) label — the two things that made every
+// fixed nudge wrong by a different amount.
 
 export default function TabBarIcon({ focused, brand = false, children }) {
+  // The centring transform lives HERE rather than in a static style: when two
+  // styles are merged, a later `transform` REPLACES an earlier one wholesale
+  // instead of concatenating — so keeping them apart would have silently
+  // dropped the -50%/-50% the moment this animated style applied.
   const iconStyle = useAnimatedStyle(() => ({
     transform: [
+      { translateX: '-50%' },
+      { translateY: '-50%' },
       { scale: withSpring(focused ? 1.04 : 1, SELECT_SPRING) },
-      { translateY: ICON_NUDGE_Y + withSpring(focused ? -1 : 0, SELECT_SPRING) },
+      { translateY: withSpring(focused ? -1 : 0, SELECT_SPRING) },
     ],
   }), [focused]);
 
   return (
-    <View style={styles.slot}>
-      <Reanimated.View style={iconStyle}>{children}</Reanimated.View>
+    <View style={styles.slot} pointerEvents="none">
+      <Reanimated.View style={[styles.centred, iconStyle]}>{children}</Reanimated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  // Sized to the largest glyph (the 36pt turtle) so every tab's icon sits on
-  // the same baseline and the highlights line up across the bar.
-  // The SAME square as the chip — imported, not a matching literal, so the two
-  // cannot drift apart when the chip is resized.
+  // Fills the tab button's box rather than being a fixed square inside it, so
+  // the centring below is relative to the button itself.
   slot: {
-    width: PILL_SIZE,
-    height: PILL_SIZE,
-    alignItems: 'center',
-    justifyContent: 'center',
+    ...StyleSheet.absoluteFillObject,
+  },
+  // Dead centre of that box: pinned at 50%/50% and pulled back by half its own
+  // size. Independent of the button's padding or any reserved label row.
+  centred: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
   },
 });
