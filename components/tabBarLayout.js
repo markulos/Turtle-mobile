@@ -20,11 +20,13 @@ export const TAB_SLOT = 52;
 // dead centre in it.
 export const PILL_SIZE = 38;
 
-// iOS continuous-corner ratio. Apple's squircle sits at ~22.4% of the side;
-// 1/φ³ = 0.236 lands on the same curve, which is why the golden division reads
-// as the familiar iOS shape rather than an arbitrary radius.
+// Corner softness. The base is the iOS continuous-corner ratio — Apple's
+// squircle sits at ~22.4% of the side, and 1/φ³ = 0.236 lands on the same
+// curve — scaled 1.5x for a rounder chip: 13pt on a 38pt square, ~34% of the
+// side. Still well short of the 50% that would turn it back into a circle.
 const PHI = 1.618;
-export const PILL_RADIUS = Math.round(PILL_SIZE / (PHI * PHI * PHI));
+const RADIUS_SCALE = 1.5;
+export const PILL_RADIUS = Math.round((PILL_SIZE / (PHI * PHI * PHI)) * RADIUS_SCALE);
 
 /**
  * Left edge of the centred tab cluster within a bar of `barWidth`.
