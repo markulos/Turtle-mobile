@@ -87,6 +87,9 @@ const FILTER_TODO = 'todo';
 const FILTER_ORDER = [FILTER_ALL, FILTER_NOTE, FILTER_TODO];
 // Sentinel topic for notes that carry no tags (shown as its own "Untagged" chip).
 const UNTAGGED = '__untagged__';
+// Notes per request. Small enough that the first page paints in one round-trip,
+// large enough that a normal screenful doesn't immediately ask for another.
+const NOTES_PAGE = 60;
 
 // Composer modes. 'feedback' persists as a to-do but auto-stamps an app tag
 // ("Turtle App" / "Turtle 3D") + a platform tag (Turtle App only) so the cue
@@ -293,6 +296,10 @@ export default function NotesScreen() {
   // the current query; `noteIndex` is the Tier-1/3 client-side index (id+text
   // over ALL notes, not just the loaded page) fetched once on mount.
   const [search, setSearch] = useState('');
+  // Mirrored for loadMoreNotes, which must not re-create itself (and re-arm the
+  // list's onEndReached) on every keystroke.
+  const searchRef = useRef(search);
+  searchRef.current = search;
   const [searchOpen, setSearchOpen] = useState(false);
   const [serverMatches, setServerMatches] = useState([]);
   const noteIndex = useRef([]);
@@ -301,19 +308,60 @@ export default function NotesScreen() {
   // ── Fetch list ──────────────────────────────────────────
   // Newest-first: the server's GET /notes already orders DESC by
   // createdAt so we render exactly what comes back.
+  // Paged instead of one 200-row shot: the first screenful lands in one small
+  // round-trip and the rest streams in as you scroll. The old single request
+  // both delayed first paint on a big library and silently truncated at 200 —
+  // note 201 simply did not exist in the app.
+  const notesOffsetRef = useRef(0);
+  const hasMoreNotesRef = useRef(true);
+  const loadingMoreRef = useRef(false);      // in-flight guard; a fast scroll fires onEndReached repeatedly
+  const [loadingMore, setLoadingMore] = useState(false);
+
   const refresh = useCallback(async () => {
     if (!isConnected) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get('/turtle/notes?limit=200');
+      const res = await api.get(`/turtle/notes?limit=${NOTES_PAGE}&offset=0`);
       if (res?.success && Array.isArray(res.notes)) {
         setNotes(res.notes);
+        notesOffsetRef.current = res.notes.length;
+        // The endpoint returns no total, so a short page is the end signal.
+        hasMoreNotesRef.current = res.notes.length === NOTES_PAGE;
       }
     } catch (e) {
       setError(e.message || 'Failed to load notes');
     } finally {
       setLoading(false);
+    }
+  }, [api, isConnected]);
+
+  const loadMoreNotes = useCallback(async () => {
+    if (!isConnected || loadingMoreRef.current || !hasMoreNotesRef.current) return;
+    // Search runs against the server index + the full note set (see
+    // visibleNotes), so paging the browse list underneath it would fetch rows
+    // nobody is looking at.
+    if (searchRef.current.trim()) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const res = await api.get(`/turtle/notes?limit=${NOTES_PAGE}&offset=${notesOffsetRef.current}`);
+      if (res?.success && Array.isArray(res.notes)) {
+        hasMoreNotesRef.current = res.notes.length === NOTES_PAGE;
+        setNotes((prev) => {
+          // Dedupe by id: a note created (or deleted) between pages shifts the
+          // window, so the same row can arrive twice.
+          const seen = new Set(prev.map((n) => n.id));
+          const fresh = res.notes.filter((n) => n && !seen.has(n.id));
+          notesOffsetRef.current = prev.length + fresh.length;
+          return fresh.length ? [...prev, ...fresh] : prev;
+        });
+      }
+    } catch {
+      // Non-fatal: the page stays where it is and the next scroll retries.
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
     }
   }, [api, isConnected]);
 
@@ -584,9 +632,29 @@ export default function NotesScreen() {
   const pageScrollX = useRef(new Animated.Value(0)).current;
   const pagerRef = useRef(null);
   const segW = (screenW - 32) / 3; // track is inset 16px each side; 3 segments
-  const tabIndicatorX = pageScrollX.interpolate({
+
+  // Underline geometry, same approach as the vault's picker. Label widths can't
+  // be computed (font metrics + the user's font scale + a live count in the
+  // label), so they're measured via onLayout on the active copy. The bar's
+  // WIDTH is a plain style, never animated: pageScrollX is fed by an
+  // Animated.event with useNativeDriver, and the native animated module handles
+  // only transforms and opacity — animating width throws. One width sized to
+  // the widest label keeps the 2pt radius from smearing, which scaleX would.
+  const [tabLabelWidths, setTabLabelWidths] = useState({});
+  const measureTabLabel = useCallback((key, w) => {
+    const next = Math.round(w);
+    if (!next) return;
+    setTabLabelWidths((prev) => (prev[key] === next ? prev : { ...prev, [key]: next }));
+  }, []);
+  const fallbackLabelW = Math.min(segW * 0.6, 76);
+  const tabUnderlineW = Math.max(...FILTER_ORDER.map((fk) => tabLabelWidths[fk] || fallbackLabelW));
+  const tabUnderlineX = pageScrollX.interpolate({
     inputRange: [0, screenW, screenW * 2],
-    outputRange: [0, segW, segW * 2],
+    outputRange: [
+      segW * 0.5 - tabUnderlineW / 2,
+      segW * 1.5 - tabUnderlineW / 2,
+      segW * 2.5 - tabUnderlineW / 2,
+    ],
     extrapolate: 'clamp',
   });
   const goToPage = useCallback((index) => {
@@ -642,8 +710,18 @@ export default function NotesScreen() {
         // the empty state centre in the space below it.
         ListHeaderComponent={renderChrome()}
         ListEmptyComponent={empty}
+        ListFooterComponent={loadingMore ? (
+          <View style={styles.listFooter}>
+            <ActivityIndicator size="small" color={theme.colors.textMuted} />
+          </View>
+        ) : null}
         refreshing={loading}
         onRefresh={refresh}
+        // Pull the next page a screenful early so the list rarely shows the
+        // spinner. Each filter tab drives the same shared browse list, so
+        // whichever page you're scrolling extends it for all three.
+        onEndReached={loadMoreNotes}
+        onEndReachedThreshold={0.6}
         {...keyboardScrollProps}
         renderItem={({ item }) => (
           isLinkNote(item) ? (
@@ -715,10 +793,15 @@ export default function NotesScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Swipeable segmented control — the pill slides 1:1 with the pager. */}
+      {/* Swipeable tabs — a sliding underline, matching the Media Vault's
+          picker: no track, no pill, just the labels with a bar that moves from
+          one to the next 1:1 with the pager scroll. */}
       <View style={styles.tabTrack}>
         <Animated.View
-          style={[styles.tabPill, { width: segW - 4, transform: [{ translateX: tabIndicatorX }] }]}
+          style={[
+            styles.tabUnderline,
+            { width: tabUnderlineW, backgroundColor: theme.colors.textPrimary, transform: [{ translateX: tabUnderlineX }] },
+          ]}
         />
         {FILTER_ORDER.map((fk, index) => {
           const inputRange = [(index - 1) * screenW, index * screenW, (index + 1) * screenW];
@@ -733,7 +816,10 @@ export default function NotesScreen() {
               onPress={() => goToPage(index)}
               activeOpacity={0.8}
             >
-              <Animated.Text style={[styles.tabSegActive, { opacity: activeOp }]}>
+              <Animated.Text
+                onLayout={(e) => measureTabLabel(fk, e.nativeEvent.layout.width)}
+                style={[styles.tabSegActive, { opacity: activeOp }]}
+              >
                 {`${label}  ${count}`}
               </Animated.Text>
               <Animated.Text style={[styles.tabSegInactive, { opacity: inactiveOp }]}>
@@ -2424,27 +2510,21 @@ const createStyles = (theme, isDark) => StyleSheet.create({
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginTop: 6, marginBottom: 4, paddingHorizontal: 12, height: 40, borderRadius: 12, borderWidth: 1 },
   searchInput: { flex: 1, fontSize: 15, paddingVertical: 0 },
   // Swipeable segmented control — same look as the photo vault's tab switcher.
+  // No track and no pill: the tabs are bare labels with a sliding underline,
+  // matching the Media Vault picker.
   tabTrack: {
     marginHorizontal: 16,
     marginBottom: 12,
     height: 34,
-    borderRadius: 8,
     flexDirection: 'row',
     position: 'relative',
-    backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
   },
-  tabPill: {
+  tabUnderline: {
     position: 'absolute',
-    top: 2,
-    bottom: 2,
-    left: 2,
-    borderRadius: 6,
-    backgroundColor: isDark ? '#333333' : '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    bottom: 0,
+    left: 0,
+    height: 3,
+    borderRadius: 2,
   },
   tabSeg: { flex: 1, justifyContent: 'center', alignItems: 'center', zIndex: 1 },
   tabSegActive: {
@@ -2490,6 +2570,11 @@ const createStyles = (theme, isDark) => StyleSheet.create({
   list: {
     paddingHorizontal: 16,
     paddingBottom: 100,
+  },
+  // Spinner shown while the next page of notes is in flight.
+  listFooter: {
+    paddingVertical: 18,
+    alignItems: 'center',
   },
   // Wraps the header chrome when it rides as the list's ListHeaderComponent.
   // The list's contentContainer adds 16px horizontal padding to every child
