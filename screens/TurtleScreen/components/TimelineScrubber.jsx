@@ -84,6 +84,11 @@ const AnimatedTextInput = Reanimated.createAnimatedComponent(TextInput);
 const THUMB = 24;            // resting thumb diameter (bigger Google-Photos-style grab handle)
 const RAIL_W = 36;           // touch strip width
 const HIDE_DELAY_MS = 1400;  // idle time before the rail fades
+// How long the thumb holds the position the finger released at, while the grid
+// finishes its jump and starts reporting its own scroll offset again. Long
+// enough to cover a scrollToOffset plus the resulting onScroll, short enough
+// that a real scroll straight after a drag still moves the thumb.
+const SETTLE_MS = 350;
 
 const TimelineScrubber = ({
   scrollY,
@@ -119,6 +124,16 @@ const TimelineScrubber = ({
   const labelText = useSharedValue('');
   const countText = useSharedValue('');
   const lastSent = useSharedValue(-1);  // throttle for drag → onJump
+  // Post-drag settle window. The rail and the grid measure position in two
+  // different spaces — the rail in ITEMS (frac × data.total), the grid in
+  // PIXELS (scrollY / maxScroll) — and those are only inverses when every row
+  // is the same height. With month headers in the list they aren't, so the
+  // instant a drag ended the grid reported back a slightly different fraction,
+  // the thumb snapped to it, and the label flip-flopped between the two months
+  // either side of the boundary. While settling, the rail holds the fraction
+  // the finger asked for and ignores the echo.
+  const settling = useSharedValue(0);
+  const settleFrac = useSharedValue(0);
 
   const scheduleHide = () => {
     'worklet';
@@ -131,10 +146,17 @@ const TimelineScrubber = ({
   // Scroll / drag → current fraction, month label, haptic tick, reveal.
   useAnimatedReaction(
     () => {
-      const max = Math.max(1, maxScroll.value);
-      return dragging.value === 1
-        ? dragFrac.value
-        : Math.min(1, Math.max(0, scrollY.value / max));
+      if (dragging.value === 1) return dragFrac.value;
+      // Hold through the settle window rather than chase the grid's echo.
+      if (settling.value > 0.5) return settleFrac.value;
+      const max = maxScroll.value;
+      // Unmeasured content (a fresh mount, a relayout, a column change) reports
+      // maxScroll ≈ 0. Dividing by the old Math.max(1, …) floor turned every
+      // scrollY into a fraction ≥ 1, which pinned the thumb to the far end and
+      // left it stuck there. Hold the last known position until a real height
+      // arrives.
+      if (!(max > 1)) return frac.value;
+      return Math.min(1, Math.max(0, scrollY.value / max));
     },
     (f, prev) => {
       if (f === prev) return;
@@ -175,7 +197,12 @@ const TimelineScrubber = ({
     // tighter gate makes the grid track the finger much more closely — the rail
     // feels responsive rather than stepping a row at a time — while still
     // coalescing sub-item jitter so scrollToOffset isn't called every frame.
-    if (lastSent.value < 0 || Math.abs(f - lastSent.value) * Math.max(1, data.total) >= 1 || f <= 0 || f >= 1) {
+    // The end-of-rail clauses used to fire on EVERY frame once the finger was
+    // parked at the top or bottom — a scrollToOffset per frame to an offset the
+    // grid was already at, which is what made a held drag at the end feel like
+    // it was fighting back. Only fire when the value actually changed.
+    const atEnd = (f <= 0 || f >= 1) && f !== lastSent.value;
+    if (lastSent.value < 0 || Math.abs(f - lastSent.value) * Math.max(1, data.total) >= 1 || atEnd) {
       lastSent.value = f;
       runOnJS(onJump)(f);
     }
@@ -213,6 +240,13 @@ const TimelineScrubber = ({
     .onFinalize(() => {
       'worklet';
       runOnJS(onJump)(dragFrac.value); // settle exactly where the finger left
+      // Pin the thumb where the finger left it while the grid catches up and
+      // re-reports its own (pixel-derived) fraction. withDelay is the timer:
+      // the value stays 1 through the delay, then drops to 0 and normal
+      // scroll-following resumes.
+      settleFrac.value = dragFrac.value;
+      settling.value = 1;
+      settling.value = withDelay(SETTLE_MS, withTiming(0, { duration: 0 }));
       dragging.value = 0;
       scheduleHide();
     });
