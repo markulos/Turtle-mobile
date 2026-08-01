@@ -37,10 +37,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { frostBorderColor, FROST_OVERLAP, blurProps, frostOverlayColor } from '../../utils/frostedChat';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../utils/haptics';
 import { dockOccupied } from '../../components/tabBarLayout';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
+import AnimalAvatar from '../../components/AnimalAvatar';
+import { generatedName } from '../../utils/avatar';
 import { useCommandBus } from '../../context/CommandBusContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { interceptAndSend } from '../../services/AICommandInterceptor';
@@ -157,7 +159,29 @@ export default function TurtleScreen() {
   const { theme } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
   const { api, isConnected, getBaseUrl, serverIP } = useServer();
-  const { token } = useAuth();
+  // Identity for the header bar: the server profile's name/avatar when set,
+  // otherwise the deterministic animal name + silhouette (see utils/avatar), so
+  // the bar is never blank and never needs an upload. Declared AFTER useServer —
+  // it reads api/getBaseUrl.
+  const [selfProfile, setSelfProfile] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await api.get('/me');
+        if (alive && r?.user) setSelfProfile(r.user);
+      } catch { /* offline / older server — the generated identity stands */ }
+    })();
+    return () => { alive = false; };
+  }, [api]);
+  const selfName = selfProfile?.displayName?.trim() || generatedName(authIdentity || 'anon');
+  const selfAvatarUrl = selfProfile?.avatarUrl
+    ? (selfProfile.avatarUrl.startsWith('/')
+      ? `${getBaseUrl().replace(/\/api$/, '')}${selfProfile.avatarUrl}`
+      : selfProfile.avatarUrl)
+    : null;
+  const { token, authIdentity } = useAuth();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   // Measured height of the floating bottom dock (cards + frosted composer).
   // It's an absolute overlay over the full-height message list, so we inset
@@ -1815,108 +1839,56 @@ export default function TurtleScreen() {
           visible message clears the bar. zIndex stays 101 (below the vault
           overlay at 200, so the vault still covers the header). */}
       <Reanimated.View style={[styles.chatHeader, { paddingTop: insets.top }, headerCounterStyle]}>
-        {/* Frosted surface — a GRADIENT scrim rather than a bar with an edge.
-            The header has always overlaid the transcript (it's absolute, and the
-            list pads by insets.top + CHAT_HEADER_BAR_HEIGHT), so it reads as a
-            veil the chat scrolls up into and out of, with nothing marking where
-            it ends. Behind the content, non-interactive.
-
-            Two layers:
-            1) A stack of blur BANDS. expo-blur can't gradient its own intensity
-               (that needs a masked-view, a native dep we don't ship), so the
-               blur is stepped instead: a full-height weak band with shorter,
-               additional bands over the top of it. They compound, so the blur is
-               strongest at the status bar and weakest at the header's bottom
-               edge — and each band's hard edge falls where the scrim below is
-               still dark enough to hide it.
-            2) The scrim itself: semi-transparent black easing to FULLY
-               transparent at the bottom, so there's no line to end the header.
-               White in light mode — same veil, the colour that keeps the glyphs
-               legible against a light chat. */}
-        {HEADER_BLUR_BANDS.map((band) => (
-          <BlurView
-            key={band.height}
-            pointerEvents="none"
-            intensity={theme.mode === 'dark' ? band.dark : band.light}
-            tint={theme.mode === 'dark' ? 'dark' : 'light'}
-            style={{ position: 'absolute', top: 0, left: 0, right: 0, height: band.height }}
-          />
-        ))}
-        <LinearGradient
+        {/* Frosted surface, matching the floating tab bar: the header has always
+            overlaid the transcript (it's absolute, and the list already pads by
+            insets.top + CHAT_HEADER_BAR_HEIGHT), so a blur lets the chat read
+            through it as it scrolls under. */}
+        <BlurView
           pointerEvents="none"
-          colors={theme.mode === 'dark' ? HEADER_SCRIM_DARK : HEADER_SCRIM_LIGHT}
-          locations={HEADER_SCRIM_STOPS}
+          intensity={theme.mode === 'dark' ? 42 : 60}
+          tint={theme.mode === 'dark' ? 'dark' : 'light'}
           style={StyleSheet.absoluteFill}
         />
-        {/* Left cluster: Friends + Conversations. Both side clusters share a
-            fixed width (styles.headerSideWrap) so the flex:1 title between
-            them stays dead-centre despite the uneven icon counts. */}
-        <View style={[styles.headerSideWrap, { justifyContent: 'flex-start' }]}>
-          <TouchableOpacity
-            onPress={openFriends}
-            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
-            style={styles.headerIconButton}
-            accessibilityLabel="Open friends"
-            accessibilityRole="button"
-          >
-            <Icon name="account-multiple-outline" size={22} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => { tapHaptic(); setShowConversations(true); }}
-            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
-            style={styles.headerIconButton}
-            accessibilityLabel="Open board conversations"
-            accessibilityRole="button"
-          >
-            <Icon name="forum-outline" size={21} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
 
+        {/* SELF-CHAT IDENTITY BAR.
+            This header used to carry Friends, Conversations, Link-desktop and
+            Settings. All four now live on the Profile tab, so the chat reads as
+            a conversation with YOURSELF rather than a toolbar: your avatar and
+            name, tapping through to the profile.
+
+            The turtle mark's long-press — the hidden route into the server
+            terminal — is preserved on this row, since nothing else exposes it.
+
+            Height is unchanged (CHAT_HEADER_BAR_HEIGHT), which the transcript's
+            top padding and the history-error strip both depend on. */}
         <TouchableOpacity
-          style={styles.headerTitleWrap}
-          activeOpacity={1}
+          style={styles.identityBar}
+          activeOpacity={0.7}
+          onPress={() => { tapHaptic(); navigation.navigate('Profile'); }}
           delayLongPress={400}
           onLongPress={() => {
-            // Hidden power gesture: long-press the turtle to drop into the server
-            // terminal. Buzz so the open is confirmed by feel.
             confirmBuzz();
-            claudeClose();                 // mutually exclusive with the Claude panel
-            setTerminalFullscreen(true);   // open full-screen
-            terminalStart();               // lazily opens the shell server-side
+            claudeClose();
+            setTerminalFullscreen(true);
+            terminalStart();
           }}
           accessibilityRole="button"
-          accessibilityLabel="Turtle"
-          accessibilityHint="Long-press to open the server terminal"
+          accessibilityLabel="Your profile"
+          accessibilityHint="Opens your profile. Long-press to open the server terminal."
         >
-          <Image
-            source={turtleLogo}
-            style={styles.headerLogo}
-            contentFit="contain"
-            tintColor={theme.colors.textPrimary}
-          />
-          <Text style={styles.headerTitle}>Turtle</Text>
+          {selfAvatarUrl ? (
+            <Image
+              source={{ uri: selfAvatarUrl }}
+              style={styles.identityAvatarImg}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              transition={150}
+            />
+          ) : (
+            <AnimalAvatar id={authIdentity || 'anon'} size={30} />
+          )}
+          <Text style={styles.identityName} numberOfLines={1}>{selfName}</Text>
         </TouchableOpacity>
-
-        <View style={[styles.headerSideWrap, { justifyContent: 'flex-end' }]}>
-          <TouchableOpacity
-            onPress={() => { tapHaptic(); setShowLinkDesktop(true); }}
-            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
-            style={styles.headerIconButton}
-            accessibilityLabel="Link a desktop"
-            accessibilityRole="button"
-          >
-            <Icon name="monitor-cellphone" size={21} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => setShowAppSettings(true)}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            style={styles.headerIconButton}
-            accessibilityLabel="Open settings"
-            accessibilityRole="button"
-          >
-            <Icon name="cog-outline" size={22} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
       </Reanimated.View>
 
       {/* History failed to load — an inline strip under the header rather than
@@ -2999,6 +2971,28 @@ const createStyles = (theme, insets) =>
       // NO bottom border. The header ends by FADING OUT (the scrim's last stop is
       // fully transparent), so a hairline there would put back the hard edge the
       // gradient exists to remove.
+    },
+    // The self-chat identity bar that replaced the header's control cluster:
+    // avatar + name, left-aligned, filling the header row. Height comes from
+    // the row's content and the header's own paddingBottom, so
+    // CHAT_HEADER_BAR_HEIGHT — which the transcript's top padding and the
+    // history-error strip both key off — is unchanged.
+    identityBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 4,
+      paddingHorizontal: 4,
+    },
+    identityAvatarImg: {
+      width: 30, height: 30, borderRadius: 15,
+      backgroundColor: theme.colors.surfaceElevated,
+    },
+    identityName: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: theme.colors.textPrimary,
+      flexShrink: 1,
     },
     // Equal-width side clusters flanking the flex:1 title, so the brand stays
     // dead-centre even though the left holds two icons and the right one.

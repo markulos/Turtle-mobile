@@ -16,6 +16,7 @@ import { tapHaptic } from '../../utils/haptics';
 import { Image } from 'expo-image';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import ConversationsOverlay from '../TurtleScreen/components/ConversationsOverlay';
+import LinkDesktop from '../TurtleScreen/components/LinkDesktop';
 import PasswordsScreen from '../PasswordsScreen';
 import SettingsScreen from '../SettingsScreen';
 
@@ -60,6 +61,7 @@ export default function ProfileScreen() {
   const [vaultOpen, setVaultOpen] = useState(false);
   const [convosOpen, setConvosOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
   // Server profile: the REAL display name, uploaded avatar and activity stats
   // (GET /me → { user: { displayName, avatarUrl, stats } }). The generated
   // animal name/disc are the FALLBACK for anyone who hasn't set either.
@@ -160,7 +162,8 @@ export default function ProfileScreen() {
     { key: 'terminal', icon: 'console', label: 'Terminal',
       sub: 'Remote shell', onPress: () => goTab('Turtle') },
     { key: 'link', icon: 'qrcode-scan', label: 'Connect to desktop',
-      sub: 'Scan the QR shown on the web app', onPress: () => goTab('Turtle') },
+      sub: 'Scan the QR shown on the web app',
+      onPress: () => { tapHaptic(); setLinkOpen(true); } },
     { key: 'settings', icon: 'cog', label: 'Settings',
       sub: 'Appearance, server, account', onPress: () => { tapHaptic(); setSettingsOpen(true); } },
   ];
@@ -297,7 +300,18 @@ export default function ProfileScreen() {
       {/* Board conversations — hosted HERE now rather than reached by switching
           to the Turtle tab. It already owns its own EdgeSwipePage, so it is
           rendered directly. */}
-      <ConversationsOverlay visible={convosOpen} onClose={() => setConvosOpen(false)} />
+      <ConversationsOverlay
+        visible={convosOpen}
+        onClose={() => setConvosOpen(false)}
+        // The inbox's pinned Claude row only renders when this is supplied.
+        // Claude itself stays in the chat (it's wired into the composer), so
+        // this closes the inbox and switches there.
+        onOpenClaude={() => { setConvosOpen(false); goTab('Turtle'); }}
+      />
+
+      {/* Connect to desktop — the existing QR flow (web shows the code, this
+          scans it), hosted here now that the chat header's button is gone. */}
+      <LinkDesktop visible={linkOpen} onClose={() => setLinkOpen(false)} />
 
       {/* Settings — the standalone screen, pushed from its card. It was already
           a standalone component (TurtleScreen only wrapped it in a Modal), so
