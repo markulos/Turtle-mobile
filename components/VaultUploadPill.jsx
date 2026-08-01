@@ -22,10 +22,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useVaultUploadState, useVaultUploadActions } from '../context/VaultUploadContext';
+import { dockOccupied } from './tabBarLayout';
 import { tapHaptic, notifyHaptic } from '../utils/haptics';
 
-// Height of the bottom tab bar's content (App.js uses 49 + bottom inset).
-const TAB_BAR_H = 49;
+// Clearance over the floating tab dock. dockOccupied is the single source of
+// truth for how much room the dock really takes (card + float gap + safe area);
+// this used to hardcode a 49pt bar, which stopped being true when the dock
+// became a taller floating card — the pill overlapped it by ~18pt.
+const PILL_GAP = 10;
 
 export default function VaultUploadPill() {
   const { theme } = useTheme();
@@ -50,7 +54,7 @@ export default function VaultUploadPill() {
     return (
       <View
         pointerEvents="box-none"
-        style={[styles.container, { bottom: TAB_BAR_H + insets.bottom + 10, alignItems: 'flex-end' }]}
+        style={[styles.container, { bottom: dockOccupied(insets.bottom) + PILL_GAP, alignItems: 'flex-end' }]}
       >
         <TouchableOpacity
           onPressIn={() => tapHaptic()}
@@ -75,7 +79,7 @@ export default function VaultUploadPill() {
   return (
     <View
       pointerEvents="box-none"
-      style={[styles.container, { bottom: TAB_BAR_H + insets.bottom + 10 }]}
+      style={[styles.container, { bottom: dockOccupied(insets.bottom) + PILL_GAP }]}
     >
       <View
         style={[styles.card, {

@@ -5,14 +5,25 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { FONTS } from '../../../utils/fonts';
 import { TAP_ONLY_PRESSABLE } from '../../../utils/pressBehavior';
 
-const Cover = ({ path, slot, resolveCoverUrl }) => (
+// `hiResPath` is an OPTIONAL larger source for a pane that renders big enough to
+// show the grid thumbnail's softness (currently only the All Photos hero). It's
+// handed to expo-image as the real source with the small thumb as the
+// placeholder, so the cheap already-cached image paints on the first frame and
+// the big one swaps in when it lands — a lazy upgrade, not a blocking load.
+// Every other pane keeps requesting the small thumbnail alone.
+const Cover = ({ path, slot, resolveCoverUrl, hiResPath }) => (
   <Image
     testID={`board-cover-${slot}`}
-    source={{ uri: resolveCoverUrl(path) }}
+    source={{ uri: resolveCoverUrl(hiResPath || path) }}
+    placeholder={hiResPath ? { uri: resolveCoverUrl(path) } : undefined}
+    placeholderContentFit="cover"
+    // Low priority so the upgrade never competes with the grid's own
+    // thumbnails for the connection.
+    priority={hiResPath ? 'low' : 'normal'}
     style={StyleSheet.absoluteFillObject}
     contentFit="cover"
     transition={160}
-    recyclingKey={`${slot}:${path}`}
+    recyclingKey={`${slot}:${hiResPath || path}`}
   />
 );
 
@@ -64,7 +75,12 @@ function PhotoVaultBoardCard({
                 { borderRightColor: theme.colors.background },
               ]}
             >
-              <Cover path={covers[0]} slot="hero" resolveCoverUrl={resolveCoverUrl} />
+              <Cover
+                path={covers[0]}
+                slot="hero"
+                resolveCoverUrl={resolveCoverUrl}
+                hiResPath={board.heroHiRes}
+              />
             </View>
             <View style={styles.sideColumn}>
               <View
@@ -136,8 +152,13 @@ const styles = StyleSheet.create({
   // weight keeps the collage leading the card; metadata stays below the title.
   // Custom faces carry their own weight: RN ignores fontWeight once fontFamily
   // names a bundled font, so the bold title uses the Bold family directly.
-  name: { fontSize: 15, lineHeight: 20, fontFamily: FONTS.semibold, marginTop: 9, paddingHorizontal: 2 },
-  metadata: { fontSize: 13.5, lineHeight: 18, fontFamily: FONTS.medium, marginTop: 1, paddingHorizontal: 2 },
+  // Title sits a step down from the 15pt pass, and the caption block is tightened:
+  // the two lines were separated by a 1pt margin PLUS ~5pt of combined leading
+  // slack (20/18 line-heights on 14/13.5pt text), which read as a gap rather than
+  // one block. Line-heights pulled close to the glyph size and the margin dropped
+  // so the count sits directly under the name.
+  name: { fontSize: 14, lineHeight: 17, fontFamily: FONTS.semibold, marginTop: 9, paddingHorizontal: 2 },
+  metadata: { fontSize: 13.5, lineHeight: 16, fontFamily: FONTS.medium, marginTop: 0, paddingHorizontal: 2 },
 });
 
 export default memo(PhotoVaultBoardCard);

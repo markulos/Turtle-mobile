@@ -69,6 +69,7 @@ import Reanimated, {
 // app's root GestureHandlerRootView already feeds this detector.
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { dockOccupied } from '../../components/tabBarLayout';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -269,7 +270,14 @@ function SharedByLine({ note, style }) {
 
 export default function NotesScreen() {
   // The tab bar floats over the page, so the list clears it itself.
-  const tabBarHeight = useBottomTabBarHeight();
+  //
+  // Measured with dockOccupied, NOT useBottomTabBarHeight(): the dock is a
+  // floating CARD whose clearance is a margin (card + float gap + safe area),
+  // and the hook only reports the card's own layout height. Reserving the hook's
+  // value left the last note trapped under the dock — no scroll could bring it
+  // clear, which is the one thing the underlay rule forbids.
+  const insets = useSafeAreaInsets();
+  const dockH = dockOccupied(insets.bottom);
   const { theme, isDark } = useTheme();
   const { api, isConnected } = useServer();
   const { enqueueNote } = useClaudeQueue();
@@ -733,9 +741,10 @@ export default function NotesScreen() {
         data={data}
         keyExtractor={(item) => item.id}
         style={{ flex: 1 }}
-        // paddingBottom clears the floating tab bar, which no longer reserves
-        // space for itself.
-        contentContainerStyle={[styles.list, { paddingBottom: tabBarHeight + 28 }, data.length === 0 && { flexGrow: 1 }]}
+        // paddingBottom clears the floating tab dock, which reserves no space
+        // for itself. +28 keeps the last card a comfortable gap clear rather
+        // than resting right on the dock's top edge.
+        contentContainerStyle={[styles.list, { paddingBottom: dockH + 28 }, data.length === 0 && { flexGrow: 1 }]}
         // No ListHeaderComponent: the chrome is fixed above the pager now, so
         // it neither scrolls away with the notes nor swipes with the pages.
         // flexGrow still lets the empty state centre in the space below it.
@@ -1006,8 +1015,10 @@ export default function NotesScreen() {
       {/* FAB */}
       <TouchableOpacity
         accessibilityLabel="Add note"
-        // Fixed control: clears the floating tab card, which reserves no space.
-        style={[styles.fab, { bottom: tabBarHeight + 20 }]}
+        // Pinned control: nothing can scroll it out from under the dock, so it
+        // must clear the dock's REAL occupancy (same dockOccupied as the list) —
+        // the hook's smaller number left it half-covered by the card.
+        style={[styles.fab, { bottom: dockH + 20 }]}
         onPressIn={() => tapHaptic()}
         onPress={() => { setEditingNote(null); setComposerOpen(true); }}
         activeOpacity={0.85}

@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Platform,
   Dimensions,
+  Keyboard,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -40,18 +41,17 @@ const glossColors = (theme) =>
 const RESIZE_EASING = Easing.bezier(0.32, 0.72, 0, 1);
 const RESIZE_DURATION = 300;
 
-// Compact card height (fits above the input like the pomodoro card)
-// vs. the "full view" height — ~72% of the screen so the whole
-// session transcript is readable without leaving the chat. Both are CEILINGS:
-// the real height is whatever fits in the room above the keyboard (see the
-// animated style), so the panel never grows tall enough to slide under the
-// chat header or hide the composer.
+// Compact card height (fits above the input like the pomodoro card). The
+// EXPANDED height is no longer a fraction of the screen: TurtleScreen measures
+// the real room between the chat header and the composer and passes it as
+// `maxHeight`, so "expanded" means exactly that room, minus PANEL_GAP of
+// headroom under the header. The old 72%-of-screen ceiling was a guess that
+// either wasted space or fought the measured room.
 const SCREEN_HEIGHT = Dimensions.get('window').height;
-const COMPACT_MAX_HEIGHT = 280;
-const EXPANDED_MAX_HEIGHT = Math.round(SCREEN_HEIGHT * 0.72);
+export const COMPACT_MAX_HEIGHT = 280;
 // Never let the panel collapse below this, even if the keyboard leaves almost
 // no room — a small scrollable panel beats a vanished one.
-const MIN_PANEL_HEIGHT = 140;
+export const MIN_PANEL_HEIGHT = 140;
 // The panel's breathing room, used on BOTH edges: as the margin above the
 // composer below it, and as headroom subtracted from the available height so a
 // fully expanded panel stops the same distance under the chat header instead of
@@ -219,25 +219,34 @@ function QuestionCard({ q, onRespond, theme, styles }) {
   );
 }
 
-export default function ClaudeConsole({ transcript = [], active, busy, live = true, onToggleLive, mode, admin, permissions = [], onRespondPermission, questions = [], onRespondQuestion, onStop, onClose, keyboard, spaceAbove = 0, spaceBelow = 0, tabBarHeight = 0 }) {
+export default function ClaudeConsole({ transcript = [], active, busy, live = true, onToggleLive, mode, admin, permissions = [], onRespondPermission, questions = [], onRespondQuestion, onStop, onClose, expanded, onToggleExpanded, keyboard, maxHeight = COMPACT_MAX_HEIGHT, dockLiftBase = 0 }) {
   const { theme } = useTheme();
   const styles = createStyles(theme);
   const scrollRef = useRef(null);
-  // Whether the card is opened to its full-height view. Opens EXPANDED by
-  // default the moment a session starts, so the whole transcript is visible
-  // straight away; the user taps the collapse control to minimize it back to
-  // the compact card. (Was compact-by-default, which meant manually expanding
-  // every session — and that expand-while-keyboard-up was the janky moment.)
-  const [expanded, setExpanded] = useState(true);
+  // Whether the card is opened to its full-height view. The state itself lives
+  // in TurtleScreen (passed down): the dock has to reserve a FIXED slot of the
+  // matching size, and it can only do that if it knows which state we're in.
+  // Opens EXPANDED by default the moment a session starts, so the whole
+  // transcript is visible straight away; the user taps the collapse control to
+  // minimize it back to the compact card.
 
   // The panel height is driven ENTIRELY on the UI thread so it tracks the
-  // keyboard frame-for-frame. TurtleScreen lifts the whole chat column above the
+  // keyboard frame-for-frame. TurtleScreen lifts the whole dock above the
   // keyboard, carrying this panel up with it; rather than fight that lift with a
   // counter-shrink (the old, fragile approach), we simply size the panel to the
   // ROOM that's actually free between the chat header and the composer. Because
   // the height is re-derived from that room every frame, it can never exceed it
   // — so the top stays pinned just under the header with no overshoot or jump,
   // in BOTH the compact and expanded states.
+  //
+  // `maxHeight` is that room with the keyboard DOWN, measured by TurtleScreen
+  // (screen − status bar − chat header − pomodoro card − composer group − two
+  // PANEL_GAPs). It is deliberately keyboard-INDEPENDENT: TurtleScreen reserves
+  // a fixed slot of that size in the dock, so the dock's own layout never
+  // changes while the keyboard moves. Only THIS view's height animates — the
+  // chat list, the composer and the dock are pure transforms. That is what took
+  // the stutter out of the lift: there is no per-frame Yoga pass outside this
+  // card, and no per-frame onLayout → setState round-trip on the JS thread.
   //
   // CRITICAL: the keyboard shared value is passed in from TurtleScreen — the
   // SAME instance that drives the column lift (and the header's counter-lift).
@@ -260,27 +269,23 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
   const animatedPanelStyle = useAnimatedStyle(() => {
     'worklet';
     const kb = keyboard ? keyboard.height.value : 0;
-    // The dock (this panel + the composer) is lifted by TurtleScreen so it
-    // tracks the keyboard. As it rises, the room between the chat header and the
-    // composer shrinks — so cap the panel height to exactly that room every
-    // frame, frame-locked to the lift (same keyboard shared value). The panel
-    // top therefore stays pinned just under the header and never slides beneath
-    // it. `belowFromBottom` = whatever sits below the panel (composer + banners)
-    // resting on the keyboard's top edge when up, else above the tab bar.
-    const belowFromBottom = Math.max(kb, tabBarHeight) + spaceBelow;
-    // PANEL_GAP is the same margin the panel keeps above the composer, applied
-    // here as headroom under the header — so the expanded log sits between two
-    // equal gaps rather than touching the header.
-    const avail = SCREEN_HEIGHT - spaceAbove - PANEL_GAP - belowFromBottom;
-    const cap = Math.max(MIN_PANEL_HEIGHT, avail);
-    const expandedH = Math.min(EXPANDED_MAX_HEIGHT, cap);
+    // How far TurtleScreen has lifted the dock this frame. EXACTLY the same
+    // expression its sessionDockLift worklet uses (keyboard height above the
+    // dock's resting occupancy), read off the SAME shared value — so the shrink
+    // and the lift are computed from one number in one frame and can never
+    // desync. Every point the dock rises is a point of headroom lost under the
+    // chat header, so the panel gives back exactly that much.
+    const lift = Math.max(kb - dockLiftBase, 0);
+    const cap = Math.max(MIN_PANEL_HEIGHT, maxHeight - lift);
     const compactH = Math.min(COMPACT_MAX_HEIGHT, cap);
     // Interpolate compact → expanded by the toggle progress; both already fit
-    // the room, so the keyboard shrink rides along for free.
-    return { height: compactH + (expandedH - compactH) * expandProgress.value };
+    // the room, so the keyboard shrink rides along for free. Rounded to whole
+    // points: sub-point heights make Yoga re-solve this subtree on frames where
+    // nothing visibly moved.
+    return { height: Math.round(compactH + (cap - compactH) * expandProgress.value) };
   });
 
-  const toggleExpanded = () => setExpanded(prev => !prev);
+  const toggleExpanded = () => onToggleExpanded?.();
 
   // Keep the newest line in view as output streams in. Re-runs on
   // expand too so opening the full view lands on the latest line. Skipped while
@@ -291,6 +296,17 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
     const id = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
     return () => clearTimeout(id);
   }, [transcript.length, expanded, live]);
+
+  // The keyboard shrinks the panel, and a ScrollView keeps its contentOffset
+  // when its frame shrinks — so without this the newest line would scroll out of
+  // view the moment the composer is focused, with no new output to re-trigger
+  // the effect above. One listener, fired once per transition (not per frame).
+  useEffect(() => {
+    const sub = Keyboard.addListener('keyboardDidShow', () => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    });
+    return () => sub.remove();
+  }, []);
 
   const isLogin = mode === 'login';
   const paused = active && !isLogin && !live;
@@ -496,7 +512,8 @@ const createStyles = (theme) => StyleSheet.create({
     // height so collapse/expand AND the keyboard shrink are one smooth motion
     // (see expandProgress + useAnimatedKeyboard / RESIZE_*).
   },
-  // The frosted-glass layer. FIXED height (the panel's tallest possible size),
+  // The frosted-glass layer. FIXED height (a full screen — taller than the panel
+  // can ever be now that its ceiling is measured rather than a fixed fraction),
   // anchored at the top — NOT absoluteFill. The panel's height animates with the
   // keyboard; if the blur tracked that height it would re-sample the blur every
   // frame (expensive). At a fixed height the panel's overflow:hidden simply
@@ -506,7 +523,7 @@ const createStyles = (theme) => StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: EXPANDED_MAX_HEIGHT,
+    height: SCREEN_HEIGHT,
   },
   // Top sheen for the gloss — a light highlight over the upper third of the
   // glass that fades to transparent. Absolute so it overlays the blur + tint

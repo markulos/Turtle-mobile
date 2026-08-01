@@ -9,11 +9,18 @@ const mockNext = jest.fn();
 const mockSeekTo = jest.fn();
 const mockRefreshLibrary = jest.fn();
 const mockRetrySetup = jest.fn();
+const mockApi = {
+  get: jest.fn(() => Promise.resolve({})),
+  post: jest.fn(() => Promise.resolve({})),
+  put: jest.fn(() => Promise.resolve({ success: true })),
+  patch: jest.fn(() => Promise.resolve({})),
+  delete: jest.fn(() => Promise.resolve({ success: true })),
+};
 const mockMusicPlayer = {
   tracks: [
-    { id: 'one', filename: 'First.mp3', rawUrl: '/media/one.mp3' },
+    { id: 'one', filename: 'First.mp3', rawUrl: '/media/one.mp3', tags: '["Chill"]' },
     { id: 'two', filename: 'Second.mp3', rawUrl: '/media/two.mp3' },
-    { id: 'three', filename: 'Third.mp3', rawUrl: '/media/three.mp3' },
+    { id: 'three', filename: 'Third.mp3', rawUrl: '/media/three.mp3', tags: '["Focus"]' },
   ],
   loading: false,
   ready: true,
@@ -62,6 +69,27 @@ jest.mock('@react-navigation/native', () => ({
 }));
 jest.mock('../../../../context/MusicPlayerContext', () => ({
   useMusicPlayer: () => mockMusicPlayer,
+}));
+jest.mock('../../../../context/ServerContext', () => ({
+  useServer: () => ({
+    api: mockApi,
+    getBaseUrl: () => 'http://pond.local/api',
+    getMediaBaseUrl: () => 'http://pond.local/api',
+  }),
+}));
+jest.mock('expo-file-system/legacy', () => ({
+  cacheDirectory: 'file:///cache/',
+  downloadAsync: jest.fn(() => Promise.resolve({ uri: 'file:///cache/track.mp3' })),
+  deleteAsync: jest.fn(() => Promise.resolve()),
+}));
+jest.mock('expo-sharing', () => ({
+  isAvailableAsync: jest.fn(() => Promise.resolve(true)),
+  shareAsync: jest.fn(() => Promise.resolve()),
+}));
+jest.mock('../../../../utils/haptics', () => ({
+  tapHaptic: jest.fn(),
+  impactHaptic: jest.fn(),
+  notifyHaptic: jest.fn(),
 }));
 
 describe('MusicVault', () => {
@@ -148,5 +176,48 @@ describe('MusicVault', () => {
     await fireEvent.press(view.getByText('Retry player'));
 
     expect(mockRetrySetup).toHaveBeenCalledTimes(1);
+  });
+
+  test('opens the per-track options card from the row button', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+
+    expect(view.queryByTestId('track-actions-card')).toBeNull();
+    await fireEvent.press(view.getByLabelText('Options for First'));
+
+    expect(view.getByTestId('track-actions-card')).toBeTruthy();
+    expect(view.getByLabelText('Share')).toBeTruthy();
+    expect(view.getByLabelText('Add to playlist')).toBeTruthy();
+    expect(view.getByLabelText('Delete from vault')).toBeTruthy();
+  });
+
+  test('the options button does not start playback', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Options for First'));
+    expect(mockPlayMedia).not.toHaveBeenCalled();
+  });
+
+  test('playlist page offers the audio library tags and adds via the tags endpoint', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Options for Second'));
+    await fireEvent.press(view.getByLabelText('Add to playlist'));
+
+    // Playlists come from the tracks' own tags, not the global album list.
+    expect(view.getByLabelText('Chill')).toBeTruthy();
+    expect(view.getByLabelText('Focus')).toBeTruthy();
+
+    await fireEvent.press(view.getByLabelText('Chill'));
+
+    expect(mockApi.put).toHaveBeenCalledWith('/media/two/tags', { tags: ['Chill'] });
+  });
+
+  test('adding to a playlist keeps the tags the track already had', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Options for First'));
+    await fireEvent.press(view.getByLabelText('Add to playlist'));
+    await fireEvent.press(view.getByLabelText('Focus'));
+
+    // 'Chill' is First's existing tag — the endpoint REPLACES the list, so the
+    // union has to be sent or the old playlist would be dropped.
+    expect(mockApi.put).toHaveBeenCalledWith('/media/one/tags', { tags: ['Chill', 'Focus'] });
   });
 });

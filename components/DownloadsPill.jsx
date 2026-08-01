@@ -11,9 +11,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useDownloads } from '../context/DownloadsContext';
+import { dockOccupied } from './tabBarLayout';
 import { tapHaptic } from '../utils/haptics';
 
-const TAB_BAR_H = 49;
+// Same clearance the vault-upload pill keeps over the dock, plus the height of
+// that pill so this one stacks above it. Both read dockOccupied rather than a
+// hardcoded bar height — the dock is a floating card whose real occupancy is
+// card + float gap + safe area, and the old 49pt constant left both pills
+// sitting on top of it.
+const PILL_GAP = 10;
+const VAULT_PILL_STACK = 60;
 
 export default function DownloadsPill() {
   const { theme } = useTheme();
@@ -33,7 +40,7 @@ export default function DownloadsPill() {
   const avg = activeJobs.length
     ? Math.round(activeJobs.reduce((a, j) => a + (typeof j.percent === 'number' ? j.percent : 0), 0) / activeJobs.length)
     : 0;
-  const bottom = TAB_BAR_H + insets.bottom + 70; // above the vault-upload pill
+  const bottom = dockOccupied(insets.bottom) + PILL_GAP + VAULT_PILL_STACK; // above the vault-upload pill
 
   if (!expanded) {
     // Label priority: active progress → failures → paused.

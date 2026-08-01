@@ -101,8 +101,25 @@ export const dockOccupied = (insetsBottom = 0) =>
 // the chip sitting low. This is that difference, isolated as one number.
 export const CHIP_Y_NUDGE = -8;
 
+/**
+ * How far DOWN the dock's contents sit inside the capsule — applied to the chip
+ * AND the glyphs, so the two can't drift apart.
+ *
+ * They're placed by two different rules: the chip is positioned from the top of
+ * `tabBarBackground` (an absolutely-positioned child), while each glyph is
+ * top-anchored inside BottomTabItem's inner pressable (`justifyContent:
+ * 'flex-start'` + `padding: 5`, neither reachable from `tabBarItemStyle`). Both
+ * therefore measure from the TOP, and both ended up above the capsule's centre
+ * line — the offset visible as a band of empty capsule under the icons.
+ *
+ * One constant moves the whole content block down together. This is the number
+ * to tune if the block ever needs re-centring; changing only one of the two
+ * would knock the glyphs off their chip.
+ */
+export const DOCK_CONTENT_Y_NUDGE = 8;
+
 export const PILL_TOP =
-  Math.round((BAR_CONTENT_HEIGHT - PILL_SIZE) / 2) + CHIP_Y_NUDGE;
+  Math.round((BAR_CONTENT_HEIGHT - PILL_SIZE) / 2) + CHIP_Y_NUDGE + DOCK_CONTENT_Y_NUDGE;
 
 export const CARD_MARGIN_H = 10;
 export const CARD_GAP_BOTTOM = 8;

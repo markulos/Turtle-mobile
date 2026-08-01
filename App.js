@@ -49,7 +49,7 @@ import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
-import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM } from './components/tabBarLayout';
+import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
@@ -62,7 +62,9 @@ installGlobalTouchFeedback();
 const Tab = createBottomTabNavigator();
 
 function TabNavigator() {
-  const { theme, isDark, hideVaultButton } = useTheme();
+  // No isDark here any more: the dock is ghosted black in BOTH themes, so
+  // nothing in this navigator's chrome branches on the theme.
+  const { theme, hideVaultButton } = useTheme();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   // Tabs actually rendered. The Vault tab is optional, and the cluster has to
@@ -125,31 +127,15 @@ function TabNavigator() {
             </TabBarIcon>
           );
         },
-        // Active sits on the accent chip, so white in both themes. Inactive
-        // has to follow the dock, which is now dark-frosted on dark and
-        // light-frosted on light — a single fixed grey disappeared into one of
-        // them.
+        // Active sits on the accent chip, so white. Inactive follows the DOCK,
+        // not the app theme — the capsule is ghosted black in both themes now
+        // (see TabBarPill), so a dark light-mode tint would vanish into it.
         tabBarActiveTintColor: '#FFFFFF',
-        tabBarInactiveTintColor: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.45)',
+        tabBarInactiveTintColor: 'rgba(255,255,255,0.55)',
         // Icons only — no text labels. Cleaner look and lets the
         // larger turtle icon breathe without crowding from a label
         // sitting under it.
         tabBarShowLabel: false,
-        // Align each glyph to the chip sliding underneath it. react-navigation's
-        // default item style adds padding: 5 with justifyContent: 'flex-start',
-        // which pushed every icon 5pt below the chip's top edge — the icon slot
-        // and the chip are both PILL_SIZE tall, so with the padding stripped
-        // they share an origin and line up exactly.
-        // Centre the glyph on both axes. react-navigation's default item style
-        // is justifyContent: 'flex-start' with padding: 5, which top-aligns the
-        // icon and offsets it; centring explicitly (and dropping the vertical
-        // padding) puts the icon slot's centre on the row's centre, which is the
-        // chip's centre too since both are PILL_SIZE squares in the same row.
-        tabBarItemStyle: {
-          paddingVertical: 0,
-          justifyContent: 'center',
-          alignItems: 'center',
-        },
         tabBarStyle: {
           // Floating bar: absolutely positioned so the page runs UNDERNEATH it
           // (Pinterest-style) instead of being pushed above it, with a
@@ -202,10 +188,16 @@ function TabNavigator() {
           alignItems: 'center',
         },
         // The icon is the item's only child, so it must not add its own margins
-        // on top of that centring.
+        // on top of that centring — except the shared vertical nudge, which is
+        // the ONLY way to push the glyph down: BottomTabItem's inner pressable
+        // hard-codes `justifyContent: 'flex-start'` and `padding: 5`, and
+        // tabBarItemStyle only reaches the OUTER wrapper, so the glyph is
+        // top-anchored no matter what the wrapper does. The chip carries the
+        // same nudge (see PILL_TOP), so glyph and chip move as one block.
         tabBarIconStyle: {
           flex: 0,
           margin: 0,
+          marginTop: DOCK_CONTENT_Y_NUDGE,
         },
         // One accent pill that SLIDES between tabs, painted behind the buttons.
         // tabBarBackground is composited under navigation's own tab buttons, so

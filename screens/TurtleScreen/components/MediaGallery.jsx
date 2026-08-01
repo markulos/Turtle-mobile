@@ -77,6 +77,7 @@ import { FlashList } from '@shopify/flash-list';
 import Reanimated, {
   useSharedValue,
   useAnimatedStyle,
+  useAnimatedKeyboard,
   withSpring,
   runOnJS,
 } from 'react-native-reanimated';
@@ -1328,6 +1329,35 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // === UPLOAD MODAL DRAG PHYSICS ===
   const uploadModalY = useRef(new Animated.Value(0)).current;
 
+  // === UPLOAD MODAL KEYBOARD LIFT ===
+  // Same technique as the Turtle chat composer: ONE useAnimatedKeyboard shared
+  // value drives a translateY on the UI thread, so the card tracks the keyboard
+  // frame-for-frame — including the interactive swipe-down dismiss, which the
+  // old KeyboardAvoidingView couldn't follow. KAV animates a LAYOUT prop
+  // (padding/height) from the JS thread on its own timeline, which is why the
+  // card used to jump and settle a beat behind the keyboard.
+  //
+  // It rides on a WRAPPER around the card, not the card itself: the card's
+  // transform belongs to the RN Animated drag/dismiss, and an RN Animated value
+  // and a Reanimated style can't share one node.
+  const uploadKeyboard = useAnimatedKeyboard();
+  // Measured card height, so the lift can be exact instead of a guess. Shared
+  // value (not state) — it's read inside the worklet every frame.
+  const uploadCardH = useSharedValue(0);
+  const uploadKeyboardLift = useAnimatedStyle(() => {
+    'worklet';
+    const kb = uploadKeyboard.height.value;
+    const cardH = uploadCardH.value;
+    if (kb <= 0 || cardH <= 0) return { transform: [{ translateY: 0 }] };
+    // The card is CENTERED in the overlay, so it isn't lifted by the full
+    // keyboard height the way the bottom-pinned composer is — it re-centres in
+    // the space that's left above the keyboard. Clamped so a tall card on a
+    // small screen slides under the status bar rather than off the top.
+    const restingTop = (height - cardH) / 2;
+    const targetTop = Math.max(insets.top + 8, (height - kb - cardH) / 2);
+    return { transform: [{ translateY: -Math.max(0, restingTop - targetTop) }] };
+  });
+
   // Reset modal position when it opens - CRITICAL: stop any running animation first
   useEffect(() => {
     if (uploadModalVisible) {
@@ -1472,15 +1502,26 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // the server's true total, not the number currently in memory.
   const allPhotosBoard = useMemo(() => {
     const covers = [];
+    // The hero pane is ~65% of a full-width card — roughly 720px of real
+    // pixels @3x — so the grid-sized thumbnail that fills the two small panes
+    // is visibly soft blown up that large. The hero (and ONLY the hero) also
+    // gets the second-tier `thumbnailLgUrl`, which the card layers OVER the
+    // small one as a lazy upgrade: the cheap thumb is already cached from the
+    // timeline, so it paints instantly and the big file swaps in when it
+    // arrives. One extra request per boards page, not four.
+    let heroHiRes = null;
     for (const item of uploadItems) {
       if (!item || item.isSkeleton) continue;
       const path = item.thumbnailUrl || item.url;
-      if (path) covers.push(path);
+      if (!path) continue;
+      if (!covers.length) heroHiRes = item.thumbnailLgUrl || item.compressedUrl || null;
+      covers.push(path);
       if (covers.length === 3) break;
     }
     return {
       name: 'All Photos',
       covers,
+      heroHiRes,
       count: globalUploadsTotal,
       metadata: formatBoardMetadata(globalUploadsTotal, 0),
     };
@@ -4448,24 +4489,25 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           uploadModalY.setValue(0);
         }}
       >
-        {/* KeyboardAvoidingView so the centered card lifts clear of the keyboard
-            (recenters in the space above it, on the OS keyboard curve) instead
-            of being half-covered when the tag field is focused. */}
-        <KeyboardAvoidingView
-          style={styles.uploadModalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
+        {/* Plain View, not KeyboardAvoidingView: the card lifts clear of the
+            keyboard via uploadKeyboardLift on the wrapper below — the same
+            UI-thread, frame-locked motion the Turtle chat composer uses. */}
+        <View style={styles.uploadModalOverlay}>
           {/* Background dimmer - tap to dismiss */}
           <Pressable
             style={StyleSheet.absoluteFill}
             onPress={dismissUploadModal}
           />
-          <Animated.View 
+          {/* Keyboard-lift wrapper. box-none so it only catches touches on the
+              card itself and the dimmer behind stays tappable. */}
+          <Reanimated.View pointerEvents="box-none" style={uploadKeyboardLift}>
+          <Animated.View
+            onLayout={(e) => { uploadCardH.value = e.nativeEvent.layout.height; }}
             style={[
-              styles.uploadModalContent, 
-              { 
+              styles.uploadModalContent,
+              {
                 backgroundColor: theme.colors.surfaceElevated,
-                transform: [{ translateY: uploadModalY }] 
+                transform: [{ translateY: uploadModalY }]
               }
             ]}
             {...uploadPanResponder.panHandlers}
@@ -4591,7 +4633,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 prompt all live in the GLOBAL VaultUploadPill now — confirming
                 here closes this modal instantly and the pill takes over. */}
           </Animated.View>
-        </KeyboardAvoidingView>
+          </Reanimated.View>
+        </View>
       </Modal>
 
       {/* Keyboard Dismiss Button (iOS only) */}

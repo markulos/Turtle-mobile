@@ -98,7 +98,7 @@ describe('PhotoVaultBoardCard', () => {
     expect(hero.width).toBe('65%');
     expect(card.marginBottom).toBe(26);
     const title = StyleSheet.flatten(view.getByText('Warm interiors').props.style);
-    expect(title.fontSize).toBe(15);
+    expect(title.fontSize).toBe(14);
     // Weight comes from the family, not fontWeight — RN ignores fontWeight once
     // a custom fontFamily is set, so a numeric weight would silently do nothing.
     expect(title.fontFamily).toBe('Figtree_600SemiBold');
@@ -107,6 +107,11 @@ describe('PhotoVaultBoardCard', () => {
     const meta = StyleSheet.flatten(view.getByText('47 items · 2d').props.style);
     expect(meta.fontSize).toBeCloseTo(13.5, 2);
     expect(meta.fontSize).toBeLessThan(title.fontSize);
+    // The caption is ONE block: no margin between the two lines, and line-heights
+    // close to the glyph size so leading slack doesn't reopen the gap.
+    expect(meta.marginTop).toBe(0);
+    expect(title.lineHeight).toBe(17);
+    expect(meta.lineHeight).toBe(16);
   });
 
   test('renders a single quiet empty-board placeholder when covers are absent', async () => {

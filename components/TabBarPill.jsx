@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useNavigationState } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
-import { blurProps, frostOverlayColor, frostBorderColor } from '../utils/frostedChat';
+import { blurProps } from '../utils/frostedChat';
 import Reanimated, {
   useAnimatedStyle,
   withSpring,
@@ -32,24 +32,28 @@ import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, BAR_CONTENT_HEIGHT, cluster
 // Settles rather than wobbles: this tracks a selection, it isn't a flourish.
 const SLIDE_SPRING = { damping: 20, stiffness: 220, mass: 0.7 };
 
-// The app's own dark frost tint, taken from the shared module by asking it for
-// the dark theme — rather than copying the rgba literal, which would then need
-// hand-updating whenever the app's frost is retuned.
-// The dock's own palette. Reviewed as a set, because they only work together:
-// a WHITE frost needs a coloured chip (a white one would vanish into it), and a
-// coloured chip needs a white glyph.
+// The dock's palette — ONE set for BOTH themes: a ghosted-black capsule, the
+// dark treatment applied in light mode too. It reads as a floating piece of
+// hardware over the page rather than a panel that restyles itself, and the
+// glyph/chip contrast is then a single problem to solve instead of two.
 //
-//   surface — white with a slight grey cast, translucent enough that the blur
-//             still shows the page moving behind it;
-//   edge    — a hairline a shade darker than the surface, so the capsule has a
-//             defined rim on light backgrounds too;
-//   chip    — the Settings highlight colour, which is the one saturated element
-//             and therefore what the eye tracks as it slides.
-// Light mode keeps the white-with-a-grey-cast surface; dark mode uses the
-// app's own dark frost, so the dock reads like the chat composer in each theme
-// rather than being light in both.
-const LIGHT_DOCK_SURFACE = 'rgba(246,246,249,0.72)';
-const DOCK_EDGE_LIGHT = 'rgba(0,0,0,0.10)';
+//   surface — near-black, translucent enough that the blur still shows the page
+//             moving behind it. A shade stronger than the chat frost's 0.4 so it
+//             still reads BLACK (not washed grey) over a light page;
+//   edge    — a white hairline BEZEL: the device's thinnest renderable line, at
+//             enough alpha to actually read as a rim around the capsule rather
+//             than a barely-there seam. It's white in both themes because the
+//             surface under it is black in both, and because a lit edge is what
+//             makes the capsule sit as a physical object on the page instead of
+//             a soft shadow of one. 0.12 was tuned against a WHITE light-mode
+//             dock and disappeared once the surface went black;
+//   chip    — the theme accent, the one saturated element and therefore what the
+//             eye tracks as it slides. It carries a WHITE glyph, which is why
+//             the inactive glyphs are white-on-dark in both themes too (see
+//             tabBarInactiveTintColor in App.js — a dark inactive tint would
+//             vanish into this surface).
+const DOCK_SURFACE = 'rgba(18,18,20,0.52)';
+const DOCK_EDGE = 'rgba(255,255,255,0.30)';
 
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
@@ -85,20 +89,21 @@ export default function TabBarPill() {
         setBarWidth((prev) => (prev === w ? prev : w));
       }}
     >
-      {/* White frosted capsule. Blur params still come from the app's shared
-          frost module so it is the same material as the chat composer; only the
-          tint and the overlay differ, because this dock is light in BOTH themes
-          rather than following the theme. */}
-      <View style={[styles.card, { borderColor: theme.mode === "dark" ? frostBorderColor(theme) : DOCK_EDGE_LIGHT }]}>
+      {/* Ghosted-black frosted capsule, in BOTH themes. Blur params still come
+          from the app's shared frost module so it's the same material as the
+          chat composer; the tint is pinned to 'dark' rather than following the
+          theme, because a light-tinted blur under a near-black overlay just
+          milks it out. */}
+      <View style={[styles.card, { borderColor: DOCK_EDGE }]}>
         <BlurView
           pointerEvents="none"
           style={StyleSheet.absoluteFill}
           {...blurProps(theme)}
-          tint={theme.mode === "dark" ? "dark" : "light"}
+          tint="dark"
         />
         <View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: theme.mode === "dark" ? frostOverlayColor(theme) : LIGHT_DOCK_SURFACE }]}
+          style={[StyleSheet.absoluteFill, { backgroundColor: DOCK_SURFACE }]}
         />
       </View>
       <Reanimated.View
@@ -118,14 +123,20 @@ export default function TabBarPill() {
 }
 
 const styles = StyleSheet.create({
-  // The floating card itself: same 28pt radius and hairline as the composer's
-  // glass card. overflow clips the blur and tint to the rounded corners.
+  // The floating card itself: same hairline treatment as the composer's glass
+  // card. overflow clips the blur and tint to the rounded corners, so the bezel
+  // is the outermost thing drawn and nothing bleeds past it.
   card: {
     ...StyleSheet.absoluteFillObject,
     // Fully rounded ends — radius is half the height, so the card is a capsule
     // rather than a rounded rectangle.
     borderRadius: BAR_CONTENT_HEIGHT / 2,
+    // The bezel. StyleSheet.hairlineWidth is the thinnest line the DEVICE can
+    // draw (~0.33pt at @3x) — a literal 1 would render three times as thick on
+    // a modern screen and read as a drawn outline rather than an edge.
     borderWidth: StyleSheet.hairlineWidth,
+    // iOS superellipse, so the bezel follows the same curve as the capsule's
+    // corners instead of a circular arc cutting across them.
     borderCurve: 'continuous',
     overflow: 'hidden',
   },

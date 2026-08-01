@@ -15,6 +15,7 @@ import {
   Share,
   Alert,
   Vibration,
+  useWindowDimensions,
 } from 'react-native';
 import Reanimated, {
   useAnimatedKeyboard,
@@ -32,9 +33,9 @@ import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FlashList } from '@shopify/flash-list';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { frostBorderColor, FROST_OVERLAP, blurProps, frostOverlayColor } from '../../utils/frostedChat';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../utils/haptics';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { dockOccupied } from '../../components/tabBarLayout';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
@@ -50,7 +51,7 @@ import MediaGallery from './components/MediaGallery';
 import { usePomodoroSocket } from './hooks/usePomodoroSocket';
 import { useClaudeSession } from './hooks/useClaudeSession';
 import { useTerminalSession } from './hooks/useTerminalSession';
-import ClaudeConsole from './components/ClaudeConsole';
+import ClaudeConsole, { PANEL_GAP, MIN_PANEL_HEIGHT, COMPACT_MAX_HEIGHT } from './components/ClaudeConsole';
 import TerminalConsole from './components/TerminalConsole';
 import FriendCard from './components/FriendCard';
 import EdgeSwipePage from './components/EdgeSwipePage';
@@ -102,6 +103,25 @@ const DEBUG_TOGGLE_HEIGHT = 44;
 // both for the bar itself and as the inverted message list's visual-top inset
 // so the oldest visible message clears the bar instead of hiding behind it.
 const CHAT_HEADER_BAR_HEIGHT = 44;
+// Chat-header scrim. The header has no bottom edge any more — it fades out
+// instead — so these describe that fade.
+//
+// Blur bands: heights as PERCENTAGES of the header (which is insets.top + the
+// bar, so it varies by device). Each shorter band sits over the ones below it
+// and the blurs compound, giving a stepped "strongest at the top" falloff that
+// expo-blur can't express as a gradient on its own. Three steps is the point
+// where adding more stops being visible.
+const HEADER_BLUR_BANDS = [
+  { height: '100%', dark: 30, light: 40 },
+  { height: '72%', dark: 26, light: 34 },
+  { height: '42%', dark: 24, light: 32 },
+];
+// The veil over the blur: near-opaque at the status bar, gone by the bottom
+// edge. The last stop MUST be fully transparent — a non-zero alpha there would
+// re-draw the very line this replaced.
+const HEADER_SCRIM_DARK = ['rgba(0,0,0,0.92)', 'rgba(0,0,0,0.58)', 'rgba(0,0,0,0)'];
+const HEADER_SCRIM_LIGHT = ['rgba(255,255,255,0.96)', 'rgba(255,255,255,0.64)', 'rgba(255,255,255,0)'];
+const HEADER_SCRIM_STOPS = [0, 0.62, 1];
 // Frozen at module scope: FlashList treats this as layout configuration, and an
 // object literal in the render body hands it a new identity on EVERY render of
 // this screen — which includes every keystroke in the composer and every frame
@@ -135,6 +155,7 @@ const CLAUDE_MODELS = [
 
 export default function TurtleScreen() {
   const { theme } = useTheme();
+  const { height: windowHeight } = useWindowDimensions();
   const { api, isConnected, getBaseUrl, serverIP } = useServer();
   const { token } = useAuth();
   const insets = useSafeAreaInsets();
@@ -166,11 +187,12 @@ export default function TurtleScreen() {
   // skip the state update during the transition, then flush it once when the
   // keyboard settles (see the keyboard listener effect). null = nothing pending.
   const pendingDockHeightRef = useRef(null);
-  // This screen sits inside the bottom tab navigator, so its container bottom
-  // is ABOVE the tab bar. useAnimatedKeyboard reports height from the SCREEN
-  // bottom, so the keyboard padding must subtract the tab-bar height — else
-  // the composer floats a tab-bar's worth of empty space above the keyboard.
-  const tabBarHeight = useBottomTabBarHeight();
+  // NOTE: useBottomTabBarHeight() is deliberately NOT used for any geometry
+  // here. The dock is a floating card whose clearance is a MARGIN, which that
+  // hook reports ambiguously — every surface in this screen measures the dock
+  // with dockOccupied() instead (see tabBarLayout). The Claude console used to
+  // subtract it ON TOP of the composer group's own dock clearance, which double
+  // counted ~70pt and left that much dead space under the chat header.
 
   // Chat state
   const [messages, setMessages] = useState([]);
@@ -410,9 +432,46 @@ export default function TurtleScreen() {
   // navigator's smaller tabBarHeight instead left the difference — ~40pt — as a
   // permanent gap over the keyboard, which is why 2pt never appeared.
   const dockH = dockOccupied(insets.bottom);
+  // NOTE: the composer and the Claude console keep their own 10/8pt side
+  // margins — deliberately WIDER than the tab dock capsule under them, which
+  // hugs the centred tab cluster (~28pt in). Narrowing the cards to the
+  // capsule's edges was tried and reverted: the cards read better full-width.
   // True whenever the Claude console is on screen (a live session OR the login
   // flow).
   const inClaudeSession = !!claudeUiMode;
+  // ── Claude console room ───────────────────────────────────────────────────
+  // The tallest the console may be with the keyboard DOWN: everything from just
+  // under the chat header down to the top of the composer group, minus one
+  // PANEL_GAP of headroom under the header and one for the console's own margin
+  // above the composer. Deliberately keyboard-INDEPENDENT — the console shrinks
+  // itself by the live lift on the UI thread (see its animatedPanelStyle), and
+  // the dock reserves a FIXED slot of this size so nothing in the dock, the chat
+  // list or the composer re-lays-out while the keyboard moves.
+  //
+  // The old math capped the console at 72% of the screen AND subtracted the tab
+  // bar height on top of dockBelowConsole — which already carries the composer's
+  // dock clearance. That double count left ~70pt of dead space under the chat
+  // header; the console now runs right up to a single PANEL_GAP below it.
+  const consoleExpandedMax = Math.max(
+    MIN_PANEL_HEIGHT,
+    windowHeight
+      - (insets.top + CHAT_HEADER_BAR_HEIGHT + dockAboveConsole)
+      - dockBelowConsole
+      - PANEL_GAP * 2,
+  );
+  // Whether the console is opened to full height. Lives HERE (not inside the
+  // console) because the dock's reserved slot has to match the state — a slot
+  // sized for the expanded panel would leave a dead, chat-blocking band above a
+  // collapsed one.
+  const [claudeExpanded, setClaudeExpanded] = useState(true);
+  // Every new session opens expanded. The state used to live in the console and
+  // reset on unmount; now that it's hoisted it has to be reset explicitly, or a
+  // session minimized last time would come back collapsed.
+  useEffect(() => {
+    if (inClaudeSession) setClaudeExpanded(true);
+  }, [inClaudeSession]);
+  const consoleSlotHeight =
+    (claudeExpanded ? consoleExpandedMax : Math.min(COMPACT_MAX_HEIGHT, consoleExpandedMax)) + PANEL_GAP;
   // UI-thread mirror of inClaudeSession. The three keyboard-lift worklets below
   // are ALWAYS attached (never swapped against null in the JSX) and branch on
   // THIS shared value to decide which node carries the lift. Why: swapping an
@@ -1756,15 +1815,37 @@ export default function TurtleScreen() {
           visible message clears the bar. zIndex stays 101 (below the vault
           overlay at 200, so the vault still covers the header). */}
       <Reanimated.View style={[styles.chatHeader, { paddingTop: insets.top }, headerCounterStyle]}>
-        {/* Frosted surface, matching the floating tab bar: the header has always
-            overlaid the transcript (it's absolute, and the list already pads by
-            insets.top + CHAT_HEADER_BAR_HEIGHT), so swapping its opaque fill for
-            a blur lets the chat read through it as it scrolls under — same
-            material top and bottom. Behind the content, non-interactive. */}
-        <BlurView
+        {/* Frosted surface — a GRADIENT scrim rather than a bar with an edge.
+            The header has always overlaid the transcript (it's absolute, and the
+            list pads by insets.top + CHAT_HEADER_BAR_HEIGHT), so it reads as a
+            veil the chat scrolls up into and out of, with nothing marking where
+            it ends. Behind the content, non-interactive.
+
+            Two layers:
+            1) A stack of blur BANDS. expo-blur can't gradient its own intensity
+               (that needs a masked-view, a native dep we don't ship), so the
+               blur is stepped instead: a full-height weak band with shorter,
+               additional bands over the top of it. They compound, so the blur is
+               strongest at the status bar and weakest at the header's bottom
+               edge — and each band's hard edge falls where the scrim below is
+               still dark enough to hide it.
+            2) The scrim itself: semi-transparent black easing to FULLY
+               transparent at the bottom, so there's no line to end the header.
+               White in light mode — same veil, the colour that keeps the glyphs
+               legible against a light chat. */}
+        {HEADER_BLUR_BANDS.map((band) => (
+          <BlurView
+            key={band.height}
+            pointerEvents="none"
+            intensity={theme.mode === 'dark' ? band.dark : band.light}
+            tint={theme.mode === 'dark' ? 'dark' : 'light'}
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, height: band.height }}
+          />
+        ))}
+        <LinearGradient
           pointerEvents="none"
-          intensity={theme.mode === 'dark' ? 42 : 60}
-          tint={theme.mode === 'dark' ? 'dark' : 'light'}
+          colors={theme.mode === 'dark' ? HEADER_SCRIM_DARK : HEADER_SCRIM_LIGHT}
+          locations={HEADER_SCRIM_STOPS}
           style={StyleSheet.absoluteFill}
         />
         {/* Left cluster: Friends + Conversations. Both side clusters share a
@@ -2449,6 +2530,20 @@ export default function TurtleScreen() {
           directly from hook state (reliable, unlike interleaving into the
           chat list). Sits above the input like the pomodoro card. */}
       {claudeUiMode && (
+        // FIXED-height slot, bottom-anchored. The console's own height animates
+        // INSIDE it as the keyboard moves, so the dock's layout — and therefore
+        // the chat list's inset, the composer's position and every onLayout in
+        // this subtree — stays completely still through the transition. Before
+        // this the panel's per-frame height change resized the dock itself,
+        // firing onLayout (and a JS-thread relayout of the FlashList) on every
+        // frame of the lift: the stutter.
+        //
+        // box-none so the empty band left above a shrunk panel doesn't swallow
+        // taps meant for the chat behind it.
+        <View
+          pointerEvents="box-none"
+          style={{ height: consoleSlotHeight, justifyContent: 'flex-end' }}
+        >
         <ClaudeConsole
           transcript={claude.transcript}
           active={claudeActive}
@@ -2463,19 +2558,25 @@ export default function TurtleScreen() {
           onRespondQuestion={claude.respondQuestion}
           onStop={() => { if (claudeUiMode === 'login') claudeLoginStop(); else claudeStop(); }}
           onClose={claudeClose}
-          // Pass the SAME keyboard tracker that lifts the column, so the
-          // console's height shrink stays frame-locked to that lift (a separate
+          expanded={claudeExpanded}
+          onToggleExpanded={() => setClaudeExpanded((e) => !e)}
+          // Pass the SAME keyboard tracker that lifts the dock, so the console's
+          // height shrink stays frame-locked to that lift (a separate
           // useAnimatedKeyboard inside the console desynced during a mid-session
           // keyboard open, sliding its top under the chat header).
           keyboard={keyboard}
-          // Room accounting so the console sizes itself to fit between the chat
-          // header and the composer — never sliding under the header or hiding
-          // the input, in any keyboard state. spaceAbove = status bar + chat
-          // header + pomodoro card; spaceBelow = banners + composer.
-          spaceAbove={insets.top + CHAT_HEADER_BAR_HEIGHT + dockAboveConsole}
-          spaceBelow={dockBelowConsole}
-          tabBarHeight={tabBarHeight}
+          // The console shrinks by exactly what the dock rises, so it needs the
+          // same baseline the lift worklet subtracts (dockOccupied).
+          dockLiftBase={dockH}
+          // Tallest allowed with the keyboard down — the measured room between
+          // the chat header and the composer (see consoleExpandedMax). Always
+          // the EXPANDED ceiling, never the collapsed one: the panel interpolates
+          // compact → this on toggle, and clamping it to the compact size while
+          // collapsing would snap the panel instantly while the slot around it
+          // was still easing down.
+          maxHeight={consoleExpandedMax}
         />
+        </View>
       )}
 
       {/* Live remote-shell console — shows the working dir + streamed output. */}
@@ -2889,15 +2990,15 @@ const createStyles = (theme, insets) =>
       justifyContent: 'space-between',
       paddingHorizontal: 12,
       paddingBottom: 6,
-      // Transparent: the surface is the BlurView rendered behind the content
-      // (see the render site). An opaque fill here would defeat the underlay.
+      // Transparent: the surface is the blur bands + scrim gradient rendered
+      // behind the content (see the render site). An opaque fill here would
+      // defeat the underlay.
       backgroundColor: 'transparent',
-      // Clip the blur to the header's box.
+      // Clip the blur bands to the header's box.
       overflow: 'hidden',
-      // The edge that ENDS the header — white, like the frosted chrome elsewhere,
-      // so the boundary reads as a lit edge rather than a grey rule.
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: '#FFFFFF',
+      // NO bottom border. The header ends by FADING OUT (the scrim's last stop is
+      // fully transparent), so a hairline there would put back the hard edge the
+      // gradient exists to remove.
     },
     // Equal-width side clusters flanking the flex:1 title, so the brand stays
     // dead-centre even though the left holds two icons and the right one.
