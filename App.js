@@ -49,7 +49,9 @@ import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
-import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
+import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE, TAB_ICON_SLOT } from './components/tabBarLayout';
+import AnimalAvatar from './components/AnimalAvatar';
+import ProfileScreen from './screens/ProfileScreen';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
@@ -67,9 +69,13 @@ function TabNavigator() {
   const { theme, hideVaultButton } = useTheme();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
-  // Tabs actually rendered. The Vault tab is optional, and the cluster has to
-  // narrow with it or the group would sit off-centre.
-  const tabCount = hideVaultButton ? 4 : 5;
+  // The avatar tab needs to know WHOSE avatar to draw.
+  const { authIdentity } = useAuth();
+  // Tabs actually rendered. The Vault tab is optional and Profile is always on,
+  // so the cluster is 5 wide by default (Vault hidden) — the same width as
+  // before this tab existed, which is why clusterPadding and the sliding pill
+  // need no adjustment.
+  const tabCount = hideVaultButton ? 5 : 6;
   const [consoleOpen, setConsoleOpen] = useState(false);
 
   return (
@@ -108,6 +114,17 @@ function TabNavigator() {
                     resizeMode: 'contain',
                   }}
                 />
+              </TabBarIcon>
+            );
+          }
+          // Profile's tab icon IS the user's avatar. Sized to the dock's icon
+          // slot like every other glyph, and switched to the on-light treatment
+          // when active so it reads against the white chip instead of sitting
+          // as a saturated disc on white.
+          if (route.name === 'Profile') {
+            return (
+              <TabBarIcon focused={focused}>
+                <AnimalAvatar id={authIdentity || 'anon'} size={TAB_ICON_SLOT - 22} onLight={focused} />
               </TabBarIcon>
             );
           }
@@ -244,6 +261,15 @@ function TabNavigator() {
         component={TurtleScreen}
         options={{ title: 'Turtle' }}
         listeners={{ tabLongPress: () => setConsoleOpen(true) }}
+      />
+      {/* Profile takes the trailing slot — the Instagram/X convention of "you"
+          on the right. NOTE: this displaces the turtle mark from the trailing
+          edge, where it had been the deliberate brand anchor. Deliberate trade,
+          recorded here so it isn't "fixed" by accident later. */}
+      <Tab.Screen
+        name="Profile"
+        component={ProfileScreen}
+        options={{ title: 'Profile' }}
       />
     </Tab.Navigator>
     <CommandConsole visible={consoleOpen} onClose={() => setConsoleOpen(false)} />

@@ -255,7 +255,12 @@ const ThemeContext = createContext({
 export const ThemeProvider = ({ children }) => {
   const [isDark, setIsDark] = useState(true);
   const [timeFormat, setTimeFormatState] = useState('12h');
-  const [hideVaultButton, setHideVaultButtonState] = useState(false);
+  // Defaults to HIDDEN now: the vault's entry point is the Profile tab's card,
+  // and the /vault chat command still works as the secondary route. Keeping the
+  // setting (rather than deleting the Tab.Screen) means the dock's tab-count
+  // geometry is already wired for it, and anyone who wants the tab back can
+  // still switch it on. Not persisted, so the new default applies to everyone.
+  const [hideVaultButton, setHideVaultButtonState] = useState(true);
   const [showCalendarDayTasks, setShowCalendarDayTasksState] = useState(false);
   const [calendarFreeScroll, setCalendarFreeScrollState] = useState(false);
   const [accent, setAccentState] = useState(DEFAULT_ACCENT);
