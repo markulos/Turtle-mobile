@@ -13,8 +13,11 @@ import AnimalAvatar from '../../components/AnimalAvatar';
 import { generatedName } from '../../utils/avatar';
 import { dockOccupied } from '../../components/tabBarLayout';
 import { tapHaptic } from '../../utils/haptics';
+import { Image } from 'expo-image';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
+import ConversationsOverlay from '../TurtleScreen/components/ConversationsOverlay';
 import PasswordsScreen from '../PasswordsScreen';
+import SettingsScreen from '../SettingsScreen';
 
 /**
  * ProfileScreen — the personal tab.
@@ -40,7 +43,7 @@ export default function ProfileScreen() {
   const c = theme.colors;
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { api } = useServer();
+  const { api, getBaseUrl } = useServer();
   const { authIdentity } = useAuth();
 
   // Identity string (e.g. "sub:123" / "phone:+1…"). Everything derived —
@@ -55,6 +58,25 @@ export default function ProfileScreen() {
   const [showFriends, setShowFriends] = useState(false);
   const [friends, setFriends] = useState([]);
   const [vaultOpen, setVaultOpen] = useState(false);
+  const [convosOpen, setConvosOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Server profile: the REAL display name, uploaded avatar and activity stats
+  // (GET /me → { user: { displayName, avatarUrl, stats } }). The generated
+  // animal name/disc are the FALLBACK for anyone who hasn't set either.
+  const [me, setMe] = useState(null);
+  // Which stat's detail page is open (null = none).
+  const [statDetail, setStatDetail] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await api.get('/me');
+        if (alive && r?.user) setMe(r.user);
+      } catch { /* offline / older server — the local identity still renders */ }
+    })();
+    return () => { alive = false; };
+  }, [api]);
 
   // Stored name wins over the generated one; absent ⇒ keep the generated
   // default (which is stable, so it doesn't churn between launches).
@@ -63,12 +85,15 @@ export default function ProfileScreen() {
     (async () => {
       try {
         const saved = await AsyncStorage.getItem(nameKey(identity));
+        // Precedence: locally-edited name → the server's displayName → the
+        // generated animal name. So a real profile name shows up without an
+        // edit, and nobody ever sees a blank.
         if (alive && saved && saved.trim()) setName(saved.trim());
-        else if (alive) setName(fallbackName);
+        else if (alive) setName(me?.displayName?.trim() || fallbackName);
       } catch { /* storage unavailable — the generated name stands */ }
     })();
     return () => { alive = false; };
-  }, [identity, fallbackName]);
+  }, [identity, fallbackName, me?.displayName]);
 
   const commitName = useCallback(async () => {
     const next = draft.trim();
@@ -95,11 +120,41 @@ export default function ProfileScreen() {
 
   const goTab = useCallback((tab) => { tapHaptic(); navigation.navigate(tab); }, [navigation]);
 
+  // Server origin (no /api) so a server-relative avatar path resolves — same
+  // construction Settings uses for its avatar.
+  const serverBase = getBaseUrl().replace(/\/api$/, '');
+  const avatarFullUrl = me?.avatarUrl
+    ? (me.avatarUrl.startsWith('/') ? `${serverBase}${me.avatarUrl}` : me.avatarUrl)
+    : null;
+
+  const stats = me?.stats || null;
+  // Only stats the server actually reported. Each drills into a detail page so
+  // the number is a doorway to the log behind it, not a dead badge.
+  const STATS = [
+    friendCount != null && {
+      key: 'friends', value: friendCount,
+      label: friendCount === 1 ? 'friend' : 'friends',
+      onPress: () => setShowFriends(true),
+    },
+    stats?.tasksCompleted != null && {
+      key: 'done', value: stats.tasksCompleted, label: 'done',
+      onPress: () => setStatDetail('done'),
+    },
+    stats?.pomodoros != null && {
+      key: 'focus', value: stats.pomodoros, label: 'focus',
+      onPress: () => setStatDetail('focus'),
+    },
+    stats?.points != null && {
+      key: 'points', value: stats.points, label: 'points',
+      onPress: () => setStatDetail('points'),
+    },
+  ].filter(Boolean);
+
   const CARDS = [
     { key: 'vault', icon: 'shield-lock', label: 'Password Vault',
       sub: 'Your saved logins', onPress: () => { tapHaptic(); setVaultOpen(true); } },
     { key: 'chats', icon: 'forum', label: 'Board conversations',
-      sub: 'Per-board chat + activity', onPress: () => goTab('Turtle') },
+      sub: 'Per-board chat + activity', onPress: () => { tapHaptic(); setConvosOpen(true); } },
     { key: 'claude', icon: 'robot', label: 'Claude session',
       sub: 'Code with Claude in chat', onPress: () => goTab('Turtle') },
     { key: 'terminal', icon: 'console', label: 'Terminal',
@@ -107,7 +162,7 @@ export default function ProfileScreen() {
     { key: 'link', icon: 'qrcode-scan', label: 'Connect to desktop',
       sub: 'Scan the QR shown on the web app', onPress: () => goTab('Turtle') },
     { key: 'settings', icon: 'cog', label: 'Settings',
-      sub: 'Appearance, server, account', onPress: () => goTab('Turtle') },
+      sub: 'Appearance, server, account', onPress: () => { tapHaptic(); setSettingsOpen(true); } },
   ];
 
   const styles = makeStyles(theme);
@@ -125,7 +180,13 @@ export default function ProfileScreen() {
       >
         {/* Identity block */}
         <View style={styles.identity}>
-          <AnimalAvatar id={identity} size={88} />
+          {/* The uploaded avatar wins; the deterministic animal disc is the
+              fallback, so a profile is never blank and never needs an upload. */}
+          {avatarFullUrl ? (
+            <Image source={{ uri: avatarFullUrl }} style={styles.avatarImg} contentFit="cover" cachePolicy="memory-disk" transition={150} />
+          ) : (
+            <AnimalAvatar id={identity} size={88} />
+          )}
 
           {editing ? (
             <TextInput
@@ -152,18 +213,25 @@ export default function ProfileScreen() {
             </TouchableOpacity>
           )}
 
-          {/* Friends as a COUNT (Instagram-style) — the list opens on tap. */}
-          {friendCount != null && (
-            <TouchableOpacity
-              onPress={() => { tapHaptic(); setShowFriends(true); }}
-              style={styles.stat}
-              accessibilityRole="button"
-              accessibilityLabel={`${friendCount} friends`}
-            >
-              <Text style={styles.statNum}>{friendCount}</Text>
-              <Text style={styles.statLabel}>{friendCount === 1 ? 'friend' : 'friends'}</Text>
-            </TouchableOpacity>
-          )}
+          {/* Stat strip — Instagram's row of tappable counts. Each one is a
+              drill-in: friends opens the list, the activity stats open a detail
+              page for that metric. Values come from GET /me's stats block, so
+              they're the server's real totals rather than anything recomputed
+              here; a stat the server doesn't report is simply omitted. */}
+          <View style={styles.statStrip}>
+            {STATS.map((s) => (
+              <TouchableOpacity
+                key={s.key}
+                onPress={() => { tapHaptic(); s.onPress(); }}
+                style={styles.stat}
+                accessibilityRole="button"
+                accessibilityLabel={`${s.value} ${s.label}`}
+              >
+                <Text style={styles.statNum}>{s.value}</Text>
+                <Text style={styles.statLabel}>{s.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
         {/* Cards */}
@@ -217,6 +285,61 @@ export default function ProfileScreen() {
         </View>
       </EdgeSwipePage>
 
+      {/* Board conversations — hosted HERE now rather than reached by switching
+          to the Turtle tab. It already owns its own EdgeSwipePage, so it is
+          rendered directly. */}
+      <ConversationsOverlay visible={convosOpen} onClose={() => setConvosOpen(false)} />
+
+      {/* Settings — the standalone screen, pushed from its card. It was already
+          a standalone component (TurtleScreen only wrapped it in a Modal), so
+          this re-hosts rather than extracts. `active` gates its live polling to
+          while it's actually on screen. */}
+      <EdgeSwipePage overlay visible={settingsOpen} onClose={() => setSettingsOpen(false)}>
+        <View style={styles.page}>
+          <View style={[styles.pushHeader, { paddingTop: insets.top + 6 }]}>
+            <TouchableOpacity onPress={() => setSettingsOpen(false)} hitSlop={HIT} accessibilityLabel="Close settings">
+              <Icon name="chevron-left" size={28} color={c.textPrimary} />
+            </TouchableOpacity>
+            <Text style={styles.pushTitle}>Settings</Text>
+          </View>
+          <SettingsScreen active={settingsOpen} />
+        </View>
+      </EdgeSwipePage>
+
+      {/* Stat detail — the log behind a number. Deliberately a stub for now:
+          it names the metric and its value and routes to the surface that owns
+          the underlying records, rather than inventing a second analytics
+          screen this pass didn't scope. */}
+      <EdgeSwipePage overlay visible={!!statDetail} onClose={() => setStatDetail(null)}>
+        <View style={styles.page}>
+          <View style={[styles.pushHeader, { paddingTop: insets.top + 6 }]}>
+            <TouchableOpacity onPress={() => setStatDetail(null)} hitSlop={HIT} accessibilityLabel="Back">
+              <Icon name="chevron-left" size={28} color={c.textPrimary} />
+            </TouchableOpacity>
+            <Text style={styles.pushTitle}>
+              {statDetail === 'done' ? 'Tasks completed' : statDetail === 'focus' ? 'Focus sessions' : 'Points'}
+            </Text>
+          </View>
+          <View style={{ alignItems: 'center', paddingTop: 30, gap: 8 }}>
+            <Text style={styles.bigStat}>
+              {statDetail === 'done' ? (stats?.tasksCompleted ?? 0)
+                : statDetail === 'focus' ? (stats?.pomodoros ?? 0)
+                : (stats?.points ?? 0)}
+            </Text>
+            <Text style={styles.statLabel}>
+              {statDetail === 'done' ? `of ${stats?.tasksCreated ?? 0} created`
+                : statDetail === 'focus' ? 'pomodoros completed'
+                : 'earned so far'}
+            </Text>
+            {statDetail === 'done' && (
+              <TouchableOpacity onPress={() => { setStatDetail(null); goTab('Tasks'); }} style={styles.linkBtn}>
+                <Text style={styles.linkText}>Open tasks</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </EdgeSwipePage>
+
       {/* Password vault — the tab it replaces in the dock. */}
       <EdgeSwipePage overlay visible={vaultOpen} onClose={() => setVaultOpen(false)}>
         <PasswordsScreen />
@@ -247,7 +370,15 @@ const makeStyles = (theme) => {
       borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
       minWidth: 200, paddingVertical: 2,
     },
+    avatarImg: { width: 88, height: 88, borderRadius: 44, backgroundColor: c.surfaceElevated },
+    statStrip: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      marginTop: 4, flexWrap: 'wrap',
+    },
     stat: { alignItems: 'center', paddingVertical: 4, paddingHorizontal: 14 },
+    bigStat: { fontSize: 44, fontWeight: '800', color: c.textPrimary },
+    linkBtn: { marginTop: 16, paddingVertical: 10, paddingHorizontal: 18, borderRadius: 12, backgroundColor: c.surfaceElevated },
+    linkText: { color: c.accent || c.accentInfo, fontWeight: '700', fontSize: 15 },
     statNum: { fontSize: 18, fontWeight: '700', color: c.textPrimary },
     statLabel: { fontSize: 12, color: c.textTertiary },
     cards: { marginTop: 26, paddingHorizontal: 16, gap: 10 },
