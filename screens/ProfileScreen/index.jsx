@@ -10,7 +10,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
-import { generatedName } from '../../utils/avatar';
+import { generatedName, avatarAnimal } from '../../utils/avatar';
 import { dockOccupied } from '../../components/tabBarLayout';
 import { tapHaptic } from '../../utils/haptics';
 import { Image } from 'expo-image';
@@ -178,15 +178,23 @@ export default function ProfileScreen() {
         }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Identity block */}
-        <View style={styles.identity}>
-          {/* The uploaded avatar wins; the deterministic animal disc is the
-              fallback, so a profile is never blank and never needs an upload. */}
-          {avatarFullUrl ? (
-            <Image source={{ uri: avatarFullUrl }} style={styles.avatarImg} contentFit="cover" cachePolicy="memory-disk" transition={150} />
-          ) : (
-            <AnimalAvatar id={identity} size={88} />
-          )}
+        {/* Identity card — the SAME card treatment Settings uses for its
+            Profile section (surface fill, 12pt radius, 0.5pt border, 16pt pad)
+            and the same row layout: avatar on the LEFT, everything else stacked
+            to its right. */}
+        <View style={styles.identityCard}>
+          {/* The uploaded image wins. With none, the user's animal shows as a
+              plain SILHOUETTE inside the same bordered circle Settings draws —
+              no coloured disc, so the two screens read identically. */}
+          <View style={styles.avatarCircle}>
+            {avatarFullUrl ? (
+              <Image source={{ uri: avatarFullUrl }} style={styles.avatarImg} contentFit="cover" cachePolicy="memory-disk" transition={150} />
+            ) : (
+              <Icon name={avatarAnimal(identity)} size={40} color={c.textTertiary} />
+            )}
+          </View>
+
+          <View style={styles.identityBody}>
 
           {editing ? (
             <TextInput
@@ -231,6 +239,7 @@ export default function ProfileScreen() {
                 <Text style={styles.statLabel}>{s.label}</Text>
               </TouchableOpacity>
             ))}
+          </View>
           </View>
         </View>
 
@@ -362,20 +371,48 @@ const makeStyles = (theme) => {
   const c = theme.colors;
   return StyleSheet.create({
     page: { flex: 1, backgroundColor: c.background },
-    identity: { alignItems: 'center', paddingHorizontal: 20, gap: 10 },
+    // Card chrome copied from Settings' section style so the two screens'
+    // profile blocks are visually identical (fill, radius, 0.5pt border, pad).
+    identityCard: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      backgroundColor: c.surface,
+      borderRadius: 12,
+      padding: 16,
+      marginHorizontal: 16,
+      borderWidth: 0.5,
+      borderColor: c.border,
+    },
+    // Settings' avatarCircle: 84pt bordered disc on the surface-elevated fill.
+    avatarCircle: {
+      width: 84,
+      height: 84,
+      borderRadius: 42,
+      borderWidth: 1,
+      borderColor: c.border,
+      backgroundColor: c.surfaceElevated,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 16,
+      overflow: 'hidden',
+    },
+    // Everything that isn't the avatar, stacked to its right.
+    identityBody: { flex: 1, minWidth: 0, gap: 8, paddingTop: 4 },
     nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    name: { fontSize: 22, fontWeight: '700', color: c.textPrimary, maxWidth: 260 },
+    name: { fontSize: 20, fontWeight: '700', color: c.textPrimary, flexShrink: 1 },
     nameInput: {
-      fontSize: 22, fontWeight: '700', color: c.textPrimary, textAlign: 'center',
+      fontSize: 20, fontWeight: '700', color: c.textPrimary,
       borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
-      minWidth: 200, paddingVertical: 2,
+      paddingVertical: 2,
     },
-    avatarImg: { width: 88, height: 88, borderRadius: 44, backgroundColor: c.surfaceElevated },
+    // Fills the bordered circle above (which clips it).
+    avatarImg: { width: '100%', height: '100%' },
+    // Left-aligned now that it sits beside the avatar rather than under it.
     statStrip: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-      marginTop: 4, flexWrap: 'wrap',
+      flexDirection: 'row', alignItems: 'center',
+      flexWrap: 'wrap', marginLeft: -10,
     },
-    stat: { alignItems: 'center', paddingVertical: 4, paddingHorizontal: 14 },
+    stat: { alignItems: 'center', paddingVertical: 2, paddingHorizontal: 10 },
     bigStat: { fontSize: 44, fontWeight: '800', color: c.textPrimary },
     linkBtn: { marginTop: 16, paddingVertical: 10, paddingHorizontal: 18, borderRadius: 12, backgroundColor: c.surfaceElevated },
     linkText: { color: c.accent || c.accentInfo, fontWeight: '700', fontSize: 15 },
