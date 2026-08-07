@@ -23,7 +23,7 @@ import {
   KeyboardAvoidingView,
   StatusBar,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 // The viewer's media-cell layer (video cell, progressive image, zoomable image
 // cell) — extracted verbatim; see viewerMedia.jsx.
 import { FullScreenVideoPlayer, ProgressiveImage, ImageViewer } from './viewerMedia';
@@ -89,6 +89,7 @@ import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context
 import { useMediaVersion } from '../../../context/DownloadsContext';
 import { useTheme } from '../../../context/ThemeContext';
 import PhotoVaultBoardsPage from './PhotoVaultBoardsPage';
+import AlbumShareSheet from './AlbumShareSheet';
 import {
   buildPhotoVaultBoards,
   formatBoardMetadata,
@@ -149,8 +150,14 @@ const { width, height } = Dimensions.get('window');
 // board cards, the pinch column step and the toolbar buttons was removed on
 // request. Don't reintroduce per-tap buzzes here.
 
+// Albums hidden from the Boards (albums) tab. "Audio" isn't a photo/video
+// album — it's the drop box the audio-download flow tags its files with, and
+// MusicVault already surfaces that content. Showing it here just puts an
+// always-empty (kind="visual") card in the photo grid. Compared lowercased.
+const HIDDEN_ALBUMS = new Set(['audio']);
+
 // Month/year from a 'YYYY-MM' bucket key → "June 2026".
-const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTH_NAMES =['January','February','March','April','May','June','July','August','September','October','November','December'];
 const labelFromMonthKey = (key) => {
   if (!key || key === 'unknown') return 'Undated';
   const [y, m] = String(key).split('-');
@@ -451,6 +458,44 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const [infoVisible, setInfoVisible] = useState(true);
   const infoOpacityAnim = useRef(new Animated.Value(1)).current;
   const [zoomScale, setZoomScale] = useState(1); // Track zoom level for close prevention
+  // Mirror for the gesture callbacks. `swipeResponder` below is built once in a
+  // useRef, so it closes over the FIRST render's `zoomScale` forever: reading
+  // the state directly there meant the "don't dismiss while zoomed" guard
+  // always compared against 1 and never fired. The ref is read live.
+  //
+  // There is deliberately NO "is a gesture in flight" flag here. The first cut
+  // had one, raised on pinch start and lowered on gesture finalize, to freeze
+  // the pager before a pinch could nudge it. Pinch and pan finalize in either
+  // order, so the two gestures fought over the single boolean: it flapped
+  // mid-pinch (pager scroll cancelling and re-enabling under the fingers — the
+  // jitter) and could latch ON after the cell deactivated, which froze paging
+  // altogether. The pager now keys off the settled zoom state alone.
+  const zoomScaleRef = useRef(1);
+  const reportZoomScale = useCallback((z) => {
+    zoomScaleRef.current = z;
+    setZoomScale(z);
+  }, []);
+
+  // "A pager swipe is in flight" — a hand-rolled store rather than state, and
+  // deliberately so: the only consumers are the image cells (they stand their
+  // HD layer down for the duration), and routing it through gallery state would
+  // re-render a 6000-line component on the frame the swipe starts. Identity is
+  // stable for the component's life, so nothing downstream re-renders either.
+  const pagerDragStoreRef = useRef(null);
+  if (pagerDragStoreRef.current === null) {
+    const listeners = new Set();
+    let dragging = false;
+    pagerDragStoreRef.current = {
+      get: () => dragging,
+      set: (next) => {
+        if (next === dragging) return;
+        dragging = next;
+        listeners.forEach((l) => l(next));
+      },
+      subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
+    };
+  }
+  const pagerDragStore = pagerDragStoreRef.current;
 
   // === PULL-TO-DISMISS (iOS Photos style) ===
   // dragY follows the finger on a downward drag of the open photo. The image
@@ -458,16 +503,30 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // release past DISMISS_DY (or with enough downward velocity) flings it the
   // rest of the way and closes; otherwise it springs back home.
   const dragY = useRef(new Animated.Value(0)).current;
-  // Photo shrinks toward 0.82 as you pull it ~70% down the screen.
+  // ...and dragX with it. iOS Photos tracks the finger in BOTH axes once the
+  // dismiss drag has been claimed — the photo goes where your thumb goes, not
+  // just straight down a rail. Sideways motion is pure follow: it never commits
+  // the dismiss on its own (that stays a vertical/velocity decision).
+  const dragX = useRef(new Animated.Value(0)).current;
+  // Photo shrinks toward 0.7 across the first ~55% of a pull — matching the
+  // amount iOS Photos shrinks a photo before it lets go of it.
   const dragScale = dragY.interpolate({
-    inputRange: [0, height * 0.7],
-    outputRange: [1, 0.82],
+    inputRange: [0, height * 0.55],
+    outputRange: [1, 0.7],
     extrapolate: 'clamp',
   });
   // Backdrop fades from solid to clear over the first ~45% of a pull, so the
   // grid behind reads through as the photo lifts away.
   const dragBackdropOpacity = dragY.interpolate({
     inputRange: [0, height * 0.45],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+  // Chrome gets out of the way the moment the photo starts moving (iOS hides
+  // every control for the duration of the drag). Interpolated rather than
+  // state-driven so it costs nothing and reverses for free on a spring-back.
+  const dragChromeOpacity = dragY.interpolate({
+    inputRange: [0, 60],
     outputRange: [1, 0],
     extrapolate: 'clamp',
   });
@@ -573,6 +632,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const [pendingAssets, setPendingAssets] = useState([]);
   const [selectedTags, setSelectedTags] = useState([]);
   
+  // Album currently open in the public "share to the web" sheet (null = closed).
+  const [shareAlbumName, setShareAlbumName] = useState(null);
+
   // === BULK SELECTION STATE ===
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedGridItems, setSelectedGridItems] = useState(new Set());
@@ -1446,7 +1508,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // -app responsiveness, with no per-keystroke re-normalization.
   const albumIndex = useMemo(() => {
     const localTags = Object.keys(tagDictionary).filter(k => k !== 'All' && k !== 'image' && k !== 'video');
-    const names = Array.from(new Set([...globalAlbums, ...localTags]));
+    const names = Array.from(new Set([...globalAlbums, ...localTags]))
+      .filter(name => !HIDDEN_ALBUMS.has(String(name).toLowerCase()));
     return names.map(name => ({ name, norm: name.toLowerCase().replace(/[-_\s]/g, '') }));
   }, [globalAlbums, tagDictionary]);
 
@@ -2389,9 +2452,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     setInfoVisible(true);
     infoOpacityAnim.setValue(1);
     dragY.setValue(0);
+    dragX.setValue(0);
     scaleAnim.setValue(0.85);
-    setZoomScale(1); // fresh viewer session starts unzoomed (guards read this)
-  }, [infoOpacityAnim, dragY, scaleAnim]);
+    reportZoomScale(1); // fresh viewer session starts unzoomed (guards read this)
+  }, [infoOpacityAnim, dragY, scaleAnim, reportZoomScale]);
 
   const closeViewer = useCallback(() => {
     Animated.parallel([
@@ -2410,35 +2474,48 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     ]).start(resetViewerState);
   }, [scaleAnim, opacityAnim, resetViewerState]);
 
-  // Pull-to-dismiss commit: continue the photo's downward motion off-screen
-  // while the backdrop finishes fading, then tear down. Distinct from the
-  // scale-pop close so a flick-down feels like the photo is thrown away.
-  const dismissByDrag = useCallback(() => {
+  // Pull-to-dismiss commit. iOS Photos does NOT throw the photo off the bottom
+  // of the screen — it flies it back into the grid thumbnail it came from,
+  // shrinking and fading on the way. That is exactly what the origin-anchored
+  // close already does: as scaleAnim retreats 1 → 0.85, originTranslate pulls
+  // the photo toward the tapped cell. So the dismiss is: unwind the drag offset
+  // and run that same retreat, from wherever the finger let go.
+  const dismissByDrag = useCallback((velocityX = 0, velocityY = 0) => {
     Animated.parallel([
-      Animated.timing(dragY, {
-        toValue: height,
-        duration: 220,
-        easing: Easing.bezier(0.3, 0.0, 0.6, 1),
+      Animated.spring(dragX, {
+        toValue: 0, velocity: velocityX, useNativeDriver: true, tension: 90, friction: 14,
+      }),
+      Animated.spring(dragY, {
+        toValue: 0, velocity: velocityY, useNativeDriver: true, tension: 90, friction: 14,
+      }),
+      Animated.timing(scaleAnim, {
+        toValue: 0.85,
+        duration: 200,
+        easing: Easing.bezier(0.3, 0.0, 0.8, 0.15),
         useNativeDriver: true,
       }),
       Animated.timing(opacityAnim, {
         toValue: 0,
-        duration: 200,
+        duration: 180,
         easing: Easing.linear,
         useNativeDriver: true,
       }),
     ]).start(resetViewerState);
-  }, [dragY, opacityAnim, resetViewerState]);
+  }, [dragX, dragY, scaleAnim, opacityAnim, resetViewerState]);
 
-  // Spring the photo back to centre when a pull didn't go far enough to commit.
-  const cancelDrag = useCallback(() => {
-    Animated.spring(dragY, {
-      toValue: 0,
-      useNativeDriver: true,
-      tension: 80,
-      friction: 12,
-    }).start();
-  }, [dragY]);
+  // Spring the photo home when a pull didn't go far enough to commit. Carries
+  // the release velocity into the spring so a quick flick-and-hold settles the
+  // way iOS does, instead of restarting from zero.
+  const cancelDrag = useCallback((velocityX = 0, velocityY = 0) => {
+    Animated.parallel([
+      Animated.spring(dragX, {
+        toValue: 0, velocity: velocityX, useNativeDriver: true, tension: 80, friction: 12,
+      }),
+      Animated.spring(dragY, {
+        toValue: 0, velocity: velocityY, useNativeDriver: true, tension: 80, friction: 12,
+      }),
+    ]).start();
+  }, [dragX, dragY]);
 
   // Toggle info visibility on tap - fade out smooth, fade in fast
   const toggleInfoVisibility = useCallback(() => {
@@ -2464,6 +2541,13 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
   }, [infoVisible, infoOpacityAnim]);
 
+  // Stable handle on the toggle for the viewer cells. `toggleInfoVisibility`
+  // takes a new identity on every chrome flip; handing THAT to renderViewerItem
+  // would re-render every mounted pager page each time the chrome is tapped.
+  const toggleInfoRef = useRef(toggleInfoVisibility);
+  toggleInfoRef.current = toggleInfoVisibility;
+  const handleViewerSingleTap = useCallback(() => { toggleInfoRef.current?.(); }, []);
+
   // Unified swipe responder. Three independent gestures handled here:
   //   • Vertical down on the photo → dismiss the viewer.
   //   • Vertical up on the photo  → open the metadata drawer.
@@ -2486,7 +2570,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const swipeResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (evt, gestureState) => {
-        if (zoomScale > 1.05) return false;
+        // Read through the refs: this responder is built once, so state read
+        // here would be frozen at the first render's values.
+        if (zoomScaleRef.current > 1.05) return false;
 
         // Edge-back: touch started near the left bezel + dominant
         // rightward motion. Take priority over the vertical gestures.
@@ -2508,9 +2594,13 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           if (gestureState.dy > 0) drawerY.setValue((height * 0.45) + gestureState.dy);
           return;
         }
-        // iOS Photos pull-to-dismiss: the open photo tracks a downward drag
-        // 1:1 (dragScale + dragBackdropOpacity react to dragY in the render).
-        if (gestureState.dy > 0) dragY.setValue(gestureState.dy);
+        // iOS Photos pull-to-dismiss: the open photo tracks the finger 1:1 in
+        // BOTH axes (dragScale, dragBackdropOpacity and dragChromeOpacity all
+        // react to dragY in the render; dragX is pure follow).
+        if (gestureState.dy > 0) {
+          dragY.setValue(gestureState.dy);
+          dragX.setValue(gestureState.dx);
+        }
       },
       onPanResponderRelease: (evt, gestureState) => {
         // Edge-back commit — checked FIRST so a fast left-edge swipe
@@ -2531,16 +2621,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           return;
         }
 
-        // Commit the dismiss if pulled far enough OR flicked down fast;
+        // Commit the dismiss if pulled far enough OR flicked down fast (iOS
+        // commits around 100px, or on a downward flick from much shorter);
         // a strong upward swipe opens the metadata drawer; anything short
-        // springs the photo back to centre.
-        if (gestureState.dy > 120 || (gestureState.dy > 40 && gestureState.vy > 0.8)) {
-          dismissByDrag();
+        // springs the photo home carrying the release velocity.
+        if (gestureState.dy > 100 || (gestureState.dy > 30 && gestureState.vy > 0.7)) {
+          dismissByDrag(gestureState.vx, gestureState.vy);
         } else if (gestureState.dy < -50) {
-          cancelDrag();
+          cancelDrag(gestureState.vx, gestureState.vy);
           openMetadataDrawer();
         } else {
-          cancelDrag();
+          cancelDrag(gestureState.vx, gestureState.vy);
         }
       },
     })
@@ -2644,6 +2735,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       'Choose an action:',
       [
         { text: 'Cancel', style: 'cancel' },
+        { text: 'Share to the web', onPress: () => setShareAlbumName(albumName) },
         { text: 'Rename', onPress: () => renameAlbum(albumName) },
         { text: 'Delete', style: 'destructive', onPress: () => deleteAlbum(albumName) }
       ]
@@ -3000,29 +3092,85 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // want different copy ("full-resolution image" vs "8 photos"). null = default.
   const [sharePrepLabel, setSharePrepLabel] = useState(null);
 
+  // Full-resolution PREFETCH for sharing. The OS share sheet can only be handed
+  // a file that ALREADY EXISTS on disk — there's no way to present the sheet
+  // first and fill the attachment in afterwards (that needs a native
+  // UIActivityItemProvider). So "instant sheet" is bought by starting the
+  // download EARLIER: tapping share on a photo is the intent signal, so the
+  // original starts pulling the moment the quality chooser opens, in the
+  // background, while the user is still reading the two options. By the time
+  // "Full resolution" is tapped the bytes are usually already down and the
+  // sheet opens with no gather overlay at all.
+  //
+  // Map: media id → { promise, uri, failed }. The entry survives the share so a
+  // second share of the same photo is instant; the file itself is swept by
+  // sweepTransientCaches (the `full_` prefix) on unmount/background.
+  const fullShareCacheRef = useRef(new Map());
+  const prefetchFullForShare = useCallback((media) => {
+    if (!media) return null;
+    const key = media.id ?? media.rawUrl ?? media.url;
+    if (!key) return null;
+    const cache = fullShareCacheRef.current;
+    const hit = cache.get(key);
+    if (hit && !hit.failed) return hit;
+    const safeName = (media.filename || `shared_media_${media.id || 'item'}.jpg`)
+      .replace(/[^\w.\-]/g, '_');
+    const localUri = `${FileSystem.cacheDirectory}full_${safeName}`;
+    const entry = { uri: null, failed: false, promise: null, localUri };
+    // Resolves to null instead of rejecting: nothing awaits this when the user
+    // backs out of the chooser, and an unawaited rejection is a redbox.
+    entry.promise = FileSystem.downloadAsync(getFullUrl(media.rawUrl || media.url), localUri)
+      .then((res) => { entry.uri = res.uri; return res.uri; })
+      .catch((e) => {
+        console.warn('[MediaGallery] Full-res share prefetch failed:', e?.message || e);
+        entry.failed = true;
+        return null;
+      });
+    cache.set(key, entry);
+    return entry;
+  }, [getFullUrl]);
+
   // Download a media item at the chosen quality and hand it to the OS share
   // sheet. 'regular' uses the compressed tier the viewer already shows (small,
-  // usually already cached → instant); 'full' pulls the original rawUrl
-  // (large → we show a gather overlay while it downloads, then dismiss it
-  // BEFORE the native share sheet so the spinner only covers the wait).
+  // usually already cached → instant); 'full' reuses the chooser's background
+  // prefetch — already finished means the sheet opens with NO overlay, still
+  // in flight means we await that same download (never a second one) behind the
+  // gather overlay, which is dismissed BEFORE the native sheet appears.
   const doShare = useCallback(async (media, quality) => {
     if (!media) return;
     const isFull = quality === 'full';
-    if (isFull) setSharePreparing(true);
     let localUri = null; // tracked so we can delete the cached copy afterward
+    let uri = null;
     try {
-      const srcPath = isFull
-        ? (media.rawUrl || media.url)
-        : (media.compressedUrl || media.thumbnailLgUrl || media.rawUrl || media.url);
-      const url = getFullUrl(srcPath);
-      const safeName = (media.filename || `shared_media_${media.id || 'item'}.jpg`)
-        .replace(/[^\w.\-]/g, '_');
-      localUri = `${FileSystem.cacheDirectory}${isFull ? 'full_' : 'reg_'}${safeName}`;
+      if (isFull) {
+        // Joins the in-flight prefetch, or starts one now (videos, which skip
+        // the chooser, land here).
+        const entry = prefetchFullForShare(media);
+        if (entry?.uri) {
+          uri = entry.uri;
+        } else if (entry) {
+          setSharePreparing(true);
+          uri = await entry.promise;
+          setSharePreparing(false);
+        }
+        localUri = uri;
+      }
 
-      const { uri } = await FileSystem.downloadAsync(url, localUri);
-      // Hide the gather overlay before presenting the OS sheet so the spinner
-      // doesn't sit underneath it for the whole share interaction.
-      if (isFull) setSharePreparing(false);
+      if (!uri) {
+        // 'regular', or the prefetch failed — download the chosen tier now.
+        const srcPath = isFull
+          ? (media.rawUrl || media.url)
+          : (media.compressedUrl || media.thumbnailLgUrl || media.rawUrl || media.url);
+        const url = getFullUrl(srcPath);
+        const safeName = (media.filename || `shared_media_${media.id || 'item'}.jpg`)
+          .replace(/[^\w.\-]/g, '_');
+        localUri = `${FileSystem.cacheDirectory}${isFull ? 'full_' : 'reg_'}${safeName}`;
+        if (isFull) setSharePreparing(true);
+        ({ uri } = await FileSystem.downloadAsync(url, localUri));
+        // Hide the gather overlay before presenting the OS sheet so the spinner
+        // doesn't sit underneath it for the whole share interaction.
+        if (isFull) setSharePreparing(false);
+      }
 
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, {
@@ -3038,21 +3186,31 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     } finally {
       if (isFull) setSharePreparing(false);
       // The cached copy existed only to feed the share sheet — drop it now so
-      // shares don't pile up GBs of duplicates in the cache directory.
-      if (localUri) { try { await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch (e) { /* ignore */ } }
+      // shares don't pile up GBs of duplicates in the cache directory. The
+      // prefetch entry goes with it: keeping a uri that points at a deleted
+      // file would make the NEXT share of this photo hand the sheet nothing.
+      if (localUri) {
+        const key = media.id ?? media.rawUrl ?? media.url;
+        if (key) fullShareCacheRef.current.delete(key);
+        try { await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch (e) { /* ignore */ }
+      }
     }
-  }, [getFullUrl]);
+  }, [getFullUrl, prefetchFullForShare]);
 
-  // Tapping share: photos open the quality chooser instantly; videos have no
-  // compressed tier, so they share the original directly (with the overlay).
+  // Tapping share: photos open the quality chooser instantly AND start pulling
+  // the original in the background right away — the chooser is the user's
+  // intent signal, so the expensive half of "Full resolution" is already
+  // running while they read the options. Videos have no compressed tier, so
+  // they share the original directly (with the overlay).
   const handleShare = useCallback(() => {
     if (!selectedMedia) return;
     if (selectedMedia.type === 'video') {
       doShare(selectedMedia, 'full');
     } else {
       setShareChooser(selectedMedia);
+      prefetchFullForShare(selectedMedia);
     }
-  }, [selectedMedia, doShare]);
+  }, [selectedMedia, doShare, prefetchFullForShare]);
 
 
   // === GARBAGE COLLECTION ===
@@ -3178,10 +3336,18 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   }, [scrollX]);
   const dragSettleTimer = useRef(null);
 
+  // Swipe start/finish bracket the HD stand-down (see pagerDragStore). Cleared
+  // on momentum end AND on the drag-settle path below, because a slow release
+  // snaps without ever producing a momentum phase.
+  const handleScrollBeginDrag = useCallback(() => {
+    pagerDragStore.set(true);
+  }, [pagerDragStore]);
+
   const handleMomentumScrollEnd = useCallback((event) => {
     if (dragSettleTimer.current) { clearTimeout(dragSettleTimer.current); dragSettleTimer.current = null; }
+    pagerDragStore.set(false);
     syncSelectedFromOffset(event.nativeEvent.contentOffset.x);
-  }, [syncSelectedFromOffset]);
+  }, [syncSelectedFromOffset, pagerDragStore]);
 
   // THE TAG-MISMATCH FIX: a slow drag-release can snap to the next photo via
   // snapToInterval WITHOUT any momentum phase, so onMomentumScrollEnd never
@@ -3193,9 +3359,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     if (dragSettleTimer.current) clearTimeout(dragSettleTimer.current);
     dragSettleTimer.current = setTimeout(() => {
       dragSettleTimer.current = null;
+      pagerDragStore.set(false);
       syncSelectedFromOffset(lastViewerOffsetX.current);
     }, 180);
-  }, [syncSelectedFromOffset]);
+  }, [syncSelectedFromOffset, pagerDragStore]);
   useEffect(() => () => { if (dragSettleTimer.current) clearTimeout(dragSettleTimer.current); }, []);
 
   // Prefetch ±2 neighbor raw URLs whenever the viewer index changes —
@@ -3311,7 +3478,16 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 onLoadComplete={handleLoadComplete}
                 // Zoom reports drive the shell's chrome-hide + pull-dismiss
                 // lockout; only the active cell gets the channel.
-                onZoomScaleChange={isActive ? setZoomScale : undefined}
+                onZoomScaleChange={isActive ? reportZoomScale : undefined}
+                // The zoom surface swallows taps, so the chrome toggle has to
+                // be routed through it (it fires only after the double-tap
+                // zoom has been ruled out).
+                onSingleTap={handleViewerSingleTap}
+                // iOS Photos: pinching a fit-to-screen photo in drops back to
+                // the grid.
+                onPinchDismiss={closeViewer}
+                // Lets the HD layer stand down for the duration of a swipe.
+                pagerDragStore={pagerDragStore}
               />
             )}
           </Animated.View>
@@ -3319,7 +3495,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         </View>
       </View>
     );
-  }, [getFullUrl, viewerActiveId, scrollX, styles, insets, api, handleLoadProgress, handleLoadComplete]);
+  }, [getFullUrl, viewerActiveId, scrollX, styles, insets, api, handleLoadProgress, handleLoadComplete, reportZoomScale, handleViewerSingleTap, closeViewer, pagerDragStore]);
 
   // Get layout for initialScrollIndex
   const getItemLayout = useCallback((data, index) => ({
@@ -3469,6 +3645,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         animationType="none"
         onRequestClose={closeViewer}
       >
+        {/* A Modal renders into its own native view tree, OUTSIDE the
+            GestureHandlerRootView at the app root — Gesture Handler needs a
+            root inside it or the photo's pinch/pan/tap gestures silently never
+            fire (Android especially). */}
+        <GestureHandlerRootView style={{ flex: 1 }}>
         <Pressable
           style={styles.viewerContainer}
           onPress={toggleInfoVisibility}
@@ -3498,7 +3679,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             style={{
               position: 'absolute', top: 0, left: 0, right: 0,
               height: insets.top + 68,
-              opacity: zoomScale > 1.05 ? 0 : opacityAnim,
+              // dragChromeOpacity: chrome clears out as soon as a pull-to-
+              // dismiss starts moving the photo, iOS-style.
+              opacity: zoomScale > 1.05 ? 0 : Animated.multiply(opacityAnim, dragChromeOpacity),
               zIndex: 5,
             }}
           >
@@ -3530,7 +3713,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               {
                 zIndex: 6,
                 top: insets.top + 16,
-                opacity: zoomScale > 1.05 ? 0 : opacityAnim,
+                opacity: zoomScale > 1.05 ? 0 : Animated.multiply(opacityAnim, dragChromeOpacity),
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 20, // Clean spacing between action icons
@@ -3580,7 +3763,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 // (opacityAnim→0). infoOpacityAnim alone left the heart/share
                 // lingering after the photo had gone; opacityAnim sits at 1 during
                 // normal viewing so the single-tap info toggle still works.
-                opacity: zoomScale > 1.05 ? 0 : Animated.multiply(opacityAnim, infoOpacityAnim),
+                opacity: zoomScale > 1.05 ? 0 : Animated.multiply(Animated.multiply(opacityAnim, infoOpacityAnim), dragChromeOpacity),
                 zIndex: 10,
               }
             ]}
@@ -3738,7 +3921,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                   // settles, so open grows OUT of the tapped cell and close
                   // retreats back toward it. dragY stacks on top for the
                   // pull-to-dismiss track.
-                  { translateX: originTranslateX },
+                  { translateX: Animated.add(dragX, originTranslateX) },
                   { translateY: Animated.add(dragY, originTranslateY) },
                   { scale: Animated.multiply(scaleAnim, dragScale) },
                 ],
@@ -3752,7 +3935,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               keyExtractor={(item) => item.id}
               horizontal={true}
               showsHorizontalScrollIndicator={false}
-              
+              // Freeze paging while the photo is zoomed: a zoomed photo's
+              // horizontal drag belongs to the photo. Keyed off the settled
+              // zoom state ONLY — toggling this mid-gesture cancels an in-flight
+              // native scroll, which is a visible jump under the fingers.
+              scrollEnabled={zoomScale <= 1.05}
+
               // --- 🛑 STRICT 1-ITEM SWIPE PHYSICS 🛑 ---
               pagingEnabled={false} // CRITICAL: Turn off native paging because we have a 4px gap
               snapToInterval={ITEM_WIDTH} // Snap exactly to our custom width + gap
@@ -3780,6 +3968,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 { useNativeDriver: true }
               )}
               scrollEventThrottle={16}
+              onScrollBeginDrag={handleScrollBeginDrag}
               onMomentumScrollEnd={handleMomentumScrollEnd}
               onScrollEndDrag={handleScrollEndDrag}
             />
@@ -3974,6 +4163,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           {/* iOS-style Metadata Drawer */}
           {renderMetadataDrawer()}
         </Pressable>
+        </GestureHandlerRootView>
       </Modal>
     );
   };
@@ -5313,6 +5503,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           no separate vault strip to overlap the bulk-select console or jump on
           reveal. */}
 
+      {/* "Share to the web" for an album (long-press a board). In-tree overlay,
+          NOT a Modal — the vault is already inside one, and a sibling Modal
+          over an open Modal silently fails to appear on iOS. */}
+      <AlbumShareSheet
+        visible={!!shareAlbumName}
+        albumName={shareAlbumName}
+        api={api}
+        theme={theme}
+        onClose={() => setShareAlbumName(null)}
+      />
+
     </View>
   );
 }
@@ -5993,12 +6194,8 @@ const createStyles = (theme) =>
       // viewport [0, width] maps exactly onto the image — dead-centre on screen.
       alignItems: 'flex-start',
     },
-    viewerScrollContent: {
-      width: width,
-      height: height * 0.85,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
+    // (viewerScrollContent lived here for the old zoom ScrollView's
+    // contentContainer. ZoomableView transforms in place, so it is gone.)
     viewerImage: {
       width: width,
       height: height * 0.85,

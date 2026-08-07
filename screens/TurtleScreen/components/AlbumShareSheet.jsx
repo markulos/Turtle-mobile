@@ -1,0 +1,336 @@
+/**
+ * AlbumShareSheet — publish a vault album to the web.
+ *
+ * Mints a public link (`<host>/s/<slug>`) that opens the album in any
+ * browser with no Turtle account. The link IS the credential, so the copy
+ * here says that plainly rather than implying it's private; an optional
+ * password adds a second gate, and "Turn off" revokes instantly.
+ *
+ * Rendered as an IN-TREE overlay, never a <Modal>: the vault already lives
+ * inside one, and a sibling Modal over an open Modal silently fails to show
+ * on iOS (see memory: ios-nested-pagesheet-modal-gotcha).
+ */
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator, Alert, Pressable, ScrollView, Share, StyleSheet,
+  Switch, Text, TextInput, View,
+} from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
+
+const isDead = (s) => !!s.revokedAt || !!(s.expiresAt && s.expiresAt < Date.now());
+
+export default function AlbumShareSheet({ visible, albumName, api, theme, onClose }) {
+  const insets = useSafeAreaInsets();
+  const [shares, setShares] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [copiedId, setCopiedId] = useState(null);
+  const [usePassword, setUsePassword] = useState(false);
+  const [password, setPassword] = useState('');
+  const [allowDownload, setAllowDownload] = useState(true);
+
+  const load = useCallback(async () => {
+    if (!albumName) return;
+    setLoading(true);
+    try {
+      const res = await api.get(`/album-shares?album=${encodeURIComponent(albumName)}`);
+      setShares(res?.shares || []);
+      setError(null);
+    } catch (e) {
+      setError(e?.message || 'Could not load links');
+    } finally {
+      setLoading(false);
+    }
+  }, [albumName, api]);
+
+  useEffect(() => {
+    if (!visible) return;
+    // Reset the form each time the sheet opens so a password typed for one
+    // album never carries into the next.
+    setUsePassword(false);
+    setPassword('');
+    setAllowDownload(true);
+    setError(null);
+    load();
+  }, [visible, load]);
+
+  const createLink = useCallback(async () => {
+    if (usePassword && password.trim().length < 4) {
+      setError('Password must be at least 4 characters.');
+      return;
+    }
+    impactHaptic('medium');
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.post('/album-shares', {
+        album: albumName,
+        password: usePassword ? password : undefined,
+        allowDownload,
+      });
+      if (!res?.share) throw new Error(res?.error || 'Could not create the link');
+      setShares((prev) => [res.share, ...prev]);
+      setUsePassword(false);
+      setPassword('');
+      notifyHaptic('success');
+      await Clipboard.setStringAsync(res.share.url);
+      setCopiedId(res.share.id);
+      setTimeout(() => setCopiedId((c) => (c === res.share.id ? null : c)), 1800);
+    } catch (e) {
+      setError(e?.message || 'Could not create the link');
+    } finally {
+      setBusy(false);
+    }
+  }, [albumName, allowDownload, api, password, usePassword]);
+
+  const copyLink = useCallback(async (share) => {
+    tapHaptic();
+    await Clipboard.setStringAsync(share.url);
+    setCopiedId(share.id);
+    setTimeout(() => setCopiedId((c) => (c === share.id ? null : c)), 1800);
+  }, []);
+
+  const shareLink = useCallback(async (share) => {
+    tapHaptic();
+    try {
+      await Share.share({ message: share.url, url: share.url });
+    } catch { /* user dismissed the sheet */ }
+  }, []);
+
+  const revoke = useCallback((share) => {
+    // The one destructive action: it kills the link for everyone holding it.
+    Alert.alert(
+      'Turn off this link?',
+      `Anyone who already has it will immediately lose access to “${albumName}”.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Turn off',
+          style: 'destructive',
+          onPress: async () => {
+            setBusy(true);
+            // Optimistic: the row greys out now, the DELETE follows.
+            setShares((prev) => prev.map((s) => (
+              s.id === share.id ? { ...s, revokedAt: Date.now() } : s
+            )));
+            try {
+              await api.delete(`/album-shares/${share.id}`);
+              notifyHaptic('success');
+            } catch (e) {
+              setShares((prev) => prev.map((s) => (
+                s.id === share.id ? { ...s, revokedAt: null } : s
+              )));
+              setError(e?.message || 'Could not turn off the link');
+            } finally {
+              setBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  }, [albumName, api]);
+
+  if (!visible) return null;
+  const s = makeStyles(theme);
+
+  return (
+    <View style={[StyleSheet.absoluteFill, s.backdrop]}>
+      <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+      <View style={[s.sheet, { paddingBottom: Math.max(insets.bottom, 14) + 8 }]}>
+        <View style={s.grabber} />
+        <View style={s.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.title} numberOfLines={1}>Share “{albumName}”</Text>
+            <Text style={s.subtitle}>
+              Anyone with the link can view this album in a browser — no account needed.
+            </Text>
+          </View>
+          <Pressable onPress={onClose} hitSlop={10} style={s.closeBtn}>
+            <MaterialCommunityIcons name="close" size={18} color={theme.colors.textSecondary} />
+          </Pressable>
+        </View>
+
+        {!!error && (
+          <Pressable onPress={() => setError(null)} style={s.errorBox}>
+            <Text style={s.errorText}>{error}</Text>
+          </Pressable>
+        )}
+
+        <ScrollView style={s.scroll} keyboardShouldPersistTaps="handled">
+          {loading ? (
+            <ActivityIndicator style={{ marginVertical: 22 }} color={theme.colors.textSecondary} />
+          ) : shares.length === 0 ? (
+            <Text style={s.empty}>No links yet.</Text>
+          ) : (
+            shares.map((share) => {
+              const dead = isDead(share);
+              return (
+                <View key={share.id} style={[s.linkCard, dead && s.linkCardDead]}>
+                  <View style={s.linkTop}>
+                    <MaterialCommunityIcons
+                      name={share.hasPassword ? 'lock' : 'earth'}
+                      size={13}
+                      color={theme.colors.textSecondary}
+                    />
+                    <Text style={s.linkKind}>
+                      {share.hasPassword ? 'Password protected' : 'Anyone with the link'}
+                    </Text>
+                    <View style={{ flex: 1 }} />
+                    <Text style={s.linkMeta}>
+                      {dead
+                        ? (share.revokedAt ? 'Turned off' : 'Expired')
+                        : `${share.viewCount} ${share.viewCount === 1 ? 'view' : 'views'}`}
+                    </Text>
+                  </View>
+                  <Text style={[s.url, dead && s.urlDead]} numberOfLines={2} selectable>
+                    {share.url}
+                  </Text>
+                  {!dead && (
+                    <View style={s.linkActions}>
+                      <Pressable onPress={() => copyLink(share)} style={s.actionBtn}>
+                        <MaterialCommunityIcons
+                          name={copiedId === share.id ? 'check' : 'content-copy'}
+                          size={13}
+                          color={theme.colors.text}
+                        />
+                        <Text style={s.actionText}>{copiedId === share.id ? 'Copied' : 'Copy'}</Text>
+                      </Pressable>
+                      <Pressable onPress={() => shareLink(share)} style={s.actionBtn}>
+                        <MaterialCommunityIcons name="share-variant" size={13} color={theme.colors.text} />
+                        <Text style={s.actionText}>Share</Text>
+                      </Pressable>
+                      <Pressable onPress={() => revoke(share)} disabled={busy} style={s.actionBtnGhost}>
+                        <MaterialCommunityIcons name="link-off" size={13} color={theme.colors.textSecondary} />
+                        <Text style={s.actionTextGhost}>Turn off</Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+              );
+            })
+          )}
+
+          {/* ── new link ─────────────────────────────────────────────── */}
+          <View style={s.newBlock}>
+            <Text style={s.sectionLabel}>NEW LINK</Text>
+
+            <View style={s.optionRow}>
+              <Text style={s.optionText}>Require a password</Text>
+              <Switch
+                value={usePassword}
+                onValueChange={(v) => { tapHaptic(); setUsePassword(v); }}
+                trackColor={{ true: theme.colors.accentInfo }}
+              />
+            </View>
+            {usePassword && (
+              <TextInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Password for viewers (min 4 characters)"
+                placeholderTextColor={theme.colors.textMuted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={s.input}
+              />
+            )}
+
+            <View style={s.optionRow}>
+              <Text style={s.optionText}>Allow downloading originals</Text>
+              <Switch
+                value={allowDownload}
+                onValueChange={(v) => { tapHaptic(); setAllowDownload(v); }}
+                trackColor={{ true: theme.colors.accentInfo }}
+              />
+            </View>
+
+            <Pressable onPress={createLink} disabled={busy} style={[s.createBtn, busy && { opacity: 0.6 }]}>
+              {busy
+                ? <ActivityIndicator size="small" color={theme.colors.background} />
+                : <MaterialCommunityIcons name="link-variant-plus" size={16} color={theme.colors.background} />}
+              <Text style={s.createText}>Create link</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </View>
+    </View>
+  );
+}
+
+const makeStyles = (theme) => StyleSheet.create({
+  backdrop: { backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end', zIndex: 60 },
+  sheet: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.borderStrong,
+    paddingHorizontal: 18,
+    paddingTop: 8,
+    maxHeight: '86%',
+  },
+  grabber: {
+    alignSelf: 'center', width: 36, height: 4, borderRadius: 2,
+    backgroundColor: theme.colors.borderStrong, marginBottom: 12,
+  },
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  title: { fontSize: 17, fontWeight: '800', color: theme.colors.text, letterSpacing: -0.2 },
+  subtitle: { fontSize: 12.5, color: theme.colors.textSecondary, marginTop: 3, lineHeight: 17 },
+  closeBtn: {
+    width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceHighlight,
+  },
+  errorBox: {
+    marginTop: 12, padding: 9, borderRadius: 9,
+    backgroundColor: 'rgba(255,69,58,0.12)', borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,69,58,0.35)',
+  },
+  errorText: { color: '#ff6b6b', fontSize: 12.5 },
+  scroll: { marginTop: 14 },
+  empty: { color: theme.colors.textMuted, fontSize: 13, paddingVertical: 6 },
+  linkCard: {
+    borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
+    borderRadius: 12, padding: 12, marginBottom: 8, backgroundColor: theme.colors.surfaceElevated,
+  },
+  linkCardDead: { opacity: 0.5 },
+  linkTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 7 },
+  linkKind: { fontSize: 11.5, fontWeight: '700', color: theme.colors.textSecondary },
+  linkMeta: { fontSize: 11, color: theme.colors.textMuted },
+  url: { fontSize: 11.5, color: theme.colors.text, marginBottom: 10 },
+  urlDead: { textDecorationLine: 'line-through', color: theme.colors.textMuted },
+  linkActions: { flexDirection: 'row', gap: 8 },
+  actionBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 7, paddingHorizontal: 11,
+    borderRadius: 9, backgroundColor: theme.colors.surfaceHighlight,
+  },
+  actionText: { fontSize: 12, fontWeight: '600', color: theme.colors.text },
+  actionBtnGhost: {
+    flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 7, paddingHorizontal: 11,
+    borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
+  },
+  actionTextGhost: { fontSize: 12, fontWeight: '600', color: theme.colors.textSecondary },
+  newBlock: {
+    marginTop: 6, paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
+  },
+  sectionLabel: {
+    fontSize: 10, fontWeight: '800', letterSpacing: 0.7, color: theme.colors.textMuted, marginBottom: 4,
+  },
+  optionRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 8, gap: 12,
+  },
+  optionText: { fontSize: 14, color: theme.colors.text, flex: 1 },
+  input: {
+    borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border, borderRadius: 10,
+    paddingHorizontal: 12, height: 42, paddingVertical: 0, textAlignVertical: 'center',
+    color: theme.colors.text, fontSize: 14, backgroundColor: theme.colors.surfaceElevated,
+  },
+  createBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 14, height: 46, borderRadius: 12, backgroundColor: theme.colors.primary,
+  },
+  createText: { fontSize: 15, fontWeight: '800', color: theme.colors.background },
+});
