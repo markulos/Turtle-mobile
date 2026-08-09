@@ -29,6 +29,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useServer, serverOrigin } from '../../context/ServerContext';
 import { DismissKeyboardView } from '../../components/KeyboardSafeView';
 import { scanForPonds, scanFunnels, confirmServerForPhone, SEED_FUNNELS } from '../../services/pondDiscovery';
+import { parseInviteLink } from '../../utils/inviteLinks';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
 
 // Brand turtle, rendered to a 1024px PNG. Was a 6.4 MB auto-traced SVG
@@ -53,11 +54,12 @@ const SERVER_PRESETS = (((__DEV__ && process.env.EXPO_PUBLIC_TURTLE_PRESETS) || 
   })
   .filter(Boolean));
 
-// TEMP single-server phase: invite codes/links are OFF — an owner-invited phone
-// just signs in, and the app auto-routes to the one Tailscale pond. Flip to
-// true to bring back the invite-code field when multi-server (Discord-style)
-// joining lands. Deep-link codes (turtle://join/…) still work regardless.
-const INVITES_ENABLED = false;
+// Discord-style joining is LIVE (pond claim shipped server-side): the invite
+// field shows on the phone step and accepts a code, a pond name, a pasted join
+// link — https://pond-host/join/CODE, turtle://join/CODE — or the whole invite
+// text message; links carry the server address, so pasting one fully
+// configures a fresh install. Deep-link taps work regardless of this flag.
+const INVITES_ENABLED = true;
 
 export default function LoginScreen() {
   const { theme } = useTheme();
@@ -176,33 +178,41 @@ export default function LoginScreen() {
   const [localError, setLocalError] = useState('');
   const displayError = localError || loginError;
 
-  // Invite deep link: turtle://join/CODE?server=IP. The link carries BOTH the
-  // invite code and the server address, so a fresh install that taps an invite
-  // is fully configured — no manual server entry, no chicken-and-egg.
+  // Adopt a parsed invite: configure the server it names (links carry the
+  // pond's address, so a fresh install needs no manual entry — no
+  // chicken-and-egg), remember the funnel, and land on the phone step with the
+  // bare code filled in. Shared by the deep-link listener and the invite
+  // field's paste handling.
+  const applyInviteLink = useCallback(({ code, server }) => {
+    if (server) {
+      // URL-shaped server (tunnel) → keep verbatim minus trailing slash;
+      // bare host → strip any path / typed :3000 (the port is implied).
+      const host = /^https?:\/\//i.test(server)
+        ? server.replace(/\/+$/, '')
+        : server.replace(/\/.*$/, '').replace(/:3000$/, '');
+      if (host) {
+        saveIP(host);
+        rememberFunnel(host); // self-guards: only https funnels persist
+      }
+    }
+    setAuthMode('phone');
+    setOtpStep('phone');
+    setInvite(code);
+    setLocalError('');
+  }, [saveIP, rememberFunnel]);
+  const applyInviteLinkRef = useRef(applyInviteLink);
+  applyInviteLinkRef.current = applyInviteLink;
+
+  // Invite deep link: turtle://join/CODE?server=IP (and the https landing URL,
+  // should the OS ever hand it to us directly).
   useEffect(() => {
     const handleJoinUrl = (url) => {
-      const m = String(url || '').match(/turtle:\/\/join\/([A-Za-z0-9-]{4,24})(?:\?([^#]*))?/i);
-      if (!m) return;
-      const qs = m[2] || '';
-      const serverParam = qs.split('&').map((p) => p.split('=')).find(([k]) => k === 'server');
-      if (serverParam && serverParam[1]) {
-        const raw = decodeURIComponent(serverParam[1]).trim();
-        // URL-shaped server (tunnel) → keep verbatim minus trailing slash;
-        // bare host → strip any path / typed :3000 (the port is implied).
-        const host = /^https?:\/\//i.test(raw)
-          ? raw.replace(/\/+$/, '')
-          : raw.replace(/\/.*$/, '').replace(/:3000$/, '');
-        if (host) saveIP(host);
-      }
-      setAuthMode('phone');
-      setOtpStep('phone');
-      setInvite(m[1]);
-      setLocalError('');
+      const link = parseInviteLink(url);
+      if (link) applyInviteLinkRef.current(link);
     };
     Linking.getInitialURL().then(handleJoinUrl).catch(() => {});
     const sub = Linking.addEventListener('url', (e) => handleJoinUrl(e.url));
     return () => sub.remove();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Debounced invite preview — shows the pond you're about to join (or that
@@ -486,10 +496,18 @@ export default function LoginScreen() {
                       <Icon name="ticket-confirmation-outline" size={20} color={theme.colors.textMuted} style={styles.inputIcon} />
                       <TextInput
                         style={[styles.input, { color: theme.colors.inputText }]}
-                        placeholder="Invite code or pond name (optional)"
+                        placeholder="Invite code, link, or pond name"
                         placeholderTextColor={theme.colors.textPlaceholder}
                         value={invite}
-                        onChangeText={setInvite}
+                        // A pasted join link (or the whole invite text) is
+                        // recognised and adopted: the server it names is
+                        // configured and the field collapses to the bare code.
+                        // Typed input can't contain "://", so it passes through.
+                        onChangeText={(t) => {
+                          const link = parseInviteLink(t);
+                          if (link) applyInviteLink(link);
+                          else setInvite(t);
+                        }}
                         autoCapitalize="none"
                         autoCorrect={false}
                         editable={!busy}
