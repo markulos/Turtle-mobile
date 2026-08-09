@@ -280,12 +280,17 @@ export const TaskQuickInspector = ({
   const openFullRef = useRef(() => {});
   openFullRef.current = () => { commitTitle(); onOpenFull?.(); };
 
-  // Drag the grab-handle area to act on the sheet: DOWN dismisses it, UP opens
+  // Drag anywhere on the card to act on the sheet: DOWN dismisses it, UP opens
   // the full task editor (so a single flick straight off the block reaches the
-  // create/edit card without aiming for the small "Edit details" link). Lives on
-  // the header only, so the title field below stays freely tappable/selectable.
+  // create/edit card without aiming for the small "Edit details" link).
   // Upward pull rubber-bands (it's a hint, not a free drag); the open fires on
   // release once it clears the threshold.
+  //
+  // This is the one sheet that does NOT use utils/useSheetDismiss: the hook only
+  // models downward dismissal, and this responder is a superset of it. It
+  // already runs in the capture phase with the same slop and thresholds. The
+  // only scrollable inside is a HORIZONTAL week pager, which the
+  // vertical-dominance test excludes, so there is nothing to gate on.
   const UP_LIFT_MAX = 64;   // furthest the sheet peeks up while pulling
   const UP_OPEN_DY = -48;   // pull this far up (or flick up) to open the editor
   const pan = useRef(
@@ -329,9 +334,12 @@ export const TaskQuickInspector = ({
           <Animated.View style={[styles.backdrop, { opacity: fade }]} />
         </TouchableWithoutFeedback>
 
-        <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-          {/* Header — drag DOWN to close, UP to open the full editor. */}
-          <View style={styles.header} {...pan.panHandlers}>
+        <Animated.View
+          {...pan.panHandlers}
+          style={[styles.sheet, { transform: [{ translateY }] }]}
+        >
+          {/* Drag DOWN anywhere to close, UP to open the full editor. */}
+          <View style={styles.header}>
             <View style={styles.grabHandle} pointerEvents="none" />
           </View>
 

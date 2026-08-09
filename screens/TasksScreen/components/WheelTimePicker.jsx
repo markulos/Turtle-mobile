@@ -228,9 +228,10 @@ export const WheelTimePicker = ({ visible, initialTime, onSelect, onClose }) => 
 
   const handleCancel = useCallback(() => animateOut(() => onClose?.()), [animateOut, onClose]);
 
-  // iOS-style pull-down on the grabber/header strip (composes with the
-  // sheet's own slide-up entrance — two translateY entries add).
-  const { panHandlers, sheetDragStyle } = useSheetDismiss(handleCancel, visible);
+  // iOS-style pull-down from anywhere on the card (composes with the sheet's
+  // own slide-up entrance — two translateY entries add). The wheels opt out
+  // below: they are vertical scrollers and must keep their own gesture.
+  const { panHandlers, noDragProps, sheetDragStyle } = useSheetDismiss(handleCancel, visible);
 
   // Live preview string in the header ("3:45 PM").
   const previewLabel = useMemo(() => {
@@ -247,10 +248,11 @@ export const WheelTimePicker = ({ visible, initialTime, onSelect, onClose }) => 
           <Pressable style={StyleSheet.absoluteFill} onPress={handleCancel} />
         </Animated.View>
 
-        <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetY }, ...sheetDragStyle.transform] }]}>
-          {/* Grabber + header = the pull-down-to-close zone. Restricted to
-              this strip so the wheels' own vertical scrolling never fights it. */}
-          <View {...panHandlers}>
+        <Animated.View
+          {...panHandlers}
+          style={[styles.sheet, { transform: [{ translateY: sheetY }, ...sheetDragStyle.transform] }]}
+        >
+          <View>
             <View style={styles.grabber} />
 
             {/* Header: cancel · live preview · set */}
@@ -265,8 +267,10 @@ export const WheelTimePicker = ({ visible, initialTime, onSelect, onClose }) => 
             </View>
           </View>
 
-          {/* Wheels */}
-          <View style={styles.wheels}>
+          {/* Wheels. noDragProps opts this subtree out of the card's
+              pull-down: the columns are vertical scrollers, and a card that
+              stole their gesture would make the picker unusable. */}
+          <View {...noDragProps} style={styles.wheels}>
             {/* Centre selection band (behind the rows) */}
             <View pointerEvents="none" style={styles.selectionBand} />
 

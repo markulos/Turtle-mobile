@@ -1,8 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
-  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,8 +10,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import Reanimated, {
+  useAnimatedKeyboard,
+  useAnimatedStyle,
+} from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
+import { useSheetDismiss } from '../../../utils/useSheetDismiss';
 
 // Sheet-presentation curve — the same weighted ease-out the vault's other
 // bottom-anchored surfaces use, so this card enters like the rest of the app.
@@ -29,10 +33,11 @@ const CLOSE_MS = 200;
  * second sibling Modal over an open one silently never appears. An overlay inside
  * the page has no such failure mode and animates the same.
  *
- * Two pages inside one card:
- *   1. actions — play/pause, share, add to playlist, delete
- *   2. playlists — pick an existing playlist or type a new one
- * The playlist picker is a PAGE, not a second sheet, for the same iOS reason.
+ * Three pages inside one card:
+ *   1. actions — play/pause, share, rename, add to playlist, delete
+ *   2. rename — edit the track's title in place
+ *   3. playlists — pick an existing playlist or type a new one
+ * Both sub-pages are PAGES, not second sheets, for the same iOS reason.
  */
 export default function TrackActionsSheet({
   visible,
@@ -46,6 +51,7 @@ export default function TrackActionsSheet({
   busy = false,
   onPlay,
   onShare,
+  onRename,
   onAddToPlaylist,
   onDelete,
   onClose,
@@ -60,17 +66,41 @@ export default function TrackActionsSheet({
   // card's slide and the scrim's fade so they can never disagree.
   const anim = useRef(new Animated.Value(0)).current;
   // Live drag offset, in points below the resting position. Kept separate from
-  // `anim` so a drag doesn't fight the open/close timing.
-  const drag = useRef(new Animated.Value(0)).current;
+  // `anim` so a drag doesn't fight the open/close timing. Owned by the shared
+  // sheet-dismiss hook, which grabs the pull from anywhere on the card and
+  // stands down while the playlist list below is scrolled.
+  const { panHandlers, dragY: drag, scrollProps } = useSheetDismiss(onClose, visible);
+
+  // Keyboard lift for the "New playlist…" field — the SAME technique as the
+  // Turtle chat composer: one useAnimatedKeyboard shared value driving a
+  // translateY on the UI thread, so the card rides the keyboard frame-for-frame
+  // instead of being covered by it (or jumping to meet it a beat late, which is
+  // what a KeyboardAvoidingView here would do).
+  //
+  // It rides a WRAPPER, not the card: the card's own transform belongs to the
+  // RN Animated open/drag, and an RN Animated value and a Reanimated style
+  // can't drive the same node.
+  //
+  // The card is bottom-pinned and already reserves `bottomInset` of clearance
+  // over the dock, so — exactly like the composer's `keyboardHeight − dockH` —
+  // the lift cancels that resting clearance and leaves the card sitting on the
+  // keyboard's top edge.
+  const keyboard = useAnimatedKeyboard();
+  const keyboardLift = useAnimatedStyle(() => {
+    'worklet';
+    return { transform: [{ translateY: -Math.max(keyboard.height.value - bottomInset, 0) }] };
+  });
   // Measured card height, driving BOTH the slide distance and the drag-dismiss
   // threshold. State (not just a ref) because the transform is built at render:
   // a ref would update silently and leave the interpolation stale. Seeded high
   // enough that the pre-layout first frame is always fully off-screen — a low
   // seed would let the card peek above the edge before it was measured.
   const [cardH, setCardH] = useState(600);
-  const cardHeight = useRef(600);
   const [page, setPage] = useState('actions');
   const [newPlaylist, setNewPlaylist] = useState('');
+  // Draft title for the rename page. Seeded from `title` each time that page is
+  // opened (not on every render) so typing isn't clobbered by a library refresh.
+  const [draftTitle, setDraftTitle] = useState('');
   // Kept mounted through the closing animation so the card slides out instead
   // of vanishing; unmounts once it's off-screen.
   const [mounted, setMounted] = useState(visible);
@@ -80,6 +110,7 @@ export default function TrackActionsSheet({
       setMounted(true);
       setPage('actions');
       setNewPlaylist('');
+      setDraftTitle('');
       drag.setValue(0);
       Animated.timing(anim, {
         toValue: 1,
@@ -99,33 +130,6 @@ export default function TrackActionsSheet({
     }
   }, [visible]);
 
-  // Drag-down-to-dismiss on the card's grabber area. Follows the finger, then
-  // either snaps back or hands off to onClose past a third of the card.
-  const pan = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponder: (_e, g) => g.dy > 4 && Math.abs(g.dy) > Math.abs(g.dx),
-        onPanResponderMove: (_e, g) => {
-          if (g.dy > 0) drag.setValue(g.dy);
-        },
-        onPanResponderRelease: (_e, g) => {
-          const far = g.dy > cardHeight.current / 3 || g.vy > 0.7;
-          if (far) {
-            onClose?.();
-            return;
-          }
-          Animated.spring(drag, {
-            toValue: 0,
-            useNativeDriver: true,
-            damping: 22,
-            stiffness: 220,
-            mass: 0.7,
-          }).start();
-        },
-      }),
-    [onClose],
-  );
-
   const translateY = Animated.add(
     anim.interpolate({ inputRange: [0, 1], outputRange: [cardH, 0] }),
     drag,
@@ -138,6 +142,18 @@ export default function TrackActionsSheet({
     },
     [],
   );
+
+  // Commit the rename. A no-op name (empty or unchanged) just closes the card
+  // rather than firing a pointless write.
+  const commitRename = useCallback(() => {
+    const name = draftTitle.trim();
+    if (!name || name === title) {
+      onClose?.();
+      return;
+    }
+    impactHaptic('medium');
+    onRename?.(name);
+  }, [draftTitle, title, onRename, onClose]);
 
   if (!mounted || !track) return null;
 
@@ -156,12 +172,16 @@ export default function TrackActionsSheet({
         />
       </Animated.View>
 
+      {/* Keyboard-lift anchor. Carries the absolute bottom-pinning so the card
+          inside it is free to keep its own open/drag transform. */}
+      <Reanimated.View pointerEvents="box-none" style={[styles.cardAnchor, keyboardLift]}>
+      {/* The whole card is the pull-down-to-close zone. */}
       <Animated.View
         testID="track-actions-card"
+        {...panHandlers}
         onLayout={(e) => {
           const h = Math.round(e.nativeEvent.layout.height);
           if (h <= 0) return;
-          cardHeight.current = h;
           setCardH((prev) => (prev === h ? prev : h));
         }}
         style={[
@@ -174,7 +194,7 @@ export default function TrackActionsSheet({
           },
         ]}
       >
-        <View {...pan.panHandlers} style={styles.grabArea}>
+        <View style={styles.grabArea}>
           <View style={[styles.grabber, { backgroundColor: c.border }]} />
         </View>
 
@@ -210,6 +230,18 @@ export default function TrackActionsSheet({
               onPress={run(onShare)}
             />
             <ActionRow
+              icon="pencil-outline"
+              label="Rename track…"
+              color={c.textPrimary}
+              style={rowBorder}
+              chevron
+              onPress={() => {
+                tapHaptic();
+                setDraftTitle(title || '');
+                setPage('rename');
+              }}
+            />
+            <ActionRow
               icon="playlist-plus"
               label="Add to playlist"
               color={c.textPrimary}
@@ -230,6 +262,55 @@ export default function TrackActionsSheet({
                 onDelete?.();
               }}
             />
+          </>
+        ) : page === 'rename' ? (
+          <>
+            <View style={styles.headerRow}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Back to track options"
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                onPress={() => {
+                  tapHaptic();
+                  setPage('actions');
+                }}
+              >
+                <Icon name="chevron-left" size={26} color={c.textPrimary} />
+              </TouchableOpacity>
+              <View style={styles.headerText}>
+                <Text style={[styles.title, { color: c.textPrimary }]} numberOfLines={1}>
+                  Rename track
+                </Text>
+                <Text style={[styles.subtitle, { color: c.textTertiary }]} numberOfLines={1}>
+                  {subtitle}
+                </Text>
+              </View>
+            </View>
+
+            <View style={[styles.newRow, rowBorder]}>
+              <Icon name="pencil-outline" size={20} color={c.textSecondary} />
+              <TextInput
+                testID="rename-track-input"
+                style={[styles.newInput, { color: c.textPrimary }]}
+                placeholder="Track name"
+                placeholderTextColor={c.textMuted}
+                value={draftTitle}
+                onChangeText={setDraftTitle}
+                autoFocus
+                selectTextOnFocus
+                returnKeyType="done"
+                onSubmitEditing={commitRename}
+              />
+              {draftTitle.trim() && draftTitle.trim() !== title ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Save track name"
+                  onPress={commitRename}
+                >
+                  <Text style={[styles.createText, { color: tint }]}>Save</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </>
         ) : (
           <>
@@ -287,7 +368,12 @@ export default function TrackActionsSheet({
 
             {/* Bounded so a long playlist list can't grow the card past the
                 screen — it scrolls inside the card instead. */}
-            <ScrollView style={styles.playlistScroll} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              style={styles.playlistScroll}
+              keyboardShouldPersistTaps="handled"
+              scrollIndicatorInsets={{ right: 1 }}
+              {...scrollProps}
+            >
               {playlists.length === 0 ? (
                 <Text style={[styles.empty, { color: c.textTertiary }]}>
                   No playlists yet — type a name above to make the first one.
@@ -315,6 +401,7 @@ export default function TrackActionsSheet({
           </>
         )}
       </Animated.View>
+      </Reanimated.View>
     </View>
   );
 }
@@ -340,11 +427,15 @@ function ActionRow({ icon, label, color, onPress, style, disabled, chevron }) {
 
 const styles = StyleSheet.create({
   scrim: { backgroundColor: 'rgba(0,0,0,0.5)' },
-  card: {
+  // The bottom pin lives on the ANCHOR (which carries the keyboard lift), not
+  // on the card — so the card's transform stays free for the open/drag motion.
+  cardAnchor: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
+  },
+  card: {
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -377,7 +468,18 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  newInput: { flex: 1, fontSize: 15, paddingVertical: 6 },
+  // Inline text field in an icon row. Vertical padding + an auto height leaves
+  // the glyphs riding HIGH against the row's icon (font ascent/descent are not
+  // symmetric); an explicit height with zero vertical padding centers the text
+  // and the caret on the row's midline. App-wide rule for inline inputs.
+  newInput: {
+    flex: 1,
+    fontSize: 15,
+    height: 34,
+    paddingVertical: 0,
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+  },
   createText: { fontSize: 14, fontWeight: '700' },
   playlistScroll: { maxHeight: 260 },
   empty: { fontSize: 13, paddingHorizontal: 18, paddingVertical: 18, lineHeight: 18 },

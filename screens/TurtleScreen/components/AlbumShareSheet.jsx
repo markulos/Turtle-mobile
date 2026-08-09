@@ -17,7 +17,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Pressable, ScrollView, Share, StyleSheet,
+  ActivityIndicator, Alert, Animated, Pressable, ScrollView, Share, StyleSheet,
   Switch, Text, TextInput, View,
 } from 'react-native';
 import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
@@ -25,6 +25,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
+import { useSheetDismiss } from '../../../utils/useSheetDismiss';
 
 const isDead = (s) => !!s.revokedAt || !!(s.expiresAt && s.expiresAt < Date.now());
 
@@ -134,6 +135,9 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
     'worklet';
     return { transform: [{ translateY: -Math.max(keyboard.height.value - rest, 0) }] };
   });
+  // Pull down anywhere on the card to close — app-wide sheet behaviour. The
+  // link list below reports its offset so the pull only closes from its top.
+  const { panHandlers, scrollProps, sheetDragStyle } = useSheetDismiss(onClose, visible);
   const [shares, setShares] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -252,8 +256,14 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
   return (
     <View style={[StyleSheet.absoluteFill, s.backdrop]}>
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-      {/* The lift rides the card itself — it carries no other transform. */}
-      <Reanimated.View style={[s.sheet, { paddingBottom: rest + 10 }, keyboardLift]}>
+      {/* Keyboard-lift anchor. The card inside owns the drag transform, and an
+          RN Animated value and a Reanimated style cannot drive the same node —
+          so the lift rides this wrapper and the height cap moves up with it. */}
+      <Reanimated.View style={[{ maxHeight: '86%' }, keyboardLift]}>
+        <Animated.View
+          {...panHandlers}
+          style={[s.sheet, { maxHeight: '100%', paddingBottom: rest + 10 }, sheetDragStyle]}
+        >
         <View style={s.grabber} />
         <View style={s.headerRow}>
           <View style={{ flex: 1 }}>
@@ -273,7 +283,12 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
           </Pressable>
         )}
 
-        <ScrollView style={s.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={s.scroll}
+          keyboardShouldPersistTaps="handled"
+          scrollIndicatorInsets={{ right: 1 }}
+          {...scrollProps}
+        >
           {loading ? (
             <ActivityIndicator style={{ marginVertical: 22 }} color={theme.colors.textSecondary} />
           ) : shares.length === 0 ? (
@@ -388,6 +403,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
             </Pressable>
           </View>
         </ScrollView>
+        </Animated.View>
       </Reanimated.View>
     </View>
   );

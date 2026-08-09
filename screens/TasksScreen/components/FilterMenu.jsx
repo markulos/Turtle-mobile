@@ -36,7 +36,7 @@ export const FilterMenu = ({
   const opacity = animation.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
   // iOS-style pull-down on the new grab-handle zone; composes with the rise
   // entrance above (two translateY entries add).
-  const { panHandlers, sheetDragStyle } = useSheetDismiss(onClose, visible);
+  const { panHandlers, scrollProps, sheetDragStyle } = useSheetDismiss(onClose, visible);
 
   const styles = createStyles(theme);
   
@@ -68,18 +68,22 @@ export const FilterMenu = ({
       <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]}>
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
       </Animated.View>
+      {/* The whole card is the pull-down-to-close zone; the ScrollView below
+          reports its offset so the pull only closes from the top of the list. */}
       <Animated.View
+        {...panHandlers}
         style={[styles.container, { transform: [{ translateY }, ...sheetDragStyle.transform], opacity }]}
       >
-        {/* Grab handle — the pull-down-to-close zone. */}
-        <View {...panHandlers} style={styles.handleZone}>
+        <View style={styles.handleZone}>
           <View style={styles.handleBar} />
         </View>
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={true}
+          scrollIndicatorInsets={{ right: 1 }}
           keyboardShouldPersistTaps="handled"
+          {...scrollProps}
         >
           {/* Incomplete Filter Toggle */}
           <View style={styles.section}>

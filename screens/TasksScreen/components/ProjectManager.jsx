@@ -105,9 +105,9 @@ export const ProjectManager = ({
   };
 
   const styles = createStyles(theme);
-  // iOS-style pull-down on the handle/title zone; keyboard is dismissed by the
+  // iOS-style pull-down from anywhere on the card; keyboard is dismissed by the
   // drag ending in a close anyway (handleClose does it).
-  const { panHandlers, sheetDragStyle } = useSheetDismiss(handleClose, visible);
+  const { panHandlers, scrollProps, sheetDragStyle } = useSheetDismiss(handleClose, visible);
 
   return (
     <Modal
@@ -126,9 +126,10 @@ export const ProjectManager = ({
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           pointerEvents="box-none"
         >
-          <Animated.View style={[styles.content, sheetDragStyle]}>
-            {/* Handle + title = the pull-down zone. */}
-            <View {...panHandlers}>
+          {/* The whole card is the pull-down zone; the board list below reports
+              its offset so the pull only closes from the top of that list. */}
+          <Animated.View {...panHandlers} style={[styles.content, sheetDragStyle]}>
+            <View>
               <View style={styles.handleBar} />
               <View style={styles.header}>
                 <Text style={styles.title}>Edit Boards</Text>
@@ -158,7 +159,9 @@ export const ProjectManager = ({
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
               showsVerticalScrollIndicator={true}
+              scrollIndicatorInsets={{ right: 1 }}
               nestedScrollEnabled
+              {...scrollProps}
             >
               {projects.map(item => (
                 <View key={item} style={styles.listItem}>
