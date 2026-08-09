@@ -141,19 +141,30 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
   // variant (older server / moved source / transient sharp failure).
   const [hiResFallback, setHiResFallback] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  // A swipe is in flight → the HD layer stands down (see its render note).
+  // A swipe is in flight → an UNLOADED HD layer stands down (see render note).
   const pagerDragging = usePagerDragging(pagerDragStore);
 
-  // Reset crossfade state on activation change. isActive=false simply
-  // unmounts Layer 2 and cancels the in-flight request.
+  // Effect-readable mirror of highResLoaded — the deactivation effect must
+  // know it without taking it as a dep (which would re-run the effect on load).
+  const highResLoadedRef = useRef(false);
+
+  // Deactivation: ONLY an unloaded cell resets. Unmounting there is the
+  // request-cancel for the in-flight HD fetch, and re-arming the dwell gate is
+  // what keeps quick pass-bys cheap. A cell whose HD already LANDED keeps it —
+  // there is nothing to cancel, and tearing the loaded layer down used to be
+  // the swipe-away hitch: the texture destroy + Layer-1 remount landed in the
+  // exact settle frame of the pager. Kept HD also means swiping BACK to a
+  // photo shows full HD instantly (visible mid-swipe, like iOS Photos) instead
+  // of paying the dwell + fetch again. Memory is bounded by the pager's
+  // windowSize: eviction happens by unmount, which drops the whole cell.
   useEffect(() => {
-    if (!isActive) {
-      setHighResLoaded(false);
-      setFastHidden(false); // bring the fast layer back for the next open
-      setHiResFallback(false);
-      setHdRequested(false); // re-arm the dwell gate for the next open
-      fadeAnim.setValue(0);
-    }
+    if (isActive) return;
+    if (highResLoadedRef.current) return;
+    setHighResLoaded(false);
+    setFastHidden(false); // bring the fast layer back for the next open
+    setHiResFallback(false);
+    setHdRequested(false); // re-arm the dwell gate for the next open
+    fadeAnim.setValue(0);
   }, [isActive, media.id, fadeAnim]);
 
   // Dwell gate: once the image is active, wait HD_DWELL_MS before allowing the
@@ -241,7 +252,14 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
           source={{ uri: fastSource }}
           style={StyleSheet.absoluteFillObject}
           contentFit={contentFit}
-          transition={0}
+          // Blur-up: the full-bleed blurhash renders on the first frame and the
+          // compressed image CROSSFADES over it instead of popping in. This
+          // never delays paging — pager cells pre-mount ±2 pages out
+          // (windowSize), so the fade plays offscreen before the user arrives;
+          // the only on-screen fades are the viewer's opening frame and cells
+          // entering the window during a fast run, which is exactly where the
+          // blurred-then-sharp reveal is wanted.
+          transition={140}
           cachePolicy="memory-disk"
           placeholder={media.blurhash ? { blurhash: media.blurhash } : null}
           placeholderContentFit="cover"
@@ -263,20 +281,21 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
       {/* LAYER 2: High-res. Loads after the user dwells on the image for
           HD_DWELL_MS (hdRequested) OR the moment they zoom in (forceHd) —
           zooming means they want detail now, so we don't make them wait. The
-          regular compressed JPEG carries the view until then. Unmounts
-          (cancelling the in-flight fetch) the moment isActive flips back to
-          false; the dwell/zoom gate is the swipe-by guard for the bytes.
+          regular compressed JPEG carries the view until then.
 
-          ALSO stands down for the duration of a pager swipe (`pagerDragging`) —
-          but ONLY while the fetch is still in flight. A multi-megabyte fetch +
-          decode landing mid-swipe stalls the frame the gesture needs, which on
-          device read as "I can't swipe while it's loading HD"; unmounting
-          cancels the request. Once the HD layer HAS loaded there is no fetch
-          to cancel, and unmounting it is how the black flash happened: after
-          the crossfade the fast layer is gone (fastHidden), so starting a
-          swipe removed the ONLY mounted image and the photo under your finger
-          blanked to background. Loaded HD stays put. */}
-      {isActive && (highResLoaded || !pagerDragging) && (hdRequested || forceHd) && (
+          Mount rule, term by term:
+          • `highResLoaded` — a LANDED HD layer stays mounted unconditionally:
+            through pager drags (unmounting it mid-swipe was the black flash —
+            after the crossfade the fast layer is gone, so the photo under the
+            finger blanked), and through deactivation (tearing it down at
+            settle was the swipe-away hitch; keeping it makes swipe-BACK show
+            HD instantly). Eviction is the pager unmounting the whole cell.
+          • `isActive && !pagerDragging` — an UNLOADED layer exists only on
+            the active, stationary page. Deactivating or starting a swipe
+            unmounts it, which is the request-cancel: a multi-megabyte fetch +
+            decode landing mid-swipe stalls the frames the gesture needs
+            ("can't swipe while it's loading HD" on device). */}
+      {(highResLoaded || (isActive && !pagerDragging)) && (hdRequested || forceHd) && (
         <Animated.View style={[StyleSheet.absoluteFillObject, { opacity: fadeAnim, zIndex: 2 }]} pointerEvents="none">
           <Image
             source={{ uri: hiResUri }}
@@ -301,6 +320,7 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
               }
             }}
             onLoad={() => {
+              highResLoadedRef.current = true;
               setHighResLoaded(true);
               if (onRawLoad) onRawLoad();
               // Ensure the progress bar reaches 100% even if the
@@ -333,7 +353,11 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
 // out left the photo parked wherever the pinch centroid was. The transform
 // model has no such state — 1× IS translate(0, 0) — and it works on Android,
 // which never had pinch zoom here at all.
-const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, api, onLoadProgress, onLoadComplete, onZoomScaleChange, onSingleTap, onPinchDismiss, pagerDragStore }) => {
+// React.memo: a page change re-renders only the two cells whose `isActive`
+// flipped (every other prop is referentially stable in renderViewerItem), so
+// the settle frame stops re-rendering all mounted pages — measurable JS-thread
+// relief exactly when the pager needs frames.
+const ImageViewer = React.memo(({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, api, onLoadProgress, onLoadComplete, onZoomScaleChange, onSingleTap, onPinchDismiss, pagerDragStore }) => {
   // 1. Track HD State
   const [rawLoaded, setRawLoaded] = useState(false);
   // True once the user zooms into this image — forces the HD layer to load
@@ -360,9 +384,13 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
   // moment the gesture needs every frame — that read as pinch jitter on device.
   const [hdZoom, setHdZoom] = useState(false);
 
-  // Reset HD state when user swipes away
+  // Swiping away resets the zoom signal only. `rawLoaded` deliberately
+  // survives deactivation — it mirrors ProgressiveImage's persistent HD layer
+  // (the cell is keyed by mediaId, so the flag can never describe another
+  // photo), which keeps the HD badge truthful when the user swipes back onto
+  // a photo whose HD is still mounted.
   useEffect(() => {
-    if (!isActive) { setRawLoaded(false); setZoomed(false); }
+    if (!isActive) setZoomed(false);
   }, [isActive]);
 
   useEffect(() => {
@@ -453,6 +481,7 @@ const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, 
       )}
     </View>
   );
-};
+});
+ImageViewer.displayName = 'ImageViewer';
 
 export { FullScreenVideoPlayer, ProgressiveImage, ImageViewer };
