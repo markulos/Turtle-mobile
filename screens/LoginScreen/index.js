@@ -39,14 +39,19 @@ const turtleIcon = require('../../assets/turtle-icon.png');
 // Quick-pick self-host server addresses for the dev build. Tailscale reaches
 // the pond from anywhere (away from home / cellular); the LAN address is the
 // fast local path at home. Tapping a chip fills the field AND saves+tests it.
-// (Keep in sync with ServerContext.DEFAULT_SERVER_HOST + the iOS dev-build notes.)
-const SERVER_PRESETS = [
-  // Funnel first — a public HTTPS pond address that works from ANYWHERE (cellular
-  // included), so it's the one-tap path for an invitee who isn't on the home LAN.
-  { label: 'Funnel', host: 'https://arch-main.tail25e0bc.ts.net', hint: 'anywhere' },
-  { label: 'Tailscale', host: '100.105.43.69', hint: 'away / cellular' },
-  { label: 'Home Wi-Fi', host: '192.168.2.93', hint: 'same LAN' },
-];
+// DEV ONLY. These were three hardcoded personal addresses — a funnel hostname,
+// a tailnet IP and a home LAN IP — shipped to every install. A preset is a
+// shortcut to YOUR pond, so it can only come from the environment; a release
+// build shows no chips and relies on discovery + the invite link (which carries
+// its own server). Set EXPO_PUBLIC_TURTLE_PRESETS in mobile-app/.env as
+// "Label=host,Label=host".
+const SERVER_PRESETS = (((__DEV__ && process.env.EXPO_PUBLIC_TURTLE_PRESETS) || '')
+  .split(',')
+  .map((pair) => {
+    const [label, host] = pair.split('=').map((s) => (s || '').trim());
+    return label && host ? { label, host, hint: 'dev' } : null;
+  })
+  .filter(Boolean));
 
 // TEMP single-server phase: invite codes/links are OFF — an owner-invited phone
 // just signs in, and the app auto-routes to the one Tailscale pond. Flip to

@@ -31,7 +31,14 @@ const CONCURRENCY = 32;
 // whole list to confirm which pond invited a given number. A private pond
 // reveals itself ONLY to a phone it invited (server-enforced via
 // /api/auth/pond/info?phone=), so the funnel that answers IS the right server.
-export const SEED_FUNNELS = ['https://arch-main.tail25e0bc.ts.net'];
+// Seeded ONLY from the environment. This was a hardcoded personal funnel
+// hostname, which shipped one person's server address to every install; the
+// remembered-funnel list (AsyncStorage) and the invite link are where a real
+// pond address comes from. Comma-separated, dev builds only.
+export const SEED_FUNNELS = ((__DEV__ && process.env.EXPO_PUBLIC_TURTLE_SEED_FUNNELS) || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 // Funnels go over the internet/tailnet with a TLS handshake, so they need a far
 // longer leash than the 600 ms LAN probe (which is one hop away).
 const FUNNEL_TIMEOUT_MS = 4000;

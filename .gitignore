@@ -8,3 +8,9 @@ node_modules/
 
 # Isolated feature workspaces
 /.worktrees/
+
+# Environment variables.
+# `.env*` not just `.env`: a hand-made backup (.env.bak, .env.2026-08-09) carries
+# the same secrets as the real thing. The example file holds only empty keys.
+.env*
+!.env.example

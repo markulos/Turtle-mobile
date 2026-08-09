@@ -1,17 +1,25 @@
 import React, { createContext, useState, useContext, useEffect, useMemo } from 'react';
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { flushQueue, startAutoFlush } from '../services/offlineQueue';
 
 const ServerContext = createContext();
 
-// TEMP single-server phase: the project is one self-hosted pond reachable over
-// Tailscale. Default every fresh install straight to it so an invitee never
-// types an IP — they just sign in. Overridable via the login screen's Advanced
-// field, and replaced by real multi-server discovery once other P2P ponds exist.
-const DEFAULT_SERVER_HOST = '100.105.43.69';
+// A DEV convenience only — never a shipped default.
+//
+// This used to be a hardcoded Tailscale IP, so every install of the app, on
+// anyone's phone, pointed at one particular person's private tailnet address.
+// A default host is an answer to "which pond?", and no client can ship one.
+//
+// Release builds resolve a pond from: a remembered pond → discovery (LAN sweep
+// + funnel walk, see services/pondDiscovery.js) → an invite link, which carries
+// its own server. Set EXPO_PUBLIC_TURTLE_DEV_HOST in mobile-app/.env for a
+// local shortcut.
+const DEFAULT_SERVER_HOST = (__DEV__ && process.env.EXPO_PUBLIC_TURTLE_DEV_HOST) || '';
 
 // Normalize whatever the user saved into a server ORIGIN. Accepted forms:
-//   '100.105.43.69'             → http://100.105.43.69:3000   (bare host — classic)
-//   '192.168.2.93:3000'         → http://192.168.2.93:3000    (host:port)
+//   '100.64.0.1'             → http://100.64.0.1:3000   (bare host — classic)
+//   '192.168.1.50:3000'         → http://192.168.1.50:3000    (host:port)
 //   'https://pc.tail123.ts.net' → https://pc.tail123.ts.net   (tunnel-style URL —
 //                                  its scheme + port ARE the address; nothing appended)
 // Every base-URL builder (the api wrapper, the health check, the three
@@ -235,17 +243,44 @@ export const ServerProvider = ({ children }) => {
     [serverIP],
   );
 
+  // ── Offline outbox ───────────────────────────────────────────────────────
+  // Writes made while the pond was unreachable are parked on disk (see
+  // services/offlineQueue). Replay them from here, once, for the whole app:
+  //   • a backoff timer that only ticks while something is pending, and
+  //   • an immediate attempt whenever the app returns to the foreground —
+  //     which is when "walked back into wifi" actually becomes observable.
+  //     There's no NetInfo dependency, and checkConnection only probes at
+  //     startup, so there is no live connectivity signal to key off.
+  // Gated on serverIP because a flush before the saved server has loaded would
+  // fire every parked request at an empty origin and burn a retry rung each.
+  // Declared AFTER `api` on purpose: the dep array is evaluated during render,
+  // so referencing it above the useMemo would hit the const's TDZ.
+  useEffect(() => {
+    if (!serverIP) return undefined;
+    const stop = startAutoFlush(api);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') flushQueue(api).catch(() => {});
+    });
+    return () => {
+      stop();
+      sub.remove();
+    };
+  }, [serverIP, api]);
+
   const loadSavedIP = async () => {
     try {
       const savedIP = await AsyncStorage.getItem('serverIP');
-      // Fall back to the one Tailscale pond when nothing's saved — auto-route.
+      // Nothing saved and no dev shortcut = no pond yet. Leave it EMPTY rather
+      // than inventing one: the login screen then runs discovery / waits for an
+      // invite. Probing a made-up host would just be a slow failure, and a
+      // baked-in address would be someone else's server.
       const ip = savedIP || DEFAULT_SERVER_HOST;
       setServerIP(ip);
-      checkConnection(ip);
+      if (ip) checkConnection(ip);
     } catch (error) {
       console.error('Error loading IP:', error);
       setServerIP(DEFAULT_SERVER_HOST);
-      checkConnection(DEFAULT_SERVER_HOST);
+      if (DEFAULT_SERVER_HOST) checkConnection(DEFAULT_SERVER_HOST);
     }
   };
 
