@@ -50,7 +50,22 @@ describe('photoVaultBoards', () => {
       itemLabel: '47 items',
       recency: '2d',
       metadata: '47 items · 2d',
+      isLive: false,
     }]);
+  });
+
+  test('flags boards with a live public link, matching names case-insensitively', () => {
+    const result = buildPhotoVaultBoards({
+      names: ['Picco', 'Turtle 3D'],
+      countsByName: { Picco: 73, 'Turtle 3D': 4 },
+      sortMode: 'alphabetical',
+      now: NOW,
+      // The gallery keeps this set lower-cased; board names are not.
+      liveAlbumNames: new Set(['picco']),
+    });
+
+    expect(result.map((board) => [board.name, board.isLive]))
+      .toEqual([['Picco', true], ['Turtle 3D', false]]);
   });
 
   test.each([

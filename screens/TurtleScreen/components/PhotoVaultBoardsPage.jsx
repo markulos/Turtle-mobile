@@ -66,6 +66,7 @@ const PhotoVaultBoardsPage = forwardRef(({
   onOpenBoard,
   onLongPressBoard,
   onCardPressIn,
+  onOpenShareInsights,
   onScroll,
   onContentSizeChange,
   onLayout,
@@ -250,6 +251,7 @@ const PhotoVaultBoardsPage = forwardRef(({
           onPress={onOpenBoard}
           onLongPress={onLongPressBoard}
           onPressIn={onCardPressIn}
+          onPressShared={onOpenShareInsights}
         />
       )}
       // Elements, NOT functions. VirtualizedList renders a function-valued

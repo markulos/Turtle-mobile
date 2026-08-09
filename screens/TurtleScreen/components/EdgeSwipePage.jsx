@@ -10,9 +10,17 @@ import {
 import { useTheme } from '../../../context/ThemeContext';
 
 const { width: SCREEN_W } = Dimensions.get('window');
-// Left bezel zone the back-swipe must start in, and the commit thresholds —
-// either drag a third of the way across, or flick rightward fast enough.
-const EDGE_ZONE_PX = 44;
+// Where a back-swipe may START. Not a bezel strip — the whole LEFT PANEL of the
+// page, app-wide: a 44pt bezel meant you had to hunt for the edge, and every
+// page in the app shares this default so the gesture feels the same everywhere.
+//
+// Safe to make this wide because the responder below is `onMoveShouldSetPanResponder`,
+// NOT the Capture variant: children get the gesture first, so a horizontal
+// ScrollView (chip rail, pager, carousel) sitting in the left panel still wins
+// its own drags. Only gestures no child claims reach the page.
+const EDGE_ZONE_PX = Math.round(SCREEN_W * 0.4);
+// Commit thresholds — either drag a third of the way across, or flick rightward
+// fast enough.
 const COMMIT_DX = SCREEN_W * 0.3;
 const COMMIT_VX = 0.5;
 
@@ -35,6 +43,9 @@ const COMMIT_VX = 0.5;
  *               won't present a second sibling Modal while the first is up, so a
  *               nested page must live INSIDE the parent page's tree, not as its
  *               own modal. (Top-level pages over a tab use the Modal form.)
+ *   edgeZone  — how far in from the left a back-swipe may start. Defaults to the
+ *               whole left panel (EDGE_ZONE_PX); only narrow it for a page whose
+ *               left side needs raw horizontal drags a child can't claim.
  */
 export default function EdgeSwipePage({ visible, onClose, children, overlay = false, swipeEnabled = true, edgeZone = EDGE_ZONE_PX }) {
   const { theme } = useTheme();
@@ -150,8 +161,17 @@ export default function EdgeSwipePage({ visible, onClose, children, overlay = fa
 
   // Overlay form: an absolute-fill layer drawn inside the parent's tree (used
   // when nesting over another page — no second native modal, which iOS drops).
+  //
+  // The zIndex is load-bearing, not decoration. Being LAST in the tree is not
+  // enough: any earlier sibling that sets a zIndex of its own (even 1, on a
+  // nested element) is lifted out of document order and drawn over this page.
+  // That's what put the Notes screen's All/Notes/Todos tabs on top of the note
+  // composer. A page that absolutely fills its parent is by definition meant to
+  // cover that parent's other children, so it declares that explicitly — and
+  // `elevation` says the same thing to Android, which ignores zIndex for
+  // stacking.
   if (overlay) {
-    return mounted ? <View style={StyleSheet.absoluteFill}>{inner}</View> : null;
+    return mounted ? <View style={[StyleSheet.absoluteFill, styles.overlayLayer]}>{inner}</View> : null;
   }
 
   // Top-level form: its own transparent over-full-screen modal.
@@ -161,3 +181,9 @@ export default function EdgeSwipePage({ visible, onClose, children, overlay = fa
     </Modal>
   );
 }
+
+const styles = StyleSheet.create({
+  // High enough to clear any incidental zIndex a host screen's chrome sets, low
+  // enough to stay under the app-level overlays (the vault sits at 200).
+  overlayLayer: { zIndex: 150, elevation: 150 },
+});

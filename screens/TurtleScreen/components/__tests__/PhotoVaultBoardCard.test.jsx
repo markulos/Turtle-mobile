@@ -114,6 +114,60 @@ describe('PhotoVaultBoardCard', () => {
     expect(meta.lineHeight).toBe(16);
   });
 
+  test('badges a published board as SHARED, and says so to screen readers', async () => {
+    const view = await render(
+      <PhotoVaultBoardCard
+        board={{ ...board, isLive: true }}
+        width={180}
+        theme={{ ...theme, colors: { ...theme.colors, accentInfo: '#38BDF8' } }}
+        resolveCoverUrl={(path) => path}
+        onPress={jest.fn()}
+        onLongPress={jest.fn()}
+      />,
+    );
+
+    expect(view.getByTestId('board-shared-badge')).toBeTruthy();
+    expect(view.getByText('SHARED')).toBeTruthy();
+    expect(view.getByLabelText('Warm interiors, 47 items, updated 2d, shared on the web')).toBeTruthy();
+  });
+
+  test('the badge opens share insights without opening the board', async () => {
+    const onPress = jest.fn();
+    const onPressShared = jest.fn();
+    const view = await render(
+      <PhotoVaultBoardCard
+        board={{ ...board, isLive: true }}
+        width={180}
+        theme={{ ...theme, colors: { ...theme.colors, accentInfo: '#38BDF8' } }}
+        resolveCoverUrl={(path) => path}
+        onPress={onPress}
+        onLongPress={jest.fn()}
+        onPressShared={onPressShared}
+      />,
+    );
+
+    await fireEvent.press(view.getByTestId('board-shared-badge'));
+
+    expect(onPressShared).toHaveBeenCalledWith('Warm interiors');
+    expect(onPress).not.toHaveBeenCalled();
+  });
+
+  test('shows nothing at all for a private board', async () => {
+    const view = await render(
+      <PhotoVaultBoardCard
+        board={board}
+        width={180}
+        theme={theme}
+        resolveCoverUrl={(path) => path}
+        onPress={jest.fn()}
+        onLongPress={jest.fn()}
+      />,
+    );
+
+    expect(view.queryByTestId('board-shared-badge')).toBeNull();
+    expect(view.queryByText('SHARED')).toBeNull();
+  });
+
   test('renders a single quiet empty-board placeholder when covers are absent', async () => {
     const view = await render(
       <PhotoVaultBoardCard

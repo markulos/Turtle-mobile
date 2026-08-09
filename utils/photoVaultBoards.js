@@ -56,9 +56,16 @@ export const buildPhotoVaultBoards = ({
   query = '',
   sortMode = 'recent',
   now = Date.now(),
+  // Names of the boards that currently have a LIVE public link (Set or array,
+  // matched case-insensitively). Published state is otherwise invisible from
+  // the grid — you would have to open each board's menu to find out.
+  liveAlbumNames = null,
 } = {}) => {
   const seen = new Set();
   const normalizedQuery = normalizeBoardSearch(query);
+  const liveNames = new Set(
+    Array.from(liveAlbumNames || []).map((name) => String(name).toLowerCase()),
+  );
 
   const boards = names
     .filter((name) => typeof name === 'string' && name.trim())
@@ -83,6 +90,7 @@ export const buildPhotoVaultBoards = ({
         itemLabel: formatBoardItemLabel(count),
         recency: formatBoardRecency(latestDate, now),
         metadata: formatBoardMetadata(count, latestDate, now),
+        isLive: liveNames.has(name.toLowerCase()),
       };
     })
     .filter((board) => !normalizedQuery || board.normalizedName.includes(normalizedQuery));

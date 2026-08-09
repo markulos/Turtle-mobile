@@ -9,12 +9,18 @@
  * Rendered as an IN-TREE overlay, never a <Modal>: the vault already lives
  * inside one, and a sibling Modal over an open Modal silently fails to show
  * on iOS (see memory: ios-nested-pagesheet-modal-gotcha).
+ *
+ * CHROME RULE: because it is in-tree, the app's floating tab dock renders OVER
+ * it. The card is a pinned surface — nothing scrolls it clear of the dock — so
+ * it rests on `bottomInset` (= dockOccupied(insets.bottom) from the caller) and
+ * the keyboard lift cancels exactly that same clearance.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator, Alert, Pressable, ScrollView, Share, StyleSheet,
   Switch, Text, TextInput, View,
 } from 'react-native';
+import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -116,8 +122,18 @@ function ShareActivity({ shareId, api, theme, styles }) {
   );
 }
 
-export default function AlbumShareSheet({ visible, albumName, api, theme, onClose }) {
+export default function AlbumShareSheet({ visible, albumName, api, theme, onClose, bottomInset = 0 }) {
   const insets = useSafeAreaInsets();
+  // Clearance the card rests on: the floating dock when there is one, the
+  // home-indicator inset when there isn't (share target / chat's vault page).
+  const rest = Math.max(bottomInset, insets.bottom, 14);
+  // The password field rides the keyboard frame-for-frame. The lift cancels the
+  // resting clearance — mixing the two parks the card above the keyboard.
+  const keyboard = useAnimatedKeyboard();
+  const keyboardLift = useAnimatedStyle(() => {
+    'worklet';
+    return { transform: [{ translateY: -Math.max(keyboard.height.value - rest, 0) }] };
+  });
   const [shares, setShares] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -236,7 +252,8 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
   return (
     <View style={[StyleSheet.absoluteFill, s.backdrop]}>
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-      <View style={[s.sheet, { paddingBottom: Math.max(insets.bottom, 14) + 8 }]}>
+      {/* The lift rides the card itself — it carries no other transform. */}
+      <Reanimated.View style={[s.sheet, { paddingBottom: rest + 10 }, keyboardLift]}>
         <View style={s.grabber} />
         <View style={s.headerRow}>
           <View style={{ flex: 1 }}>
@@ -291,12 +308,12 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
                         <MaterialCommunityIcons
                           name={copiedId === share.id ? 'check' : 'content-copy'}
                           size={13}
-                          color={theme.colors.text}
+                          color={theme.colors.textPrimary}
                         />
                         <Text style={s.actionText}>{copiedId === share.id ? 'Copied' : 'Copy'}</Text>
                       </Pressable>
                       <Pressable onPress={() => shareLink(share)} style={s.actionBtn}>
-                        <MaterialCommunityIcons name="share-variant" size={13} color={theme.colors.text} />
+                        <MaterialCommunityIcons name="share-variant" size={13} color={theme.colors.textPrimary} />
                         <Text style={s.actionText}>Share</Text>
                       </Pressable>
                       <Pressable onPress={() => revoke(share)} disabled={busy} style={s.actionBtnGhost}>
@@ -371,7 +388,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
             </Pressable>
           </View>
         </ScrollView>
-      </View>
+      </Reanimated.View>
     </View>
   );
 }
@@ -393,7 +410,7 @@ const makeStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.borderStrong, marginBottom: 12,
   },
   headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  title: { fontSize: 17, fontWeight: '800', color: theme.colors.text, letterSpacing: -0.2 },
+  title: { fontSize: 17, fontWeight: '800', color: theme.colors.textPrimary, letterSpacing: -0.2 },
   subtitle: { fontSize: 12.5, color: theme.colors.textSecondary, marginTop: 3, lineHeight: 17 },
   closeBtn: {
     width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center',
@@ -415,14 +432,14 @@ const makeStyles = (theme) => StyleSheet.create({
   linkTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 7 },
   linkKind: { fontSize: 11.5, fontWeight: '700', color: theme.colors.textSecondary },
   linkMeta: { fontSize: 11, color: theme.colors.textMuted },
-  url: { fontSize: 11.5, color: theme.colors.text, marginBottom: 10 },
+  url: { fontSize: 11.5, color: theme.colors.textPrimary, marginBottom: 10 },
   urlDead: { textDecorationLine: 'line-through', color: theme.colors.textMuted },
   linkActions: { flexDirection: 'row', gap: 8 },
   actionBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 7, paddingHorizontal: 11,
     borderRadius: 9, backgroundColor: theme.colors.surfaceHighlight,
   },
-  actionText: { fontSize: 12, fontWeight: '600', color: theme.colors.text },
+  actionText: { fontSize: 12, fontWeight: '600', color: theme.colors.textPrimary },
   actionBtnGhost: {
     flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 7, paddingHorizontal: 11,
     borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
@@ -442,7 +459,7 @@ const makeStyles = (theme) => StyleSheet.create({
   },
   statRow: { flexDirection: 'row', gap: 14, marginBottom: 10 },
   stat: { minWidth: 52 },
-  statValue: { fontSize: 15, fontWeight: '800', color: theme.colors.text },
+  statValue: { fontSize: 15, fontWeight: '800', color: theme.colors.textPrimary },
   statLabel: { fontSize: 10, color: theme.colors.textMuted },
   placeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginBottom: 10 },
   placeChip: {
@@ -455,7 +472,7 @@ const makeStyles = (theme) => StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4,
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
   },
-  visitEvent: { fontSize: 11.5, fontWeight: '600', color: theme.colors.text, minWidth: 88 },
+  visitEvent: { fontSize: 11.5, fontWeight: '600', color: theme.colors.textPrimary, minWidth: 88 },
   visitMeta: { fontSize: 11, color: theme.colors.textMuted, flex: 1 },
   visitTime: { fontSize: 10.5, color: theme.colors.textMuted },
   newBlock: {
@@ -468,11 +485,11 @@ const makeStyles = (theme) => StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingVertical: 8, gap: 12,
   },
-  optionText: { fontSize: 14, color: theme.colors.text, flex: 1 },
+  optionText: { fontSize: 14, color: theme.colors.textPrimary, flex: 1 },
   input: {
     borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border, borderRadius: 10,
     paddingHorizontal: 12, height: 42, paddingVertical: 0, textAlignVertical: 'center',
-    color: theme.colors.text, fontSize: 14, backgroundColor: theme.colors.surfaceElevated,
+    color: theme.colors.textPrimary, fontSize: 14, backgroundColor: theme.colors.surfaceElevated,
   },
   createBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
