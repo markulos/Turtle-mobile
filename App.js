@@ -49,8 +49,8 @@ import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
-import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE, TAB_ICON_SLOT } from './components/tabBarLayout';
-import AnimalAvatar from './components/AnimalAvatar';
+import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
+import { avatarAnimal } from './utils/avatar';
 import ProfileScreen from './screens/ProfileScreen';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import PomodoroNotifications from './components/PomodoroNotifications';
@@ -117,14 +117,23 @@ function TabNavigator() {
               </TabBarIcon>
             );
           }
-          // Profile's tab icon IS the user's avatar. Sized to the dock's icon
-          // slot like every other glyph, and switched to the on-light treatment
-          // when active so it reads against the white chip instead of sitting
-          // as a saturated disc on white.
+          // Profile's tab icon is the user's ANIMAL — but drawn as a bare glyph
+          // like every other tab, not as the tinted disc AnimalAvatar renders.
+          // Two reasons the disc was wrong here:
+          //   • Style — a saturated circle among flat monochrome glyphs read as
+          //     a foreign object, and its `onLight` variant was written for a
+          //     WHITE active chip; the chip is the theme accent now, so a tinted
+          //     disc sat on a saturated chip and muddied both.
+          //   • Size — the disc was 25pt but its glyph is 55% of that, so the
+          //     actual mark was ~14pt against every neighbour's 24pt.
+          // As a plain glyph it takes the same 24pt and the same active/inactive
+          // `color` the navigator hands every other tab, for free. The identity
+          // still reads: it's the user's own animal. The full tinted avatar (and
+          // any uploaded photo) still lives on the Profile screen itself.
           if (route.name === 'Profile') {
             return (
               <TabBarIcon focused={focused}>
-                <AnimalAvatar id={authIdentity || 'anon'} size={TAB_ICON_SLOT - 22} onLight={focused} />
+                <Icon name={avatarAnimal(authIdentity || 'anon') || 'account-circle-outline'} size={24} color={color} />
               </TabBarIcon>
             );
           }
