@@ -38,6 +38,9 @@ import { sweepTransientCaches } from '../../../utils/cacheManager';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { impactHaptic } from '../../../utils/haptics';
+import { buildBucketsUrl, buildGalleryUrl } from '../../../utils/galleryFilters';
+import { useGalleryFilters } from '../../../utils/useGalleryFilters';
+import GalleryFilterSheet from './GalleryFilterSheet';
 
 // react-native-share (unlike expo-sharing) can hand the OS a whole ARRAY of
 // files in ONE share sheet — so sharing many vault photos matches the native
@@ -265,7 +268,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // Media-kind scope for the Media Vault split. null = all (back-compat with
   // the chat /photos usage). The Photos & Video view passes 'visual' so audio
   // rows never appear in the photo grid.
-  const kindParam = kind ? `&kind=${kind}` : '';
+  // (The old `kindParam` string-concat is gone: every request now goes through
+  // buildGalleryUrl / buildBucketsUrl, which take `kind` as an option.)
   const { theme } = useTheme();
   const { api, getBaseUrl, getMediaBaseUrl } = useServer();
   const insets = useSafeAreaInsets();
@@ -606,15 +610,55 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const [hasLoadedAlbums, setHasLoadedAlbums] = useState(false);
   const [albumSearchQuery, setAlbumSearchQuery] = useState(''); // Album search filter
   const searchInputRef = useRef(null);
-  const [uploadsSearchQuery, setUploadsSearchQuery] = useState(''); // Uploads/All Photos search filter
+  // === BROWSE MODEL ===
+  // Every knob the "Filter & arrange" sheet offers — date basis, direction,
+  // media type, tags, scene, date range, search text, grid density — lives in
+  // one object with one URL builder (utils/galleryFilters.js). These used to be
+  // eight separate useStates with five call sites hand-writing their own query
+  // strings, which had already drifted apart.
+  const {
+    filters,
+    setFilter,
+    setFilters,
+    toggleTag,
+    clearChip,
+    reset: resetFilters,
+    chips: filterChips,
+    isDirty: filtersDirty,
+  } = useGalleryFilters();
+  const [isFilterSheetOpen, setIsFilterSheetOpen] = useState(false);
+  const [filterSheetFocusSearch, setFilterSheetFocusSearch] = useState(false);
+  const [facets, setFacets] = useState({ buckets: [], sceneCounts: {}, tagCounts: {} });
+
+  // Aliases. The rest of this file reads these names in ~40 places; keeping
+  // them means the browse model swaps in without touching the grid, the
+  // scrubber, the viewer or the pinch handoff.
+  const uploadsSearchQuery = filters.q;
+  const setUploadsSearchQuery = useCallback((q) => setFilter('q', typeof q === 'string' ? q : ''), [setFilter]);
   // Grid date basis: 'original' = when the photo was TAKEN (capture date,
   // Google-Photos style, the default) | 'upload' = when it was ADDED to
   // Turtle (shared/uploaded/ingested). Both dates live on every media row —
   // this only switches which one drives the ORDER BY + timeline buckets.
-  const [sortMode, setSortMode] = useState('original');
+  const sortMode = filters.sortBy;
   const sortModeRef = useRef(sortMode);
   sortModeRef.current = sortMode;
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+  // A stable string for everything the SERVER cares about. `filters` is a new
+  // object per keystroke; this only moves when a request would actually differ,
+  // so effects keyed on it don't thrash while the user types.
+  const filterSignature = [
+    filters.sortBy, filters.direction, filters.mediaType,
+    filters.tag.join(','), filters.sceneType ?? '', filters.from ?? '', filters.to ?? '',
+  ].join('|');
   const [isUploadsSearchVisible, setIsUploadsSearchVisible] = useState(false);
+  // The magnify icon is gone — search lives in the filter sheet now. The
+  // inline bar still earns its place as the live query readout under the
+  // header (and it carries the tag "Jump" affordance), so it follows the
+  // query rather than a button.
+  useEffect(() => {
+    setIsUploadsSearchVisible(!!(filters.q || '').trim());
+  }, [filters.q]);
   const uploadsSearchAnim = useRef(new Animated.Value(0)).current;
 
   // Animate the Photos search bar. Uses the iOS
@@ -644,9 +688,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
-        const r = await api.get(
-          `/media/search?q=${encodeURIComponent(q)}&limit=200&offset=0&sortBy=${sortModeRef.current}`,
-        );
+        // buildGalleryUrl routes to /media/search whenever the model carries a
+        // query, so the sheet's media-type and tag choices narrow search
+        // results exactly as they narrow the browse grid.
+        const r = await api.get(buildGalleryUrl(filtersRef.current, {
+          limit: 200, offset: 0, album: selectedAlbumRef.current, kind,
+        }));
         if (cancelled) return;
         const items = (Array.isArray(r?.items) ? r.items : []).filter((it) => it.type !== 'audio');
         setServerSearch({ query: q, items });
@@ -655,7 +702,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       }
     }, 300);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [uploadsSearchQuery, api]);
+    // filterSignature: narrowing to Videos (say) must re-run the search, not
+    // leave the previous, wider result set on screen.
+  }, [uploadsSearchQuery, filterSignature, api, kind]);
   
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [pendingAssets, setPendingAssets] = useState([]);
@@ -740,7 +789,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // stale count.
   const GRID_COL_MIN = 2;
   const GRID_COL_MAX = 5;
-  const [gridCols, setGridCols] = useState(3);
+  // Density lives in the browse model so the pinch gesture and the sheet's
+  // stepper are the same value read two ways — and so it survives a restart.
+  const gridCols = filters.cols;
+  const setGridCols = useCallback((n) => setFilter('cols', n), [setFilter]);
   const gridColsRef = useRef(3);
   gridColsRef.current = gridCols;
   // Cell pitch = one cell + its margins; derived per-call from the live count.
@@ -1384,7 +1436,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       // cache — a stale response must NOT repopulate it (wrong photos under
       // the new headers + duplicate FlashList keys).
       const epoch = sparseEpochRef.current;
-      api.get(`/media/gallery?limit=${SPARSE_PAGE}&offset=${best * SPARSE_PAGE}&order=desc&sortBy=${sortModeRef.current}${kindParam}`)
+      // q dropped: this is the BROWSE path. buildGalleryUrl would otherwise
+      // route a live query to FTS, and the sparse cache is page-indexed
+      // against the browse ordering.
+      api.get(buildGalleryUrl({ ...filtersRef.current, q: '' }, {
+        limit: SPARSE_PAGE, offset: best * SPARSE_PAGE, album: selectedAlbumRef.current, kind,
+      }))
         .then((res) => {
           if (epoch === sparseEpochRef.current && res && res.success && Array.isArray(res.items)) {
             sparsePagesRef.current.set(best, res.items);
@@ -1535,6 +1592,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   
   // Filter state
   const [selectedAlbum, setSelectedAlbum] = useState('All');
+  // Read by the debounced FTS effect, which is declared above this and would
+  // otherwise close over a stale board name.
+  const selectedAlbumRef = useRef(selectedAlbum);
+  selectedAlbumRef.current = selectedAlbum;
 
   // Does the open board have a live public link? Drives the header's "on the
   // web" cue. Declared here, after selectedAlbum — liveAlbums is filled far
@@ -1711,8 +1772,18 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
 
     prefixLenRef.current = filtered.length;
+    // Virtual mode maps month buckets onto page offsets assuming the server's
+    // default DESCENDING order, and it is a whole-library device — any active
+    // filter or an ascending sort breaks that mapping. Fall back to plain
+    // pagination rather than rewrite the bucket math.
     const virtual = selectedAlbum === 'All'
       && !uploadsSearchQuery.trim()
+      && filters.direction === 'desc'
+      && filters.mediaType === 'all'
+      && filters.tag.length === 0
+      && !filters.sceneType
+      && filters.from == null
+      && filters.to == null
       && uploadTimeline.total > filtered.length;
     virtualEnabledRef.current = virtual;
     if (!virtual) return filtered;
@@ -2212,21 +2283,29 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAlbum]);
 
-  // Sort-basis change → the grid AND the timeline buckets describe a
-  // different ordering; cold-reload both (same skeleton treatment as an
-  // album switch). Epoch bump orphans in-flight old-sort fetches.
-  const sortModeFirstRun = useRef(true);
+  // Any filter change → the grid AND the timeline buckets now describe a
+  // different set or a different ordering; cold-reload both (same skeleton
+  // treatment as an album switch). Epoch bump orphans in-flight stale fetches.
+  //
+  // Keyed on filterSignature (defined up with the browse model), which
+  // deliberately excludes the search query: queries are served by the
+  // debounced FTS overlay above, and cold-reloading the browse grid on every
+  // keystroke would throw away the user's scroll position for nothing.
+  const filterFirstRun = useRef(true);
   useEffect(() => {
-    if (sortModeFirstRun.current) { sortModeFirstRun.current = false; return; }
+    if (filterFirstRun.current) { filterFirstRun.current = false; return; }
     galleryEpochRef.current += 1;
+    // The sparse/virtual cache is keyed by page index against one ordering —
+    // a filter change invalidates every page it holds.
+    sparseEpochRef.current += 1;
     setLoading(true);
     setUploadItems([]);
-    // Drop the old-basis month frame so the scrubber doesn't show stale
-    // months until fetchBuckets() returns the new-basis timeline.
+    // Drop the old month frame so the scrubber doesn't show stale months until
+    // fetchBuckets() returns the new timeline.
     setUploadTimeline({ months: [], total: 0 });
     Promise.all([fetchUploads(true), fetchBuckets()]).finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortMode]);
+  }, [filterSignature]);
 
   // === API CALLS ===
   // Fetch uploads from database with strict deduplication
@@ -2239,12 +2318,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       
       const currentOffset = isRefresh ? 0 : uploadOffset;
       const epoch = galleryEpochRef.current;
-      const tagParam = selectedAlbum !== 'All' ? `&tag=${encodeURIComponent(selectedAlbum)}` : '';
       // sortBy=original orders by the photo's TAKEN date (Google-Photos style),
       // so the month/year timeline spans the real capture history instead of
       // the upload date (which clusters at import time for a bulk-uploaded
-      // library — the "everything shows 2026" symptom).
-      const response = await api.get(`/media/gallery?limit=${LIMIT}&offset=${currentOffset}&order=desc&sortBy=${sortMode}${tagParam}${kindParam}`);
+      // library — the "everything shows 2026" symptom). Every parameter now
+      // comes from the one browse model, so this page, the sparse pages, the
+      // scrubber buckets and the facets can never disagree about what's shown.
+      // q dropped — the browse grid never routes to FTS; the debounced search
+      // overlay owns queries.
+      const response = await api.get(buildGalleryUrl({ ...filters, q: '' }, {
+        limit: LIMIT, offset: currentOffset, album: selectedAlbum, kind,
+      }));
       // Sort/album context changed while this was in flight — its rows belong
       // to a dead ordering; merging them would corrupt the new list and
       // clobber uploadOffset. (finally still clears isPaginating.)
@@ -2276,7 +2360,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             const dateOf = sortMode === 'upload'
               ? (m) => new Date(m.uploadDate)
               : (m) => new Date(m.originalDate || m.uploadDate);
-            return Array.from(uniqueMap.values()).sort((a, b) => dateOf(b) - dateOf(a));
+            // Match the server's direction too — an ascending page merged with
+            // a hardcoded descending sort would scramble the timeline.
+            const sign = filters.direction === 'asc' ? -1 : 1;
+            return Array.from(uniqueMap.values()).sort((a, b) => sign * (dateOf(b) - dateOf(a)));
           });
           setUploadOffset(currentOffset + LIMIT);
         }
@@ -2287,15 +2374,21 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     } finally {
       if (!isRefresh) setIsPaginating(false);
     }
-  }, [api, uploadOffset, selectedAlbum, isPaginating, sortMode]);
+  }, [api, uploadOffset, selectedAlbum, isPaginating, sortMode, filters, kind]);
 
   // Fetch the month/year timeline for the scrubber (full library, by taken
   // date). Builds cumulative start indices so a scrub fraction maps to a month
-  // label AND an item index for scrollToIndex.
+  // label AND an item index for scrollToIndex. The same response carries the
+  // tag and scene facet counts the filter sheet's chips are built from.
   const fetchBuckets = useCallback(async () => {
     try {
-      const res = await api.get(`/media/buckets?sortBy=${sortMode}${kindParam}`);
+      const res = await api.get(buildBucketsUrl(filters, { album: selectedAlbum, kind }));
       if (!res || !res.success || !Array.isArray(res.buckets)) return;
+      setFacets({
+        buckets: res.buckets,
+        sceneCounts: res.sceneCounts || {},
+        tagCounts: res.tagCounts || {},
+      });
       let cum = 0;
       const months = res.buckets.map((b) => {
         const start = cum;
@@ -2308,7 +2401,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     } catch (e) {
       // Non-fatal — the scrubber just falls back to loaded-items labels.
     }
-  }, [api, sortMode]);
+  }, [api, sortMode, filters, selectedAlbum, kind]);
 
   // Load the Photos (uploads) grid. The PC/server-files tab was removed, so
   // there's no server-files fetch to branch on anymore. (Albums refresh is
@@ -2334,13 +2427,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const softReloadGallery = useCallback(async () => {
     try {
       const win = Math.max(LIMIT, Math.ceil(uploadCountRef.current / LIMIT) * LIMIT);
-      const tagParam = selectedAlbum !== 'All' ? `&tag=${encodeURIComponent(selectedAlbum)}` : '';
-      // Read the sort basis via the ref (a debounced timer can fire this with
-      // a stale closure right after a flip) and drop the response if the
-      // basis changed while the request was in flight.
-      const sortAtRequest = sortModeRef.current;
-      const r = await api.get(`/media/gallery?limit=${win}&offset=0&order=desc&sortBy=${sortAtRequest}${tagParam}${kindParam}`);
-      if (sortModeRef.current !== sortAtRequest) return;
+      // Read the browse model via the ref (a debounced timer can fire this
+      // with a stale closure right after a change) and drop the response if
+      // ANY filter moved while the request was in flight — not just the sort
+      // basis, which is all this used to check.
+      const filtersAtRequest = filtersRef.current;
+      const r = await api.get(buildGalleryUrl({ ...filtersAtRequest, q: '' }, {
+        limit: win, offset: 0, album: selectedAlbum, kind,
+      }));
+      if (filtersRef.current !== filtersAtRequest) return;
       if (r?.success) {
         setGlobalUploadsTotal(r.pagination?.total || r.total || r.items?.length || 0);
         setUploadItems(r.items || []);
@@ -2350,9 +2445,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     } catch (e) {
       // Best-effort — the next event or a manual refresh catches up.
     }
-    // sortMode deliberately NOT a dep — read via sortModeRef so a pending
-    // debounce timer never runs a stale-sort closure.
-  }, [api, selectedAlbum]);
+    // filters deliberately NOT a dep — read via filtersRef so a pending
+    // debounce timer never runs a stale-filter closure.
+  }, [api, selectedAlbum, kind]);
 
   // Initial load - Fetch EVERYTHING simultaneously to prepare the off-screen slider pages
   useEffect(() => {
@@ -5285,7 +5380,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                     </View>
                     {!!albumCounts[selectedAlbum] && (
                       <Text style={{ fontSize: 11.5, color: theme.colors.textTertiary, marginTop: 1 }} numberOfLines={1}>
-                        {albumCounts[selectedAlbum]} item{albumCounts[selectedAlbum] === 1 ? '' : 's'}
+                        {/* While filtered, the count says so — otherwise a
+                            board that shows 12 of its 87 photos looks broken. */}
+                        {filtersDirty && uploadDisplayItems.length !== albumCounts[selectedAlbum]
+                          ? `${uploadDisplayItems.length} of ${albumCounts[selectedAlbum]} items`
+                          : `${albumCounts[selectedAlbum]} item${albumCounts[selectedAlbum] === 1 ? '' : 's'}`}
                         {albumLatestDates[selectedAlbum]
                           ? ` · ${new Date(albumLatestDates[selectedAlbum]).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
                           : ''}
@@ -5325,29 +5424,41 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 position: 'absolute', right: 0,
                 flexDirection: 'row', alignItems: 'center', gap: 16,
               }}>
-                {/* Date-basis toggle: camera = grid ordered by CAPTURE date
-                    (default), clock-plus = ordered by when items were ADDED to
-                    Turtle. Both dates are logged on every row — this only
-                    switches which one drives the timeline. */}
+                {/* Filter & arrange. This replaced a bare icon that flipped
+                    between a camera and a clock: it changed the grid's order
+                    with no word anywhere saying so, and read as a camera
+                    button. Search folded in with it — one control for "what am
+                    I looking at", rather than three unlabelled glyphs.
+                    Long-press lands straight in the search field, so the most
+                    common action still costs one gesture. */}
                 <TouchableOpacity
-                  onPress={() => setSortMode((m) => (m === 'original' ? 'upload' : 'original'))}
+                  testID="gallery-filter-toggle"
+                  onPress={() => { setFilterSheetFocusSearch(false); setIsFilterSheetOpen(true); }}
+                  onLongPress={() => { impactHaptic('medium'); setFilterSheetFocusSearch(true); setIsFilterSheetOpen(true); }}
+                  delayLongPress={280}
                   hitSlop={HIT_SLOP_10}
                   accessibilityRole="button"
-                  accessibilityLabel={sortMode === 'original'
-                    ? 'Sorted by capture date. Switch to date added to Turtle.'
-                    : 'Sorted by date added to Turtle. Switch to capture date.'}
+                  accessibilityLabel={filtersDirty
+                    ? 'Filter and arrange. Filters are active. Long-press to search.'
+                    : 'Filter and arrange. Long-press to search.'}
                 >
-                  <Icon
-                    name={sortMode === 'original' ? 'camera-outline' : 'clock-plus-outline'}
-                    size={24}
-                    color={sortMode === 'upload' ? theme.colors.primary : theme.colors.textPrimary}
-                  />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => setIsUploadsSearchVisible(!isUploadsSearchVisible)}
-                  hitSlop={HIT_SLOP_10}
-                >
-                  <Icon name="magnify" size={24} color={isUploadsSearchVisible || uploadsSearchQuery ? theme.colors.primary : theme.colors.textPrimary} />
+                  <View>
+                    <Icon
+                      name="tune-variant"
+                      size={24}
+                      color={filtersDirty ? theme.colors.primary : theme.colors.textPrimary}
+                    />
+                    {/* Active-state dot. Density changes deliberately don't
+                        light it — badging a viewing preference cries wolf. */}
+                    {filtersDirty && (
+                      <View style={{
+                        position: 'absolute', top: -1, right: -2,
+                        width: 7, height: 7, borderRadius: 4,
+                        backgroundColor: theme.colors.primary,
+                        borderWidth: 1.5, borderColor: theme.colors.background,
+                      }} />
+                    )}
+                  </View>
                 </TouchableOpacity>
                 <TouchableOpacity
                   testID="gallery-select-toggle"
@@ -5392,7 +5503,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 onChangeText={setUploadsSearchQuery}
                 placeholder="Search photos, tags, text…"
                 placeholderTextColor={theme.colors.textMuted}
-                autoFocus={isUploadsSearchVisible}
+                // Never steals focus: this bar now appears BECAUSE a query
+                // exists, and the query is usually being typed in the sheet.
+                autoFocus={false}
               />
               {/* Jump — leave the filter and scroll the full timeline to where this
                   tag clusters in time (uploads tab only, when a tag is typed). */}
@@ -5649,6 +5762,29 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             </TouchableOpacity>
             </Animated.View>
           )}
+
+          {/* Filter & arrange. IN-TREE, inside the photos page — a sibling
+              <Modal> over this already-presented EdgeSwipePage overlay renders
+              nothing at all on iOS. */}
+          <GalleryFilterSheet
+            visible={isFilterSheetOpen}
+            theme={theme}
+            filters={filters}
+            chips={filterChips}
+            isDirty={filtersDirty}
+            facets={facets}
+            resultCount={uploadDisplayItems.length}
+            totalCount={selectedAlbum === 'All'
+              ? (uploadTimeline.total || globalUploadsTotal)
+              : albumCounts[selectedAlbum]}
+            autoFocusSearch={filterSheetFocusSearch}
+            bottomInset={Math.max(insets.bottom, 10)}
+            onChange={setFilters}
+            onToggleTag={toggleTag}
+            onClearChip={clearChip}
+            onReset={resetFilters}
+            onClose={() => { setIsFilterSheetOpen(false); setFilterSheetFocusSearch(false); }}
+          />
         </View>
       </EdgeSwipePage>
       </View>
