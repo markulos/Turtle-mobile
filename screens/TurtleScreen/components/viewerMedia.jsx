@@ -5,20 +5,22 @@
  *   • FullScreenVideoPlayer — expo-video cell for the pager
  *   • ProgressiveImage      — blurhash → compressed → RAW layered image with
  *     the HD dwell/zoom gate (HD_DWELL_MS)
- *   • ImageViewer           — the zoomable ScrollView cell (pinch + double-tap,
- *     zoom reported up via onZoomScaleChange)
+ *   • ImageViewer           — the zoomable cell (ZoomableView: pinch, pan,
+ *     double-tap; zoom reported up via onZoomScaleChange)
  * Pure presentational leaves: everything arrives via props; no gallery state.
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, Pressable, ScrollView, TouchableOpacity, Animated, Dimensions, Easing,
+  View, Text, StyleSheet, Pressable, TouchableOpacity, Animated, Dimensions, Easing, PixelRatio,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useMusicPlayer } from '../../../context/MusicPlayerContext';
+import ZoomableView from './ZoomableView';
+import { MAX_SCALE, nativeMaxScale } from '../../../utils/zoomMath';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
 // Full-screen video player component (extracted from main component)
 const FullScreenVideoPlayer = ({ sourceUrl, isActive, styles, insets }) => {
@@ -105,7 +107,25 @@ const FullScreenVideoPlayer = ({ sourceUrl, isActive, styles, insets }) => {
 // save bandwidth, at the documented 1.5s.)
 const HD_DWELL_MS = 1500;
 
-const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLoad, onLoadProgress, getFullUrl, forceHd = false }) => {
+/**
+ * Subscribe to the pager's "a swipe is in flight" store.
+ *
+ * The store is a plain object owned by MediaGallery (stable identity, no state),
+ * so a drag start re-renders ONLY the image cells that care — not the whole
+ * gallery. Gating on gallery state instead would put a re-render of a
+ * 6000-line component at the exact frame the swipe begins.
+ */
+const usePagerDragging = (store) => {
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    if (!store) return undefined;
+    setDragging(store.get());
+    return store.subscribe(setDragging);
+  }, [store]);
+  return dragging;
+};
+
+const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLoad, onLoadProgress, getFullUrl, forceHd = false, onDimensions, pagerDragStore }) => {
   const [highResLoaded, setHighResLoaded] = useState(false);
   // Gate for the HD (Layer 2) load: false until the user has dwelled on this
   // image for HD_DWELL_MS. Reset whenever the image deactivates/changes.
@@ -121,6 +141,8 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
   // variant (older server / moved source / transient sharp failure).
   const [hiResFallback, setHiResFallback] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  // A swipe is in flight → the HD layer stands down (see its render note).
+  const pagerDragging = usePagerDragging(pagerDragStore);
 
   // Reset crossfade state on activation change. isActive=false simply
   // unmounts Layer 2 and cancels the in-flight request.
@@ -223,6 +245,17 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
           cachePolicy="memory-disk"
           placeholder={media.blurhash ? { blurhash: media.blurhash } : null}
           placeholderContentFit="cover"
+          // Decoded pixel dimensions — the zoom surface needs the real aspect
+          // ratio to bound panning to the letterboxed image rect. Reported off
+          // the FAST layer so the bounds are right from the first frame, not
+          // only once the HD layer lands (and for rows whose width/height
+          // columns are null).
+          onLoad={(e) => {
+            const src = e?.source || e?.nativeEvent?.source || {};
+            if (onDimensions && src.width > 0 && src.height > 0) {
+              onDimensions(src.width, src.height);
+            }
+          }}
           onError={logLoadFailure('fast', fastSource)}
         />
       )}
@@ -232,8 +265,18 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
           zooming means they want detail now, so we don't make them wait. The
           regular compressed JPEG carries the view until then. Unmounts
           (cancelling the in-flight fetch) the moment isActive flips back to
-          false; the dwell/zoom gate is the swipe-by guard for the bytes. */}
-      {isActive && (hdRequested || forceHd) && (
+          false; the dwell/zoom gate is the swipe-by guard for the bytes.
+
+          ALSO stands down for the duration of a pager swipe (`pagerDragging`) —
+          but ONLY while the fetch is still in flight. A multi-megabyte fetch +
+          decode landing mid-swipe stalls the frame the gesture needs, which on
+          device read as "I can't swipe while it's loading HD"; unmounting
+          cancels the request. Once the HD layer HAS loaded there is no fetch
+          to cancel, and unmounting it is how the black flash happened: after
+          the crossfade the fast layer is gone (fastHidden), so starting a
+          swipe removed the ONLY mounted image and the photo under your finger
+          blanked to background. Loaded HD stays put. */}
+      {isActive && (highResLoaded || !pagerDragging) && (hdRequested || forceHd) && (
         <Animated.View style={[StyleSheet.absoluteFillObject, { opacity: fadeAnim, zIndex: 2 }]} pointerEvents="none">
           <Image
             source={{ uri: hiResUri }}
@@ -281,130 +324,112 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
   );
 };
 
-// Image viewer component with pinch-to-zoom (extracted from main component)
-const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, api, onLoadProgress, onLoadComplete, onZoomScaleChange }) => {
-  const scrollRef = useRef(null);
-  const lastTapRef = useRef(0);
-  const isZoomedRef = useRef(false);
-
+// Image viewer component with pinch-to-zoom.
+//
+// The zoom surface is ZoomableView (Reanimated + Gesture Handler). It replaced
+// the original iOS-only `ScrollView maximumZoomScale` cell, whose zoom-out
+// always settled off-centre: UIScrollView owns contentOffset during a zoom and
+// never re-centres content that has shrunk back inside the viewport, so a pinch
+// out left the photo parked wherever the pinch centroid was. The transform
+// model has no such state — 1× IS translate(0, 0) — and it works on Android,
+// which never had pinch zoom here at all.
+const ImageViewer = ({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, api, onLoadProgress, onLoadComplete, onZoomScaleChange, onSingleTap, onPinchDismiss, pagerDragStore }) => {
   // 1. Track HD State
   const [rawLoaded, setRawLoaded] = useState(false);
   // True once the user zooms into this image — forces the HD layer to load
   // immediately (no dwell wait), since a zoomed compressed JPEG looks soft.
   const [zoomed, setZoomed] = useState(false);
+  // Aspect ratio of the displayed image: the metadata columns when present,
+  // otherwise whatever the decoder reports on first paint. Drives the zoom
+  // surface's pan bounds, so panning stops at the image edge instead of the
+  // black letterbox.
+  const [loadedAspect, setLoadedAspect] = useState(null);
+  const metaAspect = (item?.width > 0 && item?.height > 0) ? item.width / item.height : null;
+  const aspectRatio = metaAspect || loadedAspect;
+  // Zoom ceiling from the ORIGINAL pixel width (the DB column — the decoder
+  // only ever sees the compressed variant, which would cap far too low). iOS
+  // caps zoom near 1:1 with the source, so a 48MP shot zooms deeper than an
+  // old 2MP one; unknown dimensions fall back to the library default.
+  const maxScale = useMemo(
+    () => (item?.width > 0 ? nativeMaxScale(item.width, width, PixelRatio.get()) : MAX_SCALE),
+    [item?.width],
+  );
+
+  // Zoom forces the HD layer in, but only once the gesture has settled. Mounting
+  // a 1600px JPEG mid-pinch puts a decode on the main thread at exactly the
+  // moment the gesture needs every frame — that read as pinch jitter on device.
+  const [hdZoom, setHdZoom] = useState(false);
 
   // Reset HD state when user swipes away
   useEffect(() => {
     if (!isActive) { setRawLoaded(false); setZoomed(false); }
   }, [isActive]);
-  
-  // Reset zoom AND scroll offset when mediaId changes (swipe to a different
-  // image, incl. FlatList cell recycle). This must run UNCONDITIONALLY — the
-  // old version gated on `isZoomedRef`, which is only set by double-tap zoom,
-  // NOT by pinch-zoom/pan. So a pinch-zoomed-and-panned cell (e.g. panned to
-  // the image's bottom-right) skipped the reset, and when that cell was reused
-  // for the next image it inherited the leftover zoomScale + scroll offset →
-  // the intermittent "image loads offset to the bottom-right" bug. Resetting
-  // both the zoom and the content offset on every image change clears it.
+
   useEffect(() => {
-    const sv = scrollRef.current;
-    if (!sv) return;
-    sv.scrollResponderZoomTo?.({ x: 0, y: 0, width, height, animated: false });
-    sv.scrollTo?.({ x: 0, y: 0, animated: false });
-    isZoomedRef.current = false;
-    setZoomed(false);
-    // New image starts at zoom 1 — tell the viewer shell so its zoom guards
-    // (chrome hide, pull-to-dismiss lockout) track reality.
-    onZoomScaleChange?.(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaId]);
-  
-  const handleDoubleTap = useCallback(() => {
-    const now = Date.now();
-    if (now - lastTapRef.current < 300) { // 300ms double-tap window
-      // Toggle zoom
-      if (scrollRef.current) {
-        if (!isZoomedRef.current) {
-          // Zoom in to center
-          scrollRef.current.scrollResponderZoomTo({
-            x: width * 0.25,
-            y: height * 0.25,
-            width: width * 0.5,
-            height: height * 0.5,
-            animated: true,
-          });
-          setZoomed(true); // want detail → load HD now, skip the dwell wait
-          onZoomScaleChange?.(2);
-        } else {
-          // Zoom out
-          scrollRef.current.scrollResponderZoomTo({
-            x: 0,
-            y: 0,
-            width: width,
-            height: height,
-            animated: true,
-          });
-          onZoomScaleChange?.(1);
-        }
-        isZoomedRef.current = !isZoomedRef.current;
-      }
-    }
-    lastTapRef.current = now;
+    if (!zoomed) { setHdZoom(false); return undefined; }
+    const t = setTimeout(() => setHdZoom(true), 260);
+    return () => clearTimeout(t);
+  }, [zoomed]);
+
+  // Drop a stale decoded aspect when the cell is recycled onto another photo.
+  useEffect(() => { setLoadedAspect(null); }, [mediaId]);
+
+  const handleDimensions = useCallback((w, h) => {
+    if (w > 0 && h > 0) setLoadedAspect(w / h);
   }, []);
-  
+
+  // Coarse zoom signal from the surface: forces the HD layer in (zooming means
+  // "I want detail now", so we skip the dwell wait) and tells the viewer shell
+  // to hide chrome / stop the pager. Only the active cell speaks, so a recycled
+  // neighbour can't clobber the shell's state.
+  const handleZoomedChange = useCallback((isZoomed) => {
+    setZoomed(isZoomed);
+    if (isActive) onZoomScaleChange?.(isZoomed ? 2 : 1);
+  }, [isActive, onZoomScaleChange]);
+
+  const handlePinchDismiss = useCallback(() => {
+    if (isActive) onPinchDismiss?.();
+  }, [isActive, onPinchDismiss]);
+
   return (
     <View style={{ flex: 1, width: width, justifyContent: 'center', alignItems: 'center' }}>
-      <ScrollView
+      <ZoomableView
         // key by mediaId so a reused cell (FlatList recycle, or a quick
-        // close-then-open-the-next-photo before this cell unmounts) tears
-        // down the old, possibly-zoomed native scroll view and mounts a
-        // FRESH one at zoom=1 / offset=0. The scrollResponderZoomTo reset
-        // below still runs, but it's imperative and can land after layout —
-        // remounting via key is what actually guarantees the next photo
-        // isn't inheriting the previous one's zoom + pan offset.
+        // close-then-open-the-next-photo before this cell unmounts) mounts a
+        // fresh surface; `resetKey`/`active` also snap it back to 1× centred,
+        // belt and braces, so the next photo can never inherit the previous
+        // one's zoom + pan.
         key={mediaId}
-        ref={scrollRef}
-        contentContainerStyle={styles.viewerScrollContent}
-        maximumZoomScale={4}
-        minimumZoomScale={1}
-        bouncesZoom={true}
-        showsHorizontalScrollIndicator={false}
-        showsVerticalScrollIndicator={false}
-        pinchGestureEnabled={true}
-        // Catch pinch-zoom (UIScrollView reports zoomScale on scroll events) so
-        // any zoom — not just double-tap — forces the HD layer in immediately.
-        // setZoomed(true) is idempotent (React bails on same value), so calling
-        // it per frame while zooming is cheap.
-        scrollEventThrottle={64}
-        onScroll={(e) => {
-          const z = e?.nativeEvent?.zoomScale ?? 1;
-          if (z > 1.01) setZoomed(true);
-          // Live zoom report → viewer shell (chrome + gesture guards). Only the
-          // active cell speaks, so a recycled neighbour can't clobber it.
-          if (isActive) onZoomScaleChange?.(z);
-        }}
+        resetKey={mediaId}
+        active={isActive}
+        aspectRatio={aspectRatio}
+        maxScale={maxScale}
+        style={styles.viewerImage}
+        onZoomedChange={handleZoomedChange}
+        onSingleTap={onSingleTap}
+        onPinchDismiss={handlePinchDismiss}
       >
-        <Pressable onPress={handleDoubleTap}>
-          <ProgressiveImage
-            media={item}
-            style={styles.viewerImage}
-            contentFit="contain"
-            isActive={isActive}
-            forceHd={zoomed}
-            onRawLoad={() => {
-              setRawLoaded(true);
-              if (typeof onLoadComplete === 'function') onLoadComplete();
-            }}
-            onLoadProgress={onLoadProgress}
-            onError={(error) => console.error('[MediaGallery] Full-res load error:', error)}
-            getFullUrl={getFullUrl}
-            // No `api` prop — JIT compress trigger removed.
-            // tunnelCompressBackfill on the server handles missing
-            // compressed copies during idle time.
-          />
-        </Pressable>
-      </ScrollView>
-      
+        <ProgressiveImage
+          media={item}
+          style={{ flex: 1 }}
+          contentFit="contain"
+          isActive={isActive}
+          forceHd={hdZoom}
+          onDimensions={handleDimensions}
+          pagerDragStore={pagerDragStore}
+          onRawLoad={() => {
+            setRawLoaded(true);
+            if (typeof onLoadComplete === 'function') onLoadComplete();
+          }}
+          onLoadProgress={onLoadProgress}
+          onError={(error) => console.error('[MediaGallery] Full-res load error:', error)}
+          getFullUrl={getFullUrl}
+          // No `api` prop — JIT compress trigger removed.
+          // tunnelCompressBackfill on the server handles missing
+          // compressed copies during idle time.
+        />
+      </ZoomableView>
+
       {/* STATIC HD HUD */}
       {rawLoaded && isActive && (
         <View style={{

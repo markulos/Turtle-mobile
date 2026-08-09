@@ -90,6 +90,8 @@ import { useMediaVersion } from '../../../context/DownloadsContext';
 import { useTheme } from '../../../context/ThemeContext';
 import PhotoVaultBoardsPage from './PhotoVaultBoardsPage';
 import AlbumShareSheet from './AlbumShareSheet';
+import AlbumActionsSheet from './AlbumActionsSheet';
+import ShareInsightsPage from './ShareInsightsPage';
 import {
   buildPhotoVaultBoards,
   formatBoardMetadata,
@@ -122,6 +124,9 @@ const HIT_SLOP_10 = { top: 10, bottom: 10, left: 10, right: 10 };
 const VAULT_PICKER_GAP = 14;
 const HIT_SLOP_15 = { top: 15, bottom: 15, left: 15, right: 15 };
 const HIT_SLOP_20 = { top: 20, bottom: 20, left: 20, right: 20 };
+// Biggest video we'll speculatively pull to disk so its share sheet is instant.
+// Above this the share path downloads on demand behind the progress overlay.
+const VIDEO_SHARE_WARM_MAX_BYTES = 60 * 1024 * 1024;
 
 // ── Slot model for the grid ─────────────────────────────────────────────────
 // A loading tile is NOT a different thing from a loaded tile — it's the same
@@ -196,7 +201,13 @@ const tagsOf = (item) => {
 };
 
 const THUMBNAIL_SIZE = width / 3 - 0.5;
-const GAP = 15; // 💎 WIDENED TO 15px FOR PREMIUM SEPARATION
+// The black gutter between pager pages. iOS Photos uses ~20–24pt; 15 read as
+// the photos almost touching. Every piece of the paging model derives from
+// ITEM_WIDTH (getItemLayout, snapToInterval, the open-offset, index math), so
+// changing GAP here changes all of them consistently — the historical
+// "clipped right edge" bug came from mixed alignment assumptions, not from
+// this constant.
+const GAP = 24;
 const ITEM_WIDTH = width + GAP;
 
 
@@ -471,10 +482,22 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // jitter) and could latch ON after the cell deactivated, which froze paging
   // altogether. The pager now keys off the settled zoom state alone.
   const zoomScaleRef = useRef(1);
+  // Chrome opacity while zoomed, as an ANIMATED value. The chrome used to be
+  // `opacity: zoomScale > 1.05 ? 0 : <Animated chain>` — a hard cut on a state
+  // flip (and a swap between a plain number and an Animated node, which
+  // rebinds the native prop). iOS fades the chrome away as the zoom engages;
+  // 150ms matches its feel.
+  const zoomChromeAnim = useRef(new Animated.Value(1)).current;
   const reportZoomScale = useCallback((z) => {
     zoomScaleRef.current = z;
     setZoomScale(z);
-  }, []);
+    Animated.timing(zoomChromeAnim, {
+      toValue: z > 1.05 ? 0 : 1,
+      duration: 150,
+      easing: Easing.out(Easing.ease),
+      useNativeDriver: true,
+    }).start();
+  }, [zoomChromeAnim]);
 
   // "A pager swipe is in flight" — a hand-rolled store rather than state, and
   // deliberately so: the only consumers are the image cells (they stand their
@@ -634,6 +657,31 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   
   // Album currently open in the public "share to the web" sheet (null = closed).
   const [shareAlbumName, setShareAlbumName] = useState(null);
+  // Album whose "⋯" menu (share / rename / delete) is open (null = closed).
+  const [albumMenuName, setAlbumMenuName] = useState(null);
+  // Album whose share-analytics page is pushed (null = closed). Reached by
+  // tapping the SHARED badge on a board card.
+  const [insightsAlbumName, setInsightsAlbumName] = useState(null);
+
+  // Lower-cased names of the boards that currently have a LIVE public link, so
+  // the board header can say "on the web" without opening the menu to find out.
+  // A board being public is invisible state otherwise — easy to forget you left
+  // one published. Refreshed whenever a share sheet closes, since that is the
+  // only place a link is created or revoked.
+  const [liveAlbums, setLiveAlbums] = useState(() => new Set());
+  const refreshLiveAlbums = useCallback(async () => {
+    try {
+      const res = await api.get('/album-shares');
+      const now = Date.now();
+      const live = (res?.shares || []).filter(
+        (s) => !s.revokedAt && !(s.expiresAt && s.expiresAt < now),
+      );
+      setLiveAlbums(new Set(live.map((s) => String(s.album || '').toLowerCase())));
+    } catch {
+      // Never claim a board is private on a failed lookup — keep what we had.
+    }
+  }, [api]);
+  useEffect(() => { refreshLiveAlbums(); }, [refreshLiveAlbums]);
 
   // === BULK SELECTION STATE ===
   const [isSelectMode, setIsSelectMode] = useState(false);
@@ -1482,6 +1530,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // Filter state
   const [selectedAlbum, setSelectedAlbum] = useState('All');
 
+  // Does the open board have a live public link? Drives the header's "on the
+  // web" cue. Declared here, after selectedAlbum — liveAlbums is filled far
+  // above, but reading selectedAlbum before this line is a TDZ crash.
+  const selectedAlbumIsLive = selectedAlbum !== 'All'
+    && liveAlbums.has(String(selectedAlbum || '').toLowerCase());
+
   // === O(1) HASH MAP FILTERING ===
   // 1. Build the O(1) Dictionary ONCE when data loads (MUST be before pinnedAlbums)
   const tagDictionary = useMemo(() => {
@@ -1549,6 +1603,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     latestDatesByName: albumLatestDates,
     query: pagerTab === 'albums' ? albumSearchQuery : '',
     sortMode: boardSortMode,
+    // Boards published to the web wear a LIVE badge in the grid, so you can
+    // see what is public without opening a single board menu.
+    liveAlbumNames: liveAlbums,
   }), [
     albumIndex,
     albumCovers,
@@ -1557,6 +1614,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     albumSearchQuery,
     boardSortMode,
     pagerTab,
+    liveAlbums,
   ]);
 
   // "All Photos" — the whole library presented as a board, pinned above the
@@ -2585,8 +2643,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           return true;
         }
 
-        // Existing: vertical-dominant drag for dismiss / drawer.
-        return Math.abs(gestureState.dy) > 10 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 0.5;
+        // Vertical drag for dismiss / drawer — but only when vertical is the
+        // DOMINANT axis. The old factor (dy > dx * 0.5) claimed swipes whose
+        // horizontal travel was twice the vertical, so a slightly diagonal
+        // page-swipe got hijacked: the native pager scroll was cancelled
+        // mid-flight (a visible jump under the finger) and the photo started
+        // dragging toward dismiss instead of paging. iOS resolves this by
+        // dominant axis; the 1.2 bias means a true diagonal stays with the
+        // pager, which is the gesture people mean far more often.
+        return Math.abs(gestureState.dy) > 10 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.2;
       },
       onPanResponderMove: (evt, gestureState) => {
         if (isDrawerOpenRef.current) {
@@ -2637,52 +2702,39 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     })
   ).current;
 
-  // Rename album (updates all photos with the old tag)
-  const renameAlbum = useCallback(async (oldName) => {
+  // Rename album (updates all photos with the old tag). The name comes from the
+  // rename PAGE inside AlbumActionsSheet — this used to be an Alert.prompt,
+  // which is iOS-only and looked nothing like the app.
+  const commitAlbumRename = useCallback(async (oldName, newName) => {
+    const trimmedName = (newName || '').trim();
     if (oldName === 'All' || oldName === 'Favourites') {
       Alert.alert('Cannot Rename', 'System albums cannot be renamed.');
       return;
     }
+    if (!trimmedName || trimmedName === oldName) return;
 
-    Alert.prompt(
-      'Rename Album',
-      `Rename "${oldName}" to:`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Rename',
-          onPress: async (newName) => {
-            if (!newName || newName.trim() === '' || newName.trim() === oldName) return;
-            
-            const trimmedName = newName.trim();
-            try {
-              const res = await api.put('/media/album/rename', {
-                oldTag: oldName,
-                newTag: trimmedName
-              });
-              
-              if (res.success) {
-                // Update local state (pinnedAlbums is derived from globalAlbums)
-                setGlobalAlbums(prev => prev.map(a => a === oldName ? trimmedName : a));
-                // Refresh
-                fetchAlbums();
-                
-                // If we're currently viewing this album, update the selection
-                if (selectedAlbum === oldName) {
-                  setSelectedAlbum(trimmedName);
-                }
-              }
-            } catch (error) {
-              console.error('[MediaGallery] Failed to rename album:', error);
-              Alert.alert('Error', 'Failed to rename album');
-            }
-          }
-        }
-      ],
-      'plain-text',
-      oldName
-    );
-  }, [api, fetchAlbums, selectedAlbum, setGlobalAlbums]);
+    // Optimistic: the board carries its new name now, the write follows.
+    setGlobalAlbums(prev => prev.map(a => a === oldName ? trimmedName : a));
+    if (selectedAlbum === oldName) setSelectedAlbum(trimmedName);
+
+    try {
+      const res = await api.put('/media/album/rename', {
+        oldTag: oldName,
+        newTag: trimmedName
+      });
+      if (!res.success) throw new Error(res.error || 'rename failed');
+      fetchAlbums();
+      // The server carries any public link over to the new name — re-read so
+      // the header's published cue follows it instead of going quiet.
+      refreshLiveAlbums();
+    } catch (error) {
+      console.error('[MediaGallery] Failed to rename album:', error);
+      // Roll the optimistic edit back — the tag is still the old one.
+      setGlobalAlbums(prev => prev.map(a => a === trimmedName ? oldName : a));
+      if (selectedAlbum === oldName) setSelectedAlbum(oldName);
+      Alert.alert('Error', 'Failed to rename album');
+    }
+  }, [api, fetchAlbums, refreshLiveAlbums, selectedAlbum, setGlobalAlbums, setSelectedAlbum]);
 
   // Delete album (removes tag from all photos)
   const deleteAlbum = useCallback(async (albumName) => {
@@ -2705,7 +2757,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               if (res.success) {
                 setGlobalAlbums(prev => prev.filter(a => a !== albumName));
                 fetchAlbums();
-                
+                // Deleting the board revokes its public link server-side.
+                refreshLiveAlbums();
+
                 // The board we were inside just disappeared — close the pushed
                 // photos page and fall back to the Boards list behind it.
                 if (selectedAlbum === albumName) {
@@ -2721,26 +2775,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         }
       ]
     );
-  }, [api, fetchAlbums, selectedAlbum, setGlobalAlbums, setSelectedAlbum]);
+  }, [api, fetchAlbums, refreshLiveAlbums, selectedAlbum, setGlobalAlbums, setSelectedAlbum]);
 
-  // Album context menu (long-press) - declared after renameAlbum and deleteAlbum
+  // Board menu — the board header's "⋯" and a long-press on a board card both
+  // land here. Opens the themed AlbumActionsSheet rather than an OS alert.
   const showAlbumOptions = useCallback((albumName) => {
     if (albumName === 'All' || albumName === 'Favourites') {
       Alert.alert(albumName, 'System albums cannot be modified.');
       return;
     }
-
-    Alert.alert(
-      albumName,
-      'Choose an action:',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Share to the web', onPress: () => setShareAlbumName(albumName) },
-        { text: 'Rename', onPress: () => renameAlbum(albumName) },
-        { text: 'Delete', style: 'destructive', onPress: () => deleteAlbum(albumName) }
-      ]
-    );
-  }, [renameAlbum, deleteAlbum]);
+    setAlbumMenuName(albumName);
+  }, []);
 
   // Placeholder for expo-image-manipulator UI integration
   const openImageEditor = useCallback(() => {
@@ -3091,6 +3136,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // Label for the gather overlay — the single full-res share and the bulk share
   // want different copy ("full-resolution image" vs "8 photos"). null = default.
   const [sharePrepLabel, setSharePrepLabel] = useState(null);
+  // 0..1 while a share download reports progress (videos are big enough that a
+  // bare spinner reads as "hung"); null = indeterminate.
+  const [shareProgress, setShareProgress] = useState(null);
+  // Cancel handle for the in-flight share download, so the overlay's Cancel
+  // button can abort a multi-hundred-MB video pull instead of stranding the user.
+  const shareCancelRef = useRef(null);
 
   // Full-resolution PREFETCH for sharing. The OS share sheet can only be handed
   // a file that ALREADY EXISTS on disk — there's no way to present the sheet
@@ -3113,16 +3164,49 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     const cache = fullShareCacheRef.current;
     const hit = cache.get(key);
     if (hit && !hit.failed) return hit;
-    const safeName = (media.filename || `shared_media_${media.id || 'item'}.jpg`)
-      .replace(/[^\w.\-]/g, '_');
+    // Extension by media TYPE when the row has no filename: a video saved as
+    // ".jpg" makes iOS infer an image UTI and silently drop it from the sheet.
+    const fallbackName = `shared_media_${media.id || 'item'}${media.type === 'video' ? '.mp4' : '.jpg'}`;
+    const safeName = (media.filename || fallbackName).replace(/[^\w.\-]/g, '_');
     const localUri = `${FileSystem.cacheDirectory}full_${safeName}`;
-    const entry = { uri: null, failed: false, promise: null, localUri };
+    const entry = { uri: null, failed: false, promise: null, localUri, cancelled: false };
+    // Resumable (not downloadAsync) purely for the progress callback — a video
+    // original is tens/hundreds of MB, and a spinner with no percentage is
+    // indistinguishable from a hang. The overlay's Cancel calls entry.cancel().
+    const task = FileSystem.createDownloadResumable(
+      getFullUrl(media.rawUrl || media.url),
+      localUri,
+      {},
+      ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
+        // ONLY while this exact download is the one the overlay is waiting on.
+        // A background warm-up must not re-render this 6000-line component on
+        // every progress tick. Whole percent steps only, same reason.
+        if (shareCancelRef.current !== entry.cancel || totalBytesExpectedToWrite <= 0) return;
+        const pct = Math.min(1, totalBytesWritten / totalBytesExpectedToWrite);
+        setShareProgress((prev) => (prev != null && Math.abs(pct - prev) < 0.01 && pct < 1 ? prev : pct));
+      },
+    );
+    entry.cancel = async () => {
+      entry.cancelled = true;
+      entry.failed = true;
+      try { await task.cancelAsync(); } catch (e) { /* already finished */ }
+      cache.delete(key); // a cancelled entry must not be reused as a "hit"
+      try { await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch (e) { /* ignore */ }
+    };
     // Resolves to null instead of rejecting: nothing awaits this when the user
     // backs out of the chooser, and an unawaited rejection is a redbox.
-    entry.promise = FileSystem.downloadAsync(getFullUrl(media.rawUrl || media.url), localUri)
-      .then((res) => { entry.uri = res.uri; return res.uri; })
+    entry.promise = task.downloadAsync()
+      .then((res) => {
+        // downloadAsync does NOT throw on 4xx/5xx — it writes the error body to
+        // disk. Sharing that hands the OS a few bytes of JSON named ".mp4".
+        if (!res || (res.status && res.status >= 400)) {
+          throw new Error(`HTTP ${res?.status} for ${media.rawUrl || media.url}`);
+        }
+        entry.uri = res.uri;
+        return res.uri;
+      })
       .catch((e) => {
-        console.warn('[MediaGallery] Full-res share prefetch failed:', e?.message || e);
+        if (!entry.cancelled) console.warn('[MediaGallery] Full-res share prefetch failed:', e?.message || e);
         entry.failed = true;
         return null;
       });
@@ -3149,9 +3233,20 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         if (entry?.uri) {
           uri = entry.uri;
         } else if (entry) {
+          setSharePrepLabel(media.type === 'video' ? 'Preparing video…' : null);
+          setShareProgress(0);
+          shareCancelRef.current = entry.cancel || null;
           setSharePreparing(true);
           uri = await entry.promise;
+          shareCancelRef.current = null;
           setSharePreparing(false);
+          setShareProgress(null);
+          setSharePrepLabel(null);
+          if (entry.cancelled) return;      // user aborted — no sheet, no alert
+          if (!uri) {                        // download genuinely failed
+            Alert.alert('Error', 'Could not download this item to share.');
+            return;
+          }
         }
         localUri = uri;
       }
@@ -3173,6 +3268,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       }
 
       if (await Sharing.isAvailableAsync()) {
+        // Let the gather overlay actually leave the screen first. It's an
+        // in-tree View (not a Modal — see below), so one committed frame is
+        // enough; presenting in the same tick as a teardown is how the sheet
+        // used to silently never appear.
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         await Sharing.shareAsync(uri, {
           UTI: media.type === 'video' ? 'public.movie' : 'public.image',
           mimeType: media.type === 'video' ? 'video/mp4' : 'image/jpeg',
@@ -3184,7 +3284,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       console.error('[MediaGallery] Share error:', error);
       Alert.alert('Error', 'Could not share this item.');
     } finally {
-      if (isFull) setSharePreparing(false);
+      if (isFull) {
+        setSharePreparing(false);
+        setShareProgress(null);
+        setSharePrepLabel(null);
+        shareCancelRef.current = null;
+      }
       // The cached copy existed only to feed the share sheet — drop it now so
       // shares don't pile up GBs of duplicates in the cache directory. The
       // prefetch entry goes with it: keeping a uri that points at a deleted
@@ -3211,6 +3316,59 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       prefetchFullForShare(selectedMedia);
     }
   }, [selectedMedia, doShare, prefetchFullForShare]);
+
+  // INSTANT-SHEET WARM-UP FOR VIDEOS.
+  // The OS sheet can only be handed a file that already exists on disk, so
+  // "instant" is always bought by starting the download earlier. Photos buy it
+  // with the quality chooser (the original pulls while the user reads the two
+  // options). A video has no compressed tier and no chooser, so the only
+  // earlier signal is "the user is sitting on this video" — after a 1.2s dwell
+  // we HEAD the original and, if it's a normal clip (<= 60MB), pull it in the
+  // background. Tapping Share then finds the bytes already down and the sheet
+  // opens with no overlay at all. Bigger files are left alone (a 500MB
+  // speculative download on cellular is worse than a progress bar) — those
+  // still download on demand behind the overlay, with a Cancel.
+  // Swiping away cancels a warm-up the user never asked for.
+  //
+  // Keyed on a FIELD SNAPSHOT, not on selectedMedia itself: tagging or
+  // favouriting the open video replaces that object, and re-running the effect
+  // on it would cancel and re-issue the very download we're warming.
+  const warmVideoTarget = useMemo(() => (
+    selectedMedia?.type === 'video'
+      ? {
+          id: selectedMedia.id,
+          type: 'video',
+          rawUrl: selectedMedia.rawUrl,
+          url: selectedMedia.url,
+          filename: selectedMedia.filename,
+        }
+      : null
+  ), [selectedMedia?.id, selectedMedia?.type, selectedMedia?.rawUrl, selectedMedia?.url, selectedMedia?.filename]);
+  useEffect(() => {
+    const media = warmVideoTarget;
+    if (!media) return undefined;
+    const key = media.id ?? media.rawUrl ?? media.url;
+    if (!key || fullShareCacheRef.current.has(key)) return undefined;
+    let cancelled = false;
+    let started = null;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(getFullUrl(media.rawUrl || media.url), { method: 'HEAD' });
+        const len = Number(res.headers.get('content-length') || 0);
+        if (cancelled || !res.ok || !len || len > VIDEO_SHARE_WARM_MAX_BYTES) return;
+        started = prefetchFullForShare(media);
+        if (cancelled) started?.cancel?.();
+      } catch (e) {
+        // Offline, or HEAD not answered — the on-demand path still works.
+      }
+    }, 1200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      // Leave it alone if a share is actively awaiting this very download.
+      if (started && !started.uri && shareCancelRef.current !== started.cancel) started.cancel?.();
+    };
+  }, [warmVideoTarget, getFullUrl, prefetchFullForShare]);
 
 
   // === GARBAGE COLLECTION ===
@@ -3440,29 +3598,21 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     const fullResUrl = getFullUrl(item.rawUrl || item.url || '');
     const isActive = item.id === viewerActiveId;
 
-    // 💎 SUBTLE IOS 17 PARALLAX (15% Shift) 💎
-    // Image moves slightly slower than the scroll, creating a subtle window effect.
-    const parallaxTranslate = scrollX.interpolate({
-      inputRange: [
-        (index - 1) * ITEM_WIDTH,
-        index * ITEM_WIDTH,
-        (index + 1) * ITEM_WIDTH,
-      ],
-      outputRange: [width * 0.15, 0, -width * 0.15], 
-      extrapolate: 'clamp',
-    });
-
+    // NO parallax. iOS Photos moves each page 1:1 with the pager and lets the
+    // gutter do the work. The old 15% counter-translate meant a full-bleed
+    // photo's edge visibly detached from the gutter mid-swipe (a black slice
+    // chasing it inside the clipping mask) — a flourish that read as jank next
+    // to the app being imitated. Removing it also removes a per-page Animated
+    // interpolation from the swipe's hot path.
     return (
-      // 1. THE OUTER BOUNDARY: Provides the screen width + 15px gap
+      // 1. THE OUTER BOUNDARY: screen width + the gutter
       <View style={styles.viewerItemContainer}>
-        
-        {/* 2. 🛑 THE CLIPPING MASK 🛑 
-            Strictly bounds the visible area to exactly the screen width. 
-            This physically prevents the image from bleeding into the void gap. */}
+
+        {/* 2. THE CLIPPING MASK: bounds the visible area to exactly the screen
+            width so the image can never bleed into the gutter. */}
         <View style={{ width: width, height: '100%', overflow: 'hidden' }}>
-          
-          {/* 3. THE PARALLAX LAYER: Translates safely inside the mask */}
-          <Animated.View style={[{ width: width, height: '100%' }, { transform: [{ translateX: parallaxTranslate }] }]}>
+
+          <View style={{ width: width, height: '100%' }}>
             {isVideo ? (
               <FullScreenVideoPlayer sourceUrl={fullResUrl} isActive={isActive} styles={styles} insets={insets} />
             ) : (
@@ -3490,12 +3640,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 pagerDragStore={pagerDragStore}
               />
             )}
-          </Animated.View>
+          </View>
 
         </View>
       </View>
     );
-  }, [getFullUrl, viewerActiveId, scrollX, styles, insets, api, handleLoadProgress, handleLoadComplete, reportZoomScale, handleViewerSingleTap, closeViewer, pagerDragStore]);
+  }, [getFullUrl, viewerActiveId, styles, insets, api, handleLoadProgress, handleLoadComplete, reportZoomScale, handleViewerSingleTap, closeViewer, pagerDragStore]);
 
   // Get layout for initialScrollIndex
   const getItemLayout = useCallback((data, index) => ({
@@ -3650,9 +3800,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             root inside it or the photo's pinch/pan/tap gestures silently never
             fire (Android especially). */}
         <GestureHandlerRootView style={{ flex: 1 }}>
+        {/* No onPress here — the chrome toggle is owned by the photo cell's
+            gesture surface (ZoomableView routes a single tap only after the
+            double-tap has been ruled out). When this container ALSO toggled on
+            press, a tap fired twice: once on finger-up (here, immediately) and
+            once ~260ms later (the gesture), so the chrome flipped and flipped
+            back — "tapping does nothing" — and the first tap of every
+            double-tap-zoom flashed the chrome for free. */}
         <Pressable
           style={styles.viewerContainer}
-          onPress={toggleInfoVisibility}
           {...swipeResponder.panHandlers}
         >
           {/* Status bar folds away with the chrome (iOS Photos): visible while
@@ -3681,7 +3837,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               height: insets.top + 68,
               // dragChromeOpacity: chrome clears out as soon as a pull-to-
               // dismiss starts moving the photo, iOS-style.
-              opacity: zoomScale > 1.05 ? 0 : Animated.multiply(opacityAnim, dragChromeOpacity),
+              opacity: Animated.multiply(zoomChromeAnim, Animated.multiply(opacityAnim, dragChromeOpacity)),
               zIndex: 5,
             }}
           >
@@ -3713,7 +3869,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               {
                 zIndex: 6,
                 top: insets.top + 16,
-                opacity: zoomScale > 1.05 ? 0 : Animated.multiply(opacityAnim, dragChromeOpacity),
+                opacity: Animated.multiply(zoomChromeAnim, Animated.multiply(opacityAnim, dragChromeOpacity)),
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 20, // Clean spacing between action icons
@@ -3763,7 +3919,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 // (opacityAnim→0). infoOpacityAnim alone left the heart/share
                 // lingering after the photo had gone; opacityAnim sits at 1 during
                 // normal viewing so the single-tap info toggle still works.
-                opacity: zoomScale > 1.05 ? 0 : Animated.multiply(Animated.multiply(opacityAnim, infoOpacityAnim), dragChromeOpacity),
+                opacity: Animated.multiply(zoomChromeAnim, Animated.multiply(Animated.multiply(opacityAnim, infoOpacityAnim), dragChromeOpacity)),
                 zIndex: 10,
               }
             ]}
@@ -3854,16 +4010,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               </Pressable>
             </Modal>
 
-            {/* "Gathering data" overlay while the full-resolution original
-                downloads. Dismissed just before the OS share sheet appears. */}
-            <Modal visible={sharePreparing} transparent animationType="fade">
-              <View style={styles.sharePreparingBackdrop} testID="share-preparing-overlay">
-                <View style={styles.sharePreparingCard}>
-                  <ActivityIndicator size="large" color={theme.colors.primary} />
-                  <Text style={styles.sharePreparingText}>{sharePrepLabel || 'Preparing full-resolution image…'}</Text>
-                </View>
-              </View>
-            </Modal>
           </Animated.View>
 
           {/* ── 3px load-progress bar ────────────────────────────────
@@ -4162,6 +4308,45 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
 
           {/* iOS-style Metadata Drawer */}
           {renderMetadataDrawer()}
+
+          {/* "Gathering data" overlay while the original downloads, then the OS
+              share sheet takes over.
+
+              IN-TREE View, NOT a Modal — and a direct child of the viewer, not
+              of the (absolutely positioned, chrome-faded) bottom action bar. A
+              second Modal over the open viewer Modal is the documented iOS
+              trap: dismiss it and present UIActivityViewController in the same
+              tick and the share sheet silently never appears. Videos hit that
+              EVERY time — they skip the quality chooser, so their download is
+              always still in flight when the sheet is asked for. That was the
+              "sharing a video never prompts" bug. */}
+          {sharePreparing && (
+            // Pressable, not View: an in-tree overlay's taps would otherwise
+            // bubble to the viewer's own tap handler (toggle chrome / dismiss)
+            // underneath it. The Modal used to swallow them for us.
+            <Pressable
+              onPress={() => {}}
+              style={[StyleSheet.absoluteFillObject, styles.sharePreparingBackdrop, { zIndex: 300 }]}
+              testID="share-preparing-overlay"
+            >
+              <View style={styles.sharePreparingCard}>
+                <ActivityIndicator size="large" color={theme.colors.primary} />
+                <Text style={styles.sharePreparingText}>
+                  {sharePrepLabel || 'Preparing full-resolution image…'}
+                  {shareProgress != null ? `  ${Math.round(shareProgress * 100)}%` : ''}
+                </Text>
+                {!!shareCancelRef.current && (
+                  <TouchableOpacity
+                    onPress={() => { const c = shareCancelRef.current; shareCancelRef.current = null; c?.(); }}
+                    activeOpacity={0.7}
+                    hitSlop={HIT_SLOP_20}
+                  >
+                    <Text style={styles.shareSheetCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </Pressable>
+          )}
         </Pressable>
         </GestureHandlerRootView>
       </Modal>
@@ -4287,6 +4472,25 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       {/* Full-screen viewer & Modals */}
       {renderFullScreenViewer()}
       {renderLocalSyncGallery()}
+
+      {/* Same gather overlay, grid side. The viewer's copy lives inside the
+          viewer Modal and so can't paint over the grid — bulk share runs with
+          the viewer CLOSED, which is why multi-select downloads used to churn
+          for minutes with no feedback at all. */}
+      {sharePreparing && !selectedMedia && (
+        <Pressable
+          onPress={() => {}}
+          style={[StyleSheet.absoluteFillObject, styles.sharePreparingBackdrop, { zIndex: 300 }]}
+          testID="share-preparing-overlay-grid"
+        >
+          <View style={styles.sharePreparingCard}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={styles.sharePreparingText}>
+              {sharePrepLabel || 'Preparing full-resolution image…'}
+            </Text>
+          </View>
+        </Pressable>
+      )}
 
       {/* Expanding Inline Bulk Console */}
       {isSelectMode && (
@@ -4415,8 +4619,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                       local.push(...got.filter(Boolean));
                     }
                     // Drop the overlay BEFORE presenting the sheet so the spinner
-                    // doesn't sit under the native share UI.
+                    // doesn't sit under the native share UI — and let it actually
+                    // leave the screen (two committed frames) before the native
+                    // presentation, which otherwise can be swallowed.
                     setSharePreparing(false);
+                    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
                     if (local.length === 0) {
                       Alert.alert('Error', 'Could not prepare the selected items');
@@ -4916,6 +5123,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               onRetry={fetchAlbums}
               onOpenBoard={openPhotosPage}
               onLongPressBoard={showAlbumOptions}
+              onOpenShareInsights={setInsightsAlbumName}
               onScroll={handleAlbumsScroll}
               onContentSizeChange={(w, h) => {
                 albumsContentH.current = h;
@@ -5021,15 +5229,41 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 // context menu the Boards overview uses on long-press.
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <View style={{ flexShrink: 1 }}>
-                    <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
-                      {selectedAlbum}
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                      <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+                        {selectedAlbum}
+                      </Text>
+                      {/* Published-state cue. Deliberately a small tinted globe
+                          rather than a badge or a pill: it must be noticeable
+                          when you look for it and silent when you don't. Tapping
+                          it opens the same board menu, where the link lives. */}
+                      {selectedAlbumIsLive && (
+                        <TouchableOpacity
+                          onPress={() => showAlbumOptions(selectedAlbum)}
+                          hitSlop={HIT_SLOP_10}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${selectedAlbum} is live on the web. Open board options`}
+                        >
+                          <Icon
+                            name="web"
+                            size={14}
+                            color={theme.colors.accentSuccess || theme.colors.accentInfo}
+                          />
+                        </TouchableOpacity>
+                      )}
+                    </View>
                     {!!albumCounts[selectedAlbum] && (
                       <Text style={{ fontSize: 11.5, color: theme.colors.textTertiary, marginTop: 1 }} numberOfLines={1}>
                         {albumCounts[selectedAlbum]} item{albumCounts[selectedAlbum] === 1 ? '' : 's'}
                         {albumLatestDates[selectedAlbum]
                           ? ` · ${new Date(albumLatestDates[selectedAlbum]).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
                           : ''}
+                        {selectedAlbumIsLive ? ' · ' : ''}
+                        {selectedAlbumIsLive ? (
+                          <Text style={{ color: theme.colors.accentSuccess || theme.colors.accentInfo }}>
+                            on the web
+                          </Text>
+                        ) : null}
                       </Text>
                     )}
                   </View>
@@ -5503,15 +5737,77 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           no separate vault strip to overlap the bulk-select console or jump on
           reveal. */}
 
-      {/* "Share to the web" for an album (long-press a board). In-tree overlay,
-          NOT a Modal — the vault is already inside one, and a sibling Modal
-          over an open Modal silently fails to appear on iOS. */}
+      {/* Board menu — share / rename / delete. Both sheets are in-tree overlays,
+          NOT Modals (the vault is already inside one, and a sibling Modal over
+          an open Modal silently fails to appear on iOS), which means the
+          floating dock draws over them: each reserves `tabBarH`. */}
+      {/* SHARE INSIGHTS — pushed by the SHARED badge on a board card. Same
+          overlay treatment and zIndex band as the photos page (it sits over the
+          pager and under the two sheets, which are later siblings), and
+          box-none so a closed page never eats taps meant for the grid. */}
+      <View style={[StyleSheet.absoluteFillObject, { zIndex: 45 }]} pointerEvents="box-none">
+        <ShareInsightsPage
+          visible={!!insightsAlbumName}
+          albumName={insightsAlbumName}
+          api={api}
+          theme={theme}
+          topInset={insets.top + 6}
+          bottomInset={tabBarH}
+          onManageLinks={(name) => {
+            setInsightsAlbumName(null);
+            setShareAlbumName(name);
+          }}
+          onClose={() => {
+            setInsightsAlbumName(null);
+            // A link may have been revoked from the page's Manage action — the
+            // badge must not keep claiming the board is shared.
+            refreshLiveAlbums();
+          }}
+        />
+      </View>
+
+      <AlbumActionsSheet
+        visible={!!albumMenuName}
+        albumName={albumMenuName}
+        subtitle={
+          albumCounts[albumMenuName]
+            ? `${albumCounts[albumMenuName]} item${albumCounts[albumMenuName] === 1 ? '' : 's'}`
+            : 'Board'
+        }
+        colors={theme.colors}
+        api={api}
+        bottomInset={tabBarH}
+        onShare={() => {
+          const name = albumMenuName;
+          setAlbumMenuName(null);
+          setShareAlbumName(name);
+        }}
+        onRename={(newName) => {
+          const oldName = albumMenuName;
+          setAlbumMenuName(null);
+          commitAlbumRename(oldName, newName);
+        }}
+        onDelete={() => {
+          const name = albumMenuName;
+          setAlbumMenuName(null);
+          deleteAlbum(name);
+        }}
+        onClose={() => setAlbumMenuName(null)}
+      />
+
+      {/* "Share to the web" for a board. */}
       <AlbumShareSheet
         visible={!!shareAlbumName}
         albumName={shareAlbumName}
         api={api}
         theme={theme}
-        onClose={() => setShareAlbumName(null)}
+        bottomInset={tabBarH}
+        onClose={() => {
+          setShareAlbumName(null);
+          // Creating or revoking a link happens only in here — re-read so the
+          // board header's published cue matches what just changed.
+          refreshLiveAlbums();
+        }}
       />
 
     </View>
