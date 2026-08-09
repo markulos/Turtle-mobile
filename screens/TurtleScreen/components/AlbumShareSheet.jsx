@@ -22,6 +22,100 @@ import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 
 const isDead = (s) => !!s.revokedAt || !!(s.expiresAt && s.expiresAt < Date.now());
 
+const EVENT_LABEL = {
+  view: 'Opened',
+  unlock_ok: 'Unlocked',
+  unlock_fail: 'Wrong password',
+  download: 'Downloaded',
+};
+
+/**
+ * Visit log for one link. Honest about its limits: public links are anonymous,
+ * so there is no "who" — only when, from where (network origin, or a city when
+ * the server has geo lookups enabled), and whether it looked like a person or
+ * a link-preview bot.
+ */
+function ShareActivity({ shareId, api, theme, styles }) {
+  const [state, setState] = useState({ loading: true, visits: [], summary: null, places: [], geoEnabled: false, error: null });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get(`/album-shares/${shareId}/visits?limit=50`);
+        if (cancelled) return;
+        setState({
+          loading: false,
+          visits: res?.visits || [],
+          summary: res?.summary || null,
+          places: res?.places || [],
+          geoEnabled: !!res?.geoEnabled,
+          error: null,
+        });
+      } catch (e) {
+        if (!cancelled) setState((s) => ({ ...s, loading: false, error: e?.message || 'Could not load activity' }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [shareId, api]);
+
+  if (state.loading) return <ActivityIndicator style={{ marginVertical: 12 }} color={theme.colors.textSecondary} />;
+  if (state.error) return <Text style={styles.activityEmpty}>{state.error}</Text>;
+  if (!state.visits.length) return <Text style={styles.activityEmpty}>Nobody has opened this link yet.</Text>;
+
+  const s = state.summary || {};
+  return (
+    <View style={styles.activityBlock}>
+      <View style={styles.statRow}>
+        <View style={styles.stat}><Text style={styles.statValue}>{s.views ?? 0}</Text><Text style={styles.statLabel}>opens</Text></View>
+        <View style={styles.stat}><Text style={styles.statValue}>{s.uniqueVisitors ?? 0}</Text><Text style={styles.statLabel}>visitors</Text></View>
+        <View style={styles.stat}><Text style={styles.statValue}>{s.downloads ?? 0}</Text><Text style={styles.statLabel}>downloads</Text></View>
+        {(s.failedUnlocks ?? 0) > 0 && (
+          <View style={styles.stat}><Text style={styles.statValue}>{s.failedUnlocks}</Text><Text style={styles.statLabel}>bad pw</Text></View>
+        )}
+        {(s.botHits ?? 0) > 0 && (
+          <View style={styles.stat}><Text style={styles.statValue}>{s.botHits}</Text><Text style={styles.statLabel}>bots</Text></View>
+        )}
+      </View>
+
+      {state.places.length > 0 && (
+        <View style={styles.placeRow}>
+          {state.places.slice(0, 5).map((p) => (
+            <View key={p.place} style={styles.placeChip}>
+              <MaterialCommunityIcons name="map-marker-outline" size={10} color={theme.colors.textSecondary} />
+              <Text style={styles.placeText}>{p.place} · {p.n}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {state.visits.slice(0, 25).map((v, i) => (
+        <View key={i} style={[styles.visitRow, v.isBot && { opacity: 0.6 }]}>
+          <MaterialCommunityIcons
+            name={v.isBot ? 'robot-outline' : 'earth'}
+            size={12}
+            color={v.isBot ? theme.colors.textMuted : theme.colors.textSecondary}
+          />
+          <Text style={styles.visitEvent}>{EVENT_LABEL[v.event] || v.event}</Text>
+          <Text style={styles.visitMeta} numberOfLines={1}>
+            {[v.place || v.origin, v.client].filter(Boolean).join(' · ')}
+          </Text>
+          <Text style={styles.visitTime}>
+            {new Date(v.ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+          </Text>
+        </View>
+      ))}
+
+      {!state.geoEnabled && (
+        <Text style={styles.activityFootnote}>
+          Network origin only. City/country needs SHARE_GEO_LOOKUP=1 on the server, which sends
+          each visitor's IP to a third-party lookup service.
+        </Text>
+      )}
+    </View>
+  );
+}
+
 export default function AlbumShareSheet({ visible, albumName, api, theme, onClose }) {
   const insets = useSafeAreaInsets();
   const [shares, setShares] = useState([]);
@@ -32,6 +126,8 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
   const [usePassword, setUsePassword] = useState(false);
   const [password, setPassword] = useState('');
   const [allowDownload, setAllowDownload] = useState(true);
+  // Which link has its visit log expanded (null = none).
+  const [openActivity, setOpenActivity] = useState(null);
 
   const load = useCallback(async () => {
     if (!albumName) return;
@@ -209,6 +305,26 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
                       </Pressable>
                     </View>
                   )}
+                  {/* Offered even for a dead link — you may care MORE about who
+                      hit a link you already turned off. */}
+                  <Pressable
+                    onPress={() => {
+                      tapHaptic();
+                      setOpenActivity((c) => (c === share.id ? null : share.id));
+                    }}
+                    style={s.activityToggle}
+                  >
+                    <MaterialCommunityIcons name="chart-line-variant" size={12} color={theme.colors.textSecondary} />
+                    <Text style={s.activityToggleText}>Activity</Text>
+                    <MaterialCommunityIcons
+                      name={openActivity === share.id ? 'chevron-up' : 'chevron-down'}
+                      size={14}
+                      color={theme.colors.textMuted}
+                    />
+                  </Pressable>
+                  {openActivity === share.id && (
+                    <ShareActivity shareId={share.id} api={api} theme={theme} styles={s} />
+                  )}
                 </View>
               );
             })
@@ -312,6 +428,36 @@ const makeStyles = (theme) => StyleSheet.create({
     borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
   },
   actionTextGhost: { fontSize: 12, fontWeight: '600', color: theme.colors.textSecondary },
+  activityToggle: {
+    flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 9, paddingVertical: 3,
+  },
+  activityToggleText: { fontSize: 12, fontWeight: '600', color: theme.colors.textSecondary, flex: 1 },
+  activityBlock: {
+    marginTop: 8, paddingTop: 9,
+    borderTopWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
+  },
+  activityEmpty: { fontSize: 12, color: theme.colors.textMuted, marginTop: 8 },
+  activityFootnote: {
+    fontSize: 10.5, color: theme.colors.textMuted, marginTop: 8, lineHeight: 15,
+  },
+  statRow: { flexDirection: 'row', gap: 14, marginBottom: 10 },
+  stat: { minWidth: 52 },
+  statValue: { fontSize: 15, fontWeight: '800', color: theme.colors.text },
+  statLabel: { fontSize: 10, color: theme.colors.textMuted },
+  placeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginBottom: 10 },
+  placeChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: 999,
+    backgroundColor: theme.colors.surfaceHighlight,
+  },
+  placeText: { fontSize: 10.5, color: theme.colors.textSecondary },
+  visitRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
+  },
+  visitEvent: { fontSize: 11.5, fontWeight: '600', color: theme.colors.text, minWidth: 88 },
+  visitMeta: { fontSize: 11, color: theme.colors.textMuted, flex: 1 },
+  visitTime: { fontSize: 10.5, color: theme.colors.textMuted },
   newBlock: {
     marginTop: 6, paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
   },
