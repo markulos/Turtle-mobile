@@ -444,13 +444,22 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // Receives a 0..1 ratio from ProgressiveImage's Layer 2 onProgress.
   // Bypasses the 150ms show-delay if it's still pending — once real
   // bytes are flowing we want immediate feedback regardless.
+  // Quantized to 2% steps: expo-image fires onProgress per network chunk —
+  // hundreds of bridge crossings on a big raw fallback, each landing on the
+  // JS thread the touch pipeline depends on. A ratio DROP means a new photo's
+  // fetch started, so the gate resets rather than sticking at the old high-
+  // water mark.
+  const lastProgressRatioRef = useRef(0);
   const handleLoadProgress = useCallback((ratio) => {
+    const clamped = Math.min(1, Math.max(0, ratio || 0));
+    if (clamped < lastProgressRatioRef.current) lastProgressRatioRef.current = 0;
+    if (clamped < 1 && clamped - lastProgressRatioRef.current < 0.02) return;
+    lastProgressRatioRef.current = clamped >= 1 ? 0 : clamped;
     if (viewerProgressShowTimerRef.current) {
       clearTimeout(viewerProgressShowTimerRef.current);
       viewerProgressShowTimerRef.current = null;
       viewerProgressOpacityAnim.setValue(1);
     }
-    const clamped = Math.min(1, Math.max(0, ratio || 0));
     viewerProgressAnim.setValue(clamped);
   }, [viewerProgressAnim, viewerProgressOpacityAnim]);
 
@@ -529,6 +538,30 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     };
   }
   const pagerDragStore = pagerDragStoreRef.current;
+
+  // WHICH PAGE IS ACTIVE — same store pattern, same reason. selectedMedia (the
+  // gallery state) re-renders the entire component, chrome and all, and that
+  // used to happen in the pager's settle frame on EVERY page change — with the
+  // touch pipeline being JS-bound, a swipe landing during that storm went dead
+  // ("massive non-responsive period", worst right after an HD load piled its
+  // own state flips on top). The cells now read activity from THIS store (two
+  // cells re-render per page change, nothing else), and the selectedMedia
+  // adoption is deferred until interactions finish (see syncSelectedFromOffset).
+  const viewerActiveStoreRef = useRef(null);
+  if (viewerActiveStoreRef.current === null) {
+    const listeners = new Set();
+    let activeId = null;
+    viewerActiveStoreRef.current = {
+      get: () => activeId,
+      set: (next) => {
+        if (next === activeId) return;
+        activeId = next;
+        listeners.forEach((l) => l(next));
+      },
+      subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
+    };
+  }
+  const viewerActiveStore = viewerActiveStoreRef.current;
 
   // === PULL-TO-DISMISS (iOS Photos style) ===
   // dragY follows the finger on a downward drag of the open photo. The image
@@ -3593,18 +3626,49 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     </View>
   );
 
+  // Live mirror of selectedMedia (+ the active-id store). The mirror exists so
+  // the pager sync below can hand the freshest item to actions IMMEDIATELY
+  // while the expensive state adoption is deferred; the effect keeps it (and
+  // the store) truthful for every other way selectedMedia changes — open,
+  // close, tag/favourite spreads.
+  const selectedMediaRef = useRef(null);
+  useEffect(() => {
+    selectedMediaRef.current = selectedMedia;
+    viewerActiveStore.set(selectedMedia?.id ?? null);
+  }, [selectedMedia, viewerActiveStore]);
+
+  // Adopt whatever the pager last settled on into gallery state. Idempotent —
+  // both schedules below may fire, latest item wins.
+  const adoptPendingSelected = useCallback(() => {
+    const latest = selectedMediaRef.current;
+    if (!latest) return;
+    setSelectedMedia((prev) => (prev?.id === latest.id ? prev : latest));
+  }, []);
+
   // Resolve which photo is centred from a (left-aligned, ITEM_WIDTH-strided)
-  // scroll offset and adopt it as selectedMedia. SINGLE source of truth for
-  // "which photo is on screen" — everything that acts on the current photo
-  // (tag editor, favourite, info, delete) reads selectedMedia, so it MUST stay
-  // in lockstep with the visible pager position.
+  // scroll offset. SINGLE source of truth for "which photo is on screen".
+  //
+  // Split into a CHEAP now and an EXPENSIVE later:
+  //   now   — the active-id store flips (re-renders exactly the two affected
+  //           cells: HD dwell re-arms, video pauses) and selectedMediaRef
+  //           updates, so anything acting on "the current photo" is truthful
+  //           immediately.
+  //   later — setSelectedMedia re-renders the WHOLE gallery (chrome, meta,
+  //           sheets). Running that in the settle frame was the swipe-eating
+  //           stall, so it waits for interactions to finish. The 400ms timeout
+  //           is the starvation belt: InteractionManager can be held off
+  //           indefinitely by chained animations (Animated timings register
+  //           interaction handles by default), and chrome meta lagging beats
+  //           chrome meta never arriving mid-run.
   const syncSelectedFromOffset = useCallback((offsetX) => {
     const index = Math.round(offsetX / ITEM_WIDTH);
-    const newlySelectedItem = viewerItems[index];
-    if (newlySelectedItem && !newlySelectedItem.isSkeleton && newlySelectedItem.id !== selectedMedia?.id) {
-      setSelectedMedia(newlySelectedItem);
-    }
-  }, [viewerItems, selectedMedia]);
+    const item = viewerItems[index];
+    if (!item || item.isSkeleton || item.id === viewerActiveStore.get()) return;
+    viewerActiveStore.set(item.id);
+    selectedMediaRef.current = item;
+    InteractionManager.runAfterInteractions(adoptPendingSelected);
+    setTimeout(adoptPendingSelected, 400);
+  }, [viewerItems, viewerActiveStore, adoptPendingSelected]);
 
   // Mirror the live scroll offset into a ref so a drag-end (which fires BEFORE
   // the snap settles) can read the FINAL resting offset a beat later.
@@ -3712,17 +3776,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // reference but not the underlying photo.
   }, [selectedMedia?.id, viewerItems, getFullUrl]);
 
-  // Render individual viewer item with pinch-to-zoom
-
-  // Depends on the active item's ID (a string), not the whole selectedMedia
-  // object — tag/favourite edits spread a new object without changing the
-  // photo, and the object dep made every such edit re-render all mounted
-  // pager pages.
-  const viewerActiveId = selectedMedia?.id;
+  // Render individual viewer item with pinch-to-zoom.
+  //
+  // Deliberately knows NOTHING about which page is active: cells read that
+  // from viewerActiveStore themselves. That keeps this callback (and so every
+  // mounted cell's props) stable across page changes AND across gallery
+  // re-renders — the memoized cells simply never re-render from the parent.
   const renderViewerItem = useCallback(({ item, index }) => {
     const isVideo = item.type === 'video';
     const fullResUrl = getFullUrl(item.rawUrl || item.url || '');
-    const isActive = item.id === viewerActiveId;
 
     // NO parallax. iOS Photos moves each page 1:1 with the pager and lets the
     // gutter do the work. The old 15% counter-translate meant a full-bleed
@@ -3740,12 +3802,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
 
           <View style={{ width: width, height: '100%' }}>
             {isVideo ? (
-              <FullScreenVideoPlayer sourceUrl={fullResUrl} isActive={isActive} styles={styles} insets={insets} />
+              <FullScreenVideoPlayer sourceUrl={fullResUrl} mediaId={item.id} activeStore={viewerActiveStore} styles={styles} insets={insets} />
             ) : (
               <ImageViewer
                 fullResUrl={fullResUrl}
                 mediaId={item.id}
-                isActive={isActive}
+                activeStore={viewerActiveStore}
                 item={item}
                 styles={styles}
                 getFullUrl={getFullUrl}
@@ -3753,8 +3815,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 onLoadProgress={handleLoadProgress}
                 onLoadComplete={handleLoadComplete}
                 // Zoom reports drive the shell's chrome-hide + pull-dismiss
-                // lockout; only the active cell gets the channel.
-                onZoomScaleChange={isActive ? reportZoomScale : undefined}
+                // lockout; the cell itself only speaks when active
+                // (handleZoomedChange gates on its store-derived isActive).
+                onZoomScaleChange={reportZoomScale}
                 // The zoom surface swallows taps, so the chrome toggle has to
                 // be routed through it (it fires only after the double-tap
                 // zoom has been ruled out).
@@ -3771,7 +3834,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         </View>
       </View>
     );
-  }, [getFullUrl, viewerActiveId, styles, insets, api, handleLoadProgress, handleLoadComplete, reportZoomScale, handleViewerSingleTap, closeViewer, pagerDragStore]);
+  }, [getFullUrl, styles, insets, api, handleLoadProgress, handleLoadComplete, reportZoomScale, handleViewerSingleTap, closeViewer, pagerDragStore, viewerActiveStore]);
 
   // Get layout for initialScrollIndex
   const getItemLayout = useCallback((data, index) => ({
@@ -3957,7 +4020,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               back arrow still fall through to the chrome toggle, and it fades
               with the same opacity the rest of the chrome uses. */}
           <Animated.View
-            pointerEvents="box-none"
+            // box-none: only the back button is a target, the rest of the
+            // gradient band passes touches through to the pager. When zoomed
+            // the chrome is faded out (zoomChromeAnim) — 'none' so an
+            // invisible back button can't eat taps/pans.
+            pointerEvents={zoomScale > 1.05 ? 'none' : 'box-none'}
             style={{
               position: 'absolute', top: 0, left: 0, right: 0,
               height: insets.top + 68,
@@ -4004,7 +4071,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 paddingVertical: 8,
               }
             ]}
-            pointerEvents={zoomScale > 1.05 ? 'none' : 'auto'}
+            // box-none, not 'auto': 'auto' made the WHOLE pill (padding and
+            // the 20px gaps between icons) swallow touches, so a swipe
+            // starting there never reached the pager — one of the overlay
+            // dead zones behind "swiping goes dead". The icons are their own
+            // targets; everything between them scrolls the pager.
+            pointerEvents={zoomScale > 1.05 ? 'none' : 'box-none'}
           >
             {/* Only show Edit button for Images, not Videos */}
             {selectedMedia?.type !== 'video' && (
@@ -4069,8 +4141,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               )}
             </Animated.View>
             
-            {/* Right Side: Share & Favourites inside a Premium Pill */}
-            <View style={[styles.premiumBezel, { flexDirection: 'row', gap: 20, alignItems: 'center', borderRadius: 30, paddingHorizontal: 20, paddingVertical: 10 }]} pointerEvents="auto">
+            {/* Right Side: Share & Favourites inside a Premium Pill.
+                box-none — the buttons (with their hitSlop) are the targets;
+                the pill's own padding shouldn't be a swipe dead zone. */}
+            <View style={[styles.premiumBezel, { flexDirection: 'row', gap: 20, alignItems: 'center', borderRadius: 30, paddingHorizontal: 20, paddingVertical: 10 }]} pointerEvents="box-none">
               <TouchableOpacity 
                 onPress={handleShare}
                 hitSlop={HIT_SLOP_20}

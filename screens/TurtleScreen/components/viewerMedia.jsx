@@ -22,8 +22,11 @@ import { MAX_SCALE, nativeMaxScale } from '../../../utils/zoomMath';
 
 const { width } = Dimensions.get('window');
 
-// Full-screen video player component (extracted from main component)
-const FullScreenVideoPlayer = ({ sourceUrl, isActive, styles, insets }) => {
+// Full-screen video player component (extracted from main component).
+// Active-page awareness comes from the shared store (see useStoreValue), so a
+// page change re-renders this cell only when ITS active/inactive state flips.
+const FullScreenVideoPlayer = ({ sourceUrl, mediaId, activeStore, styles, insets }) => {
+  const isActive = useStoreValue(activeStore) === mediaId;
   const player = useVideoPlayer(sourceUrl, player => {
     player.loop = true;
     player.muted = true;
@@ -108,22 +111,23 @@ const FullScreenVideoPlayer = ({ sourceUrl, isActive, styles, insets }) => {
 const HD_DWELL_MS = 1500;
 
 /**
- * Subscribe to the pager's "a swipe is in flight" store.
- *
- * The store is a plain object owned by MediaGallery (stable identity, no state),
- * so a drag start re-renders ONLY the image cells that care — not the whole
- * gallery. Gating on gallery state instead would put a re-render of a
- * 6000-line component at the exact frame the swipe begins.
+ * Subscribe to one of MediaGallery's hand-rolled stores ({ get, set,
+ * subscribe }). The stores exist precisely so pager-hot values (drag in
+ * flight, which page is active) can change WITHOUT re-rendering the
+ * 6000-line gallery — only the mounted cells that subscribe re-render.
  */
-const usePagerDragging = (store) => {
-  const [dragging, setDragging] = useState(false);
+const useStoreValue = (store) => {
+  const [value, setValue] = useState(() => (store ? store.get() : null));
   useEffect(() => {
     if (!store) return undefined;
-    setDragging(store.get());
-    return store.subscribe(setDragging);
+    setValue(store.get());
+    return store.subscribe(setValue);
   }, [store]);
-  return dragging;
+  return value;
 };
+
+/** "A pager swipe is in flight" — see useStoreValue. */
+const usePagerDragging = (store) => useStoreValue(store) === true;
 
 const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLoad, onLoadProgress, getFullUrl, forceHd = false, onDimensions, pagerDragStore }) => {
   const [highResLoaded, setHighResLoaded] = useState(false);
@@ -353,11 +357,14 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
 // out left the photo parked wherever the pinch centroid was. The transform
 // model has no such state — 1× IS translate(0, 0) — and it works on Android,
 // which never had pinch zoom here at all.
-// React.memo: a page change re-renders only the two cells whose `isActive`
-// flipped (every other prop is referentially stable in renderViewerItem), so
-// the settle frame stops re-rendering all mounted pages — measurable JS-thread
-// relief exactly when the pager needs frames.
-const ImageViewer = React.memo(({ fullResUrl, mediaId, isActive, item, styles, getFullUrl, api, onLoadProgress, onLoadComplete, onZoomScaleChange, onSingleTap, onPinchDismiss, pagerDragStore }) => {
+// React.memo + store-driven activity: every prop from renderViewerItem is
+// referentially stable, so the PARENT never re-renders a mounted cell at all —
+// on a page change the active-id store flips exactly the two cells whose
+// active/inactive state changed, and the gallery's own render storms (chrome
+// updates, tag edits, upload progress…) stop touching the pager entirely.
+// That is the JS-thread relief the settle frame needs.
+const ImageViewer = React.memo(({ fullResUrl, mediaId, activeStore, item, styles, getFullUrl, api, onLoadProgress, onLoadComplete, onZoomScaleChange, onSingleTap, onPinchDismiss, pagerDragStore }) => {
+  const isActive = useStoreValue(activeStore) === mediaId;
   // 1. Track HD State
   const [rawLoaded, setRawLoaded] = useState(false);
   // True once the user zooms into this image — forces the HD layer to load
