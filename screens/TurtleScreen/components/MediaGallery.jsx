@@ -210,6 +210,12 @@ const THUMBNAIL_SIZE = width / 3 - 0.5;
 const GAP = 24;
 const ITEM_WIDTH = width + GAP;
 
+// How long after the pager's last scroll frame a single-tap is still treated
+// as part of the swipe rather than a chrome toggle. Long enough to cover the
+// gap between finger-up and the first momentum frame (~1 frame) plus the
+// snap settle; short enough that a deliberate tap after a swipe still lands.
+const PAGER_TAP_QUIET_MS = 300;
+
 
 // Static overlay styles for the local-sync picker cell (no theme dependency).
 const localCellStyles = StyleSheet.create({
@@ -2604,7 +2610,27 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // would re-render every mounted pager page each time the chrome is tapped.
   const toggleInfoRef = useRef(toggleInfoVisibility);
   toggleInfoRef.current = toggleInfoVisibility;
-  const handleViewerSingleTap = useCallback(() => { toggleInfoRef.current?.(); }, []);
+
+  // ── Pager-quiet guard for the chrome toggle ───────────────────────────────
+  // A tap that arrives DURING pager motion is never a request to toggle the
+  // chrome: it's a failed swipe, or a finger catching a moving page. Two ways
+  // such a tap still reached the toggle:
+  //   • a flick lifts before the scroll claims the touch, so the tap gesture
+  //     legitimately succeeds at finger-up while the page is about to move;
+  //   • catching a page mid-momentum reads as a clean tap to the recognizer.
+  // Each one flipped the overlay, so a run of quick swipes strobed it on/off.
+  // The gesture-side fix is maxDistance on the tap (ZoomableView); this is the
+  // shell side: the scrollX listener below stamps a quiet window on EVERY
+  // pager scroll frame, so taps are swallowed while the pager moves and for
+  // PAGER_TAP_QUIET_MS after its last frame. Stamping per-frame (rather than
+  // latching between begin/end events) means the guard can never stick shut —
+  // it decays on its own even if a settle event is lost to an unmount.
+  const pagerQuietUntilRef = useRef(0);
+  const handleViewerSingleTap = useCallback(() => {
+    if (pagerDragStore.get()) return;
+    if (Date.now() < pagerQuietUntilRef.current) return;
+    toggleInfoRef.current?.();
+  }, [pagerDragStore]);
 
   // Unified swipe responder. Three independent gestures handled here:
   //   • Vertical down on the photo → dismiss the viewer.
@@ -3489,7 +3515,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // the snap settles) can read the FINAL resting offset a beat later.
   const lastViewerOffsetX = useRef(0);
   useEffect(() => {
-    const id = scrollX.addListener(({ value }) => { lastViewerOffsetX.current = value; });
+    const id = scrollX.addListener(({ value }) => {
+      lastViewerOffsetX.current = value;
+      // Feed the chrome-toggle guard (see handleViewerSingleTap): any pager
+      // motion pushes the tap-quiet horizon out past this frame.
+      pagerQuietUntilRef.current = Date.now() + PAGER_TAP_QUIET_MS;
+    });
     return () => scrollX.removeListener(id);
   }, [scrollX]);
   const dragSettleTimer = useRef(null);

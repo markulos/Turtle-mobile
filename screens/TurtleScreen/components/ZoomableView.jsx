@@ -268,6 +268,11 @@ const ZoomableView = ({
     .numberOfTaps(2)
     .maxDuration(260)
     .maxDelay(260)
+    // A tap is a POINT event. Without an explicit ceiling the recognizer's
+    // tolerance is platform-defined, and short pager flicks were landing
+    // inside it — every borderline swipe also "tapped" and flipped the
+    // chrome. 16pt is deliberate slack for a fast double-tap's second touch.
+    .maxDistance(16)
     .onEnd((e) => {
       'worklet';
       const timing = { duration: SETTLE_MS, easing: SETTLE_EASING };
@@ -306,6 +311,11 @@ const ZoomableView = ({
   const singleTap = useMemo(() => Gesture.Tap()
     .numberOfTaps(1)
     .maxDuration(260)
+    // Tighter than the double-tap: a single tap that travelled is a swipe
+    // that failed, and must FAIL as a tap — not toggle the chrome as a
+    // consolation prize. This is half of the "chrome flips while paging"
+    // fix; the shell's pager-quiet guard is the other half.
+    .maxDistance(12)
     .onEnd((_e, success) => {
       'worklet';
       if (success && onSingleTap) runOnJS(onSingleTap)();
