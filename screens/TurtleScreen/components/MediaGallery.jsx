@@ -38,6 +38,9 @@ import { sweepTransientCaches } from '../../../utils/cacheManager';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { impactHaptic } from '../../../utils/haptics';
+// Dev-only responsiveness watchdog — every call below compiles to an immediate
+// return in a release build (see utils/gestureProbe).
+import gestureProbe from '../../../utils/gestureProbe';
 import { buildBucketsUrl, buildGalleryUrl } from '../../../utils/galleryFilters';
 import { useGalleryFilters } from '../../../utils/useGalleryFilters';
 import GalleryFilterSheet from './GalleryFilterSheet';
@@ -2577,6 +2580,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // (optional) is the tap point in window coords ({x, y}) — the pop then
   // originates from the tapped cell instead of the screen centre.
   const openViewer = useCallback((item, origin) => {
+    // Dev probe: the tap-to-open path is the most latency-visible in the app.
+    gestureProbe.respond('grid:openPhoto');
     const executeOpen = () => {
       // Anchor the pop at the tap point (offset from screen centre). No origin
       // (e.g. programmatic open) ⇒ 0/0 ⇒ the old centre pop.
@@ -2650,6 +2655,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   }, [infoOpacityAnim, dragY, scaleAnim, reportZoomScale]);
 
   const closeViewer = useCallback(() => {
+    gestureProbe.respond('viewer:close');
     Animated.parallel([
       Animated.timing(scaleAnim, {
         toValue: 0.85,
@@ -2757,6 +2763,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const handleViewerSingleTap = useCallback(() => {
     if (pagerDragStore.get()) return;
     if (Date.now() < pagerQuietUntilRef.current) return;
+    gestureProbe.respond('viewer:chromeToggle');
     toggleInfoRef.current?.();
   }, [pagerDragStore]);
 
@@ -2781,6 +2788,13 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const EDGE_BACK_COMMIT_VX = 0.5;
   const swipeResponder = useRef(
     PanResponder.create({
+      // Dev probe arm-point. The viewer is a Modal — its own native root — so
+      // the app-level touch sniff in App.js never sees these touches. Capture
+      // phase + `return false`: observe, never claim.
+      onStartShouldSetPanResponderCapture: () => {
+        gestureProbe.touchStart('photo viewer');
+        return false;
+      },
       onMoveShouldSetPanResponder: (evt, gestureState) => {
         // Read through the refs: this responder is built once, so state read
         // here would be frozen at the first render's values.
@@ -3198,6 +3212,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
 
   // Optimistic UI Toggle for Quick Favourites
   const toggleFavourite = useCallback(async () => {
+    gestureProbe.respond('viewer:favourite');
     if (!selectedMedia) return;
     
     try {
@@ -3664,6 +3679,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     const index = Math.round(offsetX / ITEM_WIDTH);
     const item = viewerItems[index];
     if (!item || item.isSkeleton || item.id === viewerActiveStore.get()) return;
+    gestureProbe.mark('viewer:pageSettle');
     viewerActiveStore.set(item.id);
     selectedMediaRef.current = item;
     InteractionManager.runAfterInteractions(adoptPendingSelected);
@@ -3688,6 +3704,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // on momentum end AND on the drag-settle path below, because a slow release
   // snaps without ever producing a momentum phase.
   const handleScrollBeginDrag = useCallback(() => {
+    // The headline measurement: finger-down → the pager actually starting to
+    // move. When this reads slow, swiping "went dead".
+    gestureProbe.respond('viewer:swipe');
     pagerDragStore.set(true);
   }, [pagerDragStore]);
 

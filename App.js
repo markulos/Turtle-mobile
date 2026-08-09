@@ -53,6 +53,8 @@ import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CA
 import { avatarAnimal } from './utils/avatar';
 import ProfileScreen from './screens/ProfileScreen';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
+import GestureProbeOverlay from './components/GestureProbeOverlay';
+import gestureProbe from './utils/gestureProbe';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
 import { useAppFonts } from './utils/fonts';
@@ -383,7 +385,16 @@ export default function App() {
     // GestureHandlerRootView must wrap the whole tree (flex:1) so
     // react-native-gesture-handler gestures — e.g. the draggable
     // day-tasks bottom sheet on the Tasks screen — receive touches.
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView
+      style={{ flex: 1 }}
+      // DEV-ONLY touch sniff for the gesture probe. The CAPTURE phase sees
+      // every touch before any child claims it, and returning false means we
+      // never become the responder — so this observes without ever altering
+      // gesture routing. In a release build the handler is a no-op call.
+      // (Modals render into their own native root, so their touches don't
+      // reach here — the photo viewer arms the probe from its own responder.)
+      onStartShouldSetResponderCapture={() => { gestureProbe.touchStart('app'); return false; }}
+    >
       <ShareIntentProvider>
         <SafeAreaProvider>
           <ThemeProvider>
@@ -425,6 +436,10 @@ export default function App() {
                         {/* Interactive pomodoro end notifications (Start break /
                             Start focus buttons). Renders nothing. */}
                         <PomodoroNotifications />
+                        {/* DEV ONLY (null in release): watches for gestures the
+                            app answered late or not at all, and turns each one
+                            into a to-do carrying a ready-to-send fix prompt. */}
+                        <GestureProbeOverlay />
                        </CelebrationProvider>
                       </CommandBusProvider>
                     </ClaudeQueueProvider>
