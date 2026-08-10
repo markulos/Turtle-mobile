@@ -22,10 +22,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useServer } from '../context/ServerContext';
+import { localTodayStr } from '../screens/TasksScreen/utils/taskHelpers';
 import gestureProbe, { BAD_MS, SLOW_MS, buildFixPrompt } from '../utils/gestureProbe';
 
 const IS_DEV = typeof __DEV__ !== 'undefined' && __DEV__;
 const STORAGE_KEY = 'gestureProbe.findings.v1';
+
+// Where feedback lands in the to-do list, and how it's labelled.
+//
+// The first version posted a bare { title, description } — the row WAS created
+// (verified in the DB), but with no board and no due date it sorted into the
+// undated backlog beneath every dated task, which reads as "it didn't work".
+// Findings now arrive dated TODAY on the app's own board, tagged so they can be
+// filtered as feedback rather than mixed into real work.
+const FEEDBACK_BOARD = 'TURTLE APP';
+const FEEDBACK_TAGS = ['feedback', 'mobile', 'perf'];
 
 const KIND_ICON = {
   'freeze-after-touch': 'hand-back-left-off',
@@ -47,9 +58,18 @@ function ProbeOverlayBody() {
   const [open, setOpen] = useState(false);
   const [hidden, setHidden] = useState(false);
   const [written, setWritten] = useState(() => new Set());
+  const [checked, setChecked] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const saveTimer = useRef(null);
+
+  const toggleChecked = useCallback((key) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
 
   // Start collecting on mount; restore anything from before the last Metro
   // reload so a finding found at 2am survives the reload that follows it.
@@ -83,32 +103,45 @@ function ProbeOverlayBody() {
   const findings = state.findings || [];
   const worst = findings.length ? findings[0].worstMs : 0;
 
-  // Write findings into the real to-do list as prompts. Explicit button, never
-  // automatic: this writes rows the user will actually see in Tasks, and a
-  // debugger that spams the task list is a debugger you turn off.
+  // Write the checked findings into the real to-do list as Turtle feedback.
+  // Explicit button, never automatic: these are rows the user will actually see
+  // in Tasks, and a debugger that spams the task list is one you turn off.
   const writeTodos = useCallback(async (rows) => {
     if (!rows.length || busy) return;
     setBusy(true);
     setNote('');
+    const today = localTodayStr();
     let ok = 0;
+    let lastError = '';
     for (const f of rows) {
       try {
-        await api.post('/tasks/single', {
-          title: `[probe] ${f.label} — ${Math.round(f.worstMs)}ms`,
+        const res = await api.post('/tasks/single', {
+          title: `Mobile feedback: ${f.label} — ${Math.round(f.worstMs)}ms`,
           description: buildFixPrompt(f),
           priority: f.worstMs >= BAD_MS ? 'high' : 'medium',
-          tags: ['perf', 'probe'],
+          // Dated today + on the app's own board, or it sinks into the undated
+          // backlog where nobody finds it (the original bug).
+          dueDate: today,
+          project: FEEDBACK_BOARD,
+          tags: FEEDBACK_TAGS,
         });
+        // The route answers { success, task } — treat anything else as a
+        // failure rather than reporting a write that never landed.
+        if (!res || res.success === false || !res.task) {
+          throw new Error(res?.error || 'server rejected the task');
+        }
         ok += 1;
         setWritten((prev) => new Set(prev).add(f.key));
+        setChecked((prev) => { const n = new Set(prev); n.delete(f.key); return n; });
       } catch (e) {
-        console.warn('[probe] could not write to-do:', e?.message || e);
+        lastError = e?.message || String(e);
+        console.warn('[probe] could not write feedback:', lastError);
       }
     }
     setBusy(false);
     setNote(ok === rows.length
-      ? `Wrote ${ok} prompt${ok === 1 ? '' : 's'} to your to-do list`
-      : `Wrote ${ok} of ${rows.length} — check the server connection`);
+      ? `Added ${ok} to “${FEEDBACK_BOARD}”, due today`
+      : `Added ${ok} of ${rows.length}${lastError ? ` — ${lastError}` : ''}`);
   }, [api, busy]);
 
   const copyAll = useCallback(async () => {
@@ -119,7 +152,7 @@ function ProbeOverlayBody() {
 
   if (hidden) return null;
 
-  const pending = findings.filter((f) => !written.has(f.key));
+  const selected = findings.filter((f) => checked.has(f.key));
 
   return (
     <>
@@ -165,27 +198,33 @@ function ProbeOverlayBody() {
                   grid — and anything that lags behind your finger lands here.
                 </Text>
               ) : findings.map((f) => (
-                <View key={f.key} style={styles.row}>
+                // Whole row is the checkbox — check off what's worth reporting,
+                // then send them together as feedback.
+                <TouchableOpacity
+                  key={f.key}
+                  style={styles.row}
+                  onPress={() => toggleChecked(f.key)}
+                  activeOpacity={0.7}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: checked.has(f.key) }}
+                >
+                  <Icon
+                    name={checked.has(f.key) ? 'checkbox-marked' : 'checkbox-blank-outline'}
+                    size={20}
+                    color={checked.has(f.key) ? '#4ade80' : '#5f6368'}
+                  />
                   <Icon name={KIND_ICON[f.kind] || 'alert'} size={18} color={colorFor(f.worstMs)} />
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={styles.rowTitle} numberOfLines={1}>{f.label}</Text>
                     <Text style={styles.rowMeta}>
                       {f.kind} · {f.count}× · worst {Math.round(f.worstMs)}ms
-                      {written.has(f.key) ? ' · in to-do' : ''}
+                      {written.has(f.key) ? ' · sent' : ''}
                     </Text>
                   </View>
-                  <TouchableOpacity
-                    onPress={() => writeTodos([f])}
-                    disabled={busy}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  >
-                    <Icon
-                      name={written.has(f.key) ? 'check-circle-outline' : 'playlist-plus'}
-                      size={20}
-                      color={written.has(f.key) ? '#4ade80' : '#e8eaed'}
-                    />
-                  </TouchableOpacity>
-                </View>
+                  {written.has(f.key) ? (
+                    <Icon name="check-circle-outline" size={18} color="#4ade80" />
+                  ) : null}
+                </TouchableOpacity>
               ))}
             </ScrollView>
 
@@ -193,12 +232,14 @@ function ProbeOverlayBody() {
 
             <View style={styles.actions}>
               <TouchableOpacity
-                style={[styles.btn, styles.btnPrimary, (busy || !pending.length) && styles.btnOff]}
-                onPress={() => writeTodos(pending)}
-                disabled={busy || !pending.length}
+                style={[styles.btn, styles.btnPrimary, (busy || !selected.length) && styles.btnOff]}
+                onPress={() => writeTodos(selected)}
+                disabled={busy || !selected.length}
               >
                 <Text style={styles.btnPrimaryText}>
-                  {busy ? 'Writing…' : `Write ${pending.length} to to-do`}
+                  {busy ? 'Sending…' : selected.length
+                    ? `Send ${selected.length} as feedback`
+                    : 'Check items to send'}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.btn} onPress={copyAll}>
@@ -212,7 +253,8 @@ function ProbeOverlayBody() {
               </TouchableOpacity>
             </View>
             <Text style={styles.foot}>
-              Long-press the pill to hide it for this session. Dev builds only.
+              Sent items land on “{FEEDBACK_BOARD}”, due today, tagged {FEEDBACK_TAGS.join(' · ')}.
+              {'\n'}Long-press the pill to hide it for this session. Dev builds only.
             </Text>
           </View>
         </View>
