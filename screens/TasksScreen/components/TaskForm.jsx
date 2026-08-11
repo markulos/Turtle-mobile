@@ -649,7 +649,10 @@ export const TaskForm = ({
   const canSave = !!formData.title.trim() && (!requiresDate || !!formData.dueDate);
 
   return (
-    <EdgeSwipePage visible={visible} onClose={handleClose} overlay={asOverlay} edgeZone={110}>
+    // No edgeZone override: this page used to widen the grab zone to 110pt on
+    // its own, and the app-wide default is now the whole left panel — wider than
+    // that — so inheriting it keeps this page in step with every other.
+    <EdgeSwipePage visible={visible} onClose={handleClose} overlay={asOverlay}>
       {/* Instagram-style pushed PAGE: EdgeSwipePage slides this full-screen page
           in from the right and owns the left-edge back-swipe. GestureHandlerRootView
           is kept because a Modal renders outside the app's root, so any RNGH

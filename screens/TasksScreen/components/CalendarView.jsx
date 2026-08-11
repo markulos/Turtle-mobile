@@ -50,7 +50,7 @@ import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPass
 import { TaskQuickInspector } from './TaskQuickInspector';
 import { TimelineTaskRow } from './TimelineTaskRow';
 import { HatchBackdrop } from './HatchBackdrop';
-import { TaskSectionFrontier } from './TaskSectionFrontier';
+import { TaskSectionFrontier, DAY_SECTION_FIRST_PAINT } from './TaskSectionFrontier';
 import { WheelTimePicker } from './WheelTimePicker';
 import { tapHaptic } from '../../../utils/haptics';
 
@@ -121,9 +121,10 @@ const MONTH_HEIGHT = MONTH_TITLE_HEIGHT + DAYS_HEADER_HEIGHT + GRID_PADDING_TOP 
 // the calendar viewport down to (but not behind) this. Mirrors the
 // `calendarContent` paddingBottom so the dynamic month-height math lines up.
 const SHEET_PEEK_RESERVE = 80;
-// Thin strip at the very top of the calendar viewport that holds the up-caret
-// swipe hint so it sits ABOVE the day-of-week labels instead of over them.
-const HINT_STRIP = 20;
+// No reserved strip at the top of the calendar viewport: the up-caret hint
+// floats TRANSPARENTLY over the month title, exactly like the down-caret floats
+// over the next month below. A reserved band read as an opaque header strip and
+// clipped the top of the month title.
 
 // ── Hourly timetable constants ────────────────────────────────
 //
@@ -731,8 +732,13 @@ const DayPane = React.memo(function DayPane({
     return { segments: segs, totalTimedMin: total };
   }, [timedTasks]);
 
-  // The cross-day Pending backlog — incomplete untimed tasks across all dates.
-  const stripTasks = pendingTasks;
+  // The cross-day Pending backlog. Carry-overs are computed against TODAY, so
+  // on a PAST pane that day's own leftovers would appear twice — once in its
+  // grid/TBD list, once in the strip. Drop this pane's own date here.
+  const stripTasks = useMemo(
+    () => pendingTasks.filter((t) => !t.dueDate || t.dueDate.slice(0, 10) !== dayStr),
+    [pendingTasks, dayStr],
+  );
 
   // Auto-scroll to a useful hour on mount (now-1h today, else 8 AM) so a
   // freshly-swiped day lands on working hours rather than midnight. Mount-
@@ -1264,6 +1270,11 @@ const DayPane = React.memo(function DayPane({
                 items={stripTasks}
                 sectionLabel="Pending"
                 theme={theme}
+                // This section MOUNTS on a tap, so its first frame is the whole
+                // felt cost of opening it: paint a screenful now, stream the
+                // backlog in on idle frames after.
+                initialBatch={DAY_SECTION_FIRST_PAINT}
+                autoGrow
                 renderItem={(task, idx) => {
                   const done = task.completed || isOccurrenceCompleted(task, dayStr);
                   return (
@@ -1824,7 +1835,7 @@ export const CalendarView = ({
   // The bottom strip the calendar must keep clear now includes the FLOATING tab
   // bar: the day-panel peek, the jump-to-today button and the swipe hint all
   const { monthH, cellH } = useMemo(() => {
-    const usable = calAreaH > 0 ? calAreaH - peekReserve - HINT_STRIP : 0;
+    const usable = calAreaH > 0 ? calAreaH - peekReserve : 0;
     if (usable <= 0) return { monthH: MONTH_HEIGHT, cellH: CELL_HEIGHT };
     const gridH = usable - MONTH_TITLE_HEIGHT - DAYS_HEADER_HEIGHT - GRID_PADDING_TOP;
     // Never shrink below the original cell size; only grow to fill.
@@ -2192,18 +2203,43 @@ export const CalendarView = ({
   // Tasks for the selected date — same cache the day panes read.
   const selectedDateTasks = getDayTasks(toDateString(selectedDate));
 
-  // PENDING tasks — incomplete tasks with NO due date AND no time: the truly
-  // unscheduled backlog. Surfaced in the day planner's "Pending Tasks" strip so
-  // it's reachable from EVERY day. Dated-but-untimed tasks are deliberately
-  // excluded here — they now show on their own day's "To Do · No Time Set" (TBD)
-  // list instead, so they aren't duplicated across every day.
+  // PENDING tasks — everything still OPEN that today's plan hasn't accounted
+  // for. Two buckets:
+  //   • the undated backlog (no due date, no time) — never had a day;
+  //   • CARRY-OVERS: dated strictly BEFORE today and still not ticked, i.e.
+  //     yesterday's (and last week's) unfinished work, which otherwise only
+  //     existed on a day you'd have to swipe back to.
+  // Repeating tasks are excluded from the carry-over bucket: their stored
+  // dueDate is the series' start, so they'd sit here permanently while the grid
+  // is already drawing today's occurrence.
+  // Tasks dated today or later still live on their own day (timed grid or TBD
+  // list) — the strip is the backlog, not a duplicate of the plan.
   const pendingTasks = useMemo(() => {
+    const today = toDateString(new Date());
+    // Epoch ms for "how recent is this", tolerating both the numeric timestamps
+    // the app writes and any ISO string that reaches us from the server.
+    const toMs = (v) => {
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string') { const n = Date.parse(v); return Number.isNaN(n) ? 0 : n; }
+      return 0;
+    };
+    // Most recent first = the day it was last due, else the day it was made, so
+    // yesterday's leftovers sit above last month's and a task typed an hour ago
+    // is at the top where you can act on it.
+    const recencyOf = (t) => (t.dueDate
+      ? (parseLocalYMD(t.dueDate)?.getTime() || 0)
+      : toMs(t.createdAt || t.updatedAt));
     return filteredTasks
-      .filter(t => !t.completed
-        && itemTypeOf(t) === 'task' // events/birthdays show in their own strip
-        && !t.dueDate               // dated tasks live on their day (timed grid or TBD list)
-        && !(t.time && /^\d{1,2}:\d{2}/.test(t.time)))
-      .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+      .filter((t) => {
+        if (t.completed || itemTypeOf(t) !== 'task') return false; // events/birthdays have their own strip
+        if (!t.dueDate) return !(t.time && /^\d{1,2}:\d{2}/.test(t.time));
+        if (t.dueDate.slice(0, 10) >= today) return false;
+        return (t.recurring || t.recurrence || 'none') === 'none';
+      })
+      .sort((a, b) => {
+        const d = recencyOf(b) - recencyOf(a);
+        return d !== 0 ? d : (a.title || '').localeCompare(b.title || '');
+      });
   }, [filteredTasks]);
 
   // Highlight strings, computed once per render and shared by the month
@@ -2608,7 +2644,7 @@ export const CalendarView = ({
             updateCellsBatchingPeriod={30}
             initialNumToRender={3}
             removeClippedSubviews
-            style={{ height: monthH, marginTop: HINT_STRIP, marginBottom: peekReserve }}
+            style={{ height: monthH, marginBottom: peekReserve }}
           />
 
           {/* Faint animated swipe-hint carets — up = previous month, down = next

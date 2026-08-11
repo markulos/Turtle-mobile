@@ -2681,11 +2681,14 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textTertiary,
   },
   // Full-width day-completion bar under the header — photos-loading style:
-  // a 3px solid-white fill on a faint white track, edge to edge.
+  // a 3px solid-white fill, edge to edge. The track itself is TRANSPARENT so
+  // the strip under the header stays a single clean hairline (the header's
+  // own borderBottom); a filled track read as a second, thicker line stacked
+  // on it. Only the completed portion paints.
   dayProgressTrack: {
     width: '100%',
     height: 3,
-    backgroundColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: 'transparent',
     overflow: 'hidden',
   },
   dayProgressFill: {
