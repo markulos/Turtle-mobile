@@ -1,6 +1,16 @@
 import React from 'react';
-import { fireEvent, render } from '@testing-library/react-native';
+import { Alert } from 'react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import MusicVault from '../MusicVault';
+import { __resetForTests, getPending } from '../../../../services/offlineQueue';
+
+// The outbox persists to AsyncStorage; keep it in memory for the test run.
+const mockStore = new Map();
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  getItem: jest.fn((k) => Promise.resolve(mockStore.has(k) ? mockStore.get(k) : null)),
+  setItem: jest.fn((k, v) => { mockStore.set(k, v); return Promise.resolve(); }),
+  removeItem: jest.fn((k) => { mockStore.delete(k); return Promise.resolve(); }),
+}));
 
 const mockPlayMedia = jest.fn();
 const mockTogglePlayback = jest.fn();
@@ -95,6 +105,9 @@ jest.mock('../../../../utils/haptics', () => ({
 describe('MusicVault', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockStore.clear();
+    __resetForTests();
+    mockApi.patch.mockImplementation(() => Promise.resolve({}));
     mockMusicPlayer.activeTrack = {
       mediaId: 'two',
       title: 'Second',
@@ -186,8 +199,65 @@ describe('MusicVault', () => {
 
     expect(view.getByTestId('track-actions-card')).toBeTruthy();
     expect(view.getByLabelText('Share')).toBeTruthy();
+    expect(view.getByLabelText('Rename track…')).toBeTruthy();
     expect(view.getByLabelText('Add to playlist')).toBeTruthy();
     expect(view.getByLabelText('Delete from vault')).toBeTruthy();
+  });
+
+  test('rename patches originalName, keeps the extension, and updates the row now', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Options for First'));
+    await fireEvent.press(view.getByLabelText('Rename track…'));
+
+    // Seeded with the current title (extension stripped, as displayed).
+    const input = view.getByTestId('rename-track-input');
+    expect(input.props.value).toBe('First');
+
+    await fireEvent.changeText(input, 'Night Drive');
+    await fireEvent.press(view.getByLabelText('Save track name'));
+
+    // The stored label keeps the file extension — titleOf() strips it for
+    // display, so dropping it here would corrupt names like "Take.Five".
+    expect(mockApi.patch).toHaveBeenCalledWith('/media/one', { originalName: 'Night Drive.mp3' });
+    // Optimistic: the new name is on screen before the PATCH resolves.
+    expect(view.getByText('Night Drive')).toBeTruthy();
+    expect(view.queryByText('First')).toBeNull();
+  });
+
+  test('renaming offline parks the request instead of failing the edit', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    mockApi.patch.mockImplementation(() => Promise.reject(new Error('Network request failed')));
+
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Options for First'));
+    await fireEvent.press(view.getByLabelText('Rename track…'));
+    await fireEvent.changeText(view.getByTestId('rename-track-input'), 'Night Drive');
+    await fireEvent.press(view.getByLabelText('Save track name'));
+
+    await waitFor(() => expect(getPending()).toHaveLength(1));
+    expect(getPending()[0]).toMatchObject({
+      method: 'patch',
+      path: '/media/one',
+      body: { originalName: 'Night Drive.mp3' },
+      key: 'media:one:originalName',
+    });
+    // The edit stands — no revert, no error alert. It sends on reconnect.
+    expect(view.getByText('Night Drive')).toBeTruthy();
+    expect(alert).not.toHaveBeenCalled();
+    alert.mockRestore();
+  });
+
+  test('rename to the same name is a no-op write', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Options for First'));
+    await fireEvent.press(view.getByLabelText('Rename track…'));
+
+    // No Save button offered while the draft still matches the current title.
+    expect(view.queryByLabelText('Save track name')).toBeNull();
+    await fireEvent(view.getByTestId('rename-track-input'), 'submitEditing');
+
+    expect(mockApi.patch).not.toHaveBeenCalled();
+    expect(view.queryByTestId('track-actions-card')).toBeNull();
   });
 
   test('the options button does not start playback', async () => {
@@ -208,6 +278,33 @@ describe('MusicVault', () => {
     await fireEvent.press(view.getByLabelText('Chill'));
 
     expect(mockApi.put).toHaveBeenCalledWith('/media/two/tags', { tags: ['Chill'] });
+  });
+
+  test('the pinned Playlists row pushes a page listing every playlist', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+
+    // Names come from the audio library's own tags, with their track counts.
+    await fireEvent.press(view.getByLabelText('Playlists, 2'));
+
+    expect(view.getByLabelText('Chill, 1 track')).toBeTruthy();
+    expect(view.getByLabelText('Focus, 1 track')).toBeTruthy();
+  });
+
+  test('opening a playlist lists only its tracks, and they are playable', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Playlists, 2'));
+    await fireEvent.press(view.getByLabelText('Focus, 1 track'));
+
+    // The page OVERLAYS the library rather than unmounting it, so every title
+    // still in the list behind it is also still in the tree. 'Third' (tagged
+    // Focus) is therefore rendered twice and 'First' (tagged Chill) once —
+    // which is what proves the page filtered to just this playlist.
+    expect(view.getAllByText('Third')).toHaveLength(2);
+    expect(view.getAllByText('First')).toHaveLength(1);
+
+    const rows = view.getAllByText('Third');
+    await fireEvent.press(rows[rows.length - 1]);
+    expect(mockPlayMedia).toHaveBeenCalledWith('three');
   });
 
   test('adding to a playlist keeps the tags the track already had', async () => {

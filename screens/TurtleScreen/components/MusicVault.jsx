@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList, ActivityIndicator, StyleSheet, Pressable, Alert,
 } from 'react-native';
@@ -6,13 +6,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import { useSharedValue } from 'react-native-reanimated';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../../context/ThemeContext';
 import { useMusicPlayer } from '../../../context/MusicPlayerContext';
 import { useServer } from '../../../context/ServerContext';
 import { titleOf, sourceOf, resolveMediaUrl } from '../../../services/musicTrackMapper';
 import { TAP_ONLY } from '../../../utils/pressBehavior';
+import { tapHaptic } from '../../../utils/haptics';
+import { sendOrQueue, subscribe as subscribeOfflineQueue, loadQueue } from '../../../services/offlineQueue';
 import TrackActionsSheet from './TrackActionsSheet';
+import EdgeSwipePage from './EdgeSwipePage';
+import TimelineScrubber from './TimelineScrubber';
 
 // Tags double as playlists for audio: the vault already models "a named group of
 // media" as a tag, so a music playlist is just a tag on an audio row. This reads
@@ -32,6 +37,9 @@ const tagsOf = (row) => {
 // green. accentInfo is the same value (ThemeContext repoints it) and is the
 // fallback for any theme that predates `accent`.
 const MUSIC_TINT = (c) => c.accent || c.accentInfo || c.primary;
+
+// Outbox key for a track rename — one pending rename per track, newest wins.
+const renameKey = (id) => `media:${id}:originalName`;
 
 const fmtTime = (sec) => {
   if (!Number.isFinite(sec) || sec < 0) return '0:00';
@@ -77,10 +85,61 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
   // optimistic (app-wide rule): the row leaves the list on the tap and only
   // comes back if the server rejects it.
   const [removedIds, setRemovedIds] = useState(() => new Set());
-  const visibleTracks = useMemo(
-    () => (removedIds.size ? tracks.filter((t) => !removedIds.has(String(t.id))) : tracks),
-    [tracks, removedIds]
-  );
+  // Locally-applied renames, id → new originalName. Same optimistic rule as the
+  // delete above: the new name is on screen the instant it's typed, the PATCH
+  // rides behind it. Entries stay after the refresh lands (they then match the
+  // server value, so there's no flash); only a failed write clears one.
+  const [renamedNames, setRenamedNames] = useState(() => new Map());
+  const visibleTracks = useMemo(() => {
+    let list = removedIds.size ? tracks.filter((t) => !removedIds.has(String(t.id))) : tracks;
+    if (renamedNames.size) {
+      list = list.map((t) => {
+        const next = renamedNames.get(String(t.id));
+        return next && next !== t.originalName ? { ...t, originalName: next } : t;
+      });
+    }
+    return list;
+  }, [tracks, removedIds, renamedNames]);
+
+  // Renames that are still sitting in the offline outbox are re-applied here on
+  // mount — that's what makes an offline edit survive an app restart: the queue
+  // entry IS the record of it, and the vault paints from it until it lands.
+  // Merge-only (never removes): an entry leaving the queue means it was SENT,
+  // and dropping the override in that instant would flash the old name back
+  // before the library refresh arrives.
+  useEffect(() => {
+    loadQueue().catch(() => {});
+    return subscribeOfflineQueue((entries) => {
+      const parked = [];
+      const parkedDeletes = [];
+      entries.forEach((e) => {
+        const rename = /^media:(.+):originalName$/.exec(e?.key || '');
+        if (rename && e?.body?.originalName) parked.push([rename[1], e.body.originalName]);
+        const del = /^media:(.+):delete$/.exec(e?.key || '');
+        if (del) parkedDeletes.push(del[1]);
+      });
+      if (parked.length) {
+        setRenamedNames((prev) => {
+          const fresh = parked.filter(([id, name]) => prev.get(id) !== name);
+          if (!fresh.length) return prev;
+          const next = new Map(prev);
+          fresh.forEach(([id, name]) => next.set(id, name));
+          return next;
+        });
+      }
+      // A delete parked before the app was killed: keep the row hidden rather
+      // than resurrecting it for the seconds between launch and flush.
+      if (parkedDeletes.length) {
+        setRemovedIds((prev) => {
+          const fresh = parkedDeletes.filter((id) => !prev.has(id));
+          if (!fresh.length) return prev;
+          const next = new Set(prev);
+          fresh.forEach((id) => next.add(id));
+          return next;
+        });
+      }
+    });
+  }, []);
   const current = visibleTracks.findIndex(
     (item) => String(item.id) === String(activeTrack?.mediaId)
   );
@@ -106,14 +165,107 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
   // way to scroll it out.
   const [nowBarH, setNowBarH] = useState(0);
 
+  // ── A–Z scrub rail ─────────────────────────────────────────────────────────
+  // The rail used to belong to the Boards page only, so swiping to Music left
+  // you with no way to move through a few hundred tracks except flicking. Music
+  // now carries its own, driven by this list's own scroll.
+  const listRef = useRef(null);
+  const musicContentH = useRef(0);
+  const musicLayoutH = useRef(0);
+  const musicScrollY = useSharedValue(0);
+  const musicMaxScroll = useSharedValue(1);
+
+  // Group the list into runs of the same initial. NOTE: `starts` must follow the
+  // list's REAL order, which is newest-upload-first — not A→Z. That's why no
+  // `yearMarks` are emitted: those paint fixed letter ticks down the rail, and
+  // on a non-alphabetical list they'd read as a broken index. The rail is a
+  // clean track with a bubble that names the letter you're currently over, which
+  // is correct at any sort order.
+  const musicScrubData = useMemo(() => {
+    const total = visibleTracks.length;
+    if (total < 2) return { starts: [], labels: [], countLabels: [], total: 0, yearMarks: [] };
+    const letterOf = (row) => {
+      const ch = String(titleOf(row) || '').trim().charAt(0).toUpperCase();
+      return ch >= 'A' && ch <= 'Z' ? ch : '#';
+    };
+    const starts = []; const labels = []; const counts = [];
+    let last = null;
+    for (let i = 0; i < total; i++) {
+      const L = letterOf(visibleTracks[i]);
+      if (L !== last) {
+        last = L;
+        starts.push(i);
+        labels.push(L);
+        counts.push(0);
+      }
+      counts[counts.length - 1] += 1;
+    }
+    return {
+      starts,
+      labels,
+      countLabels: counts.map((n) => `${n} track${n === 1 ? '' : 's'}`),
+      total,
+      yearMarks: [],
+    };
+  }, [visibleTracks]);
+
+  // A rail over a handful of tracks is noise — same threshold the Boards rail uses.
+  const musicScrubEnabled = visibleTracks.length >= 20;
+
+  const handleMusicScroll = useCallback((e) => {
+    const ne = e && e.nativeEvent;
+    if (!ne) return;
+    if (ne.contentSize?.height) musicContentH.current = ne.contentSize.height;
+    if (ne.layoutMeasurement?.height) musicLayoutH.current = ne.layoutMeasurement.height;
+    musicScrollY.value = (ne.contentOffset && ne.contentOffset.y) || 0;
+    musicMaxScroll.value = Math.max(1, musicContentH.current - musicLayoutH.current);
+  }, [musicScrollY, musicMaxScroll]);
+
+  // Plain top-down list, so the drag fraction maps straight to a scroll offset.
+  const handleMusicScrubJump = useCallback((dataFrac) => {
+    const f = Math.min(1, Math.max(0, dataFrac));
+    const offset = f * Math.max(1, musicContentH.current - musicLayoutH.current);
+    musicScrollY.value = offset;
+    try {
+      listRef.current?.scrollToOffset?.({ offset, animated: false });
+    } catch (err) { /* mid-layout — the next jump lands */ }
+  }, [musicScrollY]);
+
   // Playlists are derived from the AUDIO library's own tags, not the global
   // album list — so the picker offers music playlists rather than every photo
   // board in the vault. No extra request: the rows already carry their tags.
-  const playlists = useMemo(() => {
-    const names = new Set();
-    for (const t of tracks) for (const tag of tagsOf(t)) names.add(tag);
-    return Array.from(names).sort((a, b) => a.localeCompare(b));
-  }, [tracks]);
+  // Built as name → tracks in ONE pass, because both consumers (the picker's
+  // name list and the playlists page's rows) need it and walking the library
+  // twice for the same data is wasteful on a 300-track page.
+  const playlistIndex = useMemo(() => {
+    const byName = new Map();
+    for (const t of visibleTracks) {
+      for (const tag of tagsOf(t)) {
+        const list = byName.get(tag);
+        if (list) list.push(t);
+        else byName.set(tag, [t]);
+      }
+    }
+    return byName;
+  }, [visibleTracks]);
+  const playlists = useMemo(
+    () => Array.from(playlistIndex.keys()).sort((a, b) => a.localeCompare(b)),
+    [playlistIndex]
+  );
+
+  // ── Playlists page ─────────────────────────────────────────────────────────
+  // Pushed over the library as an EdgeSwipePage (the app's push-page primitive),
+  // so it arrives from the right and a left-edge swipe takes you back to all
+  // songs — the same back gesture every other pushed page in the app uses.
+  // `openPlaylist` is the second level: null = the list of playlists, a name =
+  // that playlist's tracks.
+  const [playlistsOpen, setPlaylistsOpen] = useState(false);
+  const [openPlaylist, setOpenPlaylist] = useState(null);
+  const closePlaylists = useCallback(() => {
+    setPlaylistsOpen(false);
+    setOpenPlaylist(null);
+  }, []);
+  const openPlaylistTracks = openPlaylist ? (playlistIndex.get(openPlaylist) || []) : [];
 
   useFocusEffect(
     useCallback(() => {
@@ -121,12 +273,14 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
     }, [refreshLibrary])
   );
 
-  const playIndex = useCallback(
-    (index) => {
-      const item = visibleTracks[index];
+  // Play by ITEM, not by list index: the same row renderer serves the full
+  // library and a playlist, and an index only means something in the list it
+  // came from.
+  const playTrack = useCallback(
+    (item) => {
       if (item?.id != null) playMedia(String(item.id));
     },
-    [playMedia, visibleTracks]
+    [playMedia]
   );
 
   // ── Track actions (the ⋯ sheet) ────────────────────────────────────────────
@@ -174,10 +328,57 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
     }
   }, [sheetTrack, getBaseUrl, getMediaBaseUrl, closeSheet]);
 
+  // Rename = patch the row's originalName, which is the label titleOf() reads.
+  // The file on disk is untouched (that's `filename`), so this is a pure
+  // metadata edit. The extension is carried over from the old name because
+  // titleOf strips a trailing extension for display — dropping it would make
+  // "Take.Five" render as "Take" on the next load.
+  // Offline-safe: sendOrQueue tries the PATCH now and parks it in the durable
+  // outbox if the pond can't be reached, so a rename on the subway survives
+  // both the dead network AND an app restart — it's replayed on reconnect. Only
+  // a PERMANENT failure (a 4xx: gone, not yours) rejects and reverts.
+  const sheetRename = useCallback(
+    (name) => {
+      const item = sheetTrack;
+      const clean = String(name || '').trim();
+      if (!item || !clean) return;
+      const id = String(item.id);
+      const prevName = item.originalName || item.filename || '';
+      const ext = (String(prevName).match(/\.[a-z0-9]{2,5}$/i) || [''])[0];
+      const nextName = clean.endsWith(ext) ? clean : `${clean}${ext}`;
+      if (nextName === prevName) { closeSheet(); return; }
+
+      closeSheet();
+      setRenamedNames((prev) => new Map(prev).set(id, nextName));
+      sendOrQueue(api, {
+        method: 'patch',
+        path: `/media/${id}`,
+        body: { originalName: nextName },
+        // Rename it three times offline and only the last one is sent.
+        key: renameKey(id),
+        label: `Rename “${clean}”`,
+      })
+        .then(({ queued }) => { if (!queued) refreshLibrary(); })
+        .catch((e) => {
+          console.warn('[MusicVault] rename failed:', e?.message || e);
+          setRenamedNames((prev) => {
+            const next = new Map(prev);
+            next.delete(id);
+            return next;
+          });
+          Alert.alert('Rename', 'Could not rename that track.');
+        });
+    },
+    [sheetTrack, api, refreshLibrary, closeSheet]
+  );
+
   // Playlists are tags, and the tags endpoint REPLACES the list — so send the
   // union of what the row already has plus the new name. Closes immediately and
-  // persists in the background; a failure surfaces as an alert and a refresh
-  // puts the true state back.
+  // persists in the background; offline it parks in the outbox, and only a
+  // permanent failure alerts + refreshes the true state back.
+  //
+  // NOT keyed: each add carries the full tag list it computed at the time, so
+  // collapsing two adds would silently drop the first playlist.
   const sheetAddToPlaylist = useCallback(
     (name) => {
       const item = sheetTrack;
@@ -185,8 +386,13 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
       if (!item || !clean) return;
       closeSheet();
       const next = Array.from(new Set([...tagsOf(item), clean]));
-      api.put(`/media/${item.id}/tags`, { tags: next })
-        .then(() => refreshLibrary())
+      sendOrQueue(api, {
+        method: 'put',
+        path: `/media/${item.id}/tags`,
+        body: { tags: next },
+        label: `Add to ${clean}`,
+      })
+        .then(({ queued }) => { if (!queued) refreshLibrary(); })
         .catch((e) => {
           console.warn('[MusicVault] playlist add failed:', e?.message || e);
           Alert.alert('Playlist', `Could not add “${titleOf(item)}” to ${clean}.`);
@@ -210,10 +416,17 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
           style: 'destructive',
           onPress: () => {
             closeSheet();
-            // Optimistic: hide it now, un-hide only if the server refuses.
+            // Optimistic: hide it now, un-hide only if the server REFUSES it.
+            // Offline is not a refusal — the delete parks in the outbox and the
+            // row stays gone, which is what the user asked for.
             setRemovedIds((prev) => new Set(prev).add(id));
-            api.delete(`/media/${id}`)
-              .then(() => refreshLibrary())
+            sendOrQueue(api, {
+              method: 'delete',
+              path: `/media/${id}`,
+              key: `media:${id}:delete`,
+              label: `Delete “${titleOf(item)}”`,
+            })
+              .then(({ queued }) => { if (!queued) refreshLibrary(); })
               .catch((e) => {
                 console.warn('[MusicVault] delete failed:', e?.message || e);
                 setRemovedIds((prev) => {
@@ -252,14 +465,16 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
     });
   }, [c]);
 
-  const renderTrack = useCallback(({ item, index }) => {
-    const active = index === current;
+  const renderTrack = useCallback(({ item }) => {
+    // Active is decided by the PLAYING id, not by list position, so the same row
+    // highlights correctly in the library and inside a playlist.
+    const active = String(item.id) === String(activeTrack?.mediaId);
     return (
       <TouchableOpacity
         {...TAP_ONLY}
         activeOpacity={0.7}
         disabled={!ready}
-        onPress={() => playIndex(index)}
+        onPress={() => playTrack(item)}
         style={styles.row}
       >
         <View style={[styles.art, trackStyles.artTint]}>
@@ -292,7 +507,59 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         </TouchableOpacity>
       </TouchableOpacity>
     );
-  }, [c, trackStyles, current, isPlaying, playIndex, ready]);
+  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready]);
+
+  // The "Playlists" row, pinned as the list's first item. A destination, not a
+  // track — same row metrics so it reads as part of the list, with a chevron
+  // marking it as a push rather than a play.
+  const playlistsRow = useCallback(() => (
+    <TouchableOpacity
+      {...TAP_ONLY}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={`Playlists, ${playlists.length}`}
+      onPress={() => { tapHaptic(); setPlaylistsOpen(true); }}
+      style={styles.row}
+    >
+      <View style={[styles.art, trackStyles.artTint]}>
+        <Icon name="playlist-music" size={22} color={MUSIC_TINT(c)} />
+      </View>
+      <View style={trackStyles.body}>
+        <Text style={trackStyles.titleIdle} numberOfLines={1}>Playlists</Text>
+        <Text style={trackStyles.source} numberOfLines={1}>
+          {playlists.length === 0
+            ? 'None yet — add a track from its ⋯ menu'
+            : `${playlists.length} playlist${playlists.length === 1 ? '' : 's'}`}
+        </Text>
+      </View>
+      <Icon name="chevron-right" size={22} color={c.textTertiary} />
+    </TouchableOpacity>
+  ), [c, trackStyles, playlists.length]);
+
+  const renderPlaylistRow = useCallback(({ item }) => {
+    const count = playlistIndex.get(item)?.length || 0;
+    return (
+      <TouchableOpacity
+        {...TAP_ONLY}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={`${item}, ${count} track${count === 1 ? '' : 's'}`}
+        onPress={() => { tapHaptic(); setOpenPlaylist(item); }}
+        style={styles.row}
+      >
+        <View style={[styles.art, trackStyles.artTint]}>
+          <Icon name="playlist-music" size={22} color={MUSIC_TINT(c)} />
+        </View>
+        <View style={trackStyles.body}>
+          <Text style={trackStyles.titleIdle} numberOfLines={1}>{item}</Text>
+          <Text style={trackStyles.source} numberOfLines={1}>
+            {count} track{count === 1 ? '' : 's'}
+          </Text>
+        </View>
+        <Icon name="chevron-right" size={22} color={c.textTertiary} />
+      </TouchableOpacity>
+    );
+  }, [c, trackStyles, playlistIndex]);
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background, paddingTop: topInset }}>
@@ -338,10 +605,14 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         </View>
       ) : (
         <FlatList
+          ref={listRef}
           data={visibleTracks}
           keyExtractor={(t) => String(t.id)}
           renderItem={renderTrack}
-          extraData={`${current}:${isPlaying}:${ready}`}
+          onScroll={handleMusicScroll}
+          scrollEventThrottle={16}
+          ListHeaderComponent={playlistsRow}
+          extraData={`${current}:${isPlaying}:${ready}:${playlists.length}`}
           // With a track loaded, reserve the transport bar's real height plus a
           // gap so the last row rests clear of it rather than under it. Falls
           // back to a sane estimate for the single frame before onLayout lands.
@@ -350,7 +621,7 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
               ? (nowBarH || 150) + 16
               : Math.max(insets.bottom, bottomInset) + 24,
           }}
-          ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: c.border, marginLeft: 68 }} />}
+          ItemSeparatorComponent={() => <View style={styles.trackSep} />}
         />
       )}
 
@@ -419,6 +690,101 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         </View>
       )}
 
+      {/* A–Z scrub rail for the track list — the Music page's own, so the rail
+          no longer vanishes when you swipe over from Boards. Bounded by the
+          vault header above and the transport bar below, so the thumb can't run
+          under either. */}
+      {musicScrubEnabled && (
+        <TimelineScrubber
+          scrollY={musicScrollY}
+          maxScroll={musicMaxScroll}
+          data={musicScrubData}
+          onJump={handleMusicScrubJump}
+          inverted={false}
+          topInset={topInset + 8}
+          bottomInset={(nowBarH || Math.max(insets.bottom, bottomInset)) + 12}
+          accent={MUSIC_TINT(c)}
+          dark={theme.mode === 'dark'}
+        />
+      )}
+
+      {/* Playlists, pushed over the library. Level 1 lists the playlists; level
+          2 lists one playlist's tracks. A left-edge swipe backs out — from a
+          playlist to the playlist list, and from there to all songs — matching
+          every other pushed page in the app. */}
+      <EdgeSwipePage
+        visible={playlistsOpen}
+        onClose={closePlaylists}
+        // While a playlist is open on top, the parent's back-swipe must not fire
+        // underneath it — otherwise one drag would close BOTH levels at once.
+        swipeEnabled={!openPlaylist}
+      >
+        <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
+          <View style={styles.pageHeader}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Back to all songs"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              onPress={() => { tapHaptic(); closePlaylists(); }}
+              style={styles.pageBackBtn}
+            >
+              <Icon name="chevron-left" size={28} color={c.textPrimary} />
+            </TouchableOpacity>
+            <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>Playlists</Text>
+          </View>
+
+          <FlatList
+            data={playlists}
+            keyExtractor={(name) => name}
+            renderItem={renderPlaylistRow}
+            contentContainerStyle={{ paddingBottom: (nowBarH || 150) + 16 }}
+            ItemSeparatorComponent={() => <View style={styles.trackSep} />}
+            ListEmptyComponent={(
+              <View style={styles.pageEmpty}>
+                <Icon name="playlist-music-outline" size={40} color={c.textTertiary} />
+                <Text style={{ color: c.textSecondary, marginTop: 12, textAlign: 'center' }}>
+                  No playlists yet. Open a track's ⋯ menu and add it to one.
+                </Text>
+              </View>
+            )}
+          />
+
+          {/* One playlist's tracks — its OWN pushed page, nested INSIDE this one
+              rather than being a second state of it. That's what makes the
+              back-swipe work at this level too: a committed swipe animates the
+              page off and calls onClose, so a level that shares its parent's
+              page would animate out and then have nothing left to show.
+              `overlay` is required for the nesting — iOS won't present a second
+              sibling Modal over an open one. */}
+          <EdgeSwipePage overlay visible={!!openPlaylist} onClose={() => setOpenPlaylist(null)}>
+            <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
+              <View style={styles.pageHeader}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to playlists"
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  onPress={() => { tapHaptic(); setOpenPlaylist(null); }}
+                  style={styles.pageBackBtn}
+                >
+                  <Icon name="chevron-left" size={28} color={c.textPrimary} />
+                </TouchableOpacity>
+                <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>
+                  {openPlaylist || ''}
+                </Text>
+              </View>
+              <FlatList
+                data={openPlaylistTracks}
+                keyExtractor={(t) => String(t.id)}
+                renderItem={renderTrack}
+                extraData={`${activeTrack?.mediaId}:${isPlaying}:${ready}`}
+                contentContainerStyle={{ paddingBottom: (nowBarH || 150) + 16 }}
+                ItemSeparatorComponent={() => <View style={styles.trackSep} />}
+              />
+            </View>
+          </EdgeSwipePage>
+        </View>
+      </EdgeSwipePage>
+
       {/* Per-track options, as a card that rises from the bottom edge. Rendered
           LAST so it stacks over the list and the transport bar; it's an in-tree
           overlay rather than a Modal because the vault itself can be inside one
@@ -435,6 +801,7 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         busy={sheetBusy}
         onPlay={sheetPlay}
         onShare={sheetShare}
+        onRename={sheetRename}
         onAddToPlaylist={sheetAddToPlaylist}
         onDelete={sheetDelete}
         onClose={closeSheet}
@@ -447,7 +814,14 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
+  // Hairline grey rule, inset EQUALLY on both sides so it sits centred between
+  // rows rather than hanging off the artwork's left edge (row padding is 16).
+  trackSep: { height: StyleSheet.hairlineWidth, marginHorizontal: 16, backgroundColor: 'rgba(142,142,147,0.4)' },
   moreBtn: { paddingLeft: 2, paddingVertical: 2 },
+  pageHeader: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingBottom: 10 },
+  pageBackBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  pageTitle: { flex: 1, fontSize: 22, fontWeight: '600' },
+  pageEmpty: { alignItems: 'center', justifyContent: 'center', padding: 32, paddingTop: 80 },
   art: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   error: { marginHorizontal: 16, marginBottom: 8, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
   nowBar: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8 },
