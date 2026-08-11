@@ -3,8 +3,8 @@
  *
  * A small pill in the bottom-left corner that turns amber/red the moment the
  * app stops keeping up with your finger. Tap it for the findings list, where
- * each row can be written into the to-do list as a **ready-to-send Claude
- * prompt** — the point being that you drive the app, it notices what felt
+ * each row can be written into **Notes as app feedback** as a ready-to-send
+ * Claude prompt — the point being that you drive the app, it notices what felt
  * wrong, and you hand the resulting prompt to a session later without having
  * to remember or re-describe anything.
  *
@@ -22,21 +22,24 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useServer } from '../context/ServerContext';
-import { localTodayStr } from '../screens/TasksScreen/utils/taskHelpers';
 import gestureProbe, { BAD_MS, SLOW_MS, buildFixPrompt } from '../utils/gestureProbe';
 
 const IS_DEV = typeof __DEV__ !== 'undefined' && __DEV__;
 const STORAGE_KEY = 'gestureProbe.findings.v1';
 
-// Where feedback lands in the to-do list, and how it's labelled.
+// Where feedback lands, and how it's labelled.
 //
-// The first version posted a bare { title, description } — the row WAS created
-// (verified in the DB), but with no board and no due date it sorted into the
-// undated backlog beneath every dated task, which reads as "it didn't work".
-// Findings now arrive dated TODAY on the app's own board, tagged so they can be
-// filtered as feedback rather than mixed into real work.
-const FEEDBACK_BOARD = 'TURTLE APP';
-const FEEDBACK_TAGS = ['feedback', 'mobile', 'perf'];
+// Earlier versions posted to /tasks/single, so a finding became a REAL task —
+// dated today it then showed up on the calendar's day to-do list, mixed into
+// actual work. Findings are app feedback, not work: they now go to Notes via
+// the same path as the Notes composer's Feedback mode (a note of type 'todo'
+// stamped with the app + platform tags), so they sit with the rest of the
+// Turtle feedback and never touch the calendar.
+const FEEDBACK_APP_TAG = 'Turtle App';
+const FEEDBACK_PLATFORM_TAG = 'Mobile app';
+// Extra tag of our own so probe-generated feedback is separable from feedback
+// typed by hand.
+const FEEDBACK_TAGS = [FEEDBACK_APP_TAG, FEEDBACK_PLATFORM_TAG, 'perf'];
 
 const KIND_ICON = {
   'freeze-after-touch': 'hand-back-left-off',
@@ -103,32 +106,34 @@ function ProbeOverlayBody() {
   const findings = state.findings || [];
   const worst = findings.length ? findings[0].worstMs : 0;
 
-  // Write the checked findings into the real to-do list as Turtle feedback.
+  // Write the checked findings into Notes as Turtle feedback.
   // Explicit button, never automatic: these are rows the user will actually see
-  // in Tasks, and a debugger that spams the task list is one you turn off.
-  const writeTodos = useCallback(async (rows) => {
+  // in Notes, and a debugger that spams the list is one you turn off.
+  const writeFeedback = useCallback(async (rows) => {
     if (!rows.length || busy) return;
     setBusy(true);
     setNote('');
-    const today = localTodayStr();
     let ok = 0;
     let lastError = '';
     for (const f of rows) {
       try {
-        const res = await api.post('/tasks/single', {
-          title: `Mobile feedback: ${f.label} — ${Math.round(f.worstMs)}ms`,
+        const res = await api.post('/turtle/note', {
+          // Both field names on purpose: the handler historically reads `note`
+          // (the web chat /note path) and only newer builds accept `content`.
+          // Same dual-send the Notes composer does.
+          note: `Mobile feedback: ${f.label} — ${Math.round(f.worstMs)}ms`,
+          content: `Mobile feedback: ${f.label} — ${Math.round(f.worstMs)}ms`,
           description: buildFixPrompt(f),
-          priority: f.worstMs >= BAD_MS ? 'high' : 'medium',
-          // Dated today + on the app's own board, or it sinks into the undated
-          // backlog where nobody finds it (the original bug).
-          dueDate: today,
-          project: FEEDBACK_BOARD,
+          // Feedback mode in the Notes composer persists as a to-do note, so
+          // these match it exactly and appear alongside hand-typed feedback.
+          type: 'todo',
+          done: false,
           tags: FEEDBACK_TAGS,
         });
-        // The route answers { success, task } — treat anything else as a
+        // The route answers { success, noteId } — treat anything else as a
         // failure rather than reporting a write that never landed.
-        if (!res || res.success === false || !res.task) {
-          throw new Error(res?.error || 'server rejected the task');
+        if (!res || res.success === false || !res.noteId) {
+          throw new Error(res?.error || 'server rejected the note');
         }
         ok += 1;
         setWritten((prev) => new Set(prev).add(f.key));
@@ -140,7 +145,7 @@ function ProbeOverlayBody() {
     }
     setBusy(false);
     setNote(ok === rows.length
-      ? `Added ${ok} to “${FEEDBACK_BOARD}”, due today`
+      ? `Added ${ok} to Notes as ${FEEDBACK_APP_TAG} feedback`
       : `Added ${ok} of ${rows.length}${lastError ? ` — ${lastError}` : ''}`);
   }, [api, busy]);
 
@@ -233,7 +238,7 @@ function ProbeOverlayBody() {
             <View style={styles.actions}>
               <TouchableOpacity
                 style={[styles.btn, styles.btnPrimary, (busy || !selected.length) && styles.btnOff]}
-                onPress={() => writeTodos(selected)}
+                onPress={() => writeFeedback(selected)}
                 disabled={busy || !selected.length}
               >
                 <Text style={styles.btnPrimaryText}>
@@ -253,7 +258,7 @@ function ProbeOverlayBody() {
               </TouchableOpacity>
             </View>
             <Text style={styles.foot}>
-              Sent items land on “{FEEDBACK_BOARD}”, due today, tagged {FEEDBACK_TAGS.join(' · ')}.
+              Sent items land in Notes as feedback, tagged {FEEDBACK_TAGS.join(' · ')}.
               {'\n'}Long-press the pill to hide it for this session. Dev builds only.
             </Text>
           </View>
