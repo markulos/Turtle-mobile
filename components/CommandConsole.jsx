@@ -3,7 +3,6 @@ import {
   Modal,
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   Pressable,
   StyleSheet,
@@ -13,9 +12,13 @@ import {
   Keyboard,
   Platform,
 } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useCommandBus } from '../context/CommandBusContext';
+import { useTheme } from '../context/ThemeContext';
+import { blurProps, frostOverlayColor, frostBorderColor } from '../utils/frostedChat';
+import ChatComposer, { ComposerAction } from './ChatComposer';
 import { tapHaptic } from '../utils/haptics';
 
 // The iOS keyboard ease — Animated has no built-in "keyboard" curve, so this
@@ -23,11 +26,10 @@ import { tapHaptic } from '../utils/haptics';
 // speed. Mirrors the constant in TerminalConsole.
 const KB_EASING = Easing.bezier(0.17, 0.59, 0.4, 0.77);
 
-// Exact palette of the web app's GlobalCommandConsole (Ctrl+/). The console
-// is intentionally ALWAYS dark — theme-independent floating chrome — so these
-// are fixed colors, not theme tokens, to match the web 1:1.
+// Command names stay monospace — that is the one typographic cue this list
+// shares with the chat's own slash-command dropdown, and it is what makes a
+// command read as a command rather than as prose.
 const MONO = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
-const MINT = '#7ee9aa';
 
 // The slash-command registry the chat understands (mirrors the chat's list).
 const COMMANDS = [
@@ -43,23 +45,34 @@ const COMMANDS = [
 ];
 
 // First words that mark a slash command (so a plain message to Turtle isn't
-// turned into one). The "/" chip is a visual prompt; the user types the body.
+// turned into one). The "/" button is a visual prompt; the user types the body.
 const COMMAND_WORDS = new Set([
   'pomodoro', 'note', 'todo', 'photos', 'vault', 'terminal',
   'focus', 'tasks', 'settings', 'stats', 'feedback', 'notes',
 ]);
 
 /**
- * CommandConsole — pixel-matches the web app's Ctrl+/ command bar: a Telegram-
- * style floating bar pinned to the bottom, a faint "/" prefix chip, a monospace
- * mint-caret input, an ESC chip, and a dark suggestion popover above it.
- * Opened by long-pressing the Turtle tab. Submitting delivers the text into
- * the Turtle chat (via CommandBus), which runs the exact same command pipeline.
+ * CommandConsole — the command bar behind a long-press on the Turtle tab.
+ *
+ * It used to be a pixel-copy of the WEB app's Ctrl+/ console: a permanently
+ * dark slab with hard-coded greys, a monospace body, a boxed "ESC" chip and a
+ * separate popover floating above it. On a phone, next to the app's own chat,
+ * that read as a different application — theme-blind in light mode, square
+ * where everything else is round, and carrying a keyboard affordance ("ESC")
+ * that no phone has.
+ *
+ * So it is now the SAME composer the Turtle tab uses: ChatComposer in `bare`
+ * mode inside one frosted card, with the suggestion list riding above the input
+ * exactly the way the chat's slash-command dropdown does. Round send button,
+ * circular actions, the shared frost — one input, two entry points. Submitting
+ * still delivers the text into the Turtle chat (via CommandBus), which runs the
+ * exact same command pipeline.
  */
 export default function CommandConsole({ visible, onClose }) {
   const { dispatch } = useCommandBus();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const { theme } = useTheme();
   const [value, setValue] = useState('');
   // Lift driven off the keyboard's own show/hide events: the bar rises in
   // lockstep with the keyboard (same duration + curve) instead of snapping to
@@ -67,6 +80,7 @@ export default function CommandConsole({ visible, onClose }) {
   // transform runs off the JS thread with no relayout.
   const kbY = useRef(new Animated.Value(0)).current;
   const inputRef = useRef(null);
+  const styles = useMemo(() => makeStyles(theme), [theme]);
 
   useEffect(() => {
     if (!visible) return;
@@ -110,7 +124,7 @@ export default function CommandConsole({ visible, onClose }) {
   }, [visible, insets.bottom, kbY]);
 
   // Suggestions: empty input → the full list; typed → prefix-match (the "/" is
-  // implied by the chip, so "pomo" matches "/pomodoro …"). Capped at 8.
+  // implied by the button, so "pomo" matches "/pomodoro …"). Capped at 8.
   const suggestions = useMemo(() => {
     const q = value.trim().toLowerCase();
     if (!q) return COMMANDS.slice(0, 8);
@@ -133,8 +147,8 @@ export default function CommandConsole({ visible, onClose }) {
   };
 
   const applySuggestion = (cmd) => {
-    // Fill the body (without the leading slash — the chip shows it) + a space,
-    // mirroring the web's Tab-to-apply, then keep focus to finish typing.
+    // Fill the body (without the leading slash — the "/" button shows it) + a
+    // space, mirroring the web's Tab-to-apply, then keep focus to finish typing.
     setValue(cmd.command.replace(/^\//, '') + ' ');
     inputRef.current?.focus();
   };
@@ -151,14 +165,22 @@ export default function CommandConsole({ visible, onClose }) {
           ]}
           pointerEvents="box-none"
         >
-          <View style={styles.cluster}>
-            {/* Suggestions popover */}
+          {/* ONE frosted card: suggestions above, composer below — the same
+              shape the chat's inputArea has, where the slash dropdown lives
+              inside the frost rather than floating over it as a second slab. */}
+          <View style={styles.card}>
+            <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
+            <View
+              pointerEvents="none"
+              style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]}
+            />
+
             {suggestions.length > 0 && (
               <ScrollView
-                style={styles.popover}
-                contentContainerStyle={{ paddingVertical: 0 }}
+                style={styles.suggestions}
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
+                scrollIndicatorInsets={{ right: 1 }}
               >
                 {suggestions.map((s) => (
                   <TouchableOpacity
@@ -177,29 +199,45 @@ export default function CommandConsole({ visible, onClose }) {
               </ScrollView>
             )}
 
-            {/* The bar */}
-            <View style={styles.bar}>
-              <Text style={styles.slash} aria-hidden>
-                /
-              </Text>
-              <TextInput
-                ref={inputRef}
-                style={styles.input}
-                value={value}
-                onChangeText={setValue}
-                onSubmitEditing={submit}
-                placeholder="type a command…"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-                selectionColor={MINT}
-                returnKeyType="go"
-                autoCapitalize="none"
-                autoCorrect={false}
-                spellCheck={false}
-              />
-              <TouchableOpacity onPress={onClose} style={styles.escChip} activeOpacity={0.7}>
-                <Text style={styles.escText}>ESC</Text>
-              </TouchableOpacity>
-            </View>
+            <ChatComposer
+              bare
+              theme={theme}
+              inputRef={inputRef}
+              value={value}
+              onChangeText={setValue}
+              onSend={submit}
+              placeholder="Type a command…"
+              multiline={false}
+              maxLength={200}
+              inputProps={{
+                returnKeyType: 'go',
+                onSubmitEditing: submit,
+                autoCapitalize: 'none',
+                autoCorrect: false,
+                spellCheck: false,
+              }}
+              actions={
+                <>
+                  {/* The "/" the user doesn't have to type — same circular
+                      button shape as the chat's @ and # actions. */}
+                  <ComposerAction
+                    theme={theme}
+                    icon="slash-forward"
+                    onPress={() => inputRef.current?.focus()}
+                    accessibilityLabel="Slash command"
+                  />
+                  {/* Replaces the old boxed "ESC" chip: a phone has no escape
+                      key, and the chip was the most obviously desktop-borrowed
+                      piece of this bar. */}
+                  <ComposerAction
+                    theme={theme}
+                    icon="close"
+                    onPress={onClose}
+                    accessibilityLabel="Close command bar"
+                  />
+                </>
+              }
+            />
           </View>
         </Animated.View>
       </View>
@@ -207,89 +245,54 @@ export default function CommandConsole({ visible, onClose }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme) => StyleSheet.create({
   fill: { flex: 1, justifyContent: 'flex-end' },
   column: {
     width: '100%',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 6,
   },
-  cluster: { width: '100%', maxWidth: 560 },
-
-  // Suggestion popover — rgba(20,20,24,0.92), thin border, rounded 10.
-  popover: {
-    maxHeight: 260,
-    marginBottom: 8,
-    backgroundColor: 'rgba(20,20,24,0.92)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
-    borderRadius: 10,
+  // Same frosted card as ChatComposer's default shell (radius 28, hairline
+  // border, blur + tint), just wide enough to host the suggestion list too.
+  card: {
+    width: '100%',
+    maxWidth: 560,
+    borderRadius: 28,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: frostBorderColor(theme),
     overflow: 'hidden',
+    backgroundColor: 'transparent',
+    // The console floats over whatever screen you were on, so unlike the chat's
+    // seated composer it keeps a drop shadow to lift it off the page.
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: theme.mode === 'dark' ? 0.45 : 0.18,
+    shadowRadius: 20,
+    elevation: 14,
+  },
+  suggestions: {
+    maxHeight: 260,
   },
   row: {
     flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: frostBorderColor(theme),
   },
   rowCmd: {
     fontFamily: MONO,
-    color: '#ffffff',
+    fontSize: 15,
     fontWeight: '600',
-    fontSize: 13,
+    color: theme.colors.textPrimary,
   },
   rowDesc: {
-    flex: 1,
-    color: 'rgba(255,255,255,0.55)',
-    fontSize: 11,
-  },
-
-  // The bar — rgba(20,20,24,0.78), border rgba(255,255,255,0.14), rounded 12.
-  bar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    backgroundColor: 'rgba(20,20,24,0.78)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 16 },
-    shadowOpacity: 0.55,
-    shadowRadius: 24,
-    elevation: 16,
-  },
-  slash: {
-    fontFamily: MONO,
-    fontSize: 16,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.32)',
-    paddingLeft: 4,
-  },
-  input: {
-    flex: 1,
-    minWidth: 0,
-    paddingVertical: 4,
-    paddingHorizontal: 4,
-    fontFamily: MONO,
-    fontSize: 15,
-    color: '#fff',
-    padding: 0,
-  },
-  escChip: {
-    paddingVertical: 2,
-    paddingHorizontal: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 4,
-  },
-  escText: {
-    fontSize: 10,
-    fontWeight: '600',
-    letterSpacing: 0.3,
-    color: 'rgba(255,255,255,0.35)',
+    flexShrink: 1,
+    textAlign: 'right',
+    fontSize: 12,
+    color: theme.colors.textMuted,
   },
 });
