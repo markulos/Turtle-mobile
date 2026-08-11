@@ -55,6 +55,7 @@ import ProfileScreen from './screens/ProfileScreen';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import GestureProbeOverlay from './components/GestureProbeOverlay';
 import gestureProbe from './utils/gestureProbe';
+import DevProfiler from './components/DevProfiler';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
 import { useAppFonts } from './utils/fonts';
@@ -368,8 +369,22 @@ function AppContent() {
   return (
     <>
       <StatusBar style={isDark ? 'light' : 'dark'} />
-      <NavigationContainer>
-        <TabNavigator />
+      <NavigationContainer
+        // Dev probe: tell the probe WHICH screen is focused. Its labels only
+        // cover instrumented gestures (all of them in the vault today), so a
+        // freeze anywhere else filed as a bare "app" with nothing to go on.
+        onReady={() => gestureProbe.setScope('Tasks')}
+        onStateChange={(state) => {
+          if (!state) return;
+          const route = state.routes?.[state.index];
+          gestureProbe.setScope(route?.name || null);
+        }}
+      >
+        {/* Times every commit under the navigator, so a stall on any screen
+            names its cost the way the vault's trees already do. */}
+        <DevProfiler id="tabs">
+          <TabNavigator />
+        </DevProfiler>
       </NavigationContainer>
     </>
   );

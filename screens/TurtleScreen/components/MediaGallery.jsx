@@ -42,20 +42,9 @@ import { impactHaptic } from '../../../utils/haptics';
 // return in a release build (see utils/gestureProbe).
 import gestureProbe from '../../../utils/gestureProbe';
 import { buildBucketsUrl, buildGalleryUrl } from '../../../utils/galleryFilters';
-// DEV-ONLY commit timer. React.Profiler is what tells us WHICH tree owned the
-// JS thread when the probe reports a stall — the drift monitor can only say
-// that one happened. In a release build this is the identity function, so the
-// Profiler node is never created and there is no measurement overhead at all.
-const DevProfiler = __DEV__
-  ? ({ id, children }) => (
-    <React.Profiler
-      id={id}
-      onRender={(profId, phase, actualDuration) => gestureProbe.commit(profId, phase, actualDuration)}
-    >
-      {children}
-    </React.Profiler>
-  )
-  : ({ children }) => children;
+// DEV-ONLY commit timer — names the tree that owned the JS thread when the probe
+// reports a stall. Identity function outside __DEV__. See components/DevProfiler.
+import DevProfiler from '../../../components/DevProfiler';
 import { useGalleryFilters } from '../../../utils/useGalleryFilters';
 import GalleryFilterSheet from './GalleryFilterSheet';
 

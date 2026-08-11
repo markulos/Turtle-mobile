@@ -135,6 +135,54 @@ describe('respond() measures from the first move, not the touch-down', () => {
   });
 });
 
+describe('scope — which screen the finding came from', () => {
+  test('the prompt names the screen when samples carry one', () => {
+    const p = buildFixPrompt({
+      kind: 'freeze-after-touch',
+      label: 'app',
+      count: 13,
+      worstMs: 565,
+      samples: [
+        { ms: 346, at: 1, context: 'app', scope: 'Notes' },
+        { ms: 565, at: 2, context: 'app', scope: 'Notes' },
+      ],
+    });
+    expect(p).toContain('WHERE: the Notes screen.');
+  });
+
+  test('several screens are listed, and a scope-less finding omits the line', () => {
+    const withTwo = buildFixPrompt({
+      kind: 'js-blocked',
+      label: 'app',
+      count: 2,
+      worstMs: 200,
+      samples: [{ ms: 200, at: 1, scope: 'Tasks' }, { ms: 150, at: 2, scope: 'Turtle' }],
+    });
+    expect(withTwo).toContain('WHERE: the Tasks / Turtle screens.');
+    const withNone = buildFixPrompt({
+      kind: 'js-blocked', label: 'app', count: 1, worstMs: 200, samples: [{ ms: 200, at: 1 }],
+    });
+    expect(withNone).not.toContain('WHERE:');
+  });
+
+  test('setScope stamps the findings that follow it', () => {
+    gestureProbe.setConsoleTrail(false);
+    gestureProbe.clear();
+    gestureProbe.setScope('Photos');
+    const now = jest.spyOn(Date, 'now');
+    let t = 500_000;
+    now.mockImplementation(() => t);
+    gestureProbe.touchStart('app');
+    t += 400;
+    gestureProbe.respond('grid:openPhoto');
+    expect(gestureProbe.getState().findings[0].samples[0].scope).toBe('Photos');
+    now.mockRestore();
+    gestureProbe.setScope(null);
+    gestureProbe.clear();
+    gestureProbe.setConsoleTrail(true);
+  });
+});
+
 describe('slow-render findings', () => {
   test('name the tree and say a commit owned the thread', () => {
     const p = buildFixPrompt({

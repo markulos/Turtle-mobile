@@ -122,6 +122,13 @@ export const buildFixPrompt = (finding) => {
     new Set(samples.map((s) => s.context).filter(Boolean)),
   ).slice(0, 3);
 
+  // Which SCREEN was focused. The label says what gesture was last recognised,
+  // which is silent for anything the probe doesn't instrument — a finding
+  // labelled plainly "app" used to carry no clue at all about where to look.
+  const scopes = Array.from(
+    new Set(samples.map((s) => s.scope).filter(Boolean)),
+  ).slice(0, 3);
+
   const lines = [
     `Mobile app performance bug found by the in-app gesture probe (dev build, real device).`,
     ``,
@@ -129,6 +136,7 @@ export const buildFixPrompt = (finding) => {
     `SYMPTOM: ${KIND_SYMPTOMS[kind] || 'the app does not do what the gesture asked'}.`,
     `MEASURED: ${count} occurrence${count === 1 ? '' : 's'}, worst ${Math.round(worstMs)}ms, median ${med}ms.`,
   ];
+  if (scopes.length) lines.push(`WHERE: the ${scopes.join(' / ')} screen${scopes.length > 1 ? 's' : ''}.`);
   if (contexts.length) lines.push(`WHEN: ${contexts.join(' · ')}.`);
   if (hint) lines.push(`START HERE: ${hint}.`);
   lines.push(
@@ -152,8 +160,9 @@ const createProbe = () => {
   let listeners = new Set();
   let timer = null;
   let lastTick = 0;
-  let lastTouch = null;      // { at, context }
+  let lastTouch = null;      // { at, movedAt, context }
   let lastLabel = null;      // most recent respond() label — the "what were we doing"
+  let scope = null;          // focused screen — the "where were we"
   let running = false;
   let totalStalls = 0;
   let worstStallMs = 0;
@@ -172,12 +181,12 @@ const createProbe = () => {
     const key = findingKey(kind, label);
     const prev = findings.get(key);
     if (!prev && findings.size >= MAX_FINDINGS) return;
-    const merged = mergeSample(prev, { ms: Math.round(ms), at: Date.now(), context });
+    const merged = mergeSample(prev, { ms: Math.round(ms), at: Date.now(), context, scope });
     findings.set(key, { ...merged, key, kind, label: label || 'unknown' });
     if (consoleTrail) {
       // One line per event in the Metro log — the "background debugger" trail
       // you can watch while driving the app, without opening the panel.
-      console.log(`[probe] ${kind} ${Math.round(ms)}ms · ${label || 'unknown'}${context ? ` · ${context}` : ''}`);
+      console.log(`[probe] ${kind} ${Math.round(ms)}ms · ${label || 'unknown'}${scope ? ` @${scope}` : ''}${context ? ` · ${context}` : ''}`);
     }
     emit();
   };
@@ -271,6 +280,20 @@ const createProbe = () => {
       record('slow-response', label, ms, context || touch.context);
     },
 
+    /**
+     * WHERE the app is — the focused screen, fed by the navigator.
+     *
+     * The label answers "what gesture was last recognised", which is silent for
+     * every screen the probe doesn't instrument: 13 freezes filed as plain "app"
+     * carried no hint of where to even start reading. The scope rides on every
+     * sample from here on, so a finding names its screen even when no
+     * instrumented gesture was involved.
+     */
+    setScope(name) {
+      if (!IS_DEV) return;
+      scope = name || null;
+    },
+
     /** Mark what the app is doing without pairing to a touch (scroll settle…). */
     mark(label) {
       if (!IS_DEV) return;
@@ -335,6 +358,8 @@ const createProbe = () => {
       worstStallMs = 0;
       lastTouch = null;
       lastLabel = null;
+      // scope is NOT cleared: it describes where the app is right now, not what
+      // has been measured.
       emit();
     },
 
