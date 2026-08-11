@@ -41,6 +41,10 @@ export const SLOW_MS = 120;
 export const BAD_MS = 300;
 // A stall beginning within this long of a touch-down is attributed to it.
 export const FREEZE_WINDOW_MS = 250;
+// A single React commit (or a timed synchronous block) longer than this is
+// worth naming. Three frames: below it the work disappears into the frame
+// budget, above it it is a candidate for a stall the drift monitor will see.
+export const RENDER_MS = 50;
 // Per-finding sample cap — enough to show a spread, bounded for memory.
 const MAX_SAMPLES = 6;
 // Total distinct findings kept (dev safety valve).
@@ -93,12 +97,14 @@ const KIND_TITLES = {
   'slow-response': (label) => `${label} responds slowly`,
   'js-blocked': (label) => `JS thread blocks during ${label}`,
   'freeze-after-touch': (label) => `Touch freezes the app during ${label}`,
+  'slow-render': (label) => `${label} spends too long in one commit`,
 };
 
 const KIND_SYMPTOMS = {
   'slow-response': 'the gesture works but visibly lags behind the finger',
   'js-blocked': 'the app stops rendering and stops accepting input for that whole window',
   'freeze-after-touch': 'the finger lands and the app goes dead under it — gestures started in that window are delivered late or dropped entirely',
+  'slow-render': 'one React commit (or one synchronous block) owns the JS thread for that whole window — whatever the finger was doing is delivered late',
 };
 
 /**
@@ -248,6 +254,37 @@ const createProbe = () => {
     mark(label) {
       if (!IS_DEV) return;
       lastLabel = label;
+    },
+
+    /**
+     * A React commit finished. Fed by <Profiler onRender>, so it answers the
+     * question the drift monitor can't: WHICH tree owned the thread. Only
+     * commits past RENDER_MS are kept — everything else is inside the frame
+     * budget and would drown the findings list.
+     *
+     * The label carries the tree id; the phase (mount / update / nested-update)
+     * rides along as the context, because "mount" points at a list batch while
+     * "update" points at a state change.
+     */
+    commit(id, phase, ms) {
+      if (!IS_DEV || !(ms >= RENDER_MS)) return;
+      record('slow-render', `render:${id}`, ms, phase || null);
+    },
+
+    /**
+     * Time a synchronous block and record it if it runs long. Returns whatever
+     * the block returns, so it can wrap an existing call site without changing
+     * its shape: `probe.time('adopt', () => doTheWork())`.
+     */
+    time(label, fn) {
+      if (!IS_DEV) return fn();
+      const started = Date.now();
+      try {
+        return fn();
+      } finally {
+        const ms = Date.now() - started;
+        if (ms >= RENDER_MS) record('slow-render', `block:${label}`, ms, null);
+      }
     },
 
     subscribe(listener) {

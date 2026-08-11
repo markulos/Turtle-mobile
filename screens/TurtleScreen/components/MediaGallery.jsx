@@ -42,6 +42,20 @@ import { impactHaptic } from '../../../utils/haptics';
 // return in a release build (see utils/gestureProbe).
 import gestureProbe from '../../../utils/gestureProbe';
 import { buildBucketsUrl, buildGalleryUrl } from '../../../utils/galleryFilters';
+// DEV-ONLY commit timer. React.Profiler is what tells us WHICH tree owned the
+// JS thread when the probe reports a stall — the drift monitor can only say
+// that one happened. In a release build this is the identity function, so the
+// Profiler node is never created and there is no measurement overhead at all.
+const DevProfiler = __DEV__
+  ? ({ id, children }) => (
+    <React.Profiler
+      id={id}
+      onRender={(profId, phase, actualDuration) => gestureProbe.commit(profId, phase, actualDuration)}
+    >
+      {children}
+    </React.Profiler>
+  )
+  : ({ children }) => children;
 import { useGalleryFilters } from '../../../utils/useGalleryFilters';
 import GalleryFilterSheet from './GalleryFilterSheet';
 
@@ -3657,6 +3671,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const adoptPendingSelected = useCallback(() => {
     const latest = selectedMediaRef.current;
     if (!latest) return;
+    // Dev trail marker. This call only SCHEDULES the whole-gallery re-render —
+    // the cost lands in the commit that follows, which the Profiler above
+    // measures. Logging the schedule is what lets the two be lined up: an
+    // "adopt scheduled" immediately followed by a long `render:gallery update`
+    // is the deferred adoption landing mid-swipe.
+    if (__DEV__) console.log('[probe] adopt scheduled');
     setSelectedMedia((prev) => (prev?.id === latest.id ? prev : latest));
   }, []);
 
@@ -4294,6 +4314,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               },
             ]}
           >
+            <DevProfiler id="viewerPager">
             <Animated.FlatList
               data={viewerItems}
               renderItem={renderViewerItem}
@@ -4337,6 +4358,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               onMomentumScrollEnd={handleMomentumScrollEnd}
               onScrollEndDrag={handleScrollEndDrag}
             />
+            </DevProfiler>
           </Animated.View>
 
 
@@ -4687,9 +4709,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   return (
+    <DevProfiler id="gallery">
     <View style={styles.container}>
       {/* Full-screen viewer & Modals */}
-      {renderFullScreenViewer()}
+      <DevProfiler id="viewer">{renderFullScreenViewer()}</DevProfiler>
       {renderLocalSyncGallery()}
 
       {/* Same gather overlay, grid side. The viewer's copy lives inside the
@@ -6071,6 +6094,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       />
 
     </View>
+    </DevProfiler>
   );
 }
 

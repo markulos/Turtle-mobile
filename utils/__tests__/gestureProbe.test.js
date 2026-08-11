@@ -80,6 +80,23 @@ describe('buildFixPrompt', () => {
   });
 });
 
+describe('slow-render findings', () => {
+  test('name the tree and say a commit owned the thread', () => {
+    const p = buildFixPrompt({
+      kind: 'slow-render',
+      label: 'render:gallery',
+      count: 3,
+      worstMs: 158,
+      samples: [{ ms: 150, at: 1, context: 'update' }, { ms: 158, at: 2, context: 'update' }],
+    });
+    expect(p).toContain('render:gallery spends too long in one commit');
+    expect(p).toContain('one React commit');
+    // The Profiler phase rides along as the context — mount points at a list
+    // batch, update at a state change, and the prompt must carry the difference.
+    expect(p).toContain('update');
+  });
+});
+
 describe('describeFinding', () => {
   test('renders a compact row label', () => {
     expect(describeFinding({ label: 'viewer:swipe', count: 3, worstMs: 481.6 }))
