@@ -4,7 +4,9 @@
  * The Turtle data model treats notes and todos as the same `notes` table
  * with a `type` discriminator ('note' | 'todo') and a `done` flag. This
  * screen surfaces both kinds in a single timeline, with:
- *   • A 3-way filter pill: All / Notes / Todos
+ *   • A 4-way swipeable tab bar: All / Notes / Todos / Feedback (feedback is a
+ *     to-do carrying an app tag — see isFeedbackNote — so it shows on both
+ *     Todos and its own tab)
  *   • Type-aware row rendering (todos get a tappable checkbox + strike
  *     through when done; plain notes get a paragraph icon)
  *   • A floating ＋ FAB that opens a slide-up composer modal
@@ -68,8 +70,8 @@ import Reanimated, {
 // Composer pull-down-to-dismiss. The composer is IN-TREE (not a Modal), so the
 // app's root GestureHandlerRootView already feeds this detector.
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { dockOccupied } from '../../components/tabBarLayout';
+import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -81,12 +83,20 @@ import { TAP_ONLY } from '../../utils/pressBehavior';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
 // Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
 import { fuzzyRank } from '../../utils/trigram';
+// Tab predicates + the feedback tag vocabulary (pure, unit-tested separately).
+import { APP_TAGS, PLATFORM_TAGS, isFeedbackNote, matchesFilter } from './feedbackFilter';
 
 const FILTER_ALL = 'all';
 const FILTER_NOTE = 'note';
 const FILTER_TODO = 'todo';
+// App feedback. NOT a note type — a tag shape (see isFeedbackNote): a to-do
+// carrying an app tag, written either by the composer's Feedback mode or by the
+// dev gesture probe. Its own tab so feedback stops hiding among real todos.
+const FILTER_FEEDBACK = 'feedback';
 // Left-to-right page order for the swipeable tabs.
-const FILTER_ORDER = [FILTER_ALL, FILTER_NOTE, FILTER_TODO];
+const FILTER_ORDER = [FILTER_ALL, FILTER_NOTE, FILTER_TODO, FILTER_FEEDBACK];
+// Tab labels, keyed by filter so adding a page is one row here.
+const FILTER_LABELS = { all: 'All', note: 'Notes', todo: 'Todos', feedback: 'Feedback' };
 // Sentinel topic for notes that carry no tags (shown as its own "Untagged" chip).
 const UNTAGGED = '__untagged__';
 // Notes per request. Small enough that the first page paints in one round-trip,
@@ -96,8 +106,22 @@ const NOTES_PAGE = 60;
 // Composer modes. 'feedback' persists as a to-do but auto-stamps an app tag
 // ("Turtle App" / "Turtle 3D") + a platform tag (Turtle App only) so the cue
 // rides along when the to-do is handed to the Claude session.
-const APP_TAGS = { 'turtle-app': 'Turtle App', 'turtle-3d': 'Turtle 3D' };
-const PLATFORM_TAGS = { web: 'Web app', mobile: 'Mobile app' };
+// APP_TAGS / PLATFORM_TAGS and the two tab predicates live in feedbackFilter.js
+// so they can be unit-tested without stubbing this file's native import graph.
+
+// Which composer mode a fresh capture starts in, by the tab it was started FROM
+// — capture on the Todos tab writes a to-do, capture on Notes writes a note.
+// 'all' has no kind of its own, so it keeps the historical to-do default.
+// Keyed by filter, so capture on the Feedback tab opens straight in Feedback mode.
+const TAB_COMPOSER_MODE = { all: 'todo', note: 'note', todo: 'todo', feedback: 'feedback' };
+// Off-screen start distance for the settings sheet before its real height is
+// measured. Only has to be TALLER than the sheet — the first frames of the
+// slide-in just begin a little further down.
+const SHEET_FALLBACK_H = 900;
+// The composer's bottom toolbar (button 34 + 10 padding top/bottom). The writing
+// surface reserves this much on top of whatever's below it (dock or keyboard),
+// so the last line of a note never ends up behind the toolbar.
+const COMPOSER_TOOLBAR_H = 54;
 
 // Derive browsable "topics" from note tags, mirroring the web NotesScreen: a
 // topic is the segment BEFORE the first '/', so `moodboard/wedding` lives under
@@ -356,7 +380,14 @@ export default function NotesScreen() {
     try {
       const res = await api.get('/turtle/notes/counts');
       if (res?.success) {
-        setServerCounts({ all: res.all || 0, note: res.note || 0, todo: res.todo || 0 });
+        setServerCounts({
+          all: res.all || 0,
+          note: res.note || 0,
+          todo: res.todo || 0,
+          // Only trust a number: a server that predates the feedback count
+          // sends nothing, and `undefined` is the cue to count loaded rows.
+          feedback: typeof res.feedback === 'number' ? res.feedback : undefined,
+        });
       }
     } catch {
       // Non-fatal — the tabs fall back to counting the loaded rows.
@@ -619,7 +650,7 @@ export default function NotesScreen() {
   // also shows `moodboard/wedding`) — same predicate as the web NotesScreen.
   const visible = useMemo(() => {
     let list = notes;
-    if (filter !== FILTER_ALL) list = list.filter((n) => (n.type || 'note') === filter);
+    if (filter !== FILTER_ALL) list = list.filter((n) => matchesFilter(n, filter));
     if (selectedTopic === UNTAGGED) {
       list = list.filter((n) => !Array.isArray(n.tags) || n.tags.length === 0);
     } else if (selectedTopic) {
@@ -635,8 +666,18 @@ export default function NotesScreen() {
   // authority. Loaded rows are the fallback until it lands (and if it fails),
   // so the tabs are never blank.
   const counts = useMemo(() => {
-    if (serverCounts) return serverCounts;
-    const c = { all: notes.length, note: 0, todo: 0 };
+    // Feedback is tag-shaped, so an older server's grouped-by-type COUNT can't
+    // answer it. It sends `feedback` when it knows how; until then (and on a
+    // server that predates it) the loaded rows are the fallback.
+    let localFeedback = 0;
+    for (const n of notes) if (isFeedbackNote(n)) localFeedback += 1;
+    if (serverCounts) {
+      return {
+        ...serverCounts,
+        feedback: typeof serverCounts.feedback === 'number' ? serverCounts.feedback : localFeedback,
+      };
+    }
+    const c = { all: notes.length, note: 0, todo: 0, feedback: localFeedback };
     for (const n of notes) {
       const t = n.type || 'note';
       if (t === 'todo') c.todo += 1;
@@ -667,7 +708,7 @@ export default function NotesScreen() {
   const { width: screenW } = useWindowDimensions();
   const pageScrollX = useRef(new Animated.Value(0)).current;
   const pagerRef = useRef(null);
-  const segW = (screenW - 32) / 3; // track is inset 16px each side; 3 segments
+  const segW = (screenW - 32) / FILTER_ORDER.length; // track is inset 16px each side
 
   // Underline geometry, same approach as the vault's picker. Label widths can't
   // be computed (font metrics + the user's font scale + a live count in the
@@ -684,13 +725,12 @@ export default function NotesScreen() {
   }, []);
   const fallbackLabelW = Math.min(segW * 0.6, 76);
   const tabUnderlineW = Math.max(...FILTER_ORDER.map((fk) => tabLabelWidths[fk] || fallbackLabelW));
+  // Derived from FILTER_ORDER rather than written out per page — a hand-listed
+  // 3-point range is exactly what breaks (silently, by parking the bar under the
+  // wrong label) the day a tab is added.
   const tabUnderlineX = pageScrollX.interpolate({
-    inputRange: [0, screenW, screenW * 2],
-    outputRange: [
-      segW * 0.5 - tabUnderlineW / 2,
-      segW * 1.5 - tabUnderlineW / 2,
-      segW * 2.5 - tabUnderlineW / 2,
-    ],
+    inputRange: FILTER_ORDER.map((_, i) => i * screenW),
+    outputRange: FILTER_ORDER.map((_, i) => segW * (i + 0.5) - tabUnderlineW / 2),
     extrapolate: 'clamp',
   });
   const goToPage = useCallback((index) => {
@@ -706,7 +746,7 @@ export default function NotesScreen() {
   // filter + the active topic filter. Notes are few.
   const listFor = useCallback((filterKey) => {
     let list = visibleNotes;
-    if (filterKey !== FILTER_ALL) list = list.filter((n) => (n.type || 'note') === filterKey);
+    if (filterKey !== FILTER_ALL) list = list.filter((n) => matchesFilter(n, filterKey));
     if (selectedTopic === UNTAGGED) {
       list = list.filter((n) => !Array.isArray(n.tags) || n.tags.length === 0);
     } else if (selectedTopic) {
@@ -721,18 +761,23 @@ export default function NotesScreen() {
     // Empty state now rides as ListEmptyComponent so the scrolling header
     // (ListHeaderComponent) still shows above it — an empty tab keeps its
     // banner/pill/rail instead of collapsing to a bare centred message.
+    const emptyIcon = filterKey === FILTER_FEEDBACK ? 'message-text-outline'
+      : filterKey === FILTER_TODO ? 'checkbox-blank-outline'
+        : 'note-text-outline';
+    const emptyTitle = filterKey === FILTER_FEEDBACK ? 'No feedback yet'
+      : filterKey === FILTER_TODO ? 'No todos yet'
+        : filterKey === FILTER_NOTE ? 'No notes yet'
+          : 'Nothing here yet';
     const empty = (
       <View style={styles.center}>
-        <Icon
-          name={filterKey === FILTER_TODO ? 'checkbox-blank-outline' : 'note-text-outline'}
-          size={36}
-          color={theme.colors.textMuted}
-        />
-        <Text style={styles.emptyTitle}>
-          {filterKey === FILTER_TODO ? 'No todos yet' : filterKey === FILTER_NOTE ? 'No notes yet' : 'Nothing here yet'}
-        </Text>
+        <Icon name={emptyIcon} size={36} color={theme.colors.textMuted} />
+        <Text style={styles.emptyTitle}>{emptyTitle}</Text>
         <Text style={styles.emptyHint}>
-          Tap ＋ to add one, or use /note · /todo in Turtle chat.
+          {filterKey === FILTER_FEEDBACK
+            // The other writer is the dev gesture probe, which posts here too —
+            // worth saying, because that's where probe findings now land.
+            ? 'Tap ＋ to write app feedback. The gesture probe files its findings here too.'
+            : 'Tap ＋ to add one, or use /note · /todo in Turtle chat.'}
         </Text>
       </View>
     );
@@ -846,8 +891,8 @@ export default function NotesScreen() {
           const inputRange = [(index - 1) * screenW, index * screenW, (index + 1) * screenW];
           const activeOp = pageScrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
           const inactiveOp = pageScrollX.interpolate({ inputRange, outputRange: [1, 0, 1], extrapolate: 'clamp' });
-          const label = fk === FILTER_ALL ? 'All' : fk === FILTER_NOTE ? 'Notes' : 'Todos';
-          const count = fk === FILTER_ALL ? counts.all : fk === FILTER_NOTE ? counts.note : counts.todo;
+          const label = FILTER_LABELS[fk] || fk;
+          const count = counts[fk] || 0;
           return (
             <TouchableOpacity
               key={fk}
@@ -1048,6 +1093,7 @@ export default function NotesScreen() {
       <ComposerModal
         visible={composerOpen}
         initialNote={editingNote}
+        initialMode={TAB_COMPOSER_MODE[filter] || 'todo'}
         activeTopic={selectedTopic && selectedTopic !== UNTAGGED ? selectedTopic : null}
         allTags={allTags}
         onClose={() => { setComposerOpen(false); setEditingNote(null); }}
@@ -1854,7 +1900,7 @@ const linkCardStyles = (theme, isDark) => StyleSheet.create({
 });
 
 // ── Composer modal ──────────────────────────────────────────
-function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [], onClose, onSubmit, theme, isDark }) {
+function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic = null, allTags = [], onClose, onSubmit, theme, isDark }) {
   const [content, setContent] = useState('');
   const [description, setDescription] = useState('');
   // Composer mode: 'note' | 'todo' | 'feedback'. To-do is the default for a new
@@ -1869,8 +1915,8 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
   const [tagDraft, setTagDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const styles = composerStyles(theme, isDark);
-  const isEditing = !!initialNote;
-  const { height: screenHeight } = useWindowDimensions();
+  // The page runs edge to edge, so it owns its own status-bar clearance.
+  const insets = useSafeAreaInsets();
 
   // The live keyboard height as a UI-thread shared value — the SAME primitive the
   // Turtle session dock rides. Driving the sheet's translateY straight off this
@@ -1878,26 +1924,21 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
   // the keyboard frame-for-frame, in perfect lockstep, exactly like the session
   // card — including the interactive swipe-down dismiss.
   const keyboard = useAnimatedKeyboard();
-  // The sheet rests above the tab bar, while the keyboard rises from the window
-  // bottom — so the lift it needs is (keyboardHeight − tabBarHeight), floored at
-  // 0. Identical offset to the session dock's sessionDockLift.
-  const tabBarHeight = useBottomTabBarHeight();
+  // How much room the floating tab dock ACTUALLY takes (card + float gap + safe
+  // area). Everything pinned to this page's bottom edge — the toolbar and the
+  // settings panel — rests above it, and the keyboard lift cancels exactly that
+  // resting clearance. dockOccupied, NOT useBottomTabBarHeight(): the hook
+  // reports only the card's own height, so anything positioned from it lands
+  // under the dock — which is what buried the settings panel's Done button.
+  const dockH = dockOccupied(insets.bottom);
 
-  // Drives the open/close reveal: 0 = fully closed, 1 = fully open. The backdrop
-  // dim and the sheet's slide both read off this one shared value so they move
-  // in perfect lockstep.
-  const reveal = useSharedValue(0);
-  // Sheet height (captured onLayout) so the card slides up from exactly its own
-  // height — no guessing, no clipped peek. A shared value so the slide worklet
-  // reads it on the UI thread; seeded at ~60% of the screen until first layout.
-  const sheetH = useSharedValue(Math.round(screenHeight * 0.6));
-  // Keep the overlay mounted through the *exit* animation: the parent flips
-  // `visible` to false immediately, but we linger until the slide-down finishes,
-  // then unmount.
-  const [mounted, setMounted] = useState(visible);
-  // Imperative focus: autoFocus fires on mount (before the card has slid in),
-  // which pops the keyboard early and ruins the "rise together" feel. We focus
-  // on the next frame instead so the keyboard rises in step with the card.
+  // Which option group the settings panel is showing (null = panel closed).
+  // Everything that isn't the note itself — kind, feedback target, tags — lives
+  // behind the gear now, so the writing surface is just paper.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Imperative focus: autoFocus fires on mount (before the page has slid in),
+  // which pops the keyboard early and ruins the "arrive together" feel. We focus
+  // on the next frame instead so the keyboard rises in step with the slide.
   const contentRef = useRef(null);
 
   // On open, prefill from the note being edited (or clear for a new one), so
@@ -1906,8 +1947,10 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
     if (visible) {
       setContent(initialNote?.content || '');
       setDescription(initialNote?.description || '');
-      // Editing keeps the note's real kind; a fresh capture defaults to to-do.
-      setMode(initialNote ? (initialNote.type === 'todo' ? 'todo' : 'note') : 'todo');
+      // Editing keeps the note's real kind; a fresh capture inherits the KIND OF
+      // THE TAB it was started from (Notes tab → note, Todos tab → to-do), the
+      // same "context you're standing in wins" rule as the active-topic tag.
+      setMode(initialNote ? (initialNote.type === 'todo' ? 'todo' : 'note') : initialMode);
       setApp('turtle-app');
       setPlatform('web');
       // A fresh capture inherits the active topic (board) as a pre-selected
@@ -1917,66 +1960,30 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
         : (activeTopic ? [activeTopic] : []));
       setTagDraft('');
       setBusy(false);
+      setSettingsOpen(false);
     }
-  }, [visible, initialNote, activeTopic]);
+  }, [visible, initialNote, initialMode, activeTopic]);
 
-  // Open/close animation. Uses the iOS sheet-presentation curve
-  // (cubic-bezier 0.32, 0.72, 0, 1) — the same deceleration the keyboard rises
-  // on — so the card slide, the background fade, and the keyboard all feel like
-  // one motion. Opening is a touch slower than closing, like a native sheet.
-  const OPEN_EASING = REasing.bezier(0.32, 0.72, 0, 1);
+  // EdgeSwipePage owns the slide-in, the mount/unmount and the swipe-back, so
+  // the composer no longer runs its own reveal animation, backdrop dim or
+  // pull-down-to-dismiss. All that's left here is WHEN to raise the keyboard:
+  // a fresh capture is a "start typing now" action, so it focuses as the page
+  // arrives; opening an EXISTING note is "read it first", so it stays quiet
+  // until the user taps into a field.
   useEffect(() => {
-    if (visible) {
-      setMounted(true);
-      reveal.value = 0;
-      dragY.value = 0; // a previous pull-down must not offset the fresh open
-      reveal.value = withTiming(1, { duration: 340, easing: OPEN_EASING });
-      // Auto-focus ONLY for a fresh capture — a new note is a "start typing now"
-      // action, so the keyboard rising in step with the slide is the right feel.
-      // OPENING AN EXISTING NOTE is a "read it first" action: just slide the card
-      // up with NO keyboard, and let the user tap the title or description field
-      // to bring the keyboard up when they actually want to edit.
-      if (!initialNote) {
-        requestAnimationFrame(() => contentRef.current?.focus());
-      }
-    } else if (mounted) {
-      Keyboard.dismiss();
-      reveal.value = withTiming(0, { duration: 240, easing: OPEN_EASING }, (finished) => {
-        'worklet';
-        if (finished) runOnJS(setMounted)(false);
-      });
+    if (visible && !initialNote) {
+      const id = setTimeout(() => contentRef.current?.focus(), 260);
+      return () => clearTimeout(id);
     }
+    if (!visible) Keyboard.dismiss();
+    return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
-  // Live pull-down offset (0 while parked). Folded into the same translateY as
-  // the reveal + keyboard lift so all three motions share one compositor value.
-  const dragY = useSharedValue(0);
-  // Latest-close ref + stable trampoline so the (once-built) pan worklet never
-  // captures a stale onClose.
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-  const runComposerClose = useCallback(() => {
+  const closePage = useCallback(() => {
     Keyboard.dismiss();
-    onCloseRef.current?.();
-  }, []);
-  // Pull the handle/header down to dismiss, iOS-sheet style. Commit past 100px
-  // or a downward flick — the reveal close then takes over FROM the dragged
-  // position (dragY deliberately isn't reset here; the open effect zeroes it).
-  const handlePan = useMemo(() => Gesture.Pan()
-    .activeOffsetY([-8, 8])
-    .onUpdate((e) => {
-      dragY.value = Math.max(0, e.translationY);
-    })
-    .onEnd((e) => {
-      // RNGH velocity is px/SECOND (PanResponder's vy is px/ms) — 600 here
-      // ≈ the 0.6 px/ms flick threshold the PanResponder sheets use.
-      if (e.translationY > 100 || e.velocityY > 600) {
-        runOnJS(runComposerClose)();
-      } else {
-        dragY.value = withSpring(0, { damping: 22, stiffness: 220, mass: 0.9 });
-      }
-    }), [dragY, runComposerClose]);
+    onClose?.();
+  }, [onClose]);
 
   // Settled keyboard state on the JS thread — used ONLY to bound the scroll
   // area's height (below) so a long note can't shove the card's top (title,
@@ -1986,23 +1993,42 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
   const [kb, setKb] = useState({ visible: false, height: 0 });
   const kbVisibleRef = useRef(false);
   kbVisibleRef.current = kb.visible;
+
+  // ── The caret stays above the keyboard ───────────────────
+  // The body is ONE long multiline input (scrollEnabled={false}) inside the
+  // page's ScrollView, so nothing native keeps the caret in view: write past the
+  // fold and the line you're typing slides under the keyboard. Two halves fix it:
+  //   1. the scroll area reserves the keyboard's height at its bottom (below), so
+  //      the text CAN be scrolled clear of it — iOS Notes' "push it all the way
+  //      up" feel instead of a dead 120pt pad;
+  //   2. whenever the content grows while the caret sits at the END of the body
+  //      (what writing normally is), we ride the scroll to the bottom, so the
+  //      live line is always the one you can see.
+  // Caret mid-note is left alone — auto-scrolling then would yank the page away
+  // from where the user is editing.
+  const scrollRef = useRef(null);
+  const bodyFocusedRef = useRef(false);
+  const caretAtEndRef = useRef(true);
+  const descriptionRef = useRef('');
+  descriptionRef.current = description;
+  const keepCaretVisible = useCallback(() => {
+    if (!bodyFocusedRef.current || !caretAtEndRef.current) return;
+    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+  }, []);
+
   useEffect(() => {
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const s = Keyboard.addListener(showEvt, (e) => setKb({ visible: true, height: e.endCoordinates?.height || 0 }));
+    const s = Keyboard.addListener(showEvt, (e) => {
+      setKb({ visible: true, height: e.endCoordinates?.height || 0 });
+      // The reserved room lands with this state, so the scroll can only follow on
+      // a later frame — after the taller content is laid out.
+      setTimeout(keepCaretVisible, 60);
+    });
     const h = Keyboard.addListener(hideEvt, () => setKb({ visible: false, height: 0 }));
     return () => { s.remove(); h.remove(); };
-  }, []);
-  // Cap the scrollable body to the space left above the keyboard (minus a top
-  // breathing gap and the fixed handle+header chrome). The body then SCROLLS its
-  // full length inside that window instead of overflowing the card.
-  const SHEET_CHROME = 96; // handle + header + sheet top padding, approx
-  const TOP_GAP = 48;      // status bar + a little air above the card
-  const scrollMaxHeight = Math.max(
-    200,
-    screenHeight - (kb.visible ? kb.height : 0) - TOP_GAP - SHEET_CHROME,
-  );
-  // Double-tap the card to TOGGLE the keyboard — closed → focus the note body,
+  }, [keepCaretVisible]);
+  // Double-tap the page to TOGGLE the keyboard — closed → focus the note body,
   // open → dismiss. A quick, low-effort open/close that coexists with scrolling
   // (a scroll moves; a double-tap is stationary) and with the buttons (they
   // only need a single tap).
@@ -2015,20 +2041,47 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
     .maxDuration(260)
     .onEnd(() => { 'worklet'; runOnJS(toggleKeyboard)(); }), [toggleKeyboard]);
 
-  // The sheet's transform: closed slides it fully below the screen
-  // ((1−reveal)·sheetHeight), and the keyboard lift raises it so its bottom edge
-  // pins to the keyboard's top — both folded into ONE compositor-only translateY,
-  // recomputed every keyboard frame on the UI thread. The live pull-down offset
-  // rides on top.
-  const sheetStyle = useAnimatedStyle(() => {
+  // The page is full-screen and its body scrolls, so only the bottom TOOLBAR
+  // has to move with the keyboard. Same expression as every other keyboard lift
+  // in the app (keyboardHeight − the resting bottom clearance), read off the
+  // UI-thread shared value so it tracks frame-for-frame.
+  const toolbarLift = useAnimatedStyle(() => {
     'worklet';
-    const lift = Math.max(keyboard.height.value - tabBarHeight, 0);
-    return { transform: [{ translateY: (1 - reveal.value) * sheetH.value - lift + dragY.value }] };
+    return { transform: [{ translateY: -Math.max(keyboard.height.value - dockH, 0) }] };
   });
-  // Backdrop dim deepens exactly as the sheet rises (reads the same shared value).
-  const dimStyle = useAnimatedStyle(() => {
+
+  // ── Settings sheet motion ────────────────────────────────
+  // The panel slides UP from below the screen edge and slides back DOWN on
+  // close, so it has to outlive `settingsOpen` for the exit — `sheetMounted`
+  // is what's actually rendered, and only drops after the closing timing lands.
+  // `sheetProgress`: 1 = fully off-screen below, 0 = seated.
+  const [sheetMounted, setSheetMounted] = useState(false);
+  const sheetProgress = useSharedValue(1);
+  const sheetHeight = useSharedValue(SHEET_FALLBACK_H);
+  useEffect(() => {
+    if (settingsOpen) {
+      setSheetMounted(true);
+      sheetProgress.value = withTiming(0, { duration: 280, easing: REasing.out(REasing.cubic) });
+      return;
+    }
+    sheetProgress.value = withTiming(1, { duration: 200, easing: REasing.in(REasing.cubic) }, (finished) => {
+      'worklet';
+      if (finished) runOnJS(setSheetMounted)(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsOpen]);
+
+  // One style, two jobs: the open/close slide AND the keyboard lift (they both
+  // write translateY, so they cannot be two stacked styles — the later one would
+  // replace the earlier one's transform outright).
+  const settingsPanelStyle = useAnimatedStyle(() => {
     'worklet';
-    return { opacity: reveal.value * 0.45 };
+    const lift = Math.max(keyboard.height.value - dockH, 0);
+    return { transform: [{ translateY: sheetProgress.value * sheetHeight.value - lift }] };
+  });
+  const settingsScrimStyle = useAnimatedStyle(() => {
+    'worklet';
+    return { opacity: 1 - sheetProgress.value };
   });
 
   // Add a tag (typed or tapped), de-duped and trimmed; clears the draft.
@@ -2063,61 +2116,172 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
     setBusy(false);
   };
 
-  if (!mounted) return null;
+  // A pushed PAGE, sliding in from the right. `overlay` keeps it IN-TREE rather
+  // than in a Modal's separate native window — that's non-negotiable here,
+  // because useAnimatedKeyboard cannot see the keyboard from inside a Modal, and
+  // the toolbar's frame-for-frame lift depends on it.
   return (
-    // In-tree overlay (NOT a Modal) so useAnimatedKeyboard can see the keyboard
-    // — that's the whole reason this matches the session card. Fills the screen
-    // above the tab bar; box-none lets taps reach the backdrop / sheet below.
-    <View style={styles.backdrop} pointerEvents="box-none">
-      {/* Background fade — same shared value driving the card's slide, so the dim
-          deepens exactly as the sheet rises. */}
-      <Reanimated.View
-        pointerEvents="none"
-        style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, dimStyle]}
-      />
-      {/* Tap the dim backdrop above the sheet to dismiss everything; matches the
-          iOS sheet idiom and gives an obvious "out" if the keyboard feels stuck. */}
-      <TouchableWithoutFeedback onPress={onClose} accessible={false}>
-        <View style={{ flex: 1 }} />
-      </TouchableWithoutFeedback>
-      <Reanimated.View
-        onLayout={(e) => {
-          const h = Math.round(e.nativeEvent.layout.height);
-          if (h > 0) sheetH.value = h;
-        }}
-        style={[styles.sheet, sheetStyle]}
-      >
-        {/* Fixed drag zone: handle + title stay put (pull down here to close)
-            while the body below scrolls independently. */}
-        <GestureDetector gesture={handlePan}>
-          <View>
-            <View style={styles.handle} />
-            <View style={styles.headerRow}>
-              <Text style={styles.title}>
-                {isEditing
-                  ? (mode === 'note' ? 'Edit note' : 'Edit todo')
-                  : (mode === 'feedback' ? 'New feedback' : mode === 'todo' ? 'New todo' : 'New note')}
-              </Text>
-              <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                <Icon name="close" size={22} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </GestureDetector>
+    <EdgeSwipePage overlay visible={visible} onClose={closePage} swipeEnabled={!settingsOpen}>
+      <View style={styles.page}>
+        {/* Nav bar — iOS Notes' shape: back on the left, the note's actions on
+            the right. No title: the note's own first line is the title. */}
+        <View style={[styles.navBar, { paddingTop: insets.top + 6 }]}>
+          <TouchableOpacity
+            onPress={closePage}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.navBack}
+            accessibilityRole="button"
+            accessibilityLabel="Back to notes"
+          >
+            <Icon name="chevron-left" size={30} color={theme.colors.accent || theme.colors.accentInfo} />
+          </TouchableOpacity>
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity
+            onPress={() => { tapHaptic(); Keyboard.dismiss(); setSettingsOpen(true); }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.navIconBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Note settings"
+          >
+            <Icon name="tune-variant" size={20} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPressIn={() => impactHaptic('medium')}
+            onPress={() => { Keyboard.dismiss(); handleSubmit(); }}
+            disabled={busy || !content.trim()}
+            style={styles.navDone}
+            accessibilityRole="button"
+            accessibilityLabel="Save note"
+          >
+            {busy
+              ? <ActivityIndicator color={theme.colors.accent || theme.colors.accentInfo} />
+              : <Text style={[styles.navDoneText, !content.trim() && styles.navDoneDisabled]}>Done</Text>}
+          </TouchableOpacity>
+        </View>
 
-        {/* Scrollable body — a long note scrolls its FULL length here instead of
-            overflowing the card. Quick-scroll-down dismisses the keyboard
-            (keyboardDismissMode); a double-tap toggles it; tapping empty space
-            dismisses while still letting button taps through
-            (keyboardShouldPersistTaps). */}
+        {/* The paper. Two plain inputs, no boxes or labels — the first line is
+            the title, everything under it is the body, exactly like iOS Notes.
+            The kind chip under the title is the only chrome, so you can still
+            see at a glance whether you're writing a note or a to-do. */}
         <GestureDetector gesture={doubleTap}>
           <ScrollView
-            style={{ maxHeight: scrollMaxHeight }}
-            contentContainerStyle={styles.scrollBody}
+            ref={scrollRef}
+            style={{ flex: 1 }}
+            // The bottom reserve is whatever is actually covering the page's
+            // bottom edge — the floating dock when the keyboard is down, the
+            // keyboard itself when it's up — plus the toolbar that rides on top
+            // of it. That's what lets the last line be scrolled clear of the
+            // keyboard instead of being stuck behind it.
+            contentContainerStyle={[
+              styles.pageBody,
+              { paddingBottom: (kb.visible ? kb.height : dockH) + COMPOSER_TOOLBAR_H + 24 },
+            ]}
+            onContentSizeChange={keepCaretVisible}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             showsVerticalScrollIndicator={false}
           >
+            <TouchableOpacity
+              onPress={() => { tapHaptic(); Keyboard.dismiss(); setSettingsOpen(true); }}
+              activeOpacity={0.7}
+              style={styles.kindChip}
+              accessibilityRole="button"
+              accessibilityLabel={`Kind: ${mode}. Tap to change.`}
+            >
+              <Icon
+                name={mode === 'note' ? 'text' : mode === 'feedback' ? 'message-text-outline' : 'checkbox-marked-circle-outline'}
+                size={12}
+                color={theme.colors.textSecondary}
+              />
+              <Text style={styles.kindChipText}>
+                {mode === 'feedback' ? 'Feedback' : mode === 'todo' ? 'To-do' : 'Note'}
+              </Text>
+              {tags.length > 0 && <Text style={styles.kindChipText}>· {tags.length} tag{tags.length === 1 ? '' : 's'}</Text>}
+            </TouchableOpacity>
+
+            <TextInput
+              ref={contentRef}
+              placeholder={mode === 'note' ? 'Title' : mode === 'feedback' ? 'Feedback for Claude' : 'Buy milk'}
+              placeholderTextColor={theme.colors.textPlaceholder}
+              value={content}
+              onChangeText={setContent}
+              style={styles.titleInput}
+              multiline
+              scrollEnabled={false}
+            />
+
+            <TextInput
+              placeholder="Start writing…"
+              placeholderTextColor={theme.colors.textPlaceholder}
+              value={description}
+              onChangeText={setDescription}
+              style={styles.bodyInput}
+              multiline
+              scrollEnabled={false}
+              onFocus={() => { bodyFocusedRef.current = true; keepCaretVisible(); }}
+              onBlur={() => { bodyFocusedRef.current = false; }}
+              // "Is the caret at the end of the note?" — the one condition under
+              // which auto-scrolling to the bottom is what the user wants.
+              onSelectionChange={(e) => {
+                const sel = e.nativeEvent?.selection || {};
+                caretAtEndRef.current = sel.start === sel.end && sel.end >= (descriptionRef.current?.length || 0);
+              }}
+            />
+          </ScrollView>
+        </GestureDetector>
+
+        {/* Bottom toolbar — rides the keyboard, so the dismiss key is always to
+            hand while writing (the multiline inputs take Return as a newline,
+            so there's no other way down). */}
+        <Reanimated.View style={[styles.toolbar, { bottom: dockH }, toolbarLift]} pointerEvents="box-none">
+          <TouchableOpacity
+            onPress={Keyboard.dismiss}
+            style={styles.toolbarBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss keyboard"
+          >
+            <Icon name="keyboard-close" size={20} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+        </Reanimated.View>
+
+        {/* SETTINGS — everything that isn't the note. An in-page panel (not a
+            second Modal: iOS won't show one over an open one) holding the kind
+            toggle, the feedback target and the tags.
+
+            The panel's SURFACE runs all the way to the screen's bottom edge —
+            it passes under the floating dock rather than stopping short of it,
+            so there's no strip of dimmed page showing between the two. Its
+            CONTENT still clears the dock: the scroll body carries dockH of
+            bottom padding, so the Done button never lands under the dock. */}
+        {sheetMounted && (
+          <View style={styles.settingsLayer} pointerEvents={settingsOpen ? 'auto' : 'none'}>
+            <TouchableWithoutFeedback onPress={() => setSettingsOpen(false)} accessible={false}>
+              <Reanimated.View style={[styles.settingsScrim, settingsScrimStyle]} />
+            </TouchableWithoutFeedback>
+            {/* Slides up/down on open/close, and rides the keyboard on the same
+                shared value as the toolbar — the tag field lives in here, so
+                without the lift the panel would be covered the moment you typed
+                a tag. Its measured height IS the slide distance. */}
+            <Reanimated.View
+              style={[styles.settingsPanel, settingsPanelStyle]}
+              onLayout={(e) => { sheetHeight.value = e.nativeEvent.layout.height; }}
+            >
+              <View style={styles.settingsHeader}>
+                <Text style={styles.settingsTitle}>Note settings</Text>
+                <TouchableOpacity
+                  onPress={() => setSettingsOpen(false)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close note settings"
+                >
+                  <Icon name="close" size={22} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                contentContainerStyle={[styles.settingsBody, { paddingBottom: 28 + dockH }]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
           {/* Mode toggle — note / todo / feedback */}
           <View style={styles.typeToggle}>
             {[
@@ -2190,34 +2354,6 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
             </View>
           )}
 
-          {/* scrollEnabled={false}: a growing multiline TextInput otherwise
-              captures the vertical pan for its own (non-existent) internal
-              scroll, starving the parent ScrollView — so a long note can't be
-              scrolled to its end AND keyboardDismissMode (scroll-down-to-close)
-              never fires. Disabling the input's own scroll lets the input grow
-              to its full height and hands ALL panning to the body ScrollView,
-              which then scrolls the whole card and dismisses the keyboard. */}
-          <TextInput
-            ref={contentRef}
-            placeholder={mode === 'note' ? 'Anything to remember' : mode === 'feedback' ? 'Feedback for Claude' : 'Buy milk'}
-            placeholderTextColor={theme.colors.textPlaceholder}
-            value={content}
-            onChangeText={setContent}
-            style={styles.input}
-            multiline
-            scrollEnabled={false}
-          />
-
-          <TextInput
-            placeholder="Description (optional)"
-            placeholderTextColor={theme.colors.textPlaceholder}
-            value={description}
-            onChangeText={setDescription}
-            style={[styles.input, styles.inputDescription]}
-            multiline
-            scrollEnabled={false}
-          />
-
           {/* Tags — selected chips + inline new-tag input, then a row of the
               existing tags to tap and add. */}
           <View style={styles.tagBox}>
@@ -2278,76 +2414,105 @@ function ComposerModal({ visible, initialNote, activeTopic = null, allTags = [],
             )}
           </View>
 
-          <View style={styles.submitRow}>
-            {/* Dismiss button — for the multiline content/description
-                inputs the system Return key inserts a newline, so this
-                explicit button is the user's path to closing the
-                keyboard without saving. Hidden when the keyboard isn't
-                relevant (no inputs focused). */}
-            <TouchableOpacity
-              onPress={Keyboard.dismiss}
-              style={styles.dismissBtn}
-              accessibilityLabel="Dismiss keyboard"
-            >
-              <Icon name="keyboard-close" size={18} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPressIn={() => impactHaptic('medium')}
-              onPress={() => { Keyboard.dismiss(); handleSubmit(); }}
-              disabled={busy || !content.trim()}
-              style={[
-                styles.submit,
-                (!content.trim() || busy) && styles.submitDisabled,
-              ]}
-            >
-              {busy ? (
-                <ActivityIndicator color={isDark ? '#0a0a0a' : '#fff'} />
-              ) : (
-                <Text style={styles.submitText}>
-                  Save
-                </Text>
-              )}
-            </TouchableOpacity>
+          {/* No Save here — the page's nav bar owns it, so the settings panel
+              is purely "how is this note filed" and closing it returns you to
+              the writing surface with the choice already applied. */}
+          <TouchableOpacity
+            onPress={() => setSettingsOpen(false)}
+            style={styles.settingsDone}
+            accessibilityRole="button"
+            accessibilityLabel="Apply settings"
+          >
+            <Text style={styles.settingsDoneText}>Done</Text>
+          </TouchableOpacity>
+              </ScrollView>
+            </Reanimated.View>
           </View>
-          </ScrollView>
-        </GestureDetector>
-        </Reanimated.View>
+        )}
       </View>
+    </EdgeSwipePage>
   );
 }
 
 const composerStyles = (theme, isDark) => StyleSheet.create({
-  // Full-screen in-tree overlay (the composer is no longer a Modal). Absolutely
-  // fills the NotesScreen above the tab bar; flex-end anchors the sheet to the
-  // bottom so its keyboard lift reads as rising off the bottom edge. The dim is
-  // a separate animated layer (fades in with the card), not a static fill.
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-end',
-    zIndex: 100,
+  // The pushed page. EdgeSwipePage supplies the slide + the swipe-back; this is
+  // just its opaque contents.
+  page: { flex: 1, backgroundColor: theme.colors.background },
+  // iOS Notes' nav bar: back on the left, actions on the right, no title.
+  navBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingBottom: 6,
+    gap: 4,
   },
-  sheet: {
+  navBack: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  navIconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  navDone: { paddingHorizontal: 10, paddingVertical: 6, minWidth: 56, alignItems: 'flex-end' },
+  navDoneText: { fontSize: 16, fontWeight: '700', color: theme.colors.accent || theme.colors.accentInfo },
+  navDoneDisabled: { color: theme.colors.textMuted },
+  // The paper. Generous side margins and no field chrome — the inputs ARE the
+  // page, the way a note looks in iOS Notes.
+  // paddingBottom is supplied inline — it tracks the keyboard (see the ScrollView).
+  pageBody: { paddingHorizontal: 20, paddingTop: 4 },
+  // The one bit of chrome on the paper: what this note will be filed as. Tapping
+  // it is a second door into the settings panel.
+  kindChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999,
+    backgroundColor: theme.colors.surfaceElevated,
+    marginBottom: 10,
+  },
+  kindChipText: { fontSize: 11, fontWeight: '600', color: theme.colors.textSecondary },
+  titleInput: {
+    fontSize: 26, fontWeight: '700', lineHeight: 32,
+    color: theme.colors.textPrimary,
+    padding: 0, marginBottom: 8,
+  },
+  bodyInput: {
+    fontSize: 17, lineHeight: 24,
+    color: theme.colors.textPrimary,
+    padding: 0, minHeight: 200,
+  },
+  // Rides the keyboard; parked at the page's bottom edge when it's down.
+  toolbar: {
+    position: 'absolute', left: 0, right: 0, bottom: 0,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end',
+    paddingHorizontal: 16, paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border,
     backgroundColor: theme.colors.background,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    // Bottom gap below the Save row. When the keyboard is up the sheet's
-    // bottom edge pins to the keyboard top, so this is the visual margin
-    // between the Save button and the keyboard — kept tight but enough to
-    // breathe (was 36, which read as too airy).
-    paddingBottom: 22,
-    borderWidth: StyleSheet.hairlineWidth,
+  },
+  toolbarBtn: { width: 40, height: 34, alignItems: 'center', justifyContent: 'center' },
+  // Settings — an in-page layer, not a Modal (iOS won't present one over the
+  // page's own). Scrim + a card anchored to the bottom.
+  settingsLayer: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end', zIndex: 20 },
+  // The scrim covers the WHOLE layer including the dock strip the panel leaves
+  // clear, so tapping anywhere off the panel still dismisses it.
+  settingsScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
+  settingsPanel: {
+    maxHeight: '82%',
+    // Bottom-anchored sheet: square at the bottom because that edge IS the
+    // screen's edge (the surface runs under the floating dock), rounded on top.
+    backgroundColor: theme.colors.background,
+    borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
-    borderBottomWidth: 0,
+    paddingTop: 14,
   },
-  handle: {
-    alignSelf: 'center',
-    width: 38,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: theme.colors.borderStrong,
-    marginBottom: 12,
+  settingsHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingBottom: 12,
   },
+  settingsTitle: { fontSize: 17, fontWeight: '700', color: theme.colors.textPrimary },
+  settingsBody: { paddingHorizontal: 20, paddingBottom: 28 },
+  settingsDone: {
+    marginTop: 18, alignSelf: 'stretch', alignItems: 'center',
+    paddingVertical: 13, borderRadius: 14,
+    backgroundColor: theme.colors.accent || theme.colors.accentInfo,
+  },
+  settingsDoneText: { fontSize: 15, fontWeight: '800', color: isDark ? '#0a0a0a' : '#fff' },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
