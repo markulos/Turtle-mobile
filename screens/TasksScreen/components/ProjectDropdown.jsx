@@ -122,7 +122,15 @@ export const ProjectDropdown = ({
     });
   }, [visible, height, opacity]);
 
-  const containerAnimStyle = useAnimatedStyle(() => ({ height: height.value }));
+  // The container's bottom hairline only exists while the picker does. Closed,
+  // its height is 0 but a border still PAINTS — a second line sitting a couple
+  // of points under the header's own, which read as a double rule at the top of
+  // the calendar. Tying the border to the height means one line when collapsed,
+  // two edges (header + picker) only while the picker is actually open.
+  const containerAnimStyle = useAnimatedStyle(() => ({
+    height: height.value,
+    borderBottomWidth: height.value > 0 ? StyleSheet.hairlineWidth : 0,
+  }));
   const innerAnimStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
   // Reset the add-input row when the picker closes so reopening
@@ -299,7 +307,8 @@ const createStyles = (theme) => StyleSheet.create({
     // the ScrollView would render at full size from frame 1 and
     // overflow the collapsed container, defeating the reveal.
     overflow: 'hidden',
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    // Width is animated (see containerAnimStyle) so a collapsed picker draws no
+    // line at all; only the colour is static here.
     borderBottomColor: theme.colors.border,
   },
   scrollView: {
