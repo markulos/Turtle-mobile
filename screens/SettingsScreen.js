@@ -31,10 +31,46 @@ import { tapHaptic, impactHaptic, notifyHaptic } from '../utils/haptics';
 const MASTER_KEY_STORE = 'vault_master_key';
 const SALT_STORE = 'vault_salt';
 
+/**
+ * Watch the server's media-heal job to completion.
+ *
+ * The heal used to be one blocking POST, which meant a full library had to
+ * finish inside the fetch timeout — it couldn't, so the server abandoned most
+ * of its own work to a 45s budget and still reported success. It's a background
+ * job now; this polls its status and resolves with the final stats.
+ *
+ * A dropped poll is not a failed job (phone slept, tunnel hiccup), so transient
+ * errors just retry. Bounded so a server that never finishes can't hang the UI.
+ */
+async function pollHealToCompletion(api, onProgress, { intervalMs = 2000, maxMs = 30 * 60 * 1000 } = {}) {
+  const deadline = Date.now() + maxMs;
+  let consecutiveErrors = 0;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    try {
+      // apiGet already carries the auth header; its 2nd arg is options, not headers.
+      const res = await api.get('/media/heal/status');
+      const status = res?.status;
+      if (!status) throw new Error('no status');
+      consecutiveErrors = 0;
+      onProgress?.({ processed: status.processed || 0, total: status.total || 0 });
+      if (!status.running) {
+        if (status.error) return { success: false, error: status.error };
+        return { success: true, stats: status.stats || {} };
+      }
+    } catch (e) {
+      if (++consecutiveErrors >= 8) return { success: false, error: 'Lost contact with the server mid-heal.' };
+    }
+  }
+  return { success: false, error: 'Heal is taking unusually long — check the server log.' };
+}
+
 export default function SettingsScreen({ active = true }) {
   const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll, accent, setAccent } = useTheme();
   const { serverIP, isConnected, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
   const [isHealing, setIsHealing] = useState(false);
+  // {processed, total} while the server's heal job is running (null = idle).
+  const [healProgress, setHealProgress] = useState(null);
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
   // null = not yet measured / measuring; number = bytes currently cached.
@@ -277,18 +313,25 @@ export default function SettingsScreen({ active = true }) {
   const triggerMediaHeal = useCallback(async () => {
     Alert.alert(
       'Heal Media Vault',
-      'This will scan your server database, regenerate missing thumbnails, and purge broken ghost files. Proceed?',
+      'Scans the server library and rebuilds missing thumbnails, blurhashes and previews. '
+      + 'It runs in the background on the server and never deletes a photo — anything it '
+      + "can't reach is reported. Proceed?",
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Heal Vault',
-          style: 'destructive',
+          text: 'Run Heal',
           onPress: async () => {
             setIsHealing(true);
+            setHealProgress(null);
             try {
               const authHeaders = getAuthHeaders();
-              const res = await api.post('/media/heal', {}, authHeaders);
-              
+              const started = await api.post('/media/heal', {}, authHeaders);
+              if (!started?.success) throw new Error(started?.error || 'Failed to start the heal.');
+
+              // The pass is a background job now: poll until it reports done,
+              // so a big library isn't cut off by the request timeout.
+              const res = await pollHealToCompletion(api, setHealProgress);
+
               if (res && res.success) {
                 // --- 🧹 DUAL-ACTION: LOCAL CACHE WIPE ---
                 try {
@@ -314,18 +357,33 @@ export default function SettingsScreen({ active = true }) {
                 }
                 // ----------------------------------------
 
+                const s = res.stats || {};
+                const lines = [
+                  `Healthy rows: ${s.healthy ?? 0}`,
+                  `Thumbnails rebuilt: ${s.regenerated ?? 0}`,
+                  `WebP upgrades: ${s.webpConverted ?? 0}`,
+                  `Blurhashes filled: ${s.blurhashed ?? 0}`,
+                ];
+                // Reported, never acted on: a tunnel photo's bytes live on the
+                // host PC, so "unreachable" means that folder is offline.
+                if (s.offline > 0) lines.push(`On an offline folder (untouched): ${s.offline}`);
+                if (s.ghosts > 0) lines.push(`Missing originals, rows kept: ${s.ghosts}`);
+                if (s.storageDetached) {
+                  lines.push('\n⚠ Most originals were unreadable — that looks like a disconnected drive, so nothing was rewritten.');
+                }
                 Alert.alert(
-                  'Vault Healed & Cache Cleared ✅',
-                  `Healthy Files: ${res.stats?.healthy ?? 0}\nRescued: ${res.stats?.rescued ?? 0}\nThumbnails Built: ${res.stats?.regenerated ?? 0}\nGhosts Purged: ${res.stats?.deleted ?? 0}\n\nLocal app memory has been flushed.`
+                  s.stopped ? 'Heal Stopped' : 'Vault Healed & Cache Cleared ✅',
+                  `${lines.join('\n')}\n\nLocal app memory has been flushed.`
                 );
               } else {
                 Alert.alert('Error', res?.error || 'Failed to heal the vault.');
               }
             } catch (error) {
               console.error('[Settings] Heal error:', error);
-              Alert.alert('Error', 'Network request failed.');
+              Alert.alert('Error', error?.message || 'Network request failed.');
             } finally {
               setIsHealing(false);
+              setHealProgress(null);
             }
           }
         }
@@ -946,7 +1004,11 @@ export default function SettingsScreen({ active = true }) {
                         Heal Media Vault
                       </Text>
                       <Text style={{ color: theme.colors.textSecondary, fontSize: 13, marginTop: 2 }}>
-                        {isHealing ? 'Scanning Dell R730 database...' : 'Purge ghosts & rebuild thumbnails'}
+                        {isHealing
+                          ? (healProgress?.total
+                              ? `Auditing ${healProgress.processed.toLocaleString()} / ${healProgress.total.toLocaleString()}…`
+                              : 'Starting audit…')
+                          : 'Rebuild thumbnails & previews'}
                       </Text>
                     </View>
                   </View>
