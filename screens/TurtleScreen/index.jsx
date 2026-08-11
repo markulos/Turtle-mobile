@@ -101,29 +101,17 @@ const DEFAULT_BREAK_MINUTES = 5;
 
 const HEADER_HEIGHT = 60;
 const DEBUG_TOGGLE_HEIGHT = 44;
-// Height of the chat header bar's content row (below the safe-area inset). Used
-// both for the bar itself and as the inverted message list's visual-top inset
-// so the oldest visible message clears the bar instead of hiding behind it.
-const CHAT_HEADER_BAR_HEIGHT = 44;
-// Chat-header scrim. The header has no bottom edge any more — it fades out
-// instead — so these describe that fade.
-//
-// Blur bands: heights as PERCENTAGES of the header (which is insets.top + the
-// bar, so it varies by device). Each shorter band sits over the ones below it
-// and the blurs compound, giving a stepped "strongest at the top" falloff that
-// expo-blur can't express as a gradient on its own. Three steps is the point
-// where adding more stops being visible.
-const HEADER_BLUR_BANDS = [
-  { height: '100%', dark: 30, light: 40 },
-  { height: '72%', dark: 26, light: 34 },
-  { height: '42%', dark: 24, light: 32 },
-];
-// The veil over the blur: near-opaque at the status bar, gone by the bottom
-// edge. The last stop MUST be fully transparent — a non-zero alpha there would
-// re-draw the very line this replaced.
-const HEADER_SCRIM_DARK = ['rgba(0,0,0,0.92)', 'rgba(0,0,0,0.58)', 'rgba(0,0,0,0)'];
-const HEADER_SCRIM_LIGHT = ['rgba(255,255,255,0.96)', 'rgba(255,255,255,0.64)', 'rgba(255,255,255,0)'];
-const HEADER_SCRIM_STOPS = [0, 0.62, 1];
+// SEED for the chat header's content-row height (below the safe-area inset).
+// The real value is MEASURED at runtime (chatHeaderH) and is what everything
+// keys off — this is only the first-frame guess before onLayout lands. It used
+// to be the authority, which meant any over-estimate became permanent dead space
+// under the header: the gap above the Claude console read wider than the one
+// below it, even though both are one PANEL_GAP by construction.
+const CHAT_HEADER_BAR_HEIGHT = 60;
+// (The chat header's blur bands + fade-out scrim are gone: the header is OPAQUE
+// now, so there is nothing behind it to frost and no fade to describe. Its
+// depth comes from an accent wash, a gloss and a drop shadow — see the render
+// site and styles.chatHeader / headerEdge.)
 // Frozen at module scope: FlashList treats this as layout configuration, and an
 // object literal in the render body hands it a new identity on EVERY render of
 // this screen — which includes every keystroke in the composer and every frame
@@ -194,6 +182,13 @@ export default function TurtleScreen() {
   // anything stacked ABOVE it (a pomodoro card) and BELOW it (queue/finished
   // banners + the composer). We measure those two groups and feed the heights
   // down, so the console always fits — no matter which cards happen to be up.
+  // MEASURED height of the chat header (safe-area inset included — its
+  // paddingTop is inside the box). CHAT_HEADER_BAR_HEIGHT is only the seed: the
+  // identity row's real height depends on the avatar, two text lines and the
+  // device's font scale, and every point the constant over-guesses shows up as
+  // dead space between the header and whatever sits under it — which is why the
+  // gap above the Claude console read wider than the one below it.
+  const [chatHeaderH, setChatHeaderH] = useState(0);
   const [dockAboveConsole, setDockAboveConsole] = useState(0);   // pomodoro card
   const [dockBelowConsole, setDockBelowConsole] = useState(120); // banners + composer
   // True while the keyboard is mid-show/hide. The dock's onLayout normally fires
@@ -456,6 +451,9 @@ export default function TurtleScreen() {
   // navigator's smaller tabBarHeight instead left the difference — ~40pt — as a
   // permanent gap over the keyboard, which is why 2pt never appeared.
   const dockH = dockOccupied(insets.bottom);
+  // Where the header's bottom edge actually is. Falls back to the seed for the
+  // single frame before onLayout lands.
+  const headerBottom = chatHeaderH || (insets.top + CHAT_HEADER_BAR_HEIGHT);
   // NOTE: the composer and the Claude console keep their own 10/8pt side
   // margins — deliberately WIDER than the tab dock capsule under them, which
   // hugs the centred tab cluster (~28pt in). Narrowing the cards to the
@@ -479,7 +477,7 @@ export default function TurtleScreen() {
   const consoleExpandedMax = Math.max(
     MIN_PANEL_HEIGHT,
     windowHeight
-      - (insets.top + CHAT_HEADER_BAR_HEIGHT + dockAboveConsole)
+      - (headerBottom + dockAboveConsole)
       - dockBelowConsole
       - PANEL_GAP * 2,
   );
@@ -1699,9 +1697,9 @@ export default function TurtleScreen() {
     // header bar above; paddingBottom is clearance under the composer dock so
     // the newest message isn't hidden behind it.
     paddingHorizontal: theme.spacing.sm,
-    paddingTop: insets.top + CHAT_HEADER_BAR_HEIGHT,
+    paddingTop: headerBottom,
     paddingBottom: dockHeight,
-  }), [theme.spacing.sm, insets.top, dockHeight]);
+  }), [theme.spacing.sm, headerBottom, dockHeight]);
 
   // Stable chat renderItem — an inline arrow gave the FlashList a NEW
   // renderItem identity every render (every keystroke), defeating the
@@ -1838,17 +1836,48 @@ export default function TurtleScreen() {
           gets a matching top inset (CHAT_HEADER_BAR_HEIGHT) so the oldest
           visible message clears the bar. zIndex stays 101 (below the vault
           overlay at 200, so the vault still covers the header). */}
-      <Reanimated.View style={[styles.chatHeader, { paddingTop: insets.top }, headerCounterStyle]}>
-        {/* Frosted surface, matching the floating tab bar: the header has always
-            overlaid the transcript (it's absolute, and the list already pads by
-            insets.top + CHAT_HEADER_BAR_HEIGHT), so a blur lets the chat read
-            through it as it scrolls under. */}
-        <BlurView
+      <Reanimated.View
+        // The measured height feeds the transcript's top padding, the Claude
+        // console's room math and the history strip — so all three sit exactly
+        // one gap below the header's REAL bottom edge instead of below an
+        // estimate. onLayout reports layout height, so the counter-lift
+        // transform above doesn't skew it.
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          if (h > 0) setChatHeaderH((prev) => (prev === h ? prev : h));
+        }}
+        style={[styles.chatHeader, { paddingTop: insets.top }, headerCounterStyle]}
+      >
+        {/* OPAQUE surface, built in layers rather than a flat fill — the chat no
+            longer reads through it, so the depth has to come from the header
+            itself. Blur is gone with the transparency (there is nothing behind
+            it to frost any more):
+              1) the opaque base   — styles.chatHeader's backgroundColor
+              2) accent wash       — the user's tint, strongest at the status bar
+              3) gloss             — a light sheen over the top, the same polish
+                                     the Claude console's glass carries
+              4) accent hairline   — the bottom edge (see styles.headerEdge)
+            All four are bounded to 100% height so nothing overflows, which lets
+            the header keep a real drop shadow instead of clipping it. */}
+        <LinearGradient
           pointerEvents="none"
-          intensity={theme.mode === 'dark' ? 42 : 60}
-          tint={theme.mode === 'dark' ? 'dark' : 'light'}
+          colors={[
+            (theme.colors.accent || theme.colors.accentInfo) + '24',
+            (theme.colors.accent || theme.colors.accentInfo) + '0A',
+            'transparent',
+          ]}
+          locations={[0, 0.55, 1]}
           style={StyleSheet.absoluteFill}
         />
+        <LinearGradient
+          pointerEvents="none"
+          colors={theme.mode === 'dark'
+            ? ['rgba(255,255,255,0.10)', 'rgba(255,255,255,0.03)', 'transparent']
+            : ['rgba(255,255,255,0.55)', 'rgba(255,255,255,0.16)', 'transparent']}
+          locations={[0, 0.5, 1]}
+          style={styles.headerGloss}
+        />
+        <View pointerEvents="none" style={styles.headerEdge} />
 
         {/* SELF-CHAT IDENTITY BAR.
             This header used to carry Friends, Conversations, Link-desktop and
@@ -1876,18 +1905,51 @@ export default function TurtleScreen() {
           accessibilityLabel="Your profile"
           accessibilityHint="Opens your profile. Long-press to open the server terminal."
         >
-          {selfAvatarUrl ? (
-            <Image
-              source={{ uri: selfAvatarUrl }}
-              style={styles.identityAvatarImg}
-              contentFit="cover"
-              cachePolicy="memory-disk"
-              transition={150}
+          {/* Avatar in an accent ring, with a live presence dot on its corner —
+              the same language the Claude console's status pill uses, so the
+              chat's connection state is legible without a banner. */}
+          <View style={styles.identityAvatarWrap}>
+            <View style={styles.identityAvatarRing}>
+              {selfAvatarUrl ? (
+                <Image
+                  source={{ uri: selfAvatarUrl }}
+                  style={styles.identityAvatarImg}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  transition={150}
+                />
+              ) : (
+                <AnimalAvatar id={authIdentity || 'anon'} size={30} />
+              )}
+            </View>
+            <View
+              style={[
+                styles.identityDot,
+                { backgroundColor: isConnected ? (theme.colors.accentSuccess || '#4ADE80') : theme.colors.accentWarning },
+              ]}
             />
-          ) : (
-            <AnimalAvatar id={authIdentity || 'anon'} size={30} />
-          )}
-          <Text style={styles.identityName} numberOfLines={1}>{selfName}</Text>
+          </View>
+
+          {/* Name over a live status line. The subtitle is the one piece of
+              state worth carrying here: what the chat is doing right now, in
+              priority order — Claude working, then offline, else the self-chat
+              label. */}
+          <View style={styles.identityText}>
+            <Text style={styles.identityName} numberOfLines={1}>{selfName}</Text>
+            <Text style={styles.identitySub} numberOfLines={1}>
+              {claudeBusy ? 'Claude is working…' : !isConnected ? 'Offline' : 'Notes to self'}
+            </Text>
+          </View>
+
+          {/* Brand mark, trailing. Decorative (the row owns the tap and the
+              long-press), it just anchors the header the way the turtle anchors
+              the dock. */}
+          <Image
+            source={turtleLogo}
+            style={styles.identityBrand}
+            contentFit="contain"
+            tintColor={theme.colors.textTertiary}
+          />
         </TouchableOpacity>
       </Reanimated.View>
 
@@ -1896,7 +1958,7 @@ export default function TurtleScreen() {
           still send; the socket delivers new messages regardless). Disappears
           the moment a page lands. */}
       {historyError && messages.length === 0 && (
-        <View style={[styles.historyErrorStrip, { top: insets.top + CHAT_HEADER_BAR_HEIGHT }]}>
+        <View style={[styles.historyErrorStrip, { top: headerBottom }]}>
           <Icon name="cloud-off-outline" size={16} color={theme.colors.textTertiary} />
           <Text style={styles.historyErrorText} numberOfLines={2}>
             Couldn’t load chat history.
@@ -2961,39 +3023,88 @@ const createStyles = (theme, insets) =>
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingHorizontal: 12,
-      paddingBottom: 6,
-      // Transparent: the surface is the blur bands + scrim gradient rendered
-      // behind the content (see the render site). An opaque fill here would
-      // defeat the underlay.
-      backgroundColor: 'transparent',
-      // Clip the blur bands to the header's box.
-      overflow: 'hidden',
-      // NO bottom border. The header ends by FADING OUT (the scrim's last stop is
-      // fully transparent), so a hairline there would put back the hard edge the
-      // gradient exists to remove.
+      // The bar reaches DOWN to meet its content rather than stopping short and
+      // leaving black-on-black dead space above the Claude console. With the
+      // height now measured, this padding is the header's real bottom edge, so
+      // the console (and the transcript) sit exactly one PANEL_GAP below it —
+      // the same gap the console keeps above the composer.
+      paddingBottom: 14,
+      // OPAQUE base. The page colour, so the header reads as the top of the
+      // page rather than a separate slab; the accent wash + gloss layered over
+      // it at the render site are what give it depth, and the drop shadow below
+      // is what separates it from the transcript scrolling underneath.
+      backgroundColor: theme.colors.background,
+      // overflow must stay VISIBLE for the shadow to render — every layer inside
+      // is bounded to 100% height, so nothing spills.
+      shadowColor: '#000',
+      shadowOpacity: theme.mode === 'dark' ? 0.45 : 0.12,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 8,
+    },
+    // Bottom edge: a hairline washed with the accent, matching how ThemeContext
+    // tints every other rule in the app. Now that the header is opaque it needs
+    // a defined edge again — but a soft accent line, not the flat white rule
+    // this had before the header was reworked.
+    headerEdge: {
+      position: 'absolute', left: 0, right: 0, bottom: 0,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: (theme.colors.accent || theme.colors.accentInfo) + '59',
     },
     // The self-chat identity bar that replaced the header's control cluster:
     // avatar + name, left-aligned, filling the header row. Height comes from
     // the row's content and the header's own paddingBottom, so
     // CHAT_HEADER_BAR_HEIGHT — which the transcript's top padding and the
     // history-error strip both key off — is unchanged.
+    // Soft light sheen over the header's upper third — absolute, so it overlays
+    // the blur + scrim without taking layout space.
+    headerGloss: {
+      position: 'absolute', top: 0, left: 0, right: 0, height: '55%',
+    },
     identityBar: {
+      flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 10,
-      paddingVertical: 4,
+      paddingVertical: 2,
       paddingHorizontal: 4,
+    },
+    identityAvatarWrap: { width: 34, height: 34 },
+    // Accent ring around the avatar, matching the profile card's treatment.
+    identityAvatarRing: {
+      width: 34, height: 34, borderRadius: 17,
+      borderWidth: 1.5,
+      borderColor: theme.colors.accent || theme.colors.accentInfo,
+      alignItems: 'center', justifyContent: 'center',
+      overflow: 'hidden',
+    },
+    // Presence dot. The border is the header's own colour so the dot reads as
+    // punched out of the avatar rather than stuck on top of it.
+    identityDot: {
+      position: 'absolute', right: -1, bottom: -1,
+      width: 11, height: 11, borderRadius: 6,
+      borderWidth: 2,
+      borderColor: theme.colors.background,
     },
     identityAvatarImg: {
       width: 30, height: 30, borderRadius: 15,
       backgroundColor: theme.colors.surfaceElevated,
     },
+    identityText: { flex: 1, minWidth: 0 },
     identityName: {
       fontSize: 16,
       fontWeight: '700',
       color: theme.colors.textPrimary,
       flexShrink: 1,
     },
+    identitySub: {
+      fontSize: 11,
+      color: theme.colors.textTertiary,
+      marginTop: 1,
+    },
+    // Trailing brand mark — small and muted, so it anchors the row without
+    // competing with the name.
+    identityBrand: { width: 22, height: 22, opacity: 0.7 },
     // Equal-width side clusters flanking the flex:1 title, so the brand stays
     // dead-centre even though the left holds two icons and the right one.
     headerSideWrap: {
