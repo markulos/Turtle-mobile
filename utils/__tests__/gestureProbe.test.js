@@ -5,6 +5,7 @@ import gestureProbe, {
   buildFixPrompt,
   describeFinding,
   LABEL_HINTS,
+  TICK_MS,
 } from '../gestureProbe';
 
 describe('gestureProbe aggregation', () => {
@@ -132,6 +133,61 @@ describe('respond() measures from the first move, not the touch-down', () => {
     gestureProbe.touchMove();         // later moves must not reset the basis
     gestureProbe.respond('viewer:swipe');
     expect(gestureProbe.getState().findings[0].worstMs).toBe(200);
+  });
+});
+
+// A phone in a pocket is not a blocked JS thread. iOS stops the interval when
+// the app backgrounds, so the first tick back sees the whole absence as drift.
+describe('suspension is not a stall', () => {
+  let t;
+  beforeEach(() => {
+    jest.useFakeTimers();
+    t = 1_000_000;
+    jest.spyOn(Date, 'now').mockImplementation(() => t);
+    gestureProbe.setConsoleTrail(false);
+    gestureProbe.clear();
+    gestureProbe.start();
+  });
+  afterEach(() => {
+    gestureProbe.stop();
+    gestureProbe.clear();
+    gestureProbe.setConsoleTrail(true);
+    Date.now.mockRestore();
+    jest.useRealTimers();
+  });
+
+  test('eleven minutes away records nothing, a real block right after still does', () => {
+    t += 691_956;                       // the pocket
+    jest.advanceTimersByTime(TICK_MS);
+    expect(gestureProbe.getState().findings).toHaveLength(0);
+
+    t += 400;                           // a genuine 300ms block (drift = 400 − TICK_MS)
+    jest.advanceTimersByTime(TICK_MS);
+    const [finding] = gestureProbe.getState().findings;
+    expect(finding.kind).toBe('js-blocked');
+    expect(finding.worstMs).toBe(300);
+  });
+
+  test('the touch that was live before the gap is not blamed for the resume', () => {
+    gestureProbe.touchStart('app');     // finger down, then the phone locks
+    t += 60_000;
+    jest.advanceTimersByTime(TICK_MS);
+    t += 400;                           // a real block after coming back
+    jest.advanceTimersByTime(TICK_MS);
+    // freeze-after-touch would mean "the app died under my finger" — the finger
+    // was gone a minute ago.
+    expect(gestureProbe.getState().findings[0].kind).toBe('js-blocked');
+  });
+
+  test('suspend stops the clock and resume restarts it from now', () => {
+    gestureProbe.suspend();
+    t += 300_000;
+    jest.advanceTimersByTime(TICK_MS * 5);   // no timer is running
+    expect(gestureProbe.getState().findings).toHaveLength(0);
+    gestureProbe.resume();
+    t += 150;                                 // drift = 50ms — inside the budget
+    jest.advanceTimersByTime(TICK_MS);
+    expect(gestureProbe.getState().findings).toHaveLength(0);
   });
 });
 

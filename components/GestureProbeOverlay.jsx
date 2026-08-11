@@ -16,7 +16,7 @@
  * a screenshot of it is unambiguous.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, ScrollView, StyleSheet, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, ScrollView, StyleSheet, Platform, AppState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
@@ -94,9 +94,19 @@ function ProbeOverlayBody() {
     });
     gestureProbe.start();
     const unsub = gestureProbe.subscribe(setState);
+    // Park the drift monitor while the app is away. iOS stops timers outright
+    // when the app leaves the foreground, so without this the first tick back
+    // measures the entire absence as one block — the finding that read
+    // "691,956ms" was a phone in a pocket, not a stall. Injected here for the
+    // same reason persistence is: the probe stays free of react-native imports.
+    const appStateSub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') gestureProbe.resume();
+      else gestureProbe.suspend();
+    });
     return () => {
       alive = false;
       unsub();
+      appStateSub.remove();
       if (saveTimer.current) clearTimeout(saveTimer.current);
       gestureProbe.setPersist(null);
       gestureProbe.stop();

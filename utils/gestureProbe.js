@@ -35,6 +35,14 @@ export const TICK_MS = 100;
 // Drift past this is a stall worth recording. ~7 frames at 60Hz: past this a
 // human perceives the app as stuck rather than merely slow.
 export const STALL_MS = 120;
+// ...but drift past THIS was not a block at all — the app was suspended (locked
+// phone, backgrounded, debugger paused) and the interval simply never ran. iOS
+// stops timers outright when the app leaves the foreground, so on the way back
+// the very first tick sees the whole absence as one enormous "stall": one row
+// arrived measuring 691,956ms, eleven and a half minutes of pocket. No real JS
+// block survives seconds — a watchdog would have killed the app first — so
+// anything past this ceiling is discarded rather than recorded.
+export const MAX_STALL_MS = 5000;
 // A gesture that takes longer than this to visibly take effect reads as lag.
 export const SLOW_MS = 120;
 // ...and past this it reads as broken.
@@ -203,6 +211,13 @@ const createProbe = () => {
     const drift = now - lastTick - TICK_MS;
     lastTick = now;
     if (drift < STALL_MS) return;
+    // Time the app spent suspended is not time it spent blocked. Drop it, and
+    // drop the stale touch with it — a finger that landed before the phone was
+    // locked must not have the resume attributed to it as a freeze.
+    if (drift > MAX_STALL_MS) {
+      lastTouch = null;
+      return;
+    }
     totalStalls += 1;
     worstStallMs = Math.max(worstStallMs, drift);
     // A stall that began right after a touch-down is the "app went dead under
@@ -234,6 +249,26 @@ const createProbe = () => {
       timer = null;
       running = false;
       emit();
+    },
+
+    /**
+     * The app is leaving the foreground. Belt to MAX_STALL_MS's braces: stop
+     * counting rather than relying on the ceiling to throw the gap away, and
+     * forget the pending touch — whatever the finger was doing, it is over.
+     */
+    suspend() {
+      if (!IS_DEV || !timer) return;
+      clearInterval(timer);
+      timer = null;
+      lastTouch = null;
+    },
+
+    /** Back in the foreground. Restart the clock from NOW, so the time spent
+     *  away is never measured as drift. */
+    resume() {
+      if (!IS_DEV || !running || timer) return;
+      lastTick = Date.now();
+      timer = setInterval(tick, TICK_MS);
     },
 
     /**
