@@ -61,6 +61,7 @@ export const LABEL_HINTS = {
   'viewer:swipe': 'MediaGallery.jsx viewer FlatList (onScrollBeginDrag) — pager touch delivery',
   'viewer:pageSettle': 'MediaGallery.jsx syncSelectedFromOffset — deferred selectedMedia adoption',
   'viewer:chromeToggle': 'MediaGallery.jsx handleViewerSingleTap → toggleInfoVisibility',
+  'viewer:zoom': 'MediaGallery.jsx reportZoomScale — a zoom flip writes gallery state, which rebuilds the whole viewer tree (renderFullScreenViewer runs inline in that render)',
   'viewer:close': 'MediaGallery.jsx closeViewer / resetViewerState',
   'viewer:favourite': 'MediaGallery.jsx toggleFavourite (optimistic path)',
   'grid:scroll': 'MediaGallery.jsx grid FlashList onScroll / handleGridScroll',

@@ -526,6 +526,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const zoomChromeAnim = useRef(new Animated.Value(1)).current;
   const reportZoomScale = useCallback((z) => {
     zoomScaleRef.current = z;
+    // Dev probe attribution. A zoom flip is the one viewer interaction that
+    // writes GALLERY state without any respond()/mark() of its own, so a stall
+    // it causes was being filed under whatever the last labelled gesture was —
+    // "grid:openPhoto blocks for 254ms" was this commit, long after the open.
+    // Naming it here makes the next finding say what actually blocked.
+    gestureProbe.mark('viewer:zoom');
     setZoomScale(z);
     Animated.timing(zoomChromeAnim, {
       toValue: z > 1.05 ? 0 : 1,
