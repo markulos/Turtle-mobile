@@ -394,6 +394,10 @@ export default function App() {
       // (Modals render into their own native root, so their touches don't
       // reach here — the photo viewer arms the probe from its own responder.)
       onStartShouldSetResponderCapture={() => { gestureProbe.touchStart('app'); return false; }}
+      // Same contract for MOVES: a drag's latency is timed from the first
+      // movement, not from the finger landing (a finger resting still is dwell,
+      // not lag). Capture + false, so routing is untouched here too.
+      onMoveShouldSetResponderCapture={() => { gestureProbe.touchMove(); return false; }}
     >
       <ShareIntentProvider>
         <SafeAreaProvider>

@@ -232,19 +232,39 @@ const createProbe = () => {
      */
     touchStart(context) {
       if (!IS_DEV) return;
-      lastTouch = { at: Date.now(), context: context || null };
+      lastTouch = { at: Date.now(), movedAt: null, context: context || null };
     },
 
     /**
-     * A gesture visibly took effect. Pairs with the pending touch-down and
-     * records the gap when it is slow enough to feel.
+     * The finger MOVED. Only the first move of a touch is kept, and it is what
+     * `respond` measures from.
+     *
+     * Why this exists: a finger resting on a photo is not lag. Measuring from
+     * finger-down made "viewer:swipe" report the user's own dwell — one 556ms
+     * "slow response" was a thumb sitting still, with the JS thread idle (a real
+     * block would also have raised a freeze-after-touch row, and none did).
+     * Gestures like a pager swipe only begin once the finger travels, so the
+     * honest latency is first-movement → the app moving with it.
+     */
+    touchMove() {
+      if (!IS_DEV || !lastTouch || lastTouch.movedAt) return;
+      lastTouch.movedAt = Date.now();
+    },
+
+    /**
+     * A gesture visibly took effect. Pairs with the pending touch and records
+     * the gap when it is slow enough to feel.
+     *
+     * Measured from the first MOVE when there was one (a swipe/drag: the clock
+     * starts when the finger travels, not when it lands), and from the touch-down
+     * otherwise (a tap: landing IS the gesture).
      */
     respond(label, context) {
       if (!IS_DEV) return;
       lastLabel = label;
       const touch = lastTouch;
       if (!touch) return;
-      const ms = Date.now() - touch.at;
+      const ms = Date.now() - (touch.movedAt || touch.at);
       lastTouch = null; // one response per touch — later marks aren't this gesture
       if (severityOf(ms) === 'ok') return;
       record('slow-response', label, ms, context || touch.context);

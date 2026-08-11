@@ -1,4 +1,4 @@
-import {
+import gestureProbe, {
   findingKey,
   mergeSample,
   medianMs,
@@ -77,6 +77,61 @@ describe('buildFixPrompt', () => {
     });
     expect(p).toContain('1 occurrence,');
     expect(p).toContain('notes:openCard');
+  });
+});
+
+// A drag's latency is timed from the first MOVE. Dwell — a finger resting on a
+// photo before it travels — is the user taking their time, not the app lagging,
+// and timing it from the touch-down reported half-second "stalls" with the JS
+// thread idle.
+describe('respond() measures from the first move, not the touch-down', () => {
+  let now;
+  beforeEach(() => {
+    now = 1_000_000;
+    jest.spyOn(Date, 'now').mockImplementation(() => now);
+    gestureProbe.setConsoleTrail(false);
+    gestureProbe.clear();
+  });
+  afterEach(() => {
+    Date.now.mockRestore();
+    gestureProbe.clear();
+    gestureProbe.setConsoleTrail(true);
+  });
+
+  test('a long dwell followed by a prompt swipe records nothing', () => {
+    gestureProbe.touchStart('photo viewer');
+    now += 520;                       // thumb resting on the photo
+    gestureProbe.touchMove();
+    now += 30;                        // pager moves ~2 frames later
+    gestureProbe.respond('viewer:swipe');
+    expect(gestureProbe.getState().findings).toHaveLength(0);
+  });
+
+  test('a real delay after the finger travels is still recorded', () => {
+    gestureProbe.touchStart('photo viewer');
+    now += 520;
+    gestureProbe.touchMove();
+    now += 300;                       // finger moving, pager still stuck
+    gestureProbe.respond('viewer:swipe');
+    const [finding] = gestureProbe.getState().findings;
+    expect(finding.kind).toBe('slow-response');
+    expect(finding.worstMs).toBe(300); // the dwell is NOT folded in
+  });
+
+  test('a tap still measures from the touch-down (nothing moved)', () => {
+    gestureProbe.touchStart('photo viewer');
+    now += 200;
+    gestureProbe.respond('viewer:chromeToggle');
+    expect(gestureProbe.getState().findings[0].worstMs).toBe(200);
+  });
+
+  test('only the FIRST move of a touch starts the clock', () => {
+    gestureProbe.touchStart('photo viewer');
+    gestureProbe.touchMove();
+    now += 200;
+    gestureProbe.touchMove();         // later moves must not reset the basis
+    gestureProbe.respond('viewer:swipe');
+    expect(gestureProbe.getState().findings[0].worstMs).toBe(200);
   });
 });
 

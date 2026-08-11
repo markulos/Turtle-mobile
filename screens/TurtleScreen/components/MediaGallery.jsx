@@ -2809,6 +2809,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         gestureProbe.touchStart('photo viewer');
         return false;
       },
+      // Second half of the dev probe's arm-point, same capture-and-decline
+      // contract: the probe times a swipe from the first MOVE, because a finger
+      // resting on a photo before it travels is dwell, not lag. Capture phase so
+      // it still sees moves after the pager's ScrollView has claimed the
+      // responder — the bubble-phase handler below stops being consulted then.
+      onMoveShouldSetPanResponderCapture: () => {
+        gestureProbe.touchMove();
+        return false;
+      },
       onMoveShouldSetPanResponder: (evt, gestureState) => {
         // Read through the refs: this responder is built once, so state read
         // here would be frozen at the first render's values.
