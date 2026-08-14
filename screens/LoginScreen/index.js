@@ -279,6 +279,11 @@ export default function LoginScreen() {
     }
   };
 
+  // Join-by-knocking state: idle → offer (after NOT_INVITED) → sent → approved.
+  const [knockState, setKnockState] = useState('idle');
+  const [knockMsg, setKnockMsg] = useState('');
+  const knockIdRef = useRef(null);
+
   const handleSendCode = async () => {
     setLocalError('');
     setDevCode('');
@@ -320,10 +325,59 @@ export default function LoginScreen() {
       setOtpStep('code');
       setCode('');
       if (r.devCode) setDevCode(r.devCode); // dev mode: surface the code so it's testable
+    } else if (r.code === 'NOT_INVITED' && invite.trim()) {
+      // They found the pond but this number isn't on its list — offer a knock
+      // (a join request the owner approves) instead of a dead end.
+      setKnockState('offer');
+      setLocalError('');
     } else {
       setLocalError(r.error || 'Could not send the code');
     }
   };
+
+  // Join-by-knocking. The knock endpoint never sends SMS; only the owner's
+  // approval does. While "sent", poll the request's capability id and flow
+  // straight into the normal OTP send on approval.
+  const sendKnock = async () => {
+    const activeServer = confirmedServerRef.current || serverIP;
+    if (!activeServer) { setLocalError('No server to send the request to.'); return; }
+    try {
+      const resp = await fetch(`${serverOrigin(activeServer)}/api/auth/join/knock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phone.trim(), invite: invite.trim(), message: knockMsg }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (data.success && typeof data.requestId === 'string') {
+        knockIdRef.current = data.requestId;
+        setKnockState('sent');
+      } else {
+        setLocalError(data.message || 'Could not send the request');
+      }
+    } catch {
+      setLocalError('Network error — is the server reachable?');
+    }
+  };
+
+  useEffect(() => {
+    if (knockState !== 'sent' || !knockIdRef.current) return undefined;
+    const activeServer = confirmedServerRef.current || serverIP;
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch(`${serverOrigin(activeServer)}/api/auth/join/knock/${knockIdRef.current}`);
+        const d = await r.json().catch(() => null);
+        if (d?.status === 'approved') {
+          setKnockState('approved');
+          handleSendCode();
+        } else if (d?.status === 'denied' || d?.status === 'expired') {
+          // Quietly return to the offer — no reason surfaced, by design.
+          setKnockState('offer');
+        }
+      } catch { /* transient network — keep polling */ }
+    }, 5000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [knockState]);
 
   // `codeOverride` (a string) lets the auto-submit + SMS autofill verify the
   // exact value immediately, without waiting for the `code` state to settle.
@@ -579,6 +633,48 @@ export default function LoginScreen() {
                     <Icon name="alert-circle" size={16} color={theme.colors.accentError} />
                     <Text style={[styles.errorText, { color: theme.colors.accentError }]}>{displayError}</Text>
                   </View>
+                ) : null}
+
+                {/* Join-by-knocking: offered after NOT_INVITED with a pond name
+                    typed. The message stays plain text end to end. */}
+                {otpStep === 'phone' && knockState === 'offer' ? (
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={[styles.devHint, { color: theme.colors.textMuted, marginBottom: 8 }]}>
+                      This number isn't on the pond's list yet — but you can ask to join.
+                    </Text>
+                    <TextInput
+                      style={{
+                        borderWidth: 1, borderColor: theme.colors.border, borderRadius: 10,
+                        paddingHorizontal: 12, height: 44, color: theme.colors.textPrimary,
+                        backgroundColor: theme.colors.surface,
+                      }}
+                      value={knockMsg}
+                      onChangeText={(t) => setKnockMsg(t.slice(0, 200))}
+                      placeholder="Add a short message (optional)"
+                      placeholderTextColor={theme.colors.textMuted}
+                      maxLength={200}
+                      editable={!busy}
+                    />
+                    <TouchableOpacity
+                      style={[styles.loginButton, { backgroundColor: theme.colors.primary, marginTop: 10 }]}
+                      onPressIn={() => impactHaptic('medium')}
+                      onPress={sendKnock}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.loginButtonText, { color: theme.colors.background }]}>Request to join</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+                {otpStep === 'phone' && knockState === 'sent' ? (
+                  <Text style={[styles.devHint, { color: theme.colors.textMuted, marginTop: 12 }]}>
+                    Request sent — you'll get a text if the owner approves. Keeping this screen
+                    open also signs you in automatically the moment they do.
+                  </Text>
+                ) : null}
+                {otpStep === 'phone' && knockState === 'approved' ? (
+                  <Text style={[styles.devHint, { color: theme.colors.accentSuccess, marginTop: 12 }]}>
+                    Approved! Sending your sign-in code…
+                  </Text>
                 ) : null}
 
                 {otpStep === 'phone' ? (

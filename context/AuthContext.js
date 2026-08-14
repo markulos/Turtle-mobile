@@ -198,7 +198,9 @@ export const AuthProvider = ({ children }) => {
       if (!response.ok || !data.success) {
         const msg = data.message || 'Could not send the code';
         setLoginError(msg);
-        return { success: false, error: msg };
+        // `code` = the machine-readable error (e.g. NOT_INVITED) — the login
+        // screen branches on it to offer a join request instead of a dead end.
+        return { success: false, error: msg, code: data.error };
       }
       return { success: true, phone: data.phone, dev: !!data.dev, devCode: data.devCode };
     } catch (error) {
