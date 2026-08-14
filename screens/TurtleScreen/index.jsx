@@ -640,6 +640,9 @@ export default function TurtleScreen() {
   // over the Friends sheet; null = closed.
   const [selectedFriend, setSelectedFriend] = useState(null);
   const [pendingInvites, setPendingInvites] = useState([]);
+  // Join-by-knocking: strangers who found the pond by name and asked to join.
+  // Owner-only endpoint — non-owners just see an empty list.
+  const [knockRequests, setKnockRequests] = useState([]);
   const [friendsLoading, setFriendsLoading] = useState(false);
   const [friendQuery, setFriendQuery] = useState('');
   // Reusable fetch so both the initial open AND a post-invite refresh
@@ -656,7 +659,20 @@ export default function TurtleScreen() {
     } finally {
       setFriendsLoading(false);
     }
+    // Isolated so a 403 (non-owner) or failure can't affect the friends list.
+    try {
+      const jr = await api.get('/join-requests');
+      setKnockRequests(Array.isArray(jr?.pending) ? jr.pending : []);
+    } catch {
+      setKnockRequests([]);
+    }
   }, [api]);
+
+  // Optimistic per the app-wide rule: the row leaves NOW; failure reloads truth.
+  const decideKnock = useCallback((id, verb) => {
+    setKnockRequests((rs) => rs.filter((x) => x.id !== id));
+    api.post(`/join-requests/${id}/${verb}`, {}).catch(() => loadFriends());
+  }, [api, loadFriends]);
   // Owner-gated: pull dev accounts + the fixed code from the invites endpoint
   // (requireOwner). Success → this user is the owner, show the block; 403 →
   // hide it. Never throws (swallowed) so a non-owner's Friends sheet is clean.
@@ -2166,6 +2182,40 @@ export default function TurtleScreen() {
                   </TouchableOpacity>
                   );
                 })}
+                {/* Join requests (knocks). Message is attacker-authored text —
+                    rendered plain, never linkified. Approve/deny inline. */}
+                {knockRequests.length > 0 && <Text style={styles.friendSectionLabel}>Join requests</Text>}
+                {knockRequests.map((r) => (
+                  <View key={`knock-${r.id}`} style={styles.friendRow}>
+                    <View style={styles.friendAvatar}>
+                      <Icon name="hand-wave-outline" size={18} color={theme.colors.accentInfo} />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.friendName} numberOfLines={1}>{r.phone}</Text>
+                      {r.message ? (
+                        <Text style={styles.friendSub} numberOfLines={2}>{r.message}</Text>
+                      ) : (
+                        <Text style={styles.friendSub}>Asked to join</Text>
+                      )}
+                    </View>
+                    <TouchableOpacity
+                      onPressIn={() => impactHaptic('medium')}
+                      onPress={() => decideKnock(r.id, 'approve')}
+                      style={{ padding: 8 }}
+                      accessibilityLabel={`Approve join request from ${r.phone}`}
+                    >
+                      <Icon name="check-circle" size={24} color={theme.colors.accentSuccess} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPressIn={() => impactHaptic('light')}
+                      onPress={() => decideKnock(r.id, 'deny')}
+                      style={{ padding: 8 }}
+                      accessibilityLabel={`Deny join request from ${r.phone}`}
+                    >
+                      <Icon name="close-circle-outline" size={24} color={theme.colors.textTertiary} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
                 {filteredPending.length > 0 && <Text style={styles.friendSectionLabel}>Invited (pending)</Text>}
                 {filteredPending.map((p) => (
                   <TouchableOpacity
