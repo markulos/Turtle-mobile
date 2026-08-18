@@ -176,6 +176,29 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
     setHdCommitted(true);
   }, [hdCommitted, hdRequested, forceHd, isActive, pagerDragging]);
 
+  // THE SWIPE ALWAYS WINS. The moment a pager drag starts, an HD load that has
+  // not landed yet is CANCELLED: the source reverts to the fast image and the
+  // in-flight fetch is dropped.
+  //
+  // This is what makes the pager feel like it can be grabbed at any instant.
+  // Without it, a fetch committed a fraction of a second before the touch
+  // would still land its multi-megabyte decode + texture upload part-way
+  // through the gesture, and the swipe would hitch for something the user has
+  // already moved on from.
+  //
+  // Reverting is close to free, which is the whole reason this works: the fast
+  // image is still in expo-image's memory cache from moments ago, so the swap
+  // back is a cache hit, not a reload. Nothing decodes, nothing downloads.
+  //
+  // A LANDED HD texture is never cancelled - there is no fetch to drop, and
+  // throwing away decoded detail to show a blurrier image mid-swipe would be a
+  // visible downgrade for no gain.
+  useEffect(() => {
+    if (!pagerDragging) return;
+    if (highResLoadedRef.current) return;
+    setHdCommitted(false);
+  }, [pagerDragging]);
+
   // Deactivation: ONLY a cell whose HD never landed resets. A cell holding a
   // decoded HD texture keeps it, so swiping BACK shows full detail instantly
   // (iOS Photos behaviour) instead of paying the dwell and the fetch again.
@@ -373,7 +396,20 @@ const ImageViewer = React.memo(({ fullResUrl, mediaId, activeStore, item, styles
   // neighbour can't clobber the shell's state.
   const handleZoomedChange = useCallback((isZoomed) => {
     setZoomed(isZoomed);
-    if (isActive) onZoomScaleChange?.(isZoomed ? 2 : 1);
+    // Zoom IN is reported only by the ACTIVE cell: that signal LOCKS the pager,
+    // so a recycled neighbour must never be able to raise it.
+    //
+    // Zoom OUT is reported unconditionally, and that asymmetry is the point. It
+    // can only UNLOCK the pager, so it is safe from anyone - and gating it was
+    // a latch: a cell that went inactive while still zoomed reset its own
+    // surface but never told the shell, leaving zoomScale high and the pager
+    // with scrollEnabled=false. Swiping was then dead until something else
+    // happened to zoom.
+    if (isZoomed) {
+      if (isActive) onZoomScaleChange?.(2);
+    } else {
+      onZoomScaleChange?.(1);
+    }
   }, [isActive, onZoomScaleChange]);
 
   const handlePinchDismiss = useCallback(() => {

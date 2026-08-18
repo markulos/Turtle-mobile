@@ -2607,6 +2607,18 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       setViewerSoloItem(index !== -1 ? null : item);
       scrollX.setValue(index !== -1 ? index * ITEM_WIDTH : 0);
 
+      // Open at 1x, ALWAYS. zoomScale drives scrollEnabled on the pager, and it
+      // has exactly one writer: a cell reporting its zoom, which is gated on
+      // that cell being ACTIVE. A cell that goes inactive while still zoomed
+      // therefore never reports the way back down - ZoomableView resets itself,
+      // but the shell is never told - and the stale value leaves the pager with
+      // scrollEnabled=false. That is "swiping is completely dead", surviving
+      // until something else happens to zoom. Re-arming here costs nothing and
+      // makes the freeze unreachable: a fresh viewer cannot inherit a zoom.
+      zoomScaleRef.current = 1;
+      setZoomScale(1);
+      zoomChromeAnim.setValue(1);
+
       setSelectedMedia(item);
       // Reset and start animations
       scaleAnim.setValue(0.85);
