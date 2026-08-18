@@ -3746,6 +3746,25 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     pagerDragStore.set(true);
   }, [pagerDragStore]);
 
+  // FINGER-DOWN, not drag-recognition, is what stands the HD load down.
+  //
+  // onScrollBeginDrag only fires once the ScrollView has DECIDED the touch is a
+  // drag. That decision is itself late when the main thread is busy decoding a
+  // full-resolution image — which is precisely the moment being complained
+  // about ("it lags when the file is mid load for HD"). Cancelling from there
+  // arrives after the damage is done.
+  //
+  // A raw touch fires immediately, before any recognition, so the expensive
+  // work is dropped before it can eat the gesture. Cancelling costs nothing
+  // visible: an uncommitted HD layer is not on screen yet, so reverting to the
+  // fast source changes no pixels, and a LOADED HD texture is never cancelled.
+  const handleTouchStart = useCallback(() => {
+    // A new touch supersedes any pending settle — otherwise a timer armed by
+    // the previous gesture could clear the flag mid-way through this one.
+    if (dragSettleTimer.current) { clearTimeout(dragSettleTimer.current); dragSettleTimer.current = null; }
+    pagerDragStore.set(true);
+  }, [pagerDragStore]);
+
   const handleMomentumScrollEnd = useCallback((event) => {
     if (dragSettleTimer.current) { clearTimeout(dragSettleTimer.current); dragSettleTimer.current = null; }
     pagerDragStore.set(false);
@@ -4370,6 +4389,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 { useNativeDriver: true }
               )}
               scrollEventThrottle={16}
+              // Touch-down suppresses the HD load before the pager has even
+              // decided this is a drag; touch-end hands it back through the
+              // SAME settle path a drag uses, so a fling that is still
+              // travelling after the finger lifts stays suppressed until it
+              // lands (onMomentumScrollEnd clears sooner when there is a
+              // momentum phase at all).
+              onTouchStart={handleTouchStart}
+              onTouchEnd={handleScrollEndDrag}
+              onTouchCancel={handleScrollEndDrag}
               onScrollBeginDrag={handleScrollBeginDrag}
               onMomentumScrollEnd={handleMomentumScrollEnd}
               onScrollEndDrag={handleScrollEndDrag}
