@@ -26,7 +26,7 @@ const { width } = Dimensions.get('window');
 // Active-page awareness comes from the shared store (see useStoreValue), so a
 // page change re-renders this cell only when ITS active/inactive state flips.
 const FullScreenVideoPlayer = ({ sourceUrl, mediaId, activeStore, styles, insets }) => {
-  const isActive = useStoreValue(activeStore) === mediaId;
+  const isActive = useIsActive(activeStore, mediaId);
   const player = useVideoPlayer(sourceUrl, player => {
     player.loop = true;
     player.muted = true;
@@ -129,6 +129,30 @@ const useStoreValue = (store) => {
 /** "A pager swipe is in flight" — see useStoreValue. */
 const usePagerDragging = (store) => useStoreValue(store) === true;
 
+/**
+ * "Is THIS cell the active page?" — subscribes to the derived BOOLEAN rather
+ * than to the active id.
+ *
+ * useStoreValue holds the raw value, so `useStoreValue(activeStore) === mediaId`
+ * put the ID in state: every page change re-rendered EVERY mounted cell, since
+ * every cell's state changed even though only two of them actually changed
+ * active/inactive. (The comment on ImageViewer claimed the two-cell behaviour;
+ * this is what makes it true.)
+ *
+ * Storing the boolean lets React bail out: a cell that was false and is still
+ * false gets setActive(false), sees an identical value, and does not re-render.
+ * On a five-cell window that turns a page change from five renders into two.
+ */
+const useIsActive = (store, id) => {
+  const [active, setActive] = useState(() => (store ? store.get() === id : false));
+  useEffect(() => {
+    if (!store) { setActive(false); return undefined; }
+    setActive(store.get() === id);
+    return store.subscribe((value) => setActive(value === id));
+  }, [store, id]);
+  return active;
+};
+
 const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLoad, onLoadProgress, getFullUrl, forceHd = false, onDimensions, pagerDragStore }) => {
   // ONE image view whose SOURCE moves forward: fast -> HD.
   //
@@ -154,7 +178,20 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
   // display variant (older server / moved source / transient sharp failure).
   const [hiResFallback, setHiResFallback] = useState(false);
   // A swipe is in flight -> do not START an HD load (see the commit latch).
-  const pagerDragging = usePagerDragging(pagerDragStore);
+  //
+  // ONLY THE ACTIVE CELL SUBSCRIBES. Measured on device by the gesture probe:
+  // "JS thread blocks during viewer:swipe", 4 occurrences, median 150ms, worst
+  // 161ms - a synchronous block on the very frame the finger lands, which is
+  // felt as the swipe not taking.
+  //
+  // pagerDragStore.set(true) fires in onScrollBeginDrag and notifies every
+  // subscriber, so with windowSize 5 a single drag-begin was doing up to five
+  // React re-renders before the pager could move. Neighbours cannot use the
+  // signal anyway: both the commit latch and the cancel below are gated on
+  // isActive, so an inactive cell re-rendered to reach a branch it can never
+  // take. Passing null unsubscribes it entirely (useStoreValue no-ops on a null
+  // store), which turns drag-begin from N renders into one.
+  const pagerDragging = usePagerDragging(isActive ? pagerDragStore : null);
 
   // "This cell is holding a decoded HD texture." A REF, not state, on purpose:
   // nothing in the render output depends on it, so making it state would fire
@@ -336,12 +373,14 @@ const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLo
 // which never had pinch zoom here at all.
 // React.memo + store-driven activity: every prop from renderViewerItem is
 // referentially stable, so the PARENT never re-renders a mounted cell at all —
-// on a page change the active-id store flips exactly the two cells whose
-// active/inactive state changed, and the gallery's own render storms (chrome
+// on a page change the store flips exactly the two cells whose active/inactive
+// state changed (that is what useIsActive buys: subscribing to the derived
+// boolean rather than to the active id, which used to re-render every mounted
+// cell), and the gallery's own render storms (chrome
 // updates, tag edits, upload progress…) stop touching the pager entirely.
 // That is the JS-thread relief the settle frame needs.
 const ImageViewer = React.memo(({ fullResUrl, mediaId, activeStore, item, styles, getFullUrl, api, onLoadProgress, onLoadComplete, onZoomScaleChange, onSingleTap, onPinchDismiss, pagerDragStore }) => {
-  const isActive = useStoreValue(activeStore) === mediaId;
+  const isActive = useIsActive(activeStore, mediaId);
   // 1. Track HD State
   const [rawLoaded, setRawLoaded] = useState(false);
   // True once the user zooms into this image — forces the HD layer to load
