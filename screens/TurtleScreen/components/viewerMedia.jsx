@@ -11,7 +11,7 @@
  */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, Pressable, TouchableOpacity, Animated, Dimensions, Easing, PixelRatio,
+  View, Text, StyleSheet, Pressable, TouchableOpacity, Dimensions, PixelRatio,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
@@ -130,223 +130,177 @@ const useStoreValue = (store) => {
 const usePagerDragging = (store) => useStoreValue(store) === true;
 
 const ProgressiveImage = ({ media, style, contentFit, onError, isActive, onRawLoad, onLoadProgress, getFullUrl, forceHd = false, onDimensions, pagerDragStore }) => {
-  const [highResLoaded, setHighResLoaded] = useState(false);
-  // Gate for the HD (Layer 2) load: false until the user has dwelled on this
-  // image for HD_DWELL_MS. Reset whenever the image deactivates/changes.
+  // ONE image view whose SOURCE moves forward: fast -> HD.
+  //
+  // This used to be two stacked <Image>s: the fast layer, an HD layer mounted
+  // on top inside an Animated.View, a crossfade, and finally the fast layer
+  // UNMOUNTED. That shape is what made the viewer stutter exactly when HD
+  // arrived, and no amount of tuning WHEN to load could remove it:
+  //
+  //   - two full-screen textures alive per cell, across a 5-cell window
+  //   - a texture DESTROY (unmounting the fast layer) 300ms after HD landed,
+  //     on the UI thread, right where the next swipe wants its frames
+  //   - three React commits per photo (hd loaded -> fade done -> badge)
+  //
+  // expo-image does this in place: keep the view, change `source`, and it
+  // crossfades from the currently-decoded texture to the new one via
+  // `transition` without ever showing a gap. One texture, one commit, nothing
+  // to tear down. `recyclingKey` covers the pager reusing a cell for another
+  // photo - without it the previous picture lingers until the new one decodes.
+  // Dwell gate for the HD source: false until the user has stayed on this
+  // image for HD_DWELL_MS, so quick swipe-bys never pull the heavy bytes.
   const [hdRequested, setHdRequested] = useState(false);
-  // Once the high-res layer has fully crossfaded in, we UNMOUNT the fast
-  // (thumbnail/compressed) Layer 1 so it doesn't linger behind the full-res
-  // image — matching the web viewer, which shows a single full image with no
-  // thumbnail persisting underneath (visible through transparent PNGs or as a
-  // low-res ghost otherwise). Stays mounted during the crossfade so there's no
-  // black flash mid-transition.
-  const [fastHidden, setFastHidden] = useState(false);
-  // When true, Layer 2 retries with the raw original instead of the display
-  // variant (older server / moved source / transient sharp failure).
+  // When true the HD source retries with the raw original instead of the
+  // display variant (older server / moved source / transient sharp failure).
   const [hiResFallback, setHiResFallback] = useState(false);
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  // A swipe is in flight → an UNLOADED HD layer stands down (see render note).
+  // A swipe is in flight -> do not START an HD load (see the commit latch).
   const pagerDragging = usePagerDragging(pagerDragStore);
 
-  // Effect-readable mirror of highResLoaded — the deactivation effect must
-  // know it without taking it as a dep (which would re-run the effect on load).
+  // "This cell is holding a decoded HD texture." A REF, not state, on purpose:
+  // nothing in the render output depends on it, so making it state would fire
+  // a React commit on the exact frame the HD decode lands - the frame we are
+  // trying to keep free. The deactivation effect reads it without taking it as
+  // a dep (which would re-run the effect on load).
   const highResLoadedRef = useRef(false);
 
-  // Deactivation: ONLY an unloaded cell resets. Unmounting there is the
-  // request-cancel for the in-flight HD fetch, and re-arming the dwell gate is
-  // what keeps quick pass-bys cheap. A cell whose HD already LANDED keeps it —
-  // there is nothing to cancel, and tearing the loaded layer down used to be
-  // the swipe-away hitch: the texture destroy + Layer-1 remount landed in the
-  // exact settle frame of the pager. Kept HD also means swiping BACK to a
-  // photo shows full HD instantly (visible mid-swipe, like iOS Photos) instead
-  // of paying the dwell + fetch again. Memory is bounded by the pager's
-  // windowSize: eviction happens by unmount, which drops the whole cell.
+  // The COMMIT LATCH. Once this cell decides to show HD it never goes back to
+  // the fast source: swapping the source backwards would throw away a decoded
+  // HD texture to re-decode the small one - a hitch for no gain, and a visible
+  // downgrade. It also encodes the old mount rule, that an HD load may only
+  // START on the active, stationary page.
+  const [hdCommitted, setHdCommitted] = useState(false);
+  useEffect(() => {
+    if (hdCommitted) return;
+    if (!(hdRequested || forceHd)) return;
+    if (!isActive || pagerDragging) return;
+    setHdCommitted(true);
+  }, [hdCommitted, hdRequested, forceHd, isActive, pagerDragging]);
+
+  // Deactivation: ONLY a cell whose HD never landed resets. A cell holding a
+  // decoded HD texture keeps it, so swiping BACK shows full detail instantly
+  // (iOS Photos behaviour) instead of paying the dwell and the fetch again.
+  // Memory stays bounded by the pager's windowSize: eviction is the cell
+  // unmounting, which drops the texture with it.
   useEffect(() => {
     if (isActive) return;
     if (highResLoadedRef.current) return;
-    setHighResLoaded(false);
-    setFastHidden(false); // bring the fast layer back for the next open
     setHiResFallback(false);
     setHdRequested(false); // re-arm the dwell gate for the next open
-    fadeAnim.setValue(0);
-  }, [isActive, media.id, fadeAnim]);
+    setHdCommitted(false); // and fall back to the fast source
+  }, [isActive, media.id]);
 
-  // Dwell gate: once the image is active, wait HD_DWELL_MS before allowing the
-  // HD layer to load. Swiping away (isActive=false) or changing image clears
-  // the timer via cleanup, so a quick pass-by never requests the heavy bytes.
+  // Dwell gate: once active, wait HD_DWELL_MS before allowing HD. Swiping away
+  // or changing image clears the timer via cleanup.
   useEffect(() => {
     if (!isActive) return undefined;
     const t = setTimeout(() => setHdRequested(true), HD_DWELL_MS);
     return () => clearTimeout(t);
   }, [isActive, media.id]);
 
-  // Crossfade once the raw is decoded and ready; when the fade completes, drop
-  // the fast layer so only the full-res image remains.
-  useEffect(() => {
-    if (isActive && highResLoaded) {
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 300,
-        easing: Easing.out(Easing.ease),
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) setFastHidden(true);
-      });
-    }
-  }, [highResLoaded, isActive, fadeAnim]);
-
-  // Layer 1 source priority — compressed > thumbnail > raw.
-  // See history note (3) above for why thumbnail comes before raw.
+  // Fast source priority - compressed > thumbnail > raw.
+  // Thumbnail before raw on purpose: on tunnel mode or unmigrated rows the raw
+  // is a 25MB HEIC, and streaming it just to fill the screen for half a second
+  // is the opposite of fast. The thumbnail is ~60KB webp and always exists.
   const fastSource = media.compressedUrl
     ? getFullUrl(media.compressedUrl)
     : (media.thumbnailUrl
       ? getFullUrl(media.thumbnailUrl)
       : getFullUrl(media.rawUrl || media.url));
 
-  // Layer 2 source — the high-resolution layer.
-  //
-  // DISPLAY VARIANT (1600px progressive JPEG, ~250-600KB) instead of the raw
-  // original (which can be a 25MB HEIC). Measured 2026-06-11: 68,214 display
-  // variants pre-warmed on disk for a 24,487-image library — full coverage —
-  // so this serves from the server's disk cache with immutable headers, no
-  // Sharp work in the request path. At fullscreen phone size the variant is
-  // visually identical to raw; the win is 5-10× less bandwidth, decode time,
-  // and battery per open. If the variant fetch errors, onError below flips
-  // hiResFallback and Layer 2 retries with the raw bytes — the old behavior,
-  // automatically.
+  // HD source - the DISPLAY VARIANT (1600px progressive JPEG, ~250-600KB)
+  // rather than the raw original. At fullscreen phone size it is visually
+  // identical to raw, for 5-10x less bandwidth, decode and battery. If the
+  // variant is unavailable, onError flips hiResFallback and this becomes the
+  // raw bytes.
   const rawUri = getFullUrl(media.rawUrl || media.url);
   const displayUri = (media.id && media.type !== 'video')
-    ? getFullUrl(`/api/media/display/${media.id}`)
+    ? getFullUrl('/api/media/display/' + media.id)
     : rawUri;
   const hiResUri = hiResFallback ? rawUri : displayUri;
 
-  // Failure logger — surfaces which layer + URI + native event so
-  // image-load regressions are debuggable. Uses console.warn (not
-  // .error) because a Layer-2 failure is recoverable: Layer 1 stays
-  // visible, so the UX is degraded-not-broken. .error would imply a
-  // crash. Successful loads do NOT log — that was diagnostic-era
-  // chatter that has long since served its purpose.
-  const logLoadFailure = (layer, uri) => (e) => {
+  const showingHd = hdCommitted;
+  const uri = showingHd ? hiResUri : fastSource;
+
+  // Failure logger - surfaces which source + URI + native event so image-load
+  // regressions are debuggable. console.warn, not .error: a failed HD swap is
+  // recoverable (the fast texture stays on screen), so it is degraded, not
+  // broken.
+  const logLoadFailure = (layer, failedUri) => (e) => {
     try {
       const native = e?.nativeEvent || e || {};
-      const summary = {
+      console.warn('[MediaGallery] image load failed:', JSON.stringify({
         layer,
-        uri,
+        uri: failedUri,
         mediaId: media?.id,
         compressedUrl: media?.compressedUrl,
         thumbnailUrl: media?.thumbnailUrl,
         rawUrl: media?.rawUrl,
         error: native?.error || native?.message || String(native),
-      };
-      console.warn('[MediaGallery] image load failed:', JSON.stringify(summary));
+      }));
     } catch {
-      // Logger should never throw — silent swallow protects callers.
+      // Logger must never throw - silent swallow protects callers.
     }
     if (typeof onError === 'function') onError(e);
   };
 
   return (
     <View style={[style, { backgroundColor: '#000', overflow: 'hidden' }]}>
-      {/* LAYER 1: Fast source (compressed > thumbnail > raw fallback).
-          Mounted while the high-res Layer 2 is in-flight, then UNMOUNTED
-          once Layer 2 has fully faded in (fastHidden) so the thumbnail
-          never persists behind the full-res image. */}
-      {!fastHidden && (
-        <Image
-          source={{ uri: fastSource }}
-          style={StyleSheet.absoluteFillObject}
-          contentFit={contentFit}
-          // Blur-up: the full-bleed blurhash renders on the first frame and the
-          // compressed image CROSSFADES over it instead of popping in. This
-          // never delays paging — pager cells pre-mount ±2 pages out
-          // (windowSize), so the fade plays offscreen before the user arrives;
-          // the only on-screen fades are the viewer's opening frame and cells
-          // entering the window during a fast run, which is exactly where the
-          // blurred-then-sharp reveal is wanted.
-          transition={140}
-          cachePolicy="memory-disk"
-          placeholder={media.blurhash ? { blurhash: media.blurhash } : null}
-          placeholderContentFit="cover"
-          // Decoded pixel dimensions — the zoom surface needs the real aspect
-          // ratio to bound panning to the letterboxed image rect. Reported off
-          // the FAST layer so the bounds are right from the first frame, not
-          // only once the HD layer lands (and for rows whose width/height
-          // columns are null).
-          onLoad={(e) => {
-            const src = e?.source || e?.nativeEvent?.source || {};
-            if (onDimensions && src.width > 0 && src.height > 0) {
-              onDimensions(src.width, src.height);
-            }
-          }}
-          onError={logLoadFailure('fast', fastSource)}
-        />
-      )}
-
-      {/* LAYER 2: High-res. Loads after the user dwells on the image for
-          HD_DWELL_MS (hdRequested) OR the moment they zoom in (forceHd) —
-          zooming means they want detail now, so we don't make them wait. The
-          regular compressed JPEG carries the view until then.
-
-          Mount rule, term by term:
-          • `highResLoaded` — a LANDED HD layer stays mounted unconditionally:
-            through pager drags (unmounting it mid-swipe was the black flash —
-            after the crossfade the fast layer is gone, so the photo under the
-            finger blanked), and through deactivation (tearing it down at
-            settle was the swipe-away hitch; keeping it makes swipe-BACK show
-            HD instantly). Eviction is the pager unmounting the whole cell.
-          • `isActive && !pagerDragging` — an UNLOADED layer exists only on
-            the active, stationary page. Deactivating or starting a swipe
-            unmounts it, which is the request-cancel: a multi-megabyte fetch +
-            decode landing mid-swipe stalls the frames the gesture needs
-            ("can't swipe while it's loading HD" on device). */}
-      {(highResLoaded || (isActive && !pagerDragging)) && (hdRequested || forceHd) && (
-        <Animated.View style={[StyleSheet.absoluteFillObject, { opacity: fadeAnim, zIndex: 2 }]} pointerEvents="none">
-          <Image
-            source={{ uri: hiResUri }}
-            style={StyleSheet.absoluteFillObject}
-            contentFit={contentFit}
-            transition={0}
-            cachePolicy="disk"
-            priority="high"
-            // expo-image's onProgress fires periodically during the
-            // network fetch with { loaded, total } in bytes. We
-            // forward the ratio up to the MediaGallery viewer so the
-            // 3px progress bar at the top of the screen can animate.
-            // Cached loads don't fire onProgress at all — that case is
-            // handled in MediaGallery via the 150ms show-delay timer.
-            onProgress={(e) => {
-              if (!isActive || !onLoadProgress) return;
-              const data = (e && e.nativeEvent) || e || {};
-              const total = Number(data.total);
-              const loaded = Number(data.loaded);
-              if (total > 0 && Number.isFinite(loaded)) {
-                onLoadProgress(loaded / total);
-              }
-            }}
-            onLoad={() => {
-              highResLoadedRef.current = true;
-              setHighResLoaded(true);
-              if (onRawLoad) onRawLoad();
-              // Ensure the progress bar reaches 100% even if the
-              // final onProgress event didn't quite reach 1.0 (some
-              // platforms cap progress events at ~98%).
-              if (onLoadProgress) onLoadProgress(1);
-            }}
-            onError={(e) => {
-              if (!hiResFallback) {
-                // Display variant unavailable — retry Layer 2 with the raw
-                // original. One silent retry, then the failure logger.
-                setHiResFallback(true);
-                return;
-              }
-              logLoadFailure('raw', hiResUri)(e);
-            }}
-          />
-        </Animated.View>
-      )}
+      <Image
+        source={{ uri }}
+        style={StyleSheet.absoluteFillObject}
+        contentFit={contentFit}
+        // Blur-up on first paint, and the SAME crossfade carries the
+        // fast -> HD swap. Kept short: this plays while the user is looking,
+        // and a long dissolve reads as the image being slow.
+        transition={160}
+        // The pager recycles cells. Without this the previous photo stays on
+        // screen until the new one decodes, which looks like the swipe landed
+        // on the wrong picture.
+        recyclingKey={media.id}
+        cachePolicy="memory-disk"
+        placeholder={media.blurhash ? { blurhash: media.blurhash } : null}
+        placeholderContentFit="cover"
+        priority={showingHd ? 'high' : 'normal'}
+        // expo-image reports { loaded, total } during the fetch; the viewer's
+        // 3px bar animates off it. Only meaningful for the HD fetch - the fast
+        // source is usually already cached.
+        onProgress={(e) => {
+          if (!isActive || !onLoadProgress || !showingHd) return;
+          const data = (e && e.nativeEvent) || e || {};
+          const total = Number(data.total);
+          const loaded = Number(data.loaded);
+          if (total > 0 && Number.isFinite(loaded)) onLoadProgress(loaded / total);
+        }}
+        onLoad={(e) => {
+          // Decoded pixel dimensions feed the zoom surface's pan bounds, so
+          // panning stops at the image edge instead of out in the letterbox.
+          // Reported from WHICHEVER source decoded first, so the bounds are
+          // right from the first frame rather than only once HD lands.
+          const src = e?.source || e?.nativeEvent?.source || {};
+          if (onDimensions && src.width > 0 && src.height > 0) {
+            onDimensions(src.width, src.height);
+          }
+          if (!showingHd) return;
+          highResLoadedRef.current = true;
+          if (onRawLoad) onRawLoad();
+          // Make sure the bar reaches 100% even when the final onProgress
+          // event stopped short (some platforms cap around 98%), and for
+          // cached loads which never fire onProgress at all.
+          if (onLoadProgress) onLoadProgress(1);
+        }}
+        onError={(e) => {
+          if (showingHd && !hiResFallback) {
+            // Display variant unavailable - retry once with the raw original.
+            setHiResFallback(true);
+            return;
+          }
+          logLoadFailure(showingHd ? 'raw' : 'fast', uri)(e);
+        }}
+      />
     </View>
   );
 };
+
 
 // Image viewer component with pinch-to-zoom.
 //
