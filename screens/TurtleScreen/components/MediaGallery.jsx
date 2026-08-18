@@ -26,7 +26,7 @@ import {
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 // The viewer's media-cell layer (video cell, progressive image, zoomable image
 // cell) — extracted verbatim; see viewerMedia.jsx.
-import { FullScreenVideoPlayer, ProgressiveImage, ImageViewer } from './viewerMedia';
+import { FullScreenVideoPlayer, ImageViewer } from './viewerMedia';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -416,79 +416,20 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     return () => { loop.stop(); };
   }, [isAlbumsLoading, albumsLoadingAnim]);
 
-  // Reset progress whenever the active photo changes. The 150ms
-  // setTimeout delays the bar's appearance — fast (cached) loads
-  // never trigger a visible bar; slow loads trigger the bar shortly
-  // before the first onProgress event would have shown it anyway.
+  // The bar stays hidden. Under the HD-manager model there is no in-view
+  // network load left to narrate: cells swap to a display variant that the
+  // manager has ALREADY prefetched into the disk cache, so the "load" a bar
+  // would track is over before the swap happens. The show-delay timer this
+  // effect used to arm was fed completion by cell callbacks that no longer
+  // exist — kept armed, it would surface an empty bar and strand it at 0%.
   useEffect(() => {
-    if (viewerProgressShowTimerRef.current) {
-      clearTimeout(viewerProgressShowTimerRef.current);
-      viewerProgressShowTimerRef.current = null;
-    }
-    if (!selectedMedia?.id) {
-      viewerProgressOpacityAnim.setValue(0);
-      viewerProgressAnim.setValue(0);
-      return;
-    }
-    viewerProgressAnim.setValue(0);
     viewerProgressOpacityAnim.setValue(0);
-    viewerProgressShowTimerRef.current = setTimeout(() => {
-      Animated.timing(viewerProgressOpacityAnim, {
-        toValue: 1,
-        duration: 100,
-        useNativeDriver: true,
-      }).start();
-    }, 150);
-    return () => {
-      if (viewerProgressShowTimerRef.current) {
-        clearTimeout(viewerProgressShowTimerRef.current);
-        viewerProgressShowTimerRef.current = null;
-      }
-    };
+    viewerProgressAnim.setValue(0);
   }, [selectedMedia?.id, viewerProgressAnim, viewerProgressOpacityAnim]);
 
-  // Receives a 0..1 ratio from ProgressiveImage's Layer 2 onProgress.
-  // Bypasses the 150ms show-delay if it's still pending — once real
-  // bytes are flowing we want immediate feedback regardless.
-  // Quantized to 2% steps: expo-image fires onProgress per network chunk —
-  // hundreds of bridge crossings on a big raw fallback, each landing on the
-  // JS thread the touch pipeline depends on. A ratio DROP means a new photo's
-  // fetch started, so the gate resets rather than sticking at the old high-
-  // water mark.
-  const lastProgressRatioRef = useRef(0);
-  const handleLoadProgress = useCallback((ratio) => {
-    const clamped = Math.min(1, Math.max(0, ratio || 0));
-    if (clamped < lastProgressRatioRef.current) lastProgressRatioRef.current = 0;
-    if (clamped < 1 && clamped - lastProgressRatioRef.current < 0.02) return;
-    lastProgressRatioRef.current = clamped >= 1 ? 0 : clamped;
-    if (viewerProgressShowTimerRef.current) {
-      clearTimeout(viewerProgressShowTimerRef.current);
-      viewerProgressShowTimerRef.current = null;
-      viewerProgressOpacityAnim.setValue(1);
-    }
-    viewerProgressAnim.setValue(clamped);
-  }, [viewerProgressAnim, viewerProgressOpacityAnim]);
-
-  // Fires when Layer 2 finishes (success). Snaps the bar to 100%,
-  // holds briefly so the user sees the completion, then fades out.
-  const handleLoadComplete = useCallback(() => {
-    if (viewerProgressShowTimerRef.current) {
-      clearTimeout(viewerProgressShowTimerRef.current);
-      viewerProgressShowTimerRef.current = null;
-    }
-    Animated.timing(viewerProgressAnim, {
-      toValue: 1,
-      duration: 80,
-      useNativeDriver: true,
-    }).start(() => {
-      Animated.timing(viewerProgressOpacityAnim, {
-        toValue: 0,
-        delay: 150,
-        duration: 250,
-        useNativeDriver: true,
-      }).start();
-    });
-  }, [viewerProgressAnim, viewerProgressOpacityAnim]);
+  // (The old handleLoadProgress/handleLoadComplete pair lived here. They fed
+  // the bar from cell load callbacks; under the HD-manager model cells never
+  // load into the view over the network, so both went with their feed.)
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const [infoVisible, setInfoVisible] = useState(true);
@@ -550,6 +491,70 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     };
   }
   const pagerDragStore = pagerDragStoreRef.current;
+
+  // ── Viewer HD manager ────────────────────────────────────────────────────
+  // ALL of the viewer's HD orchestration, in one place. Cells used to run
+  // their own dwell timers, commit latches, drag subscriptions and cancel
+  // effects — React state that could (and did, measured at a 150ms median JS
+  // block) fire on the exact frame a finger landed. Now a cell only reads a
+  // per-photo "HD is warm" flag from this store; everything below is about
+  // making sure that flag can never flip at a bad moment.
+  //
+  // Two invariants:
+  //   1. WARMING IS INVISIBLE. Image.prefetch pulls the ~1600px display
+  //      variant into expo-image's disk cache without touching any view, so
+  //      it can run during anything — including mid-swipe — at zero frame
+  //      cost. The cell's later URI swap decodes from that warm cache.
+  //   2. FLIPS LAND ON QUIET FRAMES ONLY. A finished prefetch queues its id;
+  //      the queue drains through InteractionManager, and never while the
+  //      pager drag flag is up (drag release drains it). So the one re-render
+  //      a photo cell takes after mount happens on an idle frame, always.
+  //
+  // The flag is per-PHOTO and never unset: swiping away and back shows HD
+  // instantly (iOS behaviour), and a recycled cell asking about a different
+  // photo simply reads that photo's own answer.
+  const viewerHdStoreRef = useRef(null);
+  if (viewerHdStoreRef.current === null) {
+    const ready = new Set();
+    const listeners = new Set();
+    viewerHdStoreRef.current = {
+      get: (id) => ready.has(id),
+      subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
+      // Broadcasts the id that flipped so cells can ignore other photos
+      // without a state write.
+      mark: (id) => { if (ready.has(id)) return; ready.add(id); listeners.forEach((l) => l(id)); },
+    };
+  }
+  const viewerHdStore = viewerHdStoreRef.current;
+  const hdInFlightRef = useRef(new Set());
+  const hdPendingMarkRef = useRef(new Set());
+
+  const flushHdMarks = useCallback(() => {
+    if (pagerDragStore.get()) return; // drag release will drain us
+    const pending = hdPendingMarkRef.current;
+    if (pending.size === 0) return;
+    const ids = [...pending];
+    pending.clear();
+    InteractionManager.runAfterInteractions(() => {
+      ids.forEach((id) => viewerHdStore.mark(id));
+    });
+  }, [pagerDragStore, viewerHdStore]);
+
+  const ensureViewerHd = useCallback((item) => {
+    if (!item?.id || item.isSkeleton || item.type === 'video') return;
+    const id = item.id;
+    if (viewerHdStore.get(id) || hdInFlightRef.current.has(id)) return;
+    hdInFlightRef.current.add(id);
+    Image.prefetch(getFullUrl(`/api/media/display/${id}`), { cachePolicy: 'disk' })
+      .then((ok) => {
+        // A failed prefetch (missing variant, offline) simply never marks:
+        // the cell stays on the compressed image, which is degraded, not
+        // broken — and nothing retries in a loop.
+        if (ok) { hdPendingMarkRef.current.add(id); flushHdMarks(); }
+      })
+      .catch(() => {})
+      .finally(() => { hdInFlightRef.current.delete(id); });
+  }, [viewerHdStore, getFullUrl, flushHdMarks]);
 
   // WHICH PAGE IS ACTIVE — same store pattern, same reason. selectedMedia (the
   // gallery state) re-renders the entire component, chrome and all, and that
@@ -3769,7 +3774,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     if (dragSettleTimer.current) { clearTimeout(dragSettleTimer.current); dragSettleTimer.current = null; }
     pagerDragStore.set(false);
     syncSelectedFromOffset(event.nativeEvent.contentOffset.x);
-  }, [syncSelectedFromOffset, pagerDragStore]);
+    // The pager just went quiet — drain any HD flags that finished warming
+    // during the swipe, so they apply now instead of waiting for the next one.
+    flushHdMarks();
+  }, [syncSelectedFromOffset, pagerDragStore, flushHdMarks]);
 
   // THE TAG-MISMATCH FIX: a slow drag-release can snap to the next photo via
   // snapToInterval WITHOUT any momentum phase, so onMomentumScrollEnd never
@@ -3783,72 +3791,46 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       dragSettleTimer.current = null;
       pagerDragStore.set(false);
       syncSelectedFromOffset(lastViewerOffsetX.current);
+      flushHdMarks(); // pager quiet — apply any HD that warmed mid-gesture
     }, 180);
-  }, [syncSelectedFromOffset, pagerDragStore]);
+  }, [syncSelectedFromOffset, pagerDragStore, flushHdMarks]);
   useEffect(() => () => { if (dragSettleTimer.current) clearTimeout(dragSettleTimer.current); }, []);
 
-  // Prefetch ±2 neighbor raw URLs whenever the viewer index changes —
-  // but DEFERRED, so the photo the user just opened loads first.
-  //
-  // Why deferred: the active photo's own high-res (ProgressiveImage's
-  // Layer 2) starts fetching the instant the viewer opens. If we fire
-  // the neighbor prefetch in the same tick it contends for the same
-  // connection/bandwidth and the image you're actually looking at loads
-  // slower. So we let the active request go out alone, then fire the
-  // neighbor prefetch a short beat later ("load the first one insanely
-  // fast, then a second request right after for the adjacent ones").
-  //
-  // Why still prefetch: when the user swipes to the next photo we want
-  // its bytes already in the disk cache — otherwise every swipe pays a
-  // full network RTT before the high-res fades in. ±2 means the user can
-  // double-swipe in either direction without ever hitting a cold cache.
-  //
-  // Mechanics: expo-image's Image.prefetch primes its disk cache without
-  // rendering. We pass cachePolicy:'disk' so the bytes land alongside the
-  // active viewer's. The call is fire-and-forget — if the user backs out,
-  // the prefetch may finish in the background but we don't care; the bytes
-  // are useful next time too.
-  //
-  // Skips: video items (we'd be pre-streaming a movie, expensive and
-  // pointless), skeleton placeholders, items missing a URL, the
-  // currently-active item (it's already loading in ProgressiveImage's
-  // Layer 2).
+  // HD warming, driven by where the viewer is parked. This effect is the HD
+  // manager's scheduler: it decides WHEN photos warm (active first, ±1
+  // neighbors a beat later, so the photo on screen wins the bandwidth race);
+  // ensureViewerHd decides HOW (prefetch to disk cache, flag flipped only on
+  // quiet frames). Fire-and-forget on back-out — bytes in the cache stay
+  // useful next time.
   useEffect(() => {
     if (!selectedMedia?.id || !Array.isArray(viewerItems) || viewerItems.length === 0) return;
     const idx = viewerItems.findIndex(it => it && it.id === selectedMedia.id);
     if (idx < 0) return;
-    // Only the IMMEDIATE neighbors (±1) — they're what the next swipe lands on,
-    // so they hide the encode. Prefetching ±2 doubled the disk writes for a tier
-    // the user usually never reaches; trimmed to keep the cache lean.
+    // The ACTIVE photo warms immediately — a prefetch touches no view, so
+    // there is nothing to defer for. There is no dwell any more: the dwell
+    // existed to avoid loading HD into a VIEW during a pass-by, and the
+    // manager's quiet-frame commit gives that guarantee for free (a pass-by
+    // never gets a quiet frame on that photo, so the flag simply flips later,
+    // for a cell that is by then showing a different photo — harmlessly).
+    ensureViewerHd(viewerItems[idx]);
+    // Neighbors (±1) warm a beat later so the active photo's request wins the
+    // race for bandwidth. They mark ready as they land, which is what makes
+    // swiping onto them show HD instantly — the iOS behaviour — instead of
+    // paying a dwell + fetch after arrival.
     const neighbors = [
       viewerItems[idx - 1],
       viewerItems[idx + 1],
-    ].filter(it => it && !it.isSkeleton && it.type !== 'video');
-    // Prefetch the DISPLAY variants — they're what Layer 2 now loads. The
-    // variant cache is pre-warmed server-side (68k+ files, full library
-    // coverage as of 2026-06-11), so these are ~300KB disk-served fetches
-    // instead of multi-MB raws; on the rare cache miss the prefetch triggers
-    // generation AHEAD of the swipe, hiding the encode entirely.
-    const urls = neighbors
-      .map(it => (it.id ? getFullUrl(`/api/media/display/${it.id}`) : getFullUrl(it.rawUrl || it.url || '')))
-      .filter(Boolean);
-    if (urls.length === 0) return;
-    // Hold the neighbor prefetch for one short beat so the active photo's
-    // request wins the race for bandwidth, THEN fire it. Cleared if the
-    // user swipes/closes before it lands so we never prefetch around a
-    // photo they already left.
+    ].filter(Boolean);
     const NEIGHBOR_PREFETCH_DELAY_MS = 250;
     const handle = setTimeout(() => {
-      // Image.prefetch returns a promise; we don't await but we do swallow
-      // rejection so a transient prefetch failure doesn't spam errors.
-      Image.prefetch(urls, { cachePolicy: 'disk' }).catch(() => {});
+      neighbors.forEach(ensureViewerHd); // skeleton/video filtering lives inside
     }, NEIGHBOR_PREFETCH_DELAY_MS);
     return () => clearTimeout(handle);
     // Key on selectedMedia?.id (not the full object) so tag/favorite
     // mutations that spread `setSelectedMedia(prev => ({...prev,tags}))`
     // don't re-fire the prefetch unnecessarily — they change the
     // reference but not the underlying photo.
-  }, [selectedMedia?.id, viewerItems, getFullUrl]);
+  }, [selectedMedia?.id, viewerItems, ensureViewerHd]);
 
   // Render individual viewer item with pinch-to-zoom.
   //
@@ -3882,12 +3864,13 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 fullResUrl={fullResUrl}
                 mediaId={item.id}
                 activeStore={viewerActiveStore}
+                // The per-photo "HD is warm" flag — the ONLY thing that can
+                // change what a mounted photo cell renders, and the manager
+                // only flips it on quiet frames.
+                hdStore={viewerHdStore}
                 item={item}
                 styles={styles}
                 getFullUrl={getFullUrl}
-                api={api}
-                onLoadProgress={handleLoadProgress}
-                onLoadComplete={handleLoadComplete}
                 // Zoom reports drive the shell's chrome-hide + pull-dismiss
                 // lockout; the cell itself only speaks when active
                 // (handleZoomedChange gates on its store-derived isActive).
@@ -3899,8 +3882,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 // iOS Photos: pinching a fit-to-screen photo in drops back to
                 // the grid.
                 onPinchDismiss={closeViewer}
-                // Lets the HD layer stand down for the duration of a swipe.
-                pagerDragStore={pagerDragStore}
               />
             )}
           </View>
@@ -3908,7 +3889,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         </View>
       </View>
     );
-  }, [getFullUrl, styles, insets, api, handleLoadProgress, handleLoadComplete, reportZoomScale, handleViewerSingleTap, closeViewer, pagerDragStore, viewerActiveStore]);
+  }, [getFullUrl, styles, insets, reportZoomScale, handleViewerSingleTap, closeViewer, viewerActiveStore, viewerHdStore]);
 
   // Get layout for initialScrollIndex
   const getItemLayout = useCallback((data, index) => ({
@@ -4379,8 +4360,13 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               // ----------------------------------------
               
               initialNumToRender={3}
-              windowSize={5}
-              maxToRenderPerBatch={5}
+              // 3, not 5: each mounted cell holds a full-screen texture, and
+              // ±2 pages of standby textures bought nothing the ±1 prefetch
+              // cache doesn't — while costing native memory and making every
+              // store broadcast fan wider. ±1 is exactly what a single swipe
+              // can reach.
+              windowSize={3}
+              maxToRenderPerBatch={3}
               removeClippedSubviews={false}
               getItemLayout={getItemLayout}
               initialScrollIndex={viewerInitialIndex}
