@@ -5,13 +5,32 @@
  * sheet. Receives a payload from expo-share-intent (text, URL, or
  * image files) and lets the user pick a Board destination.
  *
- * Destinations:
- *   - Pinned boards surface first under "Suggested" as quick-send rows
- *     (one tap → sent), so the common case stays a single tap.
- *   - The full universe of boards (every project / tag / album) is listed
- *     below under "All boards", with a search box so a destination that
- *     isn't pinned is still a couple of keystrokes away — no need to go
- *     pin it on the web first.
+ * The screen answers two different questions, in this order:
+ *
+ * 1. WHAT should happen to it — three tiles across the top, always in the
+ *    same order, so the choice is read rather than hunted for:
+ *
+ *      Download  the bytes. Shared photos land in the vault as-is; a link
+ *                goes to the "Download" album, which the server
+ *                ghost-downloads into the vault.
+ *      Audio     the same link or file, sound only (outputKind:'audio'),
+ *                into the Music Vault.
+ *      Inbox     nothing is fetched at all — the LINK itself is what gets
+ *                kept, for reading or downloading later.
+ *
+ *    A tile that cannot work for the current payload is not rendered, so
+ *    there is never a button that quietly does nothing: a share of loose
+ *    photos has no link, so it shows no Inbox.
+ *
+ * 2. WHERE it should live — everything below the tiles. Search reaches any
+ *    board (project / tag / album) whether pinned or not, and typing a name
+ *    that doesn't exist offers to create it, so a brand-new topic never
+ *    requires a trip to the web app first. Pinned boards stay listed under
+ *    "Suggested" for the one-tap common case.
+ *
+ * The two are visually distinct on purpose — tiles are verbs, rows are
+ * places. Rendering "Download" as another board row was what made an ACTION
+ * and a BOARD NAMED "Download" read as the same thing.
  *
  *   text/url → creates a note tagged with the board name (server-side
  *              routing handles project vs tag — both look the same in
@@ -217,6 +236,38 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
     onDismiss?.();
   };
 
+  // ── The three top actions ────────────────────────────────────
+  // Everything you can do with a share that ISN'T "file it on a board".
+  // All three already exist server-side; this just names them plainly:
+  //
+  //   Download  → the bytes. Shared photos go to the vault as-is; a link goes
+  //               to the "Download" album, which the server ghost-downloads.
+  //   Audio     → the same link/file, but only the sound (outputKind:'audio').
+  //   Inbox     → nothing is fetched. The link itself is what gets kept.
+  const DOWNLOAD_BOARD = { kind: 'album', name: 'Download' };
+
+  // A link can be fetched; loose photos are already bytes. Video/audio FILES
+  // are deliberately excluded: the standard share path carries text, links and
+  // images only, so offering "Download" for a shared video file would be a
+  // button that quietly does nothing. Audio is that case's supported route.
+  const canDownload = hasImportUrl || imageFiles.length > 0;
+  const canInbox = !!url || !!text;
+
+  const pickDownload = () => {
+    if (!canDownload) return;
+    // A link is handed to the downloader; bare photos just land in the vault.
+    pickBoard(hasImportUrl ? DOWNLOAD_BOARD : null);
+  };
+
+  // Save the LINK and nothing else - no fetch, no media row. Images are dropped
+  // on purpose: "Inbox" means the address, not the contents.
+  const pickInbox = () => {
+    if (!canInbox) return;
+    notifyHaptic('success');
+    enqueueShare({ board: null, text, url, imageFiles: [] });
+    onDismiss?.();
+  };
+
   const pickAudio = () => {
     if (audioHandoffInFlightRef.current) return;
     audioHandoffInFlightRef.current = true;
@@ -359,43 +410,53 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           theme={theme}
         />
 
-        {showAudioDestination && (
-          <TouchableOpacity
-            key="__music_vault__"
-            activeOpacity={0.75}
-            accessibilityLabel="Audio — Save to Music Vault"
-            accessibilityState={{ busy: audioHandoffBusy, disabled: audioHandoffBusy }}
-            disabled={audioHandoffBusy}
-            onPressIn={() => {
-              if (!audioHandoffInFlightRef.current) impactHaptic('medium');
-            }}
-            onPress={pickAudio}
-            style={[
-              styles.boardRow,
-              {
-                backgroundColor: theme.colors.surface,
-                borderColor: theme.colors.accentSuccess,
-                opacity: audioHandoffBusy ? 0.65 : 1,
-              },
-            ]}
-          >
-            <View style={[styles.boardIcon, { backgroundColor: theme.colors.surfaceElevated || theme.colors.surface }]}>
-              <Icon name="music-box-multiple" size={18} color={theme.colors.accentSuccess} />
+        {/* ── The three things you can do with a share ─────────────────
+            One row, always in the same order, so the choice is read at a
+            glance instead of hunted for among board rows. Anything that
+            cannot work for THIS payload is not rendered - a share of loose
+            photos has no link to keep, so it shows no Inbox. */}
+        {(canDownload || showAudioDestination || canInbox) && (
+          <>
+            <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary, marginTop: 4 }]}>
+              Save as
+            </Text>
+            <View style={styles.actionRow}>
+              {canDownload && (
+                <ActionTile
+                  theme={theme}
+                  icon="tray-arrow-down"
+                  tint={theme.colors.accentInfo}
+                  title="Download"
+                  subtitle="Keep the file"
+                  accessibilityLabel="Download - keep the file"
+                  onPress={pickDownload}
+                />
+              )}
+              {showAudioDestination && (
+                <ActionTile
+                  theme={theme}
+                  icon="music-note"
+                  tint={theme.colors.accentSuccess}
+                  title="Audio"
+                  subtitle="Just the sound"
+                  accessibilityLabel="Audio - just the sound"
+                  busy={audioHandoffBusy}
+                  onPress={pickAudio}
+                />
+              )}
+              {canInbox && (
+                <ActionTile
+                  theme={theme}
+                  icon="bookmark-outline"
+                  tint={theme.colors.textSecondary}
+                  title="Inbox"
+                  subtitle="Link only"
+                  accessibilityLabel="Inbox - save the link only"
+                  onPress={pickInbox}
+                />
+              )}
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.boardName, { color: theme.colors.textPrimary }]} numberOfLines={1}>
-                Audio
-              </Text>
-              <Text style={[styles.boardKind, { color: theme.colors.textMuted }]}>
-                Save to Music Vault
-              </Text>
-            </View>
-            {audioHandoffBusy ? (
-              <ActivityIndicator size="small" color={theme.colors.accentSuccess} />
-            ) : (
-              <Icon name="chevron-right" size={22} color={theme.colors.accentSuccess} />
-            )}
-          </TouchableOpacity>
+          </>
         )}
 
         {!!handoffError && (
@@ -405,50 +466,22 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           </View>
         )}
 
-        {/* DEFAULT destination for photo shares: straight into the photo
-            vault, as-is, no board tag. Pinned above every board so sharing
-            from the iOS Photos app is one tap. board:null → the server files
-            the images untagged (uploadDate = now, originalDate = EXIF). */}
-        {imageFiles.length > 0 && (
-          <TouchableOpacity
-            key="__photo_vault__"
-            activeOpacity={0.75}
-            onPressIn={() => impactHaptic('medium')}
-            onPress={() => pickBoard(null)}
-            style={[
-              styles.boardRow,
-              {
-                backgroundColor: theme.colors.surface,
-                borderColor: theme.colors.accentInfo,
-              },
-            ]}
-          >
-            <View style={[styles.boardIcon, { backgroundColor: theme.colors.surfaceElevated || theme.colors.surface }]}>
-              <Icon name="image-multiple" size={18} color={theme.colors.accentInfo} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.boardName, { color: theme.colors.textPrimary }]} numberOfLines={1}>
-                Photo vault
-              </Text>
-              <Text style={[styles.boardKind, { color: theme.colors.textMuted }]}>
-                Save as-is · no board
-              </Text>
-            </View>
-            <Icon name="chevron-right" size={22} color={theme.colors.accentInfo} />
-          </TouchableOpacity>
-        )}
 
         {/* Search box — find any board (even unpinned) OR name a new one to
             create. Shown as soon as we have anything to show (cached list paints
             instantly); hidden only while the FIRST load is running with nothing
             cached, or on a hard error. */}
         {hasStandardContent && !busyEmpty && !boardsError && (
+          <>
+            <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>
+              Or file it on a board
+            </Text>
           <View style={[styles.searchBox, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
             <Icon name="magnify" size={18} color={theme.colors.textMuted} />
             <TextInput
               value={query}
               onChangeText={setQuery}
-              placeholder="Search or name a new board"
+              placeholder="Search boards, or type a new name"
               placeholderTextColor={theme.colors.textMuted}
               style={[styles.searchInput, { color: theme.colors.textPrimary }]}
               autoCapitalize="none"
@@ -461,6 +494,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
               </TouchableOpacity>
             )}
           </View>
+          </>
         )}
 
         {busyEmpty && (
@@ -549,6 +583,44 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
         )}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+// ── ActionTile ───────────────────────────────────────────────
+// One of the top-row choices. Deliberately a TILE and not another board-style
+// row: these are verbs, the rows below are places, and making them look alike
+// was why "download" and "a board called Download" felt like the same thing.
+function ActionTile({ theme, icon, tint, title, subtitle, onPress, busy = false, accessibilityLabel }) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.75}
+      disabled={busy}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel || title}
+      accessibilityState={{ busy, disabled: busy }}
+      onPressIn={() => { if (!busy) impactHaptic('medium'); }}
+      onPress={onPress}
+      style={[
+        styles.actionTile,
+        {
+          backgroundColor: theme.colors.surface,
+          borderColor: theme.colors.border,
+          opacity: busy ? 0.6 : 1,
+        },
+      ]}
+    >
+      <View style={[styles.actionIcon, { backgroundColor: theme.colors.surfaceElevated || theme.colors.background }]}>
+        {busy
+          ? <ActivityIndicator size="small" color={tint} />
+          : <Icon name={icon} size={20} color={tint} />}
+      </View>
+      <Text style={[styles.actionTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+        {title}
+      </Text>
+      <Text style={[styles.actionSubtitle, { color: theme.colors.textMuted }]} numberOfLines={1}>
+        {subtitle}
+      </Text>
+    </TouchableOpacity>
   );
 }
 
@@ -674,6 +746,32 @@ const styles = StyleSheet.create({
   previewCountRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   previewCount: { fontSize: 13, fontWeight: '600' },
   previewThumb: { width: 88, height: 88, borderRadius: 8, backgroundColor: '#222' },
+  // The three top actions. Equal-width tiles so no option looks like the
+  // default, and tall enough that the label + one line of explanation both fit
+  // without truncating on a narrow phone.
+  actionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 20,
+  },
+  actionTile: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 6,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: 6,
+  },
+  actionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionTitle: { fontSize: 13.5, fontWeight: '700' },
+  actionSubtitle: { fontSize: 10.5, fontWeight: '500' },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',

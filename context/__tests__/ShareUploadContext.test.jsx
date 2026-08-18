@@ -120,7 +120,7 @@ const queuedUpload = (jobId) => ({
 });
 
 function audioDestinationOnPress(view) {
-  let fiber = view.getByLabelText('Audio — Save to Music Vault').unstable_fiber;
+  let fiber = view.getByLabelText('Audio - just the sound').unstable_fiber;
   while (fiber) {
     if (typeof fiber.memoizedProps?.onPress === 'function') {
       return fiber.memoizedProps.onPress;
@@ -181,7 +181,7 @@ describe('ShareTargetScreen Audio destination', () => {
   ])('shows one first-class Audio row for a supported media import source', async (shareIntent) => {
     const view = await renderTarget(shareIntent);
 
-    expect(view.getByText('Save to Music Vault')).toBeTruthy();
+    expect(view.getByText('Just the sound')).toBeTruthy();
     expect(view.getAllByText('Audio')).toHaveLength(1);
   });
 
@@ -190,7 +190,7 @@ describe('ShareTargetScreen Audio destination', () => {
       files: [{ path: 'file:///os/notes.pdf', fileName: 'notes.pdf', mimeType: 'application/pdf' }],
     });
 
-    expect(view.queryByText('Save to Music Vault')).toBeNull();
+    expect(view.queryByText('Just the sound')).toBeNull();
     expect(view.queryByText('Audio')).toBeNull();
     expect(view.queryByText('Recipes')).toBeNull();
     expect(mockApiPost).not.toHaveBeenCalled();
@@ -235,7 +235,7 @@ describe('ShareTargetScreen Audio destination', () => {
     await waitFor(() => expect(mockCopyAsync).toHaveBeenCalledTimes(1));
     expect(latestShareUpload.jobs).toHaveLength(1);
     expect(view.onDismiss).not.toHaveBeenCalled();
-    expect(view.getByLabelText('Audio — Save to Music Vault').props.accessibilityState).toEqual({
+    expect(view.getByLabelText('Audio - just the sound').props.accessibilityState).toEqual({
       busy: true,
       disabled: true,
     });
@@ -271,21 +271,21 @@ describe('ShareTargetScreen Audio destination', () => {
       files: [{ path: 'file:///os/retry.m4a', fileName: 'retry.m4a', mimeType: 'audio/mp4' }],
     });
 
-    fireEvent.press(view.getByText('Save to Music Vault'));
+    fireEvent.press(view.getByText('Just the sound'));
     await waitFor(() => expect(mockCopyAsync).toHaveBeenCalledTimes(1));
 
     await act(async () => {
       firstCopy.reject(new Error('copy failed'));
     });
     await waitFor(() =>
-      expect(view.getByLabelText('Audio — Save to Music Vault').props.accessibilityState).toEqual({
+      expect(view.getByLabelText('Audio - just the sound').props.accessibilityState).toEqual({
         busy: false,
         disabled: false,
       })
     );
     expect(view.onDismiss).not.toHaveBeenCalled();
 
-    fireEvent.press(view.getByText('Save to Music Vault'));
+    fireEvent.press(view.getByText('Just the sound'));
     await waitFor(() => expect(view.onDismiss).toHaveBeenCalledTimes(1));
     expect(mockCopyAsync).toHaveBeenCalledTimes(2);
     expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1);
@@ -308,7 +308,7 @@ describe('ShareTargetScreen Audio destination', () => {
       files: [{ path: 'file:///os/late.m4a', fileName: 'late.m4a', mimeType: 'audio/mp4' }],
     });
 
-    fireEvent.press(view.getByText('Save to Music Vault'));
+    fireEvent.press(view.getByText('Just the sound'));
     await waitFor(() => expect(mockCopyAsync).toHaveBeenCalledTimes(1));
     await view.rerender(
       <ShareUploadProvider>
