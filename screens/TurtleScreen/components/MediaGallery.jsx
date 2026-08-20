@@ -3688,10 +3688,31 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   }, [selectedMedia, viewerActiveStore]);
 
   // Adopt whatever the pager last settled on into gallery state. Idempotent —
-  // both schedules below may fire, latest item wins.
+  // multiple schedules may fire, latest item wins.
+  //
+  // THE COMMIT ONLY LANDS AT REST. setSelectedMedia re-renders the whole
+  // 6,000-line gallery, and no deferral constant can dodge a human: the old
+  // 400ms belt landed the commit exactly when a natural browsing rhythm
+  // starts the NEXT swipe, which is why swiping still hitched "at times" —
+  // it was timing-dependent, colliding once per settle. So instead of firing
+  // after a fixed delay, adoption checks whether the user is (or moments ago
+  // was) driving the pager — finger down (pagerDragStore, set at raw
+  // touch-start) or inside the per-frame quiet horizon the scroll listener
+  // stamps — and RESCHEDULES itself until both are clear. The pager itself
+  // never waits on this: cells key off the active-id store, which flipped at
+  // settle; only the chrome (filename, meta, sheets) rides behind, and chrome
+  // catching up when the finger rests IS the async-lazy contract. During an
+  // unbroken swipe-run it simply keeps deferring — the run ends, one commit
+  // lands.
+  const adoptRetryRef = useRef(null);
   const adoptPendingSelected = useCallback(() => {
     const latest = selectedMediaRef.current;
     if (!latest) return;
+    if (pagerDragStore.get() || Date.now() < pagerQuietUntilRef.current) {
+      if (adoptRetryRef.current) clearTimeout(adoptRetryRef.current);
+      adoptRetryRef.current = setTimeout(adoptPendingSelected, PAGER_TAP_QUIET_MS);
+      return;
+    }
     // Dev trail marker. This call only SCHEDULES the whole-gallery re-render —
     // the cost lands in the commit that follows, which the Profiler above
     // measures. Logging the schedule is what lets the two be lined up: an
@@ -3699,7 +3720,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // is the deferred adoption landing mid-swipe.
     if (__DEV__) console.log('[probe] adopt scheduled');
     setSelectedMedia((prev) => (prev?.id === latest.id ? prev : latest));
-  }, []);
+  }, [pagerDragStore]);
+  useEffect(() => () => { if (adoptRetryRef.current) clearTimeout(adoptRetryRef.current); }, []);
 
   // Resolve which photo is centred from a (left-aligned, ITEM_WIDTH-strided)
   // scroll offset. SINGLE source of truth for "which photo is on screen".
