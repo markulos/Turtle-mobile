@@ -23,6 +23,7 @@ import * as Clipboard from 'expo-clipboard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useServer } from '../context/ServerContext';
 import gestureProbe, { BAD_MS, SLOW_MS, buildFixPrompt } from '../utils/gestureProbe';
+import { isGestureProbeEnabled, subscribeDebugSettings } from '../utils/debugSettings';
 
 const IS_DEV = typeof __DEV__ !== 'undefined' && __DEV__;
 const STORAGE_KEY = 'gestureProbe.findings.v1';
@@ -51,6 +52,17 @@ const colorFor = (ms) => (ms >= BAD_MS ? '#f87171' : ms >= SLOW_MS ? '#fbbf24' :
 
 export default function GestureProbeOverlay() {
   if (!IS_DEV) return null;
+  return <ProbeGate />;
+}
+
+// Settings → Debug → "Gesture probe" controls this LIVE: flipping it off
+// unmounts the body, whose cleanup stops the drift monitor — so "off" means
+// the instrument is genuinely not running, not merely invisible. Flipping it
+// on mounts fresh and starts collecting again, no reload either way.
+function ProbeGate() {
+  const [enabled, setEnabled] = useState(() => isGestureProbeEnabled());
+  useEffect(() => subscribeDebugSettings(() => setEnabled(isGestureProbeEnabled())), []);
+  if (!enabled) return null;
   return <ProbeOverlayBody />;
 }
 

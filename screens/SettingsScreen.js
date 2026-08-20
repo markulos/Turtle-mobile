@@ -27,6 +27,7 @@ import { useAuth } from '../context/AuthContext';
 import * as SecureStore from 'expo-secure-store';
 import { clearAllCaches, getCacheSizeBytes, formatBytes } from '../utils/cacheManager';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../utils/haptics';
+import { isGestureProbeEnabled, setGestureProbeEnabled, subscribeDebugSettings } from '../utils/debugSettings';
 
 const MASTER_KEY_STORE = 'vault_master_key';
 const SALT_STORE = 'vault_salt';
@@ -73,6 +74,11 @@ export default function SettingsScreen({ active = true }) {
   const [healProgress, setHealProgress] = useState(null);
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
+  // Debug → gesture probe. Mirrors the persisted flag; the subscription keeps
+  // the switch honest when hydration lands after mount (or another surface
+  // flips it).
+  const [gestureProbeOn, setGestureProbeOn] = useState(() => isGestureProbeEnabled());
+  useEffect(() => subscribeDebugSettings(() => setGestureProbeOn(isGestureProbeEnabled())), []);
   // null = not yet measured / measuring; number = bytes currently cached.
   const [cacheBytes, setCacheBytes] = useState(null);
   const [measuringCache, setMeasuringCache] = useState(false);
@@ -846,6 +852,36 @@ export default function SettingsScreen({ active = true }) {
                   {sendingTest ? 'Sending…' : 'Send test notification'}
                 </Text>
               </TouchableOpacity>
+            </View>
+            )}
+
+            {/* Debug — developer instruments. DEV BUILDS ONLY: in a release
+                build none of these tools exist, so a toggle here would be a
+                switch wired to nothing. Lives at the tail of General — real
+                settings first, instruments last. */}
+            {__DEV__ && tabKey === 'general' && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+                  <Icon name="bug-outline" size={20} color={theme.colors.textPrimary} />
+                </View>
+                <Text style={styles.sectionTitle}>Debug</Text>
+              </View>
+
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Gesture probe</Text>
+                  <Text style={styles.settingDescription}>
+                    Corner pill that flags slow gestures and JS stalls. Off stops the probe entirely; findings already saved are kept.
+                  </Text>
+                </View>
+                <Switch
+                  value={gestureProbeOn}
+                  onValueChange={(v) => { setGestureProbeOn(v); setGestureProbeEnabled(v); }}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
+                  thumbColor={gestureProbeOn ? theme.colors.textPrimary : theme.colors.textTertiary}
+                />
+              </View>
             </View>
             )}
 
