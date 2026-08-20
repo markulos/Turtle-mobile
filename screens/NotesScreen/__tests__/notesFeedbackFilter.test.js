@@ -10,7 +10,7 @@ const probeFinding = {
   id: 'n1',
   type: 'todo',
   content: 'Mobile feedback: viewer:swipe — 412ms',
-  tags: ['Turtle App', 'Mobile app', 'perf'],
+  tags: ['Turtle App', 'Mobile App', 'perf'],
 };
 const typedFeedback = { id: 'n2', type: 'todo', content: 'Grid feels slow', tags: ['Turtle 3D'] };
 const realTodo = { id: 'n3', type: 'todo', content: 'Buy milk', tags: ['Groceries'] };

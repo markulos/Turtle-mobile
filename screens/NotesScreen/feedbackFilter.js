@@ -15,7 +15,7 @@
 // The app a piece of feedback is about. Stamped as a tag so the cue rides along
 // when the to-do is handed to a Claude session.
 export const APP_TAGS = { 'turtle-app': 'Turtle App', 'turtle-3d': 'Turtle 3D' };
-export const PLATFORM_TAGS = { web: 'Web app', mobile: 'Mobile app' };
+export const PLATFORM_TAGS = { web: 'Web App', mobile: 'Mobile App' };
 
 // Matched case-insensitively (and trimmed) because tags are free text
 // everywhere else in the app.

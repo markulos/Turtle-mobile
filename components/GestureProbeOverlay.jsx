@@ -37,7 +37,7 @@ const STORAGE_KEY = 'gestureProbe.findings.v1';
 // stamped with the app + platform tags), so they sit with the rest of the
 // Turtle feedback and never touch the calendar.
 const FEEDBACK_APP_TAG = 'Turtle App';
-const FEEDBACK_PLATFORM_TAG = 'Mobile app';
+const FEEDBACK_PLATFORM_TAG = 'Mobile App';
 // Extra tag of our own so probe-generated feedback is separable from feedback
 // typed by hand.
 const FEEDBACK_TAGS = [FEEDBACK_APP_TAG, FEEDBACK_PLATFORM_TAG, 'perf'];
