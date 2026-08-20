@@ -146,6 +146,11 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
   const [usePassword, setUsePassword] = useState(false);
   const [password, setPassword] = useState('');
   const [allowDownload, setAllowDownload] = useState(true);
+  // Visitor uploads: whoever holds the link can ADD photos/videos/audio/PDFs
+  // into this album. Server-enforced (magic-byte identification, per-slug+IP
+  // rate limits, audit events) — but it is still an anonymous WRITE surface,
+  // so it defaults OFF and turning it on is a per-link choice.
+  const [allowUpload, setAllowUpload] = useState(false);
   // Which link has its visit log expanded (null = none).
   const [openActivity, setOpenActivity] = useState(null);
 
@@ -170,6 +175,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
     setUsePassword(false);
     setPassword('');
     setAllowDownload(true);
+    setAllowUpload(false); // anonymous-write opt-in never carries between albums
     setError(null);
     load();
   }, [visible, load]);
@@ -187,6 +193,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
         album: albumName,
         password: usePassword ? password : undefined,
         allowDownload,
+        allowUpload,
       });
       if (!res?.share) throw new Error(res?.error || 'Could not create the link');
       setShares((prev) => [res.share, ...prev]);
@@ -201,7 +208,24 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
     } finally {
       setBusy(false);
     }
-  }, [albumName, allowDownload, api, password, usePassword]);
+  }, [albumName, allowDownload, allowUpload, api, password, usePassword]);
+
+  // Flip visitor uploads on an EXISTING link. Optimistic with revert — the
+  // switch answers the finger now, the PATCH follows, and a failure puts the
+  // old value back rather than lying about what the server enforces.
+  const toggleUpload = useCallback(async (share, next) => {
+    tapHaptic();
+    setShares((prev) => prev.map((s) => (s.id === share.id ? { ...s, allowUpload: next } : s)));
+    try {
+      const res = await api.patch(`/album-shares/${share.id}`, { allowUpload: next });
+      if (!res?.success) throw new Error(res?.error || 'update failed');
+      if (res.share) setShares((prev) => prev.map((s) => (s.id === share.id ? res.share : s)));
+    } catch (e) {
+      setShares((prev) => prev.map((s) => (s.id === share.id ? { ...s, allowUpload: !next } : s)));
+      setError(e?.message || 'Could not change visitor uploads');
+      notifyHaptic('error');
+    }
+  }, [api]);
 
   const copyLink = useCallback(async (share) => {
     tapHaptic();
@@ -306,6 +330,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
                     />
                     <Text style={s.linkKind}>
                       {share.hasPassword ? 'Password protected' : 'Anyone with the link'}
+                      {share.allowUpload ? ' · drop box' : ''}
                     </Text>
                     <View style={{ flex: 1 }} />
                     <Text style={s.linkMeta}>
@@ -317,6 +342,19 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
                   <Text style={[s.url, dead && s.urlDead]} numberOfLines={2} selectable>
                     {share.url}
                   </Text>
+                  {/* Visitor uploads — per-link, flippable after creation.
+                      Only on live links: a revoked/expired link can't accept
+                      anything, so a toggle there would be theater. */}
+                  {!dead && (
+                    <View style={s.optionRow}>
+                      <Text style={s.optionText}>Visitor uploads</Text>
+                      <Switch
+                        value={!!share.allowUpload}
+                        onValueChange={(v) => toggleUpload(share, v)}
+                        trackColor={{ true: theme.colors.accentInfo }}
+                      />
+                    </View>
+                  )}
                   {!dead && (
                     <View style={s.linkActions}>
                       <Pressable onPress={() => copyLink(share)} style={s.actionBtn}>
@@ -391,6 +429,20 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
               <Switch
                 value={allowDownload}
                 onValueChange={(v) => { tapHaptic(); setAllowDownload(v); }}
+                trackColor={{ true: theme.colors.accentInfo }}
+              />
+            </View>
+
+            <View style={s.optionRow}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={[s.optionText, { flex: 0 }]}>Let visitors add to this album</Text>
+                <Text style={s.optionHint}>
+                  Anyone with the link can upload photos, videos, audio and PDFs. Files are verified and rate-limited by the server.
+                </Text>
+              </View>
+              <Switch
+                value={allowUpload}
+                onValueChange={(v) => { tapHaptic(); setAllowUpload(v); }}
                 trackColor={{ true: theme.colors.accentInfo }}
               />
             </View>
@@ -502,6 +554,7 @@ const makeStyles = (theme) => StyleSheet.create({
     paddingVertical: 8, gap: 12,
   },
   optionText: { fontSize: 14, color: theme.colors.textPrimary, flex: 1 },
+  optionHint: { fontSize: 11.5, color: theme.colors.textMuted, marginTop: 2, lineHeight: 15 },
   input: {
     borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border, borderRadius: 10,
     paddingHorizontal: 12, height: 42, paddingVertical: 0, textAlignVertical: 'center',
