@@ -30,7 +30,6 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import * as MediaLibrary from 'expo-media-library';
 import * as VideoThumbnails from 'expo-video-thumbnails';
-import * as ImageManipulator from 'expo-image-manipulator';
 import { useServer } from './ServerContext';
 import { useAuth } from './AuthContext';
 import { notifyUploadComplete, updateUploadProgress, clearUploadProgress } from '../services/uploadNotify';
@@ -378,7 +377,6 @@ export function VaultUploadProvider({ children }) {
         if (TERMINAL.has(item.status)) continue;
         if (!isCurrentBatch()) return;
         let tempThumbnailUri = null;
-        let tempManipulatedUri = null;
         try {
           const meta = item.meta || (await resolveItem(item));
           if (!meta) { item.status = 'missing'; item.meta = null; continue; }
@@ -414,13 +412,16 @@ export function VaultUploadProvider({ children }) {
             } catch (e) { /* server falls back to a placeholder thumbnail */ }
             if (meta.duration) parameters.duration = String(Math.round(meta.duration / 1000));
           } else if (isHeic) {
-            const manipulated = await ImageManipulator.manipulateAsync(
-              meta.uri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
-            );
-            tempManipulatedUri = manipulated.uri;
-            mediaUri = tempManipulatedUri;
-            mediaName = originalFilename.replace(/\.heic$/i, '.jpg').replace(/\.heif$/i, '.jpg');
-            mediaType = 'image/jpeg';
+            // HEIC uploads AS-IS. The client-side re-encode that used to live
+            // here (ImageManipulator → JPEG) decoded a full-resolution bitmap
+            // on the phone for every photo — and an iPhone camera roll is
+            // mostly HEIC, so a 450-item batch did hundreds of full-res
+            // decodes back-to-back. That native allocation churn was the
+            // standing suspect for iOS killing the app mid-batch. The server
+            // now converts HEIC itself (heic-convert in the upload handler,
+            // on a 56-core machine); the phone just streams the original
+            // bytes, which also uploads less data than the re-encoded JPEG.
+            mediaType = 'image/heic';
           }
           // The streamed part's filename is the cache URI's basename (a UUID),
           // so send the real name explicitly to preserve it server-side.
@@ -460,7 +461,6 @@ export function VaultUploadProvider({ children }) {
           item.meta = null; // terminal — release
         } finally {
           if (tempThumbnailUri) FileSystem.deleteAsync(tempThumbnailUri, { idempotent: true }).catch(() => {});
-          if (tempManipulatedUri) FileSystem.deleteAsync(tempManipulatedUri, { idempotent: true }).catch(() => {});
           if (isCurrentBatch()) {
             currentPctRef.current = 0;
             publish();
