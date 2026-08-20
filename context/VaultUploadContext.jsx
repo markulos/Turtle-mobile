@@ -294,11 +294,44 @@ export function VaultUploadProvider({ children }) {
       // work within the session they were picked.
       try { await MediaLibrary.requestPermissionsAsync(); } catch (e) { /* optional */ }
 
-      // 1. METADATA PASS — resolve every pending item to a live file + its
-      //    duplicate fingerprint inputs. Items whose bytes are gone (deleted
-      //    from the device between sessions) become 'missing'.
-      const pending = batch.items.filter((it) => !TERMINAL.has(it.status));
-      for (const item of pending) {
+      // SEGMENTED PIPELINE. A 450-item batch used to resolve every asset up
+      // front and then run 450 back-to-back upload iterations; on iOS that
+      // crashed the app around item ~200. Not the file bytes — those stream
+      // natively and never enter JS — but everything AROUND them accumulated:
+      // 450 PHAsset touches and their meta objects held for the whole run,
+      // per-item native transients (HEIC re-encode bitmaps, video thumbnail
+      // decodes, their base64 strings) allocated back-to-back with no gap for
+      // iOS to drain autorelease pools, until jetsam killed the process.
+      //
+      // The industry-standard shape for a massive sequential transfer is a
+      // WINDOWED queue, and that is what this is:
+      //   • work proceeds in segments of SEGMENT_SIZE items — the working set
+      //     is bounded no matter how large the batch is
+      //   • metadata resolves just-in-time, per segment, so an asset is
+      //     touched only when its turn approaches
+      //   • the duplicate pre-check runs per segment (same endpoint, smaller
+      //     bodies) and still skips hits before any of THEIR bytes move; its
+      //     unreachable→retry→pause behaviour is preserved per segment
+      //   • an item's meta is RELEASED the moment it goes terminal, so the
+      //     retained graph shrinks as the batch progresses instead of growing
+      //     (this also keeps the per-item AsyncStorage checkpoints small —
+      //     resume re-resolves from assetId, which was already the contract)
+      //   • segments are separated by a short breather that yields the JS
+      //     thread and gives native pools a frame to drain
+      // Per-item checkpointing is unchanged, so kill/resume still lands on
+      // the next unfinished item regardless of segment boundaries.
+      const SEGMENT_SIZE = 24;
+      const SEGMENT_BREATHER_MS = 250;
+      const base = getBaseUrlRef.current?.() || '';
+      const uploadEndpoint = base.endsWith('/api') ? `${base}/media/upload` : `${base}/api/media/upload`;
+
+      for (;;) {
+      const segment = batch.items.filter((it) => !TERMINAL.has(it.status)).slice(0, SEGMENT_SIZE);
+      if (segment.length === 0) break;
+
+      // 1. METADATA PASS (this segment) — resolve to a live file + duplicate
+      //    fingerprint inputs. Items whose bytes are gone become 'missing'.
+      for (const item of segment) {
         if (!isCurrentBatch()) return;
         const meta = await resolveItem(item);
         if (!isCurrentBatch()) return;
@@ -307,12 +340,10 @@ export function VaultUploadProvider({ children }) {
       }
       publish();
 
-      // 2. DUPLICATE PRE-CHECK — one batch call; hits are skipped before any
-      //    bytes move. This fetch is also the reachability probe: if the
-      //    server is unreachable (fresh launch before the tunnel is up), retry
-      //    with backoff, then PAUSE the batch (resumable from the pill /
-      //    next foreground) instead of burning items as failures.
-      const toCheck = batch.items.filter((it) => !TERMINAL.has(it.status));
+      // 2. DUPLICATE PRE-CHECK (this segment) — hits are skipped before any
+      //    bytes move. Also the reachability probe: unreachable → retry with
+      //    backoff → PAUSE the batch (resumable) instead of burning items.
+      const toCheck = segment.filter((it) => !TERMINAL.has(it.status));
       if (toCheck.length > 0) {
         let results = null;
         for (let attempt = 1; attempt <= 5; attempt++) {
@@ -332,6 +363,7 @@ export function VaultUploadProvider({ children }) {
           if (r?.duplicate) {
             toCheck[i].status = 'duplicate';
             toCheck[i].dupOf = r.id || null;
+            toCheck[i].meta = null; // terminal — release immediately
           }
         });
         const dupCount = results.filter((r) => r?.duplicate).length;
@@ -340,18 +372,16 @@ export function VaultUploadProvider({ children }) {
         await persist();
       }
 
-      // 3. UPLOAD LOOP — stream the survivors one by one, checkpointing after
-      //    each so a killed app resumes at the next item.
-      const base = getBaseUrlRef.current?.() || '';
-      const uploadEndpoint = base.endsWith('/api') ? `${base}/media/upload` : `${base}/api/media/upload`;
-      for (const item of batch.items) {
+      // 3. UPLOAD LOOP (this segment) — stream the survivors one by one,
+      //    checkpointing after each so a killed app resumes at the next item.
+      for (const item of segment) {
         if (TERMINAL.has(item.status)) continue;
         if (!isCurrentBatch()) return;
         let tempThumbnailUri = null;
         let tempManipulatedUri = null;
         try {
           const meta = item.meta || (await resolveItem(item));
-          if (!meta) { item.status = 'missing'; continue; }
+          if (!meta) { item.status = 'missing'; item.meta = null; continue; }
 
           // Multipart TEXT fields go as a flat string map (the streaming
           // uploader takes `parameters`, not a FormData/blob).
@@ -422,10 +452,12 @@ export function VaultUploadProvider({ children }) {
           });
           if (!isCurrentBatch()) return;
           item.status = 'uploaded';
+          item.meta = null; // terminal — release the retained graph as we go
         } catch (error) {
           if (!isCurrentBatch()) return;
           console.error(`[VaultUpload] Failed ${item.fileName || item.key}:`, error.message);
           item.status = 'failed';
+          item.meta = null; // terminal — release
         } finally {
           if (tempThumbnailUri) FileSystem.deleteAsync(tempThumbnailUri, { idempotent: true }).catch(() => {});
           if (tempManipulatedUri) FileSystem.deleteAsync(tempManipulatedUri, { idempotent: true }).catch(() => {});
@@ -435,6 +467,14 @@ export function VaultUploadProvider({ children }) {
             await persist();
           }
         }
+      }
+
+      // Segment boundary: yield the JS thread and give iOS a beat to drain
+      // native autorelease pools before the next window begins. 250ms every
+      // 24 items adds ~4.7s across a 450-item batch — noise against the
+      // upload time, and the difference between finishing and being killed.
+      if (!isCurrentBatch()) return;
+      await new Promise((r) => setTimeout(r, SEGMENT_BREATHER_MS));
       }
 
       // 4. FINISH — freeze the stats (incl. how many duplicates were found),
