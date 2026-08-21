@@ -375,12 +375,18 @@ export default function PondInvitesSection({ active = true }) {
 }
 
 const createStyles = (theme) => StyleSheet.create({
+  // Matches SettingsScreen's own `section` exactly. This card renders inside
+  // the same `inner` (padding:16) as its siblings, so the extra
+  // marginHorizontal:12 it used to carry inset it to 28 against their 16 —
+  // it read as a narrower card in the same stack. Every Settings card shares
+  // one width and one set of margins; the container owns the gutter.
   section: {
     backgroundColor: theme.colors.surface,
-    borderRadius: 14,
-    marginHorizontal: 12,
-    marginBottom: 14,
+    borderRadius: 12,
+    marginBottom: 16,
     paddingBottom: 14,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
     overflow: 'hidden',
   },
   sectionHeader: {

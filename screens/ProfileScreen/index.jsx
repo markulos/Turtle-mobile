@@ -425,11 +425,21 @@ export default function ProfileScreen() {
           while it's actually on screen. */}
       <EdgeSwipePage overlay visible={settingsOpen} onClose={() => setSettingsOpen(false)}>
         <View style={styles.page}>
-          <View style={[styles.pushHeader, { paddingTop: insets.top + 6 }]}>
-            <TouchableOpacity onPress={() => setSettingsOpen(false)} hitSlop={HIT} accessibilityLabel="Close settings">
+          {/* The ONLY "Settings" title — the screen below used to draw its own
+              underneath this one. Title centred, chevron pinned left; the empty
+              slot opposite the chevron is what keeps the centring true (without
+              it the title sits off-centre by the chevron's width). */}
+          <View style={[styles.pushHeader, styles.pushHeaderCentered, { paddingTop: insets.top + 6 }]}>
+            <TouchableOpacity
+              onPress={() => setSettingsOpen(false)}
+              hitSlop={HIT}
+              accessibilityLabel="Close settings"
+              style={styles.pushHeaderSlot}
+            >
               <Icon name="chevron-left" size={28} color={c.textPrimary} />
             </TouchableOpacity>
-            <Text style={styles.pushTitle}>Settings</Text>
+            <Text style={[styles.pushTitle, styles.pushTitleCentered]}>Settings</Text>
+            <View style={styles.pushHeaderSlot} />
           </View>
           <SettingsScreen active={settingsOpen} />
         </View>
@@ -1047,6 +1057,18 @@ const makeStyles = (theme) => {
     cardSub: { fontSize: 12, color: c.textTertiary, marginTop: 1 },
     pushHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingBottom: 10 },
     pushTitle: { fontSize: 17, fontWeight: '700', color: c.textPrimary },
+    // Centred variant (Settings). gap:0 because the two edge slots do the
+    // spacing now; the hairline is inherited from the in-page header that this
+    // bar replaced, so the content below still reads as a separate surface.
+    pushHeaderCentered: {
+      gap: 0,
+      paddingBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    // Equal-width bookends: chevron on the left, empty on the right.
+    pushHeaderSlot: { width: 28, alignItems: 'flex-start' },
+    pushTitleCentered: { flex: 1, textAlign: 'center', fontSize: 18 },
     friendRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
     friendName: { fontSize: 15, fontWeight: '600', color: c.textPrimary, flex: 1 },
     empty: { color: c.textSecondary, textAlign: 'center', padding: 40 },

@@ -2424,7 +2424,13 @@ export default function TurtleScreen() {
               safe-area inset here just bloated the top. Use a small fixed
               pad on iOS; Android renders the Modal full-screen so it still
               needs the real status-bar inset. */}
-          <View style={[styles.settingsSheetHeader, { paddingTop: Platform.OS === 'android' ? insets.top + 6 : 12 }]}>
+          {/* Carries the title now. SettingsScreen used to render its own
+              "Settings" heading; that produced two stacked titles wherever a
+              host already had one, so the hosts own it. The empty slot mirrors
+              the close button's width so the title centres on the sheet. */}
+          <View style={[styles.settingsSheetHeader, styles.settingsSheetHeaderTitled, { paddingTop: Platform.OS === 'android' ? insets.top + 6 : 12 }]}>
+            <View style={styles.settingsCloseButton} />
+            <Text style={styles.settingsSheetTitle}>Settings</Text>
             <TouchableOpacity
               onPress={() => setShowAppSettings(false)}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -3346,6 +3352,20 @@ const createStyles = (theme, insets) =>
       paddingHorizontal: 12,
       paddingBottom: 6,
       backgroundColor: theme.colors.background,
+    },
+    // Titled variant: space-between + equal edge slots centres the title, and
+    // the hairline replaces the one the removed in-page header used to draw.
+    settingsSheetHeaderTitled: {
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.colors.border,
+    },
+    settingsSheetTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: theme.colors.textPrimary,
     },
     settingsCloseButton: {
       width: 36,

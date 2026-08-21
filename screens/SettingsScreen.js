@@ -640,15 +640,16 @@ export default function SettingsScreen({ active = true }) {
   const styles = createStyles(theme);
 
   return (
-    // No top safe-area inset here: this screen is presented inside
-    // TurtleScreen's page-sheet Modal, whose own header strip already
-    // applies insets.top. Adding it again here double-padded the top and
-    // pushed the "Settings" title way down the sheet.
+    // No top safe-area inset here: every host presents this screen below a
+    // header strip that has already applied insets.top (TurtleScreen's
+    // page-sheet Modal, ProfileScreen's push header). Applying it again here
+    // double-padded the top and pushed the content way down the sheet.
     <View style={styles.container}>
-      {/* Custom Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Settings</Text>
-      </View>
+      {/* No header here. This screen is always pushed/presented by a host that
+          already draws a "Settings" bar (ProfileScreen's chevron header,
+          TurtleScreen's sheet header), so an in-page title rendered the word
+          twice, stacked. The host owns the one title; this screen starts at
+          its content. */}
 
       {/* Search — spans every tab, because the whole point is finding a control
           without already knowing which tab it lives under. While this has text
@@ -1379,10 +1380,16 @@ const createStyles = (theme) => StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginHorizontal: 12,
+    // With the in-page title gone this is the first thing under the host's
+    // header bar, so it needs a real gutter above it — it used to inherit its
+    // top spacing from the title block that sat on top of it.
+    marginTop: 12,
     marginBottom: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     backgroundColor: theme.colors.inputBackground,
-    borderRadius: 10,
+    // Fully rounded: height/2. A search field reads as a pill, and at this
+    // height a 10 looked like an accidental radius rather than a shape.
+    borderRadius: 20,
     // Explicit height + paddingVertical:0 on the field below: padding alone
     // makes the glyphs ride high in an icon row.
     height: 40,
@@ -1415,27 +1422,19 @@ const createStyles = (theme) => StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 0.5,
-    borderBottomColor: theme.colors.border,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: theme.colors.textPrimary,
-  },
+  // `header`/`headerTitle` used to live here and drew a second "Settings"
+  // title under the host's own header. The host (ProfileScreen / TurtleScreen)
+  // now carries the single title and the hairline beneath it.
   // Segmented control track — a faint rounded bar holding the 4 tab segments
   // with the sliding pill behind them. Mirrors the Notes/vault switcher.
   tabTrack: {
     flexDirection: 'row',
     position: 'relative',
     marginHorizontal: 12,
-    marginVertical: 8,
+    // No top margin: the search field above already carries a 10 below it, and
+    // stacking both put a 24pt hole between the field and the tabs.
+    marginTop: 0,
+    marginBottom: 8,
     height: 40,
     borderRadius: 12,
     backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
