@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ParticipantPicker from './TasksScreen/components/ParticipantPicker';
 import CalendarPartners from './TasksScreen/components/CalendarPartners';
 import {
@@ -28,9 +28,99 @@ import * as SecureStore from 'expo-secure-store';
 import { clearAllCaches, getCacheSizeBytes, formatBytes } from '../utils/cacheManager';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../utils/haptics';
 import { isGestureProbeEnabled, setGestureProbeEnabled, subscribeDebugSettings } from '../utils/debugSettings';
+import { matchesQuery } from '../utils/settingsSearch';
+import PondInvitesSection from '../components/PondInvitesSection';
 
 const MASTER_KEY_STORE = 'vault_master_key';
 const SALT_STORE = 'vault_salt';
+
+// The single page the pager collapses to while a search is running. Searching
+// spans every tab, so the four-page pager would otherwise have to show the same
+// results four times over.
+const SEARCH_PAGE = { key: '__search__', label: 'Results', icon: 'magnify' };
+
+/**
+ * Everything the Settings search can match, in one place.
+ *
+ * Each value is the visible label plus the words someone might reach for
+ * instead of it ("colour" and "color", "logout" and "sign out"), because the
+ * matcher is deliberately literal — it forgives typos, not vocabulary.
+ *
+ * Kept as a map rather than inline props so the screen can also ask "did
+ * ANYTHING match?" for its empty state. Children that render null cannot
+ * answer that, and a second hand-kept list would drift out of agreement
+ * with the first.
+ */
+const SETTING_TERMS = {
+  profile: 'profile display name avatar photo picture alias points stats tasks pomodoros',
+  darkMode: 'dark mode theme appearance night light colour color',
+  accent: 'highlight colour color accent theme appearance swatch',
+  hideVault: 'hide vault button navbar tab bar navigation photos',
+  cache: 'cache size storage space photos clear free disk measure',
+  notifications: 'notifications push alerts reminders test sms text badge sound',
+  gestureProbe: 'gesture probe debug developer performance lag jank stalls diagnostics',
+  timeFormat: '24 hour time format clock twelve twenty four am pm military',
+  dayCellTasks: 'list tasks day cells month grid titles dots appearance',
+  freeScroll: 'free scroll calendar months continuous paging swipe snap',
+  defaultParticipants: 'default participants people tasks assign involved pond members',
+  calendarPartners: 'calendar partners share sharing partner view only merged tasks',
+  serverConnection: 'server connection ip address computer host wifi network connect test pond offline',
+  healMedia: 'heal media vault thumbnails previews rebuild repair audit library',
+  passwordVault: 'password vault master password change reset security encryption face id touch id',
+  noVault: 'password vault set up security encryption missing',
+  account: 'account sign out log out logout session leave',
+  sidecar: 'ai sidecar status inference understanding library inferences model',
+  securityInfo: 'security info encryption privacy passwords plaintext server',
+  pondInvites: 'invite invites pond members phone number join share link revoke owner people friends',
+};
+
+/** Terms only reachable in a dev build — excluded from the empty-state check
+ *  in release, where the settings they describe do not render at all. */
+const DEV_ONLY_TERMS = ['gestureProbe'];
+
+/**
+ * One searchable setting.
+ *
+ * A marker component: it renders its children untouched, and exists so the
+ * enclosing SettingsSection can read `terms` off the element and decide whether
+ * this row survives the current query. `terms` is the searchable text — the
+ * visible label plus the words someone might reach for instead of it.
+ */
+function SettingsItem({ children }) {
+  return <>{children}</>;
+}
+
+/**
+ * A settings group.
+ *
+ * While a search is running it renders only the SettingsItem children whose
+ * terms match, and returns null when none do — so results read as a short list
+ * of settings instead of a page of empty section headers.
+ *
+ * Children WITHOUT `terms` are dropped during a search on purpose: they are the
+ * explanatory blurbs and decorative rows that belong to the section as a whole,
+ * and leaking them into a filtered result would put text under a header whose
+ * actual setting had been filtered out.
+ */
+function SettingsSection({ title, icon, query, styles, theme, children }) {
+  const searching = !!(query && query.trim());
+  const kids = React.Children.toArray(children);
+  const visible = searching
+    ? kids.filter((k) => k?.props?.terms && matchesQuery(query, k.props.terms))
+    : kids;
+  if (searching && visible.length === 0) return null;
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
+          <Icon name={icon} size={20} color={theme.colors.textPrimary} />
+        </View>
+        <Text style={styles.sectionTitle}>{title}</Text>
+      </View>
+      {visible}
+    </View>
+  );
+}
 
 /**
  * Watch the server's media-heal job to completion.
@@ -83,6 +173,25 @@ export default function SettingsScreen({ active = true }) {
   const [cacheBytes, setCacheBytes] = useState(null);
   const [measuringCache, setMeasuringCache] = useState(false);
   const [activeTab, setActiveTab] = useState('general');
+  // ── Settings search ─────────────────────────────────────────
+  // Filters in place rather than offering a jump list: the point is to see the
+  // control itself, already live, without knowing which tab Turtle filed it
+  // under. Matching (including typo tolerance) lives in utils/settingsSearch.
+  const [search, setSearch] = useState('');
+  const searchQuery = search.trim();
+  const searching = searchQuery.length > 0;
+  // Did anything match at all? Sections that filter themselves down to nothing
+  // return null, so they cannot report it — this asks the same map they filter
+  // against, which is why the terms live in one place.
+  const anyMatch = useMemo(() => {
+    if (!searching) return true;
+    return Object.keys(SETTING_TERMS).some((key) => {
+      // A dev-only setting must not suppress the empty state in a release
+      // build, where the control it names never renders.
+      if (!__DEV__ && DEV_ONLY_TERMS.includes(key)) return false;
+      return matchesQuery(searchQuery, SETTING_TERMS[key]);
+    });
+  }, [searching, searchQuery]);
   const SETTINGS_TABS = [
     { key: 'general', label: 'General', icon: 'tune' },
     { key: 'calendar', label: 'Calendar', icon: 'calendar' },
@@ -111,10 +220,26 @@ export default function SettingsScreen({ active = true }) {
     if (t) setActiveTab(t.key);
   }, [screenW]);
   const onPagerEnd = useCallback((e) => {
+    // While searching the pager holds ONE page, so its offset is always 0 —
+    // reading a tab out of that would silently reset the active tab to General
+    // the moment anyone typed.
+    if (searching) return;
     const idx = Math.round(e.nativeEvent.contentOffset.x / screenW);
     const t = SETTINGS_TABS[idx];
     if (t && t.key !== activeTab) setActiveTab(t.key);
-  }, [screenW, activeTab]);
+  }, [screenW, activeTab, searching]);
+
+  // Leaving the search puts the pager back on the tab you were reading, not
+  // wherever a one-page layout left the offset.
+  useEffect(() => {
+    if (searching) return;
+    const idx = SETTINGS_TABS.findIndex((t) => t.key === activeTab);
+    if (idx >= 0) pagerRef.current?.scrollTo({ x: idx * screenW, animated: false });
+    // activeTab is deliberately not a dependency: this restores position when
+    // the SEARCH ends, and re-running it on every tab change would fight the
+    // pager's own animated scroll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searching, screenW]);
   const { logout, getAuthHeaders } = useAuth();
   const [ipInput, setIpInput] = useState(serverIP);
   const [hasVault, setHasVault] = useState(false);
@@ -525,9 +650,40 @@ export default function SettingsScreen({ active = true }) {
         <Text style={styles.headerTitle}>Settings</Text>
       </View>
 
+      {/* Search — spans every tab, because the whole point is finding a control
+          without already knowing which tab it lives under. While this has text
+          the pager collapses to one page of matching settings (SEARCH_PAGE) and
+          the segmented control hides, since tabs mean nothing in a result set. */}
+      <View style={styles.searchWrap}>
+        <Icon name="magnify" size={18} color={theme.colors.textTertiary} style={styles.searchIcon} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search settings"
+          placeholderTextColor={theme.colors.textPlaceholder}
+          value={search}
+          onChangeText={setSearch}
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+          accessibilityLabel="Search settings"
+        />
+        {searching && (
+          <TouchableOpacity
+            onPressIn={() => tapHaptic()}
+            onPress={() => setSearch('')}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+          >
+            <Icon name="close-circle" size={18} color={theme.colors.textTertiary} />
+          </TouchableOpacity>
+        )}
+      </View>
+
       {/* Swipeable segmented control — the pill slides 1:1 with the pager, and
           each label/icon crossfades from muted to primary as its page arrives.
           Tapping a segment animates the pager to that page. */}
+      {!searching && (
       <View style={styles.tabTrack}>
         <Animated.View
           style={[styles.tabPill, { width: segW - 4, transform: [{ translateX: tabIndicatorX }] }]}
@@ -562,6 +718,7 @@ export default function SettingsScreen({ active = true }) {
           );
         })}
       </View>
+      )}
 
       {/* Swipeable pager — one page per tab. The scroll offset feeds pageScrollX
           (native driver) which drives the pill above 1:1. Each page holds only
@@ -571,6 +728,9 @@ export default function SettingsScreen({ active = true }) {
         ref={pagerRef}
         horizontal
         pagingEnabled
+        // One page while searching — there is nothing to swipe between, and a
+        // bounce on a single page reads as a broken gesture.
+        scrollEnabled={!searching}
         showsHorizontalScrollIndicator={false}
         scrollEventThrottle={16}
         onScroll={Animated.event(
@@ -580,7 +740,7 @@ export default function SettingsScreen({ active = true }) {
         onMomentumScrollEnd={onPagerEnd}
         style={{ flex: 1 }}
       >
-        {SETTINGS_TABS.map((tabItem) => {
+        {(searching ? [SEARCH_PAGE] : SETTINGS_TABS).map((tabItem) => {
           const tabKey = tabItem.key;
           return (
           <View key={tabKey} style={{ width: screenW }}>
@@ -588,15 +748,9 @@ export default function SettingsScreen({ active = true }) {
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={styles.inner}>
             {/* Profile Section — avatar + alias used across the app */}
-            {tabKey === 'general' && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
-                  <Icon name="account-circle" size={20} color={theme.colors.textPrimary} />
-                </View>
-                <Text style={styles.sectionTitle}>Profile</Text>
-              </View>
-
+            {(searching || tabKey === 'general') && (
+            <SettingsSection title="Profile" icon="account-circle" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.profile}>
               <View style={styles.profileRow}>
                 <TouchableOpacity onPressIn={() => tapHaptic()} onPress={handlePickAvatar} activeOpacity={0.8} disabled={uploadingAvatar}>
                   <View style={[styles.avatarCircle, { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.border }]}>
@@ -674,19 +828,14 @@ export default function SettingsScreen({ active = true }) {
                   <Text style={styles.primaryButtonText}>{savingName ? 'Saving...' : 'Save Name'}</Text>
                 </TouchableOpacity>
               )}
-            </View>
+              </SettingsItem>
+            </SettingsSection>
             )}
 
             {/* Appearance Section */}
-            {tabKey === 'general' && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
-                  <Icon name="palette" size={20} color={theme.colors.textPrimary} />
-                </View>
-                <Text style={styles.sectionTitle}>Appearance</Text>
-              </View>
-              
+            {(searching || tabKey === 'general') && (
+            <SettingsSection title="Appearance" icon="palette" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.darkMode}>
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
                   <Text style={styles.settingLabel}>Dark Mode</Text>
@@ -699,11 +848,15 @@ export default function SettingsScreen({ active = true }) {
                   thumbColor={isDark ? theme.colors.textPrimary : theme.colors.textTertiary}
                 />
               </View>
+              </SettingsItem>
 
               {/* Highlight colour — the accent the whole app draws with: the
                   sliding tab pill, links, active chips, affirmative actions.
                   Chosen here rather than per-surface so one pick carries
-                  everywhere (see ThemeContext's accent handling). */}
+                  everywhere (see ThemeContext's accent handling). The label and
+                  its swatch row are ONE item so a search that matches the label
+                  still shows the control that goes with it. */}
+              <SettingsItem terms={SETTING_TERMS.accent}>
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
                   <Text style={styles.settingLabel}>Highlight colour</Text>
@@ -737,20 +890,15 @@ export default function SettingsScreen({ active = true }) {
                   );
                 })}
               </View>
-            </View>
+              </SettingsItem>
+            </SettingsSection>
 
             )}
 
             {/* Navigation Section — control what shows in the bottom navbar. */}
-            {tabKey === 'general' && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
-                  <Icon name="dock-bottom" size={20} color={theme.colors.textPrimary} />
-                </View>
-                <Text style={styles.sectionTitle}>Navigation</Text>
-              </View>
-
+            {(searching || tabKey === 'general') && (
+            <SettingsSection title="Navigation" icon="dock-bottom" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.hideVault}>
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
                   <Text style={styles.settingLabel}>Hide Vault button</Text>
@@ -765,20 +913,15 @@ export default function SettingsScreen({ active = true }) {
                   thumbColor={hideVaultButton ? theme.colors.textPrimary : theme.colors.textTertiary}
                 />
               </View>
-            </View>
+              </SettingsItem>
+            </SettingsSection>
             )}
 
             {/* Storage Section — manual cache control. The app auto-trims the
                 cache on background, but this gives an instant manual wipe. */}
-            {tabKey === 'general' && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
-                  <Icon name="database-cog" size={20} color={theme.colors.textPrimary} />
-                </View>
-                <Text style={styles.sectionTitle}>Storage</Text>
-              </View>
-
+            {(searching || tabKey === 'general') && (
+            <SettingsSection title="Storage" icon="database-cog" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.cache}>
               <Text style={[styles.hint, { marginTop: 0 }]}>
                 Cached photos make browsing instant but can build up over time. The app trims this
                 automatically when you leave it — clear it now to free space immediately.
@@ -818,19 +961,14 @@ export default function SettingsScreen({ active = true }) {
                   {isClearingCache ? 'Clearing...' : 'Clear photo cache'}
                 </Text>
               </TouchableOpacity>
-            </View>
+              </SettingsItem>
+            </SettingsSection>
             )}
 
             {/* Notifications Section — verify the reminder pipeline end-to-end. */}
-            {tabKey === 'general' && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
-                  <Icon name="bell-ring" size={20} color={theme.colors.textPrimary} />
-                </View>
-                <Text style={styles.sectionTitle}>Notifications</Text>
-              </View>
-
+            {(searching || tabKey === 'general') && (
+            <SettingsSection title="Notifications" icon="bell-ring" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.notifications}>
               <Text style={[styles.hint, { marginTop: 0 }]}>
                 Task and event reminders are pushed to this phone (and texted too if you turn on
                 SMS for the item). Send a test to confirm they reach you.
@@ -852,22 +990,17 @@ export default function SettingsScreen({ active = true }) {
                   {sendingTest ? 'Sending…' : 'Send test notification'}
                 </Text>
               </TouchableOpacity>
-            </View>
+              </SettingsItem>
+            </SettingsSection>
             )}
 
             {/* Debug — developer instruments. DEV BUILDS ONLY: in a release
                 build none of these tools exist, so a toggle here would be a
                 switch wired to nothing. Lives at the tail of General — real
                 settings first, instruments last. */}
-            {__DEV__ && tabKey === 'general' && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
-                  <Icon name="bug-outline" size={20} color={theme.colors.textPrimary} />
-                </View>
-                <Text style={styles.sectionTitle}>Debug</Text>
-              </View>
-
+            {__DEV__ && (searching || tabKey === 'general') && (
+            <SettingsSection title="Debug" icon="bug-outline" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.gestureProbe}>
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
                   <Text style={styles.settingLabel}>Gesture probe</Text>
@@ -882,18 +1015,14 @@ export default function SettingsScreen({ active = true }) {
                   thumbColor={gestureProbeOn ? theme.colors.textPrimary : theme.colors.textTertiary}
                 />
               </View>
-            </View>
+              </SettingsItem>
+            </SettingsSection>
             )}
 
             {/* Calendar — time format */}
-            {tabKey === 'calendar' && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
-                  <Icon name="calendar-clock" size={20} color={theme.colors.textPrimary} />
-                </View>
-                <Text style={styles.sectionTitle}>Calendar</Text>
-              </View>
+            {(searching || tabKey === 'calendar') && (
+            <SettingsSection title="Calendar" icon="calendar-clock" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.timeFormat}>
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
                   <Text style={styles.settingLabel}>24-hour time</Text>
@@ -906,6 +1035,8 @@ export default function SettingsScreen({ active = true }) {
                   thumbColor={timeFormat === '24h' ? theme.colors.textPrimary : theme.colors.textTertiary}
                 />
               </View>
+              </SettingsItem>
+              <SettingsItem terms={SETTING_TERMS.dayCellTasks}>
               {/* Day-cell appearance — list task titles (iOS Calendar style) vs the
                   compact project dots in each day of the month grid. */}
               <View style={styles.settingRow}>
@@ -920,6 +1051,8 @@ export default function SettingsScreen({ active = true }) {
                   thumbColor={showCalendarDayTasks ? theme.colors.textPrimary : theme.colors.textTertiary}
                 />
               </View>
+              </SettingsItem>
+              <SettingsItem terms={SETTING_TERMS.freeScroll}>
               {/* Calendar scroll style — free-form continuous scrolling (iOS
                   Calendar style) vs. the default paged one-month-per-swipe. */}
               <View style={styles.settingRow}>
@@ -934,6 +1067,8 @@ export default function SettingsScreen({ active = true }) {
                   thumbColor={calendarFreeScroll ? theme.colors.textPrimary : theme.colors.textTertiary}
                 />
               </View>
+              </SettingsItem>
+              <SettingsItem terms={SETTING_TERMS.defaultParticipants}>
               {/* Default participants — pond members auto-added to tasks you create */}
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
@@ -944,6 +1079,8 @@ export default function SettingsScreen({ active = true }) {
               <View style={{ paddingHorizontal: 16, paddingBottom: 14, marginTop: -6 }}>
                 <ParticipantPicker selected={defaultParticipants} onChange={handleChangeDefaults} />
               </View>
+              </SettingsItem>
+              <SettingsItem terms={SETTING_TERMS.calendarPartners}>
 
               {/* Calendar partners — share your whole calendar with a partner (view-only),
                   and see partners' calendars merged onto yours. Backed by /api/shares
@@ -957,19 +1094,14 @@ export default function SettingsScreen({ active = true }) {
               <View style={{ paddingHorizontal: 16, paddingBottom: 16, marginTop: -6 }}>
                 <CalendarPartners />
               </View>
-            </View>
+              </SettingsItem>
+            </SettingsSection>
             )}
 
             {/* Server Connection Section */}
-            {tabKey === 'connection' && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
-                  <Icon name="server-network" size={20} color={theme.colors.textPrimary} />
-                </View>
-                <Text style={styles.sectionTitle}>Server Connection</Text>
-              </View>
-              
+            {(searching || tabKey === 'connection') && (
+            <SettingsSection title="Server Connection" icon="server-network" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.serverConnection}>
               <View style={styles.statusContainer}>
                 <View style={[styles.statusDot, isConnected ? styles.connected : styles.disconnected]} />
                 <Text style={styles.statusText}>
@@ -1014,8 +1146,10 @@ export default function SettingsScreen({ active = true }) {
                 </TouchableOpacity>
               )}
 
+              </SettingsItem>
+              <SettingsItem terms={SETTING_TERMS.healMedia}>
               {isConnected && (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={{
                     flexDirection: 'row', 
                     alignItems: 'center', 
@@ -1055,23 +1189,22 @@ export default function SettingsScreen({ active = true }) {
                   )}
                 </TouchableOpacity>
               )}
-            </View>
+              </SettingsItem>
+            </SettingsSection>
 
             )}
 
-            {/* AI Sidecar — live status, library progress & inference stats */}
-            {tabKey === 'connection' && <SidecarStatusCard active={active} />}
+            {/* AI Sidecar — live status, library progress & inference stats.
+                Its own card rather than a SettingsSection, so it carries its own
+                search terms instead of delegating to child items. */}
+            {(searching
+              ? matchesQuery(searchQuery, SETTING_TERMS.sidecar)
+              : tabKey === 'connection') && <SidecarStatusCard active={active} />}
 
             {/* Password Vault Section */}
-            {tabKey === 'security' && hasVault && (
-              <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
-                    <Icon name="shield-key" size={20} color={theme.colors.textPrimary} />
-                  </View>
-                  <Text style={styles.sectionTitle}>Password Vault</Text>
-                </View>
-
+            {(searching || tabKey === 'security') && hasVault && (
+              <SettingsSection title="Password Vault" icon="shield-key" query={searchQuery} styles={styles} theme={theme}>
+                <SettingsItem terms={SETTING_TERMS.passwordVault}>
                 <View style={styles.vaultStatus}>
                   <Icon name="check-circle" size={14} color={theme.colors.accentSuccess} />
                   <Text style={styles.vaultStatusText}>Vault is set up and secure</Text>
@@ -1141,17 +1274,13 @@ export default function SettingsScreen({ active = true }) {
                   <Icon name="delete-forever" size={16} color={theme.colors.accentError} style={styles.buttonIcon} />
                   <Text style={styles.dangerButtonText}>Reset Password Vault</Text>
                 </TouchableOpacity>
-              </View>
+                </SettingsItem>
+              </SettingsSection>
             )}
 
-            {tabKey === 'security' && !hasVault && (
-              <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <View style={[styles.iconContainer, { backgroundColor: 'rgba(244, 67, 54, 0.15)' }]}>
-                    <Icon name="shield-off" size={20} color={theme.colors.accentError} />
-                  </View>
-                  <Text style={styles.sectionTitle}>Password Vault</Text>
-                </View>
+            {(searching || tabKey === 'security') && !hasVault && (
+              <SettingsSection title="Password Vault" icon="shield-off" query={searchQuery} styles={styles} theme={theme}>
+                <SettingsItem terms={SETTING_TERMS.noVault}>
                 <View style={styles.vaultStatus}>
                   <Icon name="alert-circle" size={14} color={theme.colors.accentError} />
                   <Text style={[styles.vaultStatusText, { color: theme.colors.accentError }]}>No vault set up</Text>
@@ -1159,19 +1288,21 @@ export default function SettingsScreen({ active = true }) {
                 <Text style={styles.hint}>
                   Go to the Passwords tab to set up your encrypted password vault.
                 </Text>
-              </View>
+                </SettingsItem>
+              </SettingsSection>
             )}
 
+            {/* Pond members — owner-only invite desk. Renders its own card (and
+                hides itself entirely for non-owners), so like the sidecar card
+                it carries its own search terms rather than delegating to items. */}
+            {(searching
+              ? matchesQuery(searchQuery, SETTING_TERMS.pondInvites)
+              : tabKey === 'general') && <PondInvitesSection active={active} />}
+
             {/* Account Section */}
-            {tabKey === 'general' && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={[styles.iconContainer, { backgroundColor: theme.colors.surfaceElevated }]}>
-                  <Icon name="account-circle" size={20} color={theme.colors.textPrimary} />
-                </View>
-                <Text style={styles.sectionTitle}>Account</Text>
-              </View>
-              
+            {(searching || tabKey === 'general') && (
+            <SettingsSection title="Account" icon="account-circle" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.account}>
               <TouchableOpacity
                 style={styles.dangerButton}
                 onPressIn={() => notifyHaptic('warning')}
@@ -1195,12 +1326,15 @@ export default function SettingsScreen({ active = true }) {
                 <Icon name="logout" size={16} color={theme.colors.accentError} style={styles.buttonIcon} />
                 <Text style={styles.dangerButtonText}>Sign Out</Text>
               </TouchableOpacity>
-            </View>
+              </SettingsItem>
+            </SettingsSection>
 
             )}
 
             {/* Info Section */}
-            {tabKey === 'security' && (
+            {(searching
+              ? matchesQuery(searchQuery, SETTING_TERMS.securityInfo)
+              : tabKey === 'security') && (
             <View style={styles.infoBox}>
               <Icon name="information" size={18} color={theme.colors.textPrimary} style={styles.infoIcon} />
               <View style={styles.infoContent}>
@@ -1211,6 +1345,16 @@ export default function SettingsScreen({ active = true }) {
               </View>
             </View>
 
+            )}
+
+            {searching && !anyMatch && (
+              <View style={styles.noResults}>
+                <Icon name="magnify-close" size={30} color={theme.colors.textTertiary} />
+                <Text style={styles.noResultsTitle}>Nothing matches “{searchQuery}”</Text>
+                <Text style={styles.noResultsHint}>
+                  Try a shorter word, or describe what the setting does.
+                </Text>
+              </View>
             )}
 
             <View style={styles.bottomPadding} />
@@ -1229,6 +1373,47 @@ const createStyles = (theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
+  },
+  searchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 12,
+    marginBottom: 10,
+    paddingHorizontal: 12,
+    backgroundColor: theme.colors.inputBackground,
+    borderRadius: 10,
+    // Explicit height + paddingVertical:0 on the field below: padding alone
+    // makes the glyphs ride high in an icon row.
+    height: 40,
+  },
+  searchIcon: {
+    // No margin — the row's gap already spaces it off the field.
+  },
+  searchInput: {
+    flex: 1,
+    height: 40,
+    paddingVertical: 0,
+    textAlignVertical: 'center',
+    fontSize: 15,
+    color: theme.colors.inputText,
+  },
+  noResults: {
+    alignItems: 'center',
+    paddingVertical: 48,
+    paddingHorizontal: 32,
+    gap: 8,
+  },
+  noResultsTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  noResultsHint: {
+    color: theme.colors.textTertiary,
+    fontSize: 13,
+    textAlign: 'center',
   },
   header: {
     flexDirection: 'row',
