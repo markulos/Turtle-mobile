@@ -221,9 +221,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   pane: { overflow: 'hidden' },
-  heroPane: { width: '65%', height: '100%', borderRightWidth: 2 },
+  // The seams between panes are hairlines — one device pixel, so they stay a
+  // crisp line at any scale instead of the 2pt channel they used to cut, which
+  // read as a gap between three photos rather than one divided image.
+  heroPane: { width: '65%', height: '100%', borderRightWidth: StyleSheet.hairlineWidth },
   sideColumn: { width: '35%', height: '100%' },
-  topPane: { height: '50%', borderBottomWidth: 2 },
+  topPane: { height: '50%', borderBottomWidth: StyleSheet.hairlineWidth },
   bottomPane: { height: '50%' },
   emptyCover: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   // Caption block under the collage, scaled 1.3x off the 12/11pt pass. Medium
