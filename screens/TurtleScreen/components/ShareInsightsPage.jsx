@@ -23,7 +23,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator, Pressable, RefreshControl, ScrollView, Share,
+  ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, Share,
   StyleSheet, Text, View,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -273,6 +273,19 @@ export default function ShareInsightsPage({
     notifyHaptic('success');
   }, []);
 
+  // Open the share in the phone's default browser — the point is to see the
+  // link the way a visitor does, so it deliberately leaves the app rather than
+  // opening an in-app webview. Falling back to copy means the tap always does
+  // SOMETHING useful: openURL rejects when no handler is registered, and on a
+  // stats page a silent no-op reads as a broken button.
+  const openLink = useCallback(async (url) => {
+    try {
+      await Linking.openURL(url);
+    } catch {
+      await copyLink(url);
+    }
+  }, [copyLink]);
+
   const trend = roll.last7 - roll.prev7;
 
   return (
@@ -360,14 +373,25 @@ export default function ShareInsightsPage({
               <Text style={styles.sectionTitle}>Links</Text>
               {state.shares.map((s) => (
                 <View key={s.id} style={styles.linkCard}>
-                  <View style={styles.linkTop}>
+                  {/* The URL itself opens the share in the default browser.
+                      It's the biggest thing on the card and reads like a link,
+                      so it was the obvious tap target long before it was a
+                      button. hitSlop widens it past the single text line. */}
+                  <Pressable
+                    onPress={() => { tapHaptic(); openLink(s.url); }}
+                    hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                    style={({ pressed }) => [styles.linkTop, pressed && styles.linkTopPressed]}
+                    accessibilityRole="link"
+                    accessibilityLabel={`Open ${s.url} in your browser`}
+                  >
                     <MaterialCommunityIcons
                       name={s.hasPassword ? 'lock' : 'web'}
                       size={14}
                       color={s.hasPassword ? (c.accentWarning || c.textSecondary) : tint}
                     />
-                    <Text style={styles.linkUrl} numberOfLines={1}>{s.url}</Text>
-                  </View>
+                    <Text style={[styles.linkUrl, styles.linkUrlTappable]} numberOfLines={1}>{s.url}</Text>
+                    <MaterialCommunityIcons name="open-in-new" size={13} color={c.textSecondary} />
+                  </Pressable>
                   <Text style={styles.linkMeta} numberOfLines={2}>
                     {[
                       `${perShareOpens.get(s.id) || 0} opens`,
@@ -522,7 +546,13 @@ const makeStyles = (theme) => {
 
     linkCard: { backgroundColor: c.surfaceElevated, borderRadius: 12, padding: 12, marginBottom: 10 },
     linkTop: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    // Pressed state on the row, not the text: the whole strip is the target.
+    linkTopPressed: { opacity: 0.6 },
     linkUrl: { flex: 1, fontSize: 12.5, fontWeight: '600', color: c.textPrimary },
+    // Underlined so it reads as tappable before anyone taps it — the row has
+    // no button chrome, and the trailing open-in-new glyph alone is easy to
+    // miss against a long URL.
+    linkUrlTappable: { textDecorationLine: 'underline' },
     linkMeta: { fontSize: 11.5, lineHeight: 16, color: c.textTertiary || c.textSecondary, marginTop: 4 },
     linkActions: { flexDirection: 'row', gap: 8, marginTop: 10 },
     linkAction: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 32, paddingHorizontal: 10, borderRadius: 8, backgroundColor: c.surfaceHighlight || c.surface },
