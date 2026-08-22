@@ -3192,11 +3192,6 @@ const createStyles = (theme, insets) =>
       width: 22,
       height: 22,
     },
-    headerTitle: {
-      fontSize: 16,
-      fontWeight: '700',
-      color: theme.colors.textPrimary,
-    },
     friendSearchBox: {
       flexDirection: 'row',
       alignItems: 'center',
