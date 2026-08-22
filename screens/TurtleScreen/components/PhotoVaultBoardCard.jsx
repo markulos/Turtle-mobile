@@ -208,6 +208,10 @@ function PhotoVaultBoardCard({
 // a 555x380px collage (1.46 aspect, noticeably wider than tall), a 360px hero
 // pane (65% of the card), ~6px internal gutters, and ~85px (26pt) of breathing
 // room under the metadata before the next row of cards.
+// Width of the seams dividing the three cover panes. One constant, two edges —
+// the vertical and horizontal seams have to match or the collage looks skewed.
+const SEAM = StyleSheet.hairlineWidth * 2;
+
 const styles = StyleSheet.create({
   card: { marginBottom: 26 },
   collage: {
@@ -221,12 +225,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   pane: { overflow: 'hidden' },
-  // The seams between panes are hairlines — one device pixel, so they stay a
-  // crisp line at any scale instead of the 2pt channel they used to cut, which
-  // read as a gap between three photos rather than one divided image.
-  heroPane: { width: '65%', height: '100%', borderRightWidth: StyleSheet.hairlineWidth },
+  // Seams between the panes: two device pixels. A single hairline vanished
+  // where two covers happened to share a tone; doubling it reads as a
+  // deliberate division without reopening the 2pt channel this started as,
+  // which looked like three separate photos rather than one divided image.
+  // Expressed in hairlines, not points, so it stays 2px on any screen density.
+  heroPane: { width: '65%', height: '100%', borderRightWidth: SEAM },
   sideColumn: { width: '35%', height: '100%' },
-  topPane: { height: '50%', borderBottomWidth: StyleSheet.hairlineWidth },
+  topPane: { height: '50%', borderBottomWidth: SEAM },
   bottomPane: { height: '50%' },
   emptyCover: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   // Caption block under the collage, scaled 1.3x off the 12/11pt pass. Medium
