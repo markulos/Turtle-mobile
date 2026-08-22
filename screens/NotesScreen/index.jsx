@@ -2093,8 +2093,61 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
   };
   const removeTag = (t) => setTags((cur) => cur.filter((x) => x !== t));
 
-  // Existing tags not already selected — the tap-to-add suggestions.
-  const suggestions = (allTags || []).filter((t) => !tags.includes(t));
+  // Existing tags not already selected, narrowed and ranked against whatever
+  // is half-typed in the draft — with nothing typed this is just the full
+  // tap-to-add list, exactly as before.
+  //
+  // Ranking, best first: an exact match, then tags STARTING with the query,
+  // then tags merely containing it; ties break on where the match landed, then
+  // on brevity ("2023" should beat "2023-holiday-photos" for "2023"), then
+  // alphabetically so the order is stable rather than dependent on fetch order.
+  const tagQuery = tagDraft.trim().toLowerCase();
+  const suggestions = useMemo(() => {
+    const available = (allTags || []).filter((t) => !tags.includes(t));
+    if (!tagQuery) return available;
+    return available
+      .map((t) => {
+        const at = t.toLowerCase().indexOf(tagQuery);
+        if (at === -1) return null;
+        const rank = t.toLowerCase() === tagQuery ? 0 : at === 0 ? 1 : 2;
+        return { t, rank, at };
+      })
+      .filter(Boolean)
+      .sort(
+        (a, b) =>
+          a.rank - b.rank ||
+          a.at - b.at ||
+          a.t.length - b.t.length ||
+          a.t.localeCompare(b.t),
+      )
+      .map((s) => s.t);
+  }, [allTags, tags, tagQuery]);
+
+  // Offer to create only when the draft can't already be satisfied — an exact
+  // hit in the suggestions, or a tag that's on the note already. Compared
+  // case-insensitively so typing "Egypt" under an existing "egypt" offers the
+  // existing one rather than a near-duplicate.
+  const canCreateTag =
+    tagQuery.length > 0 &&
+    !(allTags || []).some((t) => t.toLowerCase() === tagQuery) &&
+    !tags.some((t) => t.toLowerCase() === tagQuery);
+
+  // Defined once, placed twice — it leads the row when nothing matched and
+  // trails it when something did (see the render), and duplicating the markup
+  // for that is how the two copies drift apart.
+  const createTagChip = (
+    <TouchableOpacity
+      onPress={() => addTag(tagDraft)}
+      activeOpacity={0.7}
+      style={[styles.suggestChip, styles.createChip]}
+      accessibilityLabel={`Create new tag ${tagDraft.trim()}`}
+    >
+      <Icon name="tag-plus" size={12} color={theme.colors.accent || theme.colors.accentInfo} />
+      <Text style={[styles.suggestChipText, styles.createChipText]} numberOfLines={1}>
+        New tag “{tagDraft.trim()}”
+      </Text>
+    </TouchableOpacity>
+  );
 
   const handleSubmit = async () => {
     if (!content.trim()) return;
@@ -2387,9 +2440,15 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
               />
             </View>
 
-            {suggestions.length > 0 && (
+            {(suggestions.length > 0 || canCreateTag) && (
               <>
-                <Text style={styles.tagSuggestLabel}>Existing tags</Text>
+                <Text style={styles.tagSuggestLabel}>
+                  {!tagQuery
+                    ? 'Existing tags'
+                    : suggestions.length
+                    ? 'Matches'
+                    : 'No matching tag'}
+                </Text>
                 <ScrollView
                   horizontal
                   nestedScrollEnabled
@@ -2397,6 +2456,12 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
                   keyboardShouldPersistTaps="handled"
                   contentContainerStyle={styles.tagSuggestRow}
                 >
+                  {/* Create leads ONLY when nothing matched. With matches
+                      present the best one has to be leftmost — that's the whole
+                      point of ranking them — so create moves to the tail, still
+                      one tap away. It vanishes entirely on an exact hit, so the
+                      same keystrokes can't yield two near-identical tags. */}
+                  {canCreateTag && suggestions.length === 0 && createTagChip}
                   {suggestions.map((t) => (
                     <TouchableOpacity
                       key={t}
@@ -2409,6 +2474,7 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
                       <Text style={styles.suggestChipText} numberOfLines={1}>{t}</Text>
                     </TouchableOpacity>
                   ))}
+                  {canCreateTag && suggestions.length > 0 && createTagChip}
                 </ScrollView>
               </>
             )}
@@ -2640,6 +2706,20 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
     color: theme.colors.textSecondary,
+  },
+  // The create-a-tag chip. Same shape as a suggestion so the row reads as one
+  // list, but accent-tinted because it's the one chip that WRITES a new tag
+  // rather than picking an existing one.
+  // Border and text only — no tinted fill. `accent` is the user's configurable
+  // Highlight colour, so a hardcoded rgba wash would drift out of step the
+  // moment they change it; the surrounding chip fill still applies.
+  createChip: {
+    borderColor: theme.colors.accent || theme.colors.accentInfo,
+    maxWidth: 200,
+  },
+  createChipText: {
+    color: theme.colors.accent || theme.colors.accentInfo,
+    fontWeight: '600',
   },
   submitRow: { marginTop: 6, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 8 },
   dismissBtn: {
