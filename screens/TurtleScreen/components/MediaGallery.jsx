@@ -5946,7 +5946,14 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               ? (uploadTimeline.total || globalUploadsTotal)
               : albumCounts[selectedAlbum]}
             autoFocusSearch={filterSheetFocusSearch}
-            bottomInset={Math.max(insets.bottom, 10)}
+            // Clear the floating dock, not just the home indicator. This was
+            // reserving insets.bottom only, so the dock sat over the tail of
+            // the sheet and ate the LAYOUT row. tabBarH is dockOccupied() —
+            // card + float gap + inset — and is 0 outside a tab (share target,
+            // /vault), where insets.bottom is the right floor instead. The
+            // extra 12 lifts the last row clear of the dock rather than
+            // leaving it flush against its top edge.
+            bottomInset={Math.max(tabBarH, insets.bottom) + 12}
             onChange={setFilters}
             onToggleTag={toggleTag}
             onClearChip={clearChip}
