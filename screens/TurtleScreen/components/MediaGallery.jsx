@@ -22,6 +22,10 @@ import {
   InputAccessoryView,
   KeyboardAvoidingView,
   StatusBar,
+  // RN's own Share — the only one that can hand the OS a URL rather than a
+  // file. expo-sharing shares files exclusively, which is exactly the thing a
+  // link is meant to avoid.
+  Share as RNShareSheet,
 } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 // The viewer's media-cell layer (video cell, progressive image, zoomable image
@@ -47,6 +51,10 @@ import { buildBucketsUrl, buildGalleryUrl } from '../../../utils/galleryFilters'
 import DevProfiler from '../../../components/DevProfiler';
 import { useGalleryFilters } from '../../../utils/useGalleryFilters';
 import GalleryFilterSheet from './GalleryFilterSheet';
+// Public capability links for one item — the "send a link that plays in the
+// chat" half of the share sheet. See services/mediaShareLinks.js for why a
+// video's link has to wait on a conversion before it can be handed out.
+import { prepareShareLink } from '../../../services/mediaShareLinks';
 
 // react-native-share (unlike expo-sharing) can hand the OS a whole ARRAY of
 // files in ONE share sheet — so sharing many vault photos matches the native
@@ -136,6 +144,32 @@ const HIT_SLOP_20 = { top: 20, bottom: 20, left: 20, right: 20 };
 // Biggest video we'll speculatively pull to disk so its share sheet is instant.
 // Above this the share path downloads on demand behind the progress overlay.
 const VIDEO_SHARE_WARM_MAX_BYTES = 60 * 1024 * 1024;
+
+/**
+ * Alert.alert as something you can await.
+ *
+ * The share-link flow has two "this works, but not how you'd expect" moments
+ * that have to be answered before the OS sheet is presented — and a callback
+ * Alert in the middle of an async function means either dropping the rest of
+ * it into the callback or racing the sheet against the user's tap.
+ *
+ * @returns {Promise<boolean>} true if the user chose to continue
+ */
+function confirmAsync(title, message, confirmLabel) {
+  return new Promise((resolve) => {
+    Alert.alert(
+      title,
+      message,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: confirmLabel, onPress: () => resolve(true) },
+      ],
+      // Android's back button / outside tap dismisses without either handler,
+      // and an unresolved promise here would hang the share for good.
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
+}
 
 // ── Slot model for the grid ─────────────────────────────────────────────────
 // A loading tile is NOT a different thing from a loaded tile — it's the same
@@ -3506,20 +3540,99 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
   }, [getFullUrl, prefetchFullForShare]);
 
-  // Tapping share: photos open the quality chooser instantly AND start pulling
-  // the original in the background right away — the chooser is the user's
-  // intent signal, so the expensive half of "Full resolution" is already
-  // running while they read the options. Videos have no compressed tier, so
-  // they share the original directly (with the overlay).
+  // ── Sharing a LINK instead of the bytes ───────────────────────────────────
+  // The counterpart to doShare. Nothing leaves the phone: the server mints a
+  // capability URL, and the recipient's chat app unfurls it into a preview —
+  // a playing video, for a video. What this has to get right is the WAITING:
+  // an unfurler caches whatever it finds on first sight, so the URL must not
+  // reach the share sheet until the server's MP4 exists. See
+  // services/mediaShareLinks.js.
+  //
+  // Warned once per session, not per share: a tailnet-only link is invisible
+  // to everyone outside the tailnet, and there is no way to discover that from
+  // the link itself — but someone deliberately sending to a family device
+  // shouldn't have to dismiss the same alert every time.
+  const tailnetWarnedRef = useRef(false);
+  const doShareLink = useCallback(async (media) => {
+    if (!media) return;
+    const isVideo = media.type === 'video';
+    let cancelled = false;
+    try {
+      setSharePrepLabel(isVideo ? 'Making it play in chat…' : 'Making a link…');
+      setShareProgress(null);
+      shareCancelRef.current = () => { cancelled = true; };
+      setSharePreparing(true);
+
+      const share = await prepareShareLink(api, media.id, {
+        onProgress: (p) => setShareProgress(p),
+        isCancelled: () => cancelled,
+      });
+
+      setSharePreparing(false);
+      setShareProgress(null);
+      setSharePrepLabel(null);
+      shareCancelRef.current = null;
+      if (cancelled || share.cancelled) return;
+
+      // Both of these are "the link works, but not the way you'd assume".
+      // Neither is a failure worth throwing away the work over, so each asks
+      // rather than deciding.
+      if (share.prepareFailed) {
+        const send = await confirmAsync(
+          'It won’t play inline',
+          isVideo
+            ? 'This video couldn’t be converted, so chat apps will show a link instead of a player. It still opens fine in a browser.'
+            : 'This link still works, but it may show without a preview.',
+          'Send anyway',
+        );
+        if (!send) return;
+      }
+      if (share.reach === 'tailnet' && !tailnetWarnedRef.current) {
+        tailnetWarnedRef.current = true;
+        const send = await confirmAsync(
+          'Only works on your Tailscale network',
+          'Turtle can’t see a public address right now, so anyone outside your tailnet will get a dead link. Turn on Tailscale Funnel to send this to the world.',
+          'Send anyway',
+        );
+        if (!send) return;
+      }
+
+      // Same iOS trap the file path documents below: dismissing an overlay and
+      // presenting the share sheet in one tick means the sheet never appears.
+      // Let the overlay's removal commit first.
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      // iOS treats `url` as a first-class URL item, which is what makes
+      // Messages insert it as a rich link. Android's sheet only reads
+      // `message`, so the URL goes there instead — sending both on iOS
+      // duplicates it in the bubble.
+      await RNShareSheet.share(
+        Platform.OS === 'ios'
+          ? { url: share.url }
+          : { message: share.url },
+      );
+    } catch (error) {
+      console.error('[MediaGallery] Share-link error:', error);
+      Alert.alert('Error', 'Could not create a link for this item.');
+    } finally {
+      setSharePreparing(false);
+      setShareProgress(null);
+      setSharePrepLabel(null);
+      shareCancelRef.current = null;
+    }
+  }, [api]);
+
+  // Tapping share opens the chooser — for videos too, now. They used to skip
+  // straight to downloading the original, which is why the only thing a video
+  // share could ever be was a multi-hundred-megabyte upload from the phone.
+  // The chooser also doubles as the intent signal that starts pulling a
+  // photo's original in the background while the options are being read.
   const handleShare = useCallback(() => {
     if (!selectedMedia) return;
-    if (selectedMedia.type === 'video') {
-      doShare(selectedMedia, 'full');
-    } else {
-      setShareChooser(selectedMedia);
-      prefetchFullForShare(selectedMedia);
-    }
-  }, [selectedMedia, doShare, prefetchFullForShare]);
+    setShareChooser(selectedMedia);
+    // Videos have no compressed tier to choose between, and their warm-up is
+    // already handled by the dwell effect below — no point starting a second.
+    if (selectedMedia.type !== 'video') prefetchFullForShare(selectedMedia);
+  }, [selectedMedia, prefetchFullForShare]);
 
   // INSTANT-SHEET WARM-UP FOR VIDEOS.
   // The OS sheet can only be handed a file that already exists on disk, so
@@ -4244,9 +4357,16 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               </TouchableOpacity>
             </View>
 
-            {/* Share quality chooser — photos pick regular vs full-resolution
-                before the OS share sheet. Modal portals above the viewer, so
-                where it sits in the tree has no layout effect. */}
+            {/* Share chooser — a link, or the bytes.
+
+                These are genuinely different things, not two routes to one
+                action, so the sheet names what each one costs. The link is
+                first because it's the cheap one: nothing leaves the phone, the
+                original stays full quality, and a video plays inside the
+                conversation instead of arriving as a blue link.
+
+                Modal portals above the viewer, so where it sits in the tree
+                has no layout effect. */}
             <Modal
               visible={!!shareChooser}
               transparent
@@ -4255,31 +4375,64 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             >
               <Pressable style={styles.shareSheetBackdrop} onPress={() => setShareChooser(null)}>
                 <Pressable style={styles.shareSheetCard} onPress={() => {}}>
-                  <Text style={styles.shareSheetTitle}>Share photo</Text>
+                  <Text style={styles.shareSheetTitle}>
+                    {shareChooser?.type === 'video' ? 'Share video' : 'Share photo'}
+                  </Text>
+
                   <TouchableOpacity
                     style={styles.shareSheetOption}
                     activeOpacity={0.7}
-                    onPress={() => { const m = shareChooser; setShareChooser(null); doShare(m, 'regular'); }}
+                    onPress={() => { const m = shareChooser; setShareChooser(null); doShareLink(m); }}
                   >
-                    <Icon name="image-outline" size={22} color={theme.colors.accentInfo} />
+                    <Icon name="link-variant" size={22} color={theme.colors.primary} />
                     <View style={styles.shareSheetOptionText}>
-                      <Text style={styles.shareSheetOptionTitle}>Regular</Text>
-                      <Text style={styles.shareSheetOptionSub}>Smaller file · sends instantly</Text>
+                      <Text style={styles.shareSheetOptionTitle}>Send a link</Text>
+                      <Text style={styles.shareSheetOptionSub}>
+                        {shareChooser?.type === 'video'
+                          ? 'Plays right inside iMessage & WhatsApp · nothing uploads'
+                          : 'Shows as a preview card · nothing uploads'}
+                      </Text>
                     </View>
                   </TouchableOpacity>
+
+                  {/* A video has no compressed tier to choose between — its
+                      only file option is the original. */}
+                  {shareChooser?.type !== 'video' && (
+                    <TouchableOpacity
+                      style={styles.shareSheetOption}
+                      activeOpacity={0.7}
+                      onPress={() => { const m = shareChooser; setShareChooser(null); doShare(m, 'regular'); }}
+                    >
+                      <Icon name="image-outline" size={22} color={theme.colors.accentInfo} />
+                      <View style={styles.shareSheetOptionText}>
+                        <Text style={styles.shareSheetOptionTitle}>Regular</Text>
+                        <Text style={styles.shareSheetOptionSub}>Smaller file · sends instantly</Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
+
                   <TouchableOpacity
                     style={styles.shareSheetOption}
                     activeOpacity={0.7}
                     onPress={() => { const m = shareChooser; setShareChooser(null); doShare(m, 'full'); }}
                   >
-                    <Icon name="image-size-select-actual" size={22} color={theme.colors.primary} />
+                    <Icon
+                      name={shareChooser?.type === 'video' ? 'movie-outline' : 'image-size-select-actual'}
+                      size={22}
+                      color={theme.colors.primary}
+                    />
                     <View style={styles.shareSheetOptionText}>
-                      <Text style={styles.shareSheetOptionTitle}>Full resolution</Text>
+                      <Text style={styles.shareSheetOptionTitle}>
+                        {shareChooser?.type === 'video' ? 'Send the file' : 'Full resolution'}
+                      </Text>
                       <Text style={styles.shareSheetOptionSub}>
-                        Original quality{shareChooser?.width && shareChooser?.height ? ` · ${shareChooser.width}×${shareChooser.height}` : ''}
+                        {shareChooser?.type === 'video'
+                          ? 'The original itself · uploads from here'
+                          : `Original quality${shareChooser?.width && shareChooser?.height ? ` · ${shareChooser.width}×${shareChooser.height}` : ''}`}
                       </Text>
                     </View>
                   </TouchableOpacity>
+
                   <TouchableOpacity style={styles.shareSheetCancel} activeOpacity={0.7} onPress={() => setShareChooser(null)}>
                     <Text style={styles.shareSheetCancelText}>Cancel</Text>
                   </TouchableOpacity>
