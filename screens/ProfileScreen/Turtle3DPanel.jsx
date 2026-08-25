@@ -8,18 +8,26 @@ import { useTheme } from '../../context/ThemeContext';
 import { useServer } from '../../context/ServerContext';
 import { dockOccupied } from '../../components/tabBarLayout';
 import { tapHaptic } from '../../utils/haptics';
+import { probeCollab, resolveCollabBase } from '../../services/collabHealth';
 
 /**
  * Turtle3DPanel — a read-only status page for the TURTLE-3D collab side of this
  * server, reached from a Profile card.
  *
  * ★ WHAT THIS SERVER ACTUALLY KNOWS ★
- * Everything here is derived from exactly one thing: this server mints
- * credentials that TURTLE-3D bridges use to check whether a sign-in token is
- * valid (RFC 7662 introspection). There is NO ping, NO health check and NO
- * socket to a bridge. `lastUsedAt` moves only when a bridge successfully
- * introspects a token — i.e. when somebody signs in to it — never on a
- * heartbeat.
+ * The bridge INVENTORY here is derived from exactly one thing: this server
+ * mints credentials that TURTLE-3D bridges use to check whether a sign-in
+ * token is valid (RFC 7662 introspection). This server has NO socket to a
+ * bridge and gets NO heartbeat from one. `lastUsedAt` moves only when a
+ * bridge successfully introspects a token — i.e. when somebody signs in to
+ * it — never on a ping.
+ *
+ * The one exception, added deliberately and kept separate: the Collab bridge
+ * card at the bottom asks the BRIDGE ITSELF (`GET <collab base>/health`) and
+ * reports what it answers. That request never touches this app server —
+ * pointing it here would re-report this server's liveness under a collab
+ * label, which is precisely the confusion the rest of this page avoids. See
+ * services/collabHealth.js.
  *
  * So this page never claims a bridge is "online", "connected" or "running".
  * Per bridge, state is derived strictly from the payload:
@@ -71,6 +79,12 @@ export default function Turtle3DPanel({ onClose }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  // The bridge's OWN liveness, asked of the bridge. null = not probed yet.
+  const [collab, setCollab] = useState(null);
+  const [probing, setProbing] = useState(false);
+  // Who has actually been let into a bridge. Owner-only, so it stays null for
+  // everyone else and the section simply doesn't render.
+  const [activity, setActivity] = useState(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -95,6 +109,26 @@ export default function Turtle3DPanel({ onClose }) {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+
+    // Who has been on. Same owner gate as the inventory above, so a non-owner
+    // simply never populates it.
+    try {
+      const r = await api.get('/collab/activity');
+      setActivity(r && r.success ? r : null);
+    } catch { /* non-owner or offline — the section stays hidden */ }
+
+    // The bridge is a DIFFERENT server. This app mints its credentials and
+    // has no socket to it, so the only way to learn whether collab is up is
+    // to ask the bridge itself — at its own address, never at this one.
+    setProbing(true);
+    let settings = null;
+    try { settings = await api.get('/settings'); } catch { /* fall back to the default address */ }
+    try {
+      const base = resolveCollabBase(settings?.settings || settings);
+      setCollab(await probeCollab(base));
+    } finally {
+      setProbing(false);
     }
   }, [api]);
 
@@ -279,6 +313,91 @@ export default function Turtle3DPanel({ onClose }) {
             value={isConnected ? 'Reachable from this phone' : 'Not reachable right now'}
           />
         </View>
+
+        {/* Collab bridge — a DIFFERENT server, asked directly.
+            Deliberately its own card, below "This server", so its state can
+            never be read as the app server's. This is the second measured
+            signal on the page; everything above it about bridges is still
+            derived from credential use, not from a heartbeat. */}
+        <View style={styles.card}>
+          <View style={styles.cardHead}>
+            <View style={styles.cardIcon}>
+              <Icon name="cube-outline" size={18} color={c.accent || c.accentInfo} />
+            </View>
+            <Text style={styles.cardTitle}>Collab bridge</Text>
+          </View>
+
+          {probing && !collab ? (
+            <InfoRow theme={theme} label="Status" value="Checking…" />
+          ) : collab ? (
+            <>
+              <InfoRow
+                theme={theme}
+                label="Status"
+                value={collab.state === 'up'
+                  ? `Up${collab.entities != null ? ` · ${collab.entities} element${collab.entities === 1 ? '' : 's'} loaded` : ''}`
+                  : 'Not answering'}
+              />
+              <InfoRow theme={theme} label="Address" value={collab.url} mono />
+              {collab.state === 'up' && collab.ms != null && (
+                <InfoRow theme={theme} label="Replied in" value={`${collab.ms} ms`} />
+              )}
+              {collab.state !== 'up' && !!collab.detail && (
+                <Text style={styles.footnote}>{collab.detail}</Text>
+              )}
+            </>
+          ) : (
+            <InfoRow theme={theme} label="Status" value="—" />
+          )}
+
+          <Text style={styles.footnote}>
+            Asked of the bridge itself, not of this app server. The two are separate
+            machines — this app issues the bridge's credentials and has no other line
+            to it, so its health has to come from its own address.
+          </Text>
+        </View>
+
+        {/* Who has been on. Owner-only; hidden entirely otherwise.
+            Unlike the inventory above, every row here is MEASURED: it exists
+            because a bridge really did admit that person. */}
+        {activity && (
+          <View style={styles.card}>
+            <View style={styles.cardHead}>
+              <View style={styles.cardIcon}>
+                <Icon name="account-clock-outline" size={18} color={c.accent || c.accentInfo} />
+              </View>
+              <Text style={styles.cardTitle}>Who's been on</Text>
+            </View>
+
+            <InfoRow
+              theme={theme}
+              label="On now"
+              value={activity.online?.length
+                ? activity.online.map((s) => s.display || s.userId).join(', ')
+                : 'Nobody'}
+            />
+
+            {activity.recent?.length ? (
+              activity.recent.slice(0, 6).map((s) => (
+                <InfoRow
+                  key={s.id}
+                  theme={theme}
+                  label={s.display || s.userId}
+                  value={`${s.serviceName || 'a bridge'} · ${relativeTime(s.lastSeenAt)}`}
+                />
+              ))
+            ) : (
+              <InfoRow theme={theme} label="Recent" value="No sign-ins yet" />
+            )}
+
+            <Text style={styles.footnote}>
+              A bridge checks a token every time someone connects, so repeat checks
+              inside {Math.round((activity.idleWindowMs || 0) / 60000)} minutes count as
+              one visit — that's also when you get a notification, once per arrival
+              rather than once per reconnect.
+            </Text>
+          </View>
+        )}
       </ScrollView>
     </View>
   );
