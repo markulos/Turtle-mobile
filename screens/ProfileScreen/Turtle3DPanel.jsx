@@ -29,14 +29,16 @@ import { probeCollab, resolveCollabBase } from '../../services/collabHealth';
  * label, which is precisely the confusion the rest of this page avoids. See
  * services/collabHealth.js.
  *
- * So this page never claims a bridge is "online", "connected" or "running".
- * Per bridge, state is derived strictly from the payload:
+ * So this page never claims a BRIDGE CREDENTIAL is "online" or "running".
+ * Per credential, state is derived strictly from the payload:
  *     revokedAt != null  → Revoked
  *     lastUsedAt == null → Never used
  *     otherwise          → Last seen <relative>
- * The one genuine liveness signal on this page is THIS APP SERVER's own
- * reachability (isConnected), which the app really does poll — it is labelled
- * as the app server's, never as a bridge's.
+ *
+ * The app server's own address and reachability are deliberately NOT here —
+ * Settings → Connection owns those. Repeating them invited two readings of
+ * the same fact drifting apart, and invited the app server's state being read
+ * as the bridge's.
  *
  * Bridge inventory is OWNER-ONLY on the server (requireOwner). Rather than
  * guessing the role client-side — the server also accepts a legacy
@@ -70,7 +72,9 @@ export default function Turtle3DPanel({ onClose }) {
   const { theme } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
-  const { api, serverIP, isConnected } = useServer();
+  // serverIP / isConnected are deliberately not taken: the app server's own
+  // address and reachability live in Settings → Connection, not here.
+  const { api } = useServer();
 
   const [me, setMe] = useState(null);
   const [servers, setServers] = useState([]);
@@ -297,28 +301,15 @@ export default function Turtle3DPanel({ onClose }) {
           </Text>
         </View>
 
-        {/* This server */}
-        <View style={styles.card}>
-          <View style={styles.cardHead}>
-            <View style={styles.cardIcon}><Icon name="lan-connect" size={18} color={c.accent || c.accentInfo} /></View>
-            <Text style={styles.cardTitle}>This server</Text>
-          </View>
-          <InfoRow theme={theme} label="Address" value={serverIP || '—'} mono />
-          {/* The ONLY genuine liveness on this page: the app polls its own
-              server, so this is measured, not inferred. Labelled as the app
-              server's — never a bridge's. */}
-          <InfoRow
-            theme={theme}
-            label="App server"
-            value={isConnected ? 'Reachable from this phone' : 'Not reachable right now'}
-          />
-        </View>
+        {/* The app server's own address and reachability used to sit here. It
+            was removed: Settings → Connection already owns that, and showing it
+            twice invites the two from drifting apart — and invites reading the
+            app server's state as the bridge's, which is the confusion this page
+            exists to avoid. This page is about the 3D side only. */}
 
-        {/* Collab bridge — a DIFFERENT server, asked directly.
-            Deliberately its own card, below "This server", so its state can
-            never be read as the app server's. This is the second measured
-            signal on the page; everything above it about bridges is still
-            derived from credential use, not from a heartbeat. */}
+        {/* Collab bridge — a DIFFERENT server, asked directly. This is the one
+            measured signal here; everything above it about bridges is derived
+            from credential use, not from a heartbeat. */}
         <View style={styles.card}>
           <View style={styles.cardHead}>
             <View style={styles.cardIcon}>
