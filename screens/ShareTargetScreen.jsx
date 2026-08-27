@@ -16,7 +16,9 @@
  *      Audio     the same link or file, sound only (outputKind:'audio'),
  *                into the Music Vault.
  *      Inbox     nothing is fetched at all — the LINK itself is what gets
- *                kept, for reading or downloading later.
+ *                kept, as an untagged note, for reading later. The server
+ *                unfurls it in the background so the note ends up with a real
+ *                headline, a summary, and a thumbnail rather than a bare URL.
  *
  *    A tile that cannot work for the current payload is not rendered, so
  *    there is never a button that quietly does nothing: a share of loose
@@ -25,8 +27,16 @@
  * 2. WHERE it should live — everything below the tiles. Search reaches any
  *    board (project / tag / album) whether pinned or not, and typing a name
  *    that doesn't exist offers to create it, so a brand-new topic never
- *    requires a trip to the web app first. Pinned boards stay listed under
- *    "Suggested" for the one-tap common case.
+ *    requires a trip to the web app first.
+ *
+ *    For a link, the server ranks the user's OWN boards against the unfurled
+ *    page and returns the ones that actually fit, which we list first under
+ *    "Suggested for this link". Pinned boards follow under "Pinned" — they're
+ *    the one-tap common case, but a topical match beats a favourite. The
+ *    ranking is lexical by default and Claude-assisted when the server has an
+ *    API key; either way the server only ever returns boards that exist (plus,
+ *    from the AI path, at most one proposed new tag flagged `create`), so
+ *    nothing here can route a share at a destination that isn't real.
  *
  * The two are visually distinct on purpose — tiles are verbs, rows are
  * places. Rendering "Download" as another board row was what made an ACTION
@@ -113,6 +123,13 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const [boardsError, setBoardsError] = useState(null);
   const [query, setQuery] = useState('');
   const [handoffError, setHandoffError] = useState(null);
+  // Unfurled link metadata + the boards the server thinks it belongs on.
+  // Both arrive from one POST /share/preview; both are optional — the sheet is
+  // fully usable while they're still in flight or if they never arrive.
+  const [preview, setPreview] = useState(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [suggested, setSuggested] = useState([]);
+  const [aiSuggested, setAiSuggested] = useState(false);
   const [audioHandoffBusy, setAudioHandoffBusy] = useState(false);
   const audioHandoffInFlightRef = useRef(false);
   const audioHandoffDismissedRef = useRef(false);
@@ -137,6 +154,28 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const hasImportUrl = isHttpImportUrl(url);
   const showAudioDestination = mediaFiles.length > 0 || hasImportUrl;
   const hasStandardContent = !!text || !!url || imageFiles.length > 0;
+
+  // The link we unfurl. iOS often hands the SAME url twice — once as webUrl and
+  // once as the plain-text body (that's the duplicated address in the payload
+  // card) — so fall back to `text` when it is itself a link and there's no
+  // webUrl. Trimmed here so the effect below doesn't re-fire on whitespace.
+  const linkUrl = (url && url.trim())
+    || (isHttpImportUrl(text) ? String(text).trim() : '')
+    || '';
+
+  // Free text worth showing on its own. When the shared text IS the shared
+  // link, rendering it a second time is what made the payload card a wall of
+  // URL — the card shows the unfurled link instead, so drop the duplicate.
+  const captionText = (() => {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return '';
+    if (!linkUrl) return trimmed;
+    if (trimmed === linkUrl) return '';
+    // Some apps append the bare link to a real caption; keep the caption, drop
+    // the tail so the address isn't shown twice.
+    const stripped = trimmed.replace(linkUrl, '').trim();
+    return stripped === '' ? '' : stripped;
+  })();
 
   // ── Fetch ALL boards on mount ───────────────────────────────
   // We pull the full universe (not ?pinned=1) so the search box can find
@@ -195,6 +234,38 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
     loadBoards();
   }, [loadBoards]);
 
+  // ── Unfurl the link + ask where it belongs ──────────────────
+  // One round trip: the server fetches the page (or serves its cache), and
+  // returns the card metadata plus its board suggestions together. Fire and
+  // forget — the sheet has already painted, and every consumer of this state
+  // renders a sensible fallback while it's null.
+  //
+  // Deliberately NOT blocking the action tiles: the whole point of the share
+  // sheet is that Download / Audio / Inbox are tappable the instant it opens,
+  // and a slow or dead page must never hold that up. The worst case is a card
+  // that stays as the bare hostname.
+  useEffect(() => {
+    if (!linkUrl || !isConnected) return undefined;
+    let cancelled = false;
+    setPreviewBusy(true);
+    (async () => {
+      try {
+        const res = await api.post('/share/preview', { url: linkUrl });
+        if (cancelled) return;
+        if (!res?.success) throw new Error(res?.error || 'preview failed');
+        setPreview(res.preview || null);
+        setSuggested(Array.isArray(res.suggestions) ? res.suggestions : []);
+        setAiSuggested(!!res.aiSuggestions);
+      } catch (e) {
+        // Non-fatal by design — a link that won't unfurl is still shareable.
+        if (!cancelled) console.warn('[Share] link preview failed:', e.message);
+      } finally {
+        if (!cancelled) setPreviewBusy(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [linkUrl, isConnected, api]);
+
   // ── Derived: search + sections ──────────────────────────────
   // When the user is searching we collapse to one flat result list across
   // every board. Otherwise we split into Suggested (pinned, quick-send)
@@ -209,8 +280,25 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const matches = q
     ? visibleBoards.filter((b) => String(b?.name || '').toLowerCase().includes(q))
     : null;
-  const pinned = visibleBoards.filter((b) => b.isPinned);
-  const unpinned = visibleBoards.filter((b) => !b.isPinned);
+
+  // Server suggestions, minus anything this payload can't route to (the Audio
+  // album, when the Audio tile already owns that destination). A suggestion
+  // flagged `create` is a board that doesn't exist yet, so it is NOT filtered
+  // against visibleBoards — it carries the create flag through to pickBoard.
+  const boardKey = (b) => `${b.kind}::${b.name}`;
+  const knownBoards = new Set(visibleBoards.map(boardKey));
+  const suggestedBoards = hasStandardContent
+    ? suggested.filter((s) => (
+      s && s.kind && s.name
+        && !(showAudioDestination && isAudioBoard(s))
+        && (s.create ? !knownBoards.has(boardKey(s)) : knownBoards.has(boardKey(s)))
+    ))
+    : [];
+  // Everything below the suggestions is de-duped against them, so a board never
+  // appears twice in the same list.
+  const suggestedKeys = new Set(suggestedBoards.map(boardKey));
+  const pinned = visibleBoards.filter((b) => b.isPinned && !suggestedKeys.has(boardKey(b)));
+  const unpinned = visibleBoards.filter((b) => !b.isPinned && !suggestedKeys.has(boardKey(b)));
   // Offer "create a new board" whenever the typed name doesn't already match an
   // existing board exactly (case-insensitive) — so a brand-new topic is one tap
   // away without leaving the share sheet. New boards are created as tags.
@@ -229,10 +317,15 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   // background (owned by something that outlives this modal) and their progress /
   // outcome surface in the floating ShareUploadToast — so 10–30 large photos no
   // longer block the sheet.
+  // Sends the NORMALISED payload, not the raw intent: `linkUrl` puts the
+  // address in the url slot even when the OS only handed us plain text, and
+  // `captionText` drops the caption when it's a duplicate of that address.
+  // Both matter server-side — it keys the unfurl off the url, and a caption
+  // that's just the link would otherwise become the note's headline.
   const pickBoard = (board) => {
     if (!hasStandardContent) return;
     notifyHaptic('success');
-    enqueueShare({ board, text, url, imageFiles });
+    enqueueShare({ board, text: captionText, url: linkUrl, imageFiles });
     onDismiss?.();
   };
 
@@ -251,7 +344,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   // images only, so offering "Download" for a shared video file would be a
   // button that quietly does nothing. Audio is that case's supported route.
   const canDownload = hasImportUrl || imageFiles.length > 0;
-  const canInbox = !!url || !!text;
+  const canInbox = !!linkUrl || !!captionText;
 
   const pickDownload = () => {
     if (!canDownload) return;
@@ -260,11 +353,13 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   };
 
   // Save the LINK and nothing else - no fetch, no media row. Images are dropped
-  // on purpose: "Inbox" means the address, not the contents.
+  // on purpose: "Inbox" means the address, not the contents. No board either:
+  // that's what makes the server file it as an untagged note rather than onto
+  // a board, and it's the whole difference between the Inbox and the rows below.
   const pickInbox = () => {
     if (!canInbox) return;
     notifyHaptic('success');
-    enqueueShare({ board: null, text, url, imageFiles: [] });
+    enqueueShare({ board: null, text: captionText, url: linkUrl, imageFiles: [] });
     onDismiss?.();
   };
 
@@ -299,8 +394,15 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   // ── A single tappable destination row ───────────────────────
   // Tapping sends immediately (quick-send) — there's no confirm step.
   // Shared across the Suggested / All boards / search-results sections.
-  const renderBoard = (b) => {
+  //   suggestion — render as a match for THIS link: accent-tinted icon, the
+  //                server's one-line reason instead of the generic kind label,
+  //                and (for a proposed new tag) a "will be created" hint.
+  const renderBoard = (b, { suggestion = false } = {}) => {
     const key = `${b.kind}::${b.name}`;
+    const tint = suggestion ? theme.colors.primary : theme.colors.textSecondary;
+    const subtitle = suggestion
+      ? [b.create ? 'New tag' : (KIND_LABELS[b.kind] || b.kind), b.reason].filter(Boolean).join(' · ')
+      : (KIND_LABELS[b.kind] || b.kind);
     return (
       <TouchableOpacity
         key={key}
@@ -311,23 +413,23 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           styles.boardRow,
           {
             backgroundColor: theme.colors.surface,
-            borderColor: theme.colors.border,
+            borderColor: suggestion ? theme.colors.primary : theme.colors.border,
           },
         ]}
       >
         <View style={[styles.boardIcon, { backgroundColor: theme.colors.surfaceElevated || theme.colors.surface }]}>
           <Icon
-            name={KIND_ICONS[b.kind] || 'circle-outline'}
+            name={b.create ? 'tag-plus-outline' : (KIND_ICONS[b.kind] || 'circle-outline')}
             size={18}
-            color={theme.colors.textSecondary}
+            color={tint}
           />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.boardName, { color: theme.colors.textPrimary }]} numberOfLines={1}>
             {b.name}
           </Text>
-          <Text style={[styles.boardKind, { color: theme.colors.textMuted }]}>
-            {KIND_LABELS[b.kind] || b.kind}
+          <Text style={[styles.boardKind, { color: theme.colors.textMuted }]} numberOfLines={1}>
+            {subtitle}
           </Text>
         </View>
         {/* Tapping hands off to the background uploader + dismisses instantly,
@@ -403,8 +505,10 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {/* Preview — show what is about to be sent */}
         <SharePreview
-          text={text}
-          url={url}
+          text={captionText}
+          url={linkUrl}
+          preview={preview}
+          previewBusy={previewBusy}
           imageFiles={imageFiles}
           mediaFiles={mediaFiles}
           theme={theme}
@@ -525,7 +629,8 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           </View>
         )}
 
-        {hasStandardContent && !busyEmpty && !boardsError && visibleBoards.length === 0 && !q && (
+        {hasStandardContent && !busyEmpty && !boardsError && visibleBoards.length === 0
+          && suggestedBoards.length === 0 && !q && (
           <View style={styles.centerState}>
             <Icon name="folder-off-outline" size={36} color={theme.colors.textMuted} />
             <Text style={[styles.centerTitle, { color: theme.colors.textPrimary, fontSize: 15 }]}>
@@ -547,7 +652,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
                 <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary, marginTop: canCreate ? 18 : 0 }]}>
                   {matches.length} result{matches.length === 1 ? '' : 's'}
                 </Text>
-                {matches.map(renderBoard)}
+                {matches.map((b) => renderBoard(b))}
               </>
             ) : !canCreate ? (
               <View style={styles.centerState}>
@@ -560,23 +665,41 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           </>
         )}
 
-        {/* Not searching → Suggested (pinned, quick-send) then All boards. */}
-        {hasStandardContent && !busyEmpty && !boardsError && !matches && visibleBoards.length > 0 && (
+        {/* Not searching → link suggestions, then Pinned, then All boards.
+            Suggestions lead because a board that matches THIS link beats a
+            board the user happens to have favourited. */}
+        {hasStandardContent && !busyEmpty && !boardsError && !matches
+          && (visibleBoards.length > 0 || suggestedBoards.length > 0) && (
           <>
+            {suggestedBoards.length > 0 && (
+              <>
+                <View style={styles.sectionLabelRow}>
+                  <Icon
+                    name={aiSuggested ? 'auto-fix' : 'label-variant-outline'}
+                    size={13}
+                    color={theme.colors.primary}
+                  />
+                  <Text style={[styles.sectionLabel, { color: theme.colors.primary, marginBottom: 0 }]}>
+                    Suggested for this link
+                  </Text>
+                </View>
+                {suggestedBoards.map((b) => renderBoard(b, { suggestion: true }))}
+              </>
+            )}
             {pinned.length > 0 && (
               <>
-                <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>
-                  Suggested
+                <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary, marginTop: suggestedBoards.length > 0 ? 18 : 0 }]}>
+                  Pinned
                 </Text>
-                {pinned.map(renderBoard)}
+                {pinned.map((b) => renderBoard(b))}
               </>
             )}
             {unpinned.length > 0 && (
               <>
-                <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary, marginTop: pinned.length > 0 ? 18 : 0 }]}>
+                <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary, marginTop: (pinned.length > 0 || suggestedBoards.length > 0) ? 18 : 0 }]}>
                   All boards
                 </Text>
-                {unpinned.map(renderBoard)}
+                {unpinned.map((b) => renderBoard(b))}
               </>
             )}
           </>
@@ -636,10 +759,78 @@ function Header({ onDismiss, title, theme }) {
   );
 }
 
+// ── LinkCard ─────────────────────────────────────────────────
+// A shared link, rendered the way every messaging app renders one: thumbnail,
+// headline, one-line summary, source. The raw address is reduced to the
+// hostname — a share of a Facebook permalink is 300 characters of tracking
+// parameters, and showing that verbatim told the user nothing about what they
+// were sending while burying the rest of the sheet.
+//
+// Three states, and each is a complete card rather than a placeholder:
+//   • metadata resolved  → thumbnail + title + description + host
+//   • still unfurling    → host + a spinner on the title line
+//   • unfurl failed/none → host alone, which is the honest answer
+function LinkCard({ url, preview, busy, theme }) {
+  let host = preview?.host || '';
+  if (!host) {
+    // Cheap client-side fallback so the card is never empty on the first frame
+    // (or when the page can't be unfurled at all).
+    const m = /^https?:\/\/(?:www\.)?([^/?#]+)/i.exec(url || '');
+    host = m ? m[1] : (url || '');
+  }
+  const title = preview?.title || '';
+  const description = preview?.description || '';
+  const isVideo = preview?.mediaType === 'video';
+
+  return (
+    <View style={[styles.linkCard, { backgroundColor: theme.colors.surfaceElevated || theme.colors.background }]}>
+      {!!preview?.thumbUrl && (
+        <View>
+          <Image
+            source={{ uri: preview.thumbUrl }}
+            style={styles.linkThumb}
+            resizeMode="cover"
+          />
+          {/* Play glyph on a video link, same affordance as a chat preview —
+              it isn't playable here, it just tells you what you're saving. */}
+          {isVideo && (
+            <View style={styles.linkPlayBadge}>
+              <Icon name="play" size={18} color="#fff" />
+            </View>
+          )}
+        </View>
+      )}
+      <View style={styles.linkBody}>
+        <View style={styles.linkHostRow}>
+          <Icon name="link-variant" size={13} color={theme.colors.textMuted} />
+          <Text style={[styles.linkHost, { color: theme.colors.textMuted }]} numberOfLines={1}>
+            {preview?.siteName || host}
+          </Text>
+          {busy && !preview && <ActivityIndicator size="small" color={theme.colors.textMuted} />}
+        </View>
+        <Text
+          style={[styles.linkTitle, { color: theme.colors.textPrimary }]}
+          numberOfLines={2}
+        >
+          {title || host}
+        </Text>
+        {!!description && (
+          <Text
+            style={[styles.linkDescription, { color: theme.colors.textMuted }]}
+            numberOfLines={2}
+          >
+            {description}
+          </Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
 // ── SharePreview ─────────────────────────────────────────────
 // Compact summary of the share payload at the top of the screen, so
 // the user can confirm what they're about to send.
-function SharePreview({ text, url, imageFiles, mediaFiles, theme }) {
+function SharePreview({ text, url, preview, previewBusy, imageFiles, mediaFiles, theme }) {
   const hasImages = imageFiles.length > 0;
   const hasMedia = mediaFiles.length > 0;
   const hasText = !!text;
@@ -692,15 +883,7 @@ function SharePreview({ text, url, imageFiles, mediaFiles, theme }) {
         </View>
       )}
       {hasUrl && (
-        <View style={styles.previewRow}>
-          <Icon name="link-variant" size={16} color={theme.colors.textSecondary} />
-          <Text
-            style={{ color: theme.colors.textPrimary, flex: 1, fontSize: 13 }}
-            numberOfLines={2}
-          >
-            {url}
-          </Text>
-        </View>
+        <LinkCard url={url} preview={preview} busy={previewBusy} theme={theme} />
       )}
       {hasText && (
         <View style={styles.previewRow}>
@@ -746,6 +929,28 @@ const styles = StyleSheet.create({
   previewCountRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   previewCount: { fontSize: 13, fontWeight: '600' },
   previewThumb: { width: 88, height: 88, borderRadius: 8, backgroundColor: '#222' },
+  // Link card. The thumbnail is edge-to-edge inside the card (overflow hidden
+  // clips it to the rounded corners) with the text block below it, which is the
+  // shape every chat app uses for a link and therefore the one that reads as
+  // "this is the page you're about to save".
+  linkCard: { borderRadius: 10, overflow: 'hidden' },
+  // 16:9 keeps og:image at its native aspect for the overwhelming majority of
+  // pages, so the crop doesn't cut the subject out of the frame.
+  linkThumb: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#222' },
+  linkPlayBadge: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  linkBody: { padding: 10, gap: 3 },
+  linkHostRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  linkHost: { fontSize: 11, fontWeight: '600', textTransform: 'lowercase', flexShrink: 1 },
+  linkTitle: { fontSize: 14, fontWeight: '600', lineHeight: 19 },
+  linkDescription: { fontSize: 12, lineHeight: 16 },
   // The three top actions. Equal-width tiles so no option looks like the
   // default, and tall enough that the label + one line of explanation both fit
   // without truncating on a narrow phone.
@@ -794,6 +999,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     marginBottom: 8,
   },
+  // Icon + label on one baseline, for the section headers that carry a glyph.
+  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
   boardRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -832,3 +1039,4 @@ const styles = StyleSheet.create({
   centerTitle: { fontSize: 17, fontWeight: '600' },
   centerBody: { fontSize: 13, textAlign: 'center', lineHeight: 19 },
 });
+

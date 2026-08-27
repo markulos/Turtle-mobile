@@ -31,6 +31,17 @@ const tagsOf = (row) => {
   }
 };
 
+/**
+ * Does this track belong to a board? Case-insensitively, because a board is a
+ * tag and tags are matched that way everywhere else in the app — the boards
+ * canvas would otherwise send you to a library that looks empty over a capital
+ * letter.
+ */
+const hasTag = (row, tag) => {
+  const wanted = String(tag || '').toLowerCase();
+  return !!wanted && tagsOf(row).some((t) => t.toLowerCase() === wanted);
+};
+
 // The music player's single tint. `accent` is the user's chosen highlight
 // colour, folded into the palette by ThemeContext — so the player follows
 // whatever the rest of the app is tinted with instead of being permanently
@@ -58,7 +69,15 @@ const fmtTime = (sec) => {
  * pager there is nothing to go back to and the vault header already names the
  * page, so the internal back/title row is omitted.
  */
-export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
+export default function MusicVault({
+  onClose,
+  topInset = 0,
+  bottomInset = 0,
+  // A board name to narrow the library to, set when the boards canvas sends you
+  // here from a board's Audio group. Null = the whole library, as always.
+  boardFilter = null,
+  onClearBoardFilter,
+}) {
   const { theme } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
@@ -92,6 +111,7 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
   const [renamedNames, setRenamedNames] = useState(() => new Map());
   const visibleTracks = useMemo(() => {
     let list = removedIds.size ? tracks.filter((t) => !removedIds.has(String(t.id))) : tracks;
+    if (boardFilter) list = list.filter((t) => hasTag(t, boardFilter));
     if (renamedNames.size) {
       list = list.map((t) => {
         const next = renamedNames.get(String(t.id));
@@ -99,7 +119,7 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
       });
     }
     return list;
-  }, [tracks, removedIds, renamedNames]);
+  }, [tracks, removedIds, renamedNames, boardFilter]);
 
   // Renames that are still sitting in the offline outbox are re-applied here on
   // mount — that's what makes an offline edit survive an app restart: the queue
@@ -575,6 +595,32 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         </View>
       ) : null}
 
+      {/* Arrived here from a board's Audio group. A filtered library that does
+          not SAY it is filtered is a library that looks like it lost your
+          music — so it says so, and the same chip is the way back out. */}
+      {!!boardFilter && (
+        <TouchableOpacity
+          {...TAP_ONLY}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={`Showing audio on ${boardFilter}. Show the whole library`}
+          testID="music-board-filter"
+          onPress={() => { tapHaptic(); onClearBoardFilter?.(); }}
+          style={[styles.boardFilter, {
+            borderColor: MUSIC_TINT(c), backgroundColor: c.surfaceElevated,
+          }]}
+        >
+          <Icon name="shape-outline" size={14} color={MUSIC_TINT(c)} />
+          <Text style={{ color: c.textPrimary, fontWeight: '700', fontSize: 13, flexShrink: 1 }} numberOfLines={1}>
+            {boardFilter}
+          </Text>
+          <Text style={{ color: c.textTertiary, fontSize: 12 }}>
+            {visibleTracks.length} track{visibleTracks.length === 1 ? '' : 's'}
+          </Text>
+          <Icon name="close-circle" size={16} color={c.textTertiary} />
+        </TouchableOpacity>
+      )}
+
       {error ? (
         <View style={[styles.error, { borderColor: c.border, backgroundColor: c.surfaceElevated }]}>
           <Text style={{ color: c.textSecondary }}>{error}</Text>
@@ -824,6 +870,14 @@ const styles = StyleSheet.create({
   pageEmpty: { alignItems: 'center', justifyContent: 'center', padding: 32, paddingTop: 80 },
   art: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   error: { marginHorizontal: 16, marginBottom: 8, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  boardFilter: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    alignSelf: 'flex-start',
+    marginHorizontal: 16, marginBottom: 8,
+    paddingHorizontal: 11, paddingVertical: 6,
+    borderRadius: 999, borderWidth: 1,
+    maxWidth: '90%',
+  },
   nowBar: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8 },
   seekHit: { paddingVertical: 8, paddingHorizontal: 16 },
   seekTrack: { height: 4, borderRadius: 2, overflow: 'hidden' },

@@ -54,7 +54,7 @@ import GalleryFilterSheet from './GalleryFilterSheet';
 // Public capability links for one item — the "send a link that plays in the
 // chat" half of the share sheet. See services/mediaShareLinks.js for why a
 // video's link has to wait on a conversion before it can be handed out.
-import { prepareShareLink } from '../../../services/mediaShareLinks';
+import { loadShareExposure, prepareShareLink } from '../../../services/mediaShareLinks';
 
 // react-native-share (unlike expo-sharing) can hand the OS a whole ARRAY of
 // files in ONE share sheet — so sharing many vault photos matches the native
@@ -104,9 +104,12 @@ import MusicVault from './MusicVault';
 import EdgeSwipePage from './EdgeSwipePage';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
 import { useMediaVersion } from '../../../context/DownloadsContext';
+import { useBoardLinkTarget } from '../../../context/BoardLinkContext';
 import { useTheme } from '../../../context/ThemeContext';
 import PhotoVaultBoardsPage from './PhotoVaultBoardsPage';
 import AlbumShareSheet from './AlbumShareSheet';
+import SelectionShareLinkSheet from './SelectionShareLinkSheet';
+import PhotoLinksSheet from './PhotoLinksSheet';
 import AlbumActionsSheet from './AlbumActionsSheet';
 import ShareInsightsPage from './ShareInsightsPage';
 import {
@@ -141,6 +144,11 @@ const HIT_SLOP_10 = { top: 10, bottom: 10, left: 10, right: 10 };
 const VAULT_PICKER_GAP = 14;
 const HIT_SLOP_15 = { top: 15, bottom: 15, left: 15, right: 15 };
 const HIT_SLOP_20 = { top: 20, bottom: 20, left: 20, right: 20 };
+// Every white glyph in the viewer sits on an unknown photo — it can land on a
+// blown-out sky as easily as on a dark corner. One shared shadow rather than
+// the same object re-declared inline at each icon, which is how they drifted
+// apart in the first place.
+const VIEWER_ICON_SHADOW = { textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 };
 // Biggest video we'll speculatively pull to disk so its share sheet is instant.
 // Above this the share path downloads on demand behind the progress overlay.
 const VIDEO_SHARE_WARM_MAX_BYTES = 60 * 1024 * 1024;
@@ -1459,6 +1467,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // extra strips). The timeline scrubber anchors BELOW it — measured, not
   // hardcoded, so search bars / context rows can't overlap the rail.
   const [vaultHeaderH, setVaultHeaderH] = useState(0);
+  // Measured height of the PHOTOS page's own floating header (a different
+  // element from the vault header above). It is no longer a fixed 44pt row: a
+  // long board name wraps to a second line, so the grid's top reservation has
+  // to follow it rather than assume it.
+  const [photosHeaderH, setPhotosHeaderH] = useState(0);
+  // How much of the grid's top the floating header covers, plus the 30pt of air
+  // that has always sat between the header and the first row. It was the
+  // constant `insets.top + 90`, which is exactly what a one-line header
+  // measures (insets + 44pt row + 8 + 8) plus that 30 — so an unmeasured
+  // header lands on the identical number and only a WRAPPED title moves it.
+  const gridTopReserve = Math.max(insets.top + 90, photosHeaderH + 30);
 
   // ── Self-draining, viewport-prioritized page loader ─────────────────────
   // The old loader fetched inline and `break`-ed when the concurrency cap was
@@ -1916,11 +1935,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // Paddings must mirror the grid's contentContainerStyle exactly, tab-bar
     // reservation included, or the analytic extent drifts from the real one.
     const expected = Math.ceil(len / gridCols) * pitch
-      + (insets.top + 90)
+      + gridTopReserve
       + Math.max(insets.bottom + 16, tabBarH + 16);
     gridContentH.current = expected;
     maxScrollSv.value = Math.max(1, expected - (gridLayoutH.current || height));
-  }, [uploadDisplayItems, gridCols, insets.top, insets.bottom, tabBarH, maxScrollSv]);
+  }, [uploadDisplayItems, gridCols, gridTopReserve, insets.bottom, tabBarH, maxScrollSv]);
 
   // The array the full-screen pager walks. It MUST be the same set the grid
   // renders, or a tapped photo won't be found in it and the pager collapses to
@@ -2716,6 +2735,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
 
   const closeViewer = useCallback(() => {
     gestureProbe.respond('viewer:close');
+    // The links sheet lives inside the viewer, so it has to go down with it —
+    // otherwise it is still "open" when the next photo is tapped and reappears
+    // over a picture nobody asked about it for.
+    setPhotoLinksOpen(false);
     Animated.parallel([
       Animated.timing(scaleAnim, {
         toValue: 0.85,
@@ -3621,6 +3644,259 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
   }, [api]);
 
+  // ── Sharing a SELECTION ───────────────────────────────────────────────────
+  // Everything below is the multi-select counterpart of doShare/doShareLink.
+  // Both branches need the same first step, and getting it wrong is silent:
+  // the grid is virtualized over an LRU page cache, so a photo that was picked
+  // and then scrolled far past is no longer resident. Resolving a selection
+  // against `uploadItemsForDragRef` ALONE drops exactly those — the batch just
+  // comes out short, with nothing to indicate which ones went missing.
+  const resolveSelectedItems = useCallback(async (ids) => {
+    const disp = uploadItemsForDragRef.current || [];
+    const byId = new Map();
+    for (const di of disp) if (di && di.id && !di.isSkeleton) byId.set(di.id, di);
+    let items = ids.map((id) => byId.get(id)).filter(Boolean);
+    if (items.length < ids.length) {
+      const have = new Set(items.map((it) => it.id));
+      const missing = ids.filter((id) => !have.has(id));
+      try {
+        const resp = await api.post('/media/by-ids', { ids: missing });
+        if (Array.isArray(resp?.items)) items = items.concat(resp.items);
+      } catch (e) {
+        console.warn('[MediaGallery] by-ids backfill failed:', e?.message || e);
+      }
+    }
+    return items;
+  }, [api]);
+
+  // Which selection is waiting on a "link or files?" answer, and which is in
+  // the naming sheet. Both hold RESOLVED items, not ids, so neither has to
+  // re-resolve against a grid that may have scrolled underneath them.
+  const [selectionShareChooser, setSelectionShareChooser] = useState(null);
+  const [selectionLinkItems, setSelectionLinkItems] = useState(null);
+
+  // The files branch — the original behaviour of the selection bar's Share
+  // button, unchanged except that it now takes already-resolved items and is
+  // reachable from the chooser rather than being the only option.
+  const doBulkFileShare = useCallback(async (items) => {
+    if (bulkShareBusyRef.current) return; // ignore double-taps
+    if (!items.length) {
+      Alert.alert('Error', 'Could not prepare the selected items');
+      return;
+    }
+    bulkShareBusyRef.current = true;
+
+    const local = []; // cached copies to clean up after sharing
+    // Gather overlay while the originals download — the sheet only appears
+    // once everything's ready, so it opens fully populated.
+    setSharePrepLabel(items.length > 1 ? `Preparing ${items.length} photos…` : null);
+    setSharePreparing(true);
+    try {
+      // Download originals in parallel batches of 4 → local file URIs.
+      // Each download retries ONCE so a transient network blip on one
+      // photo doesn't silently drop it from the batch.
+      const downloadOne = async (item) => {
+        const url = getFullUrl(item.rawUrl || item.url);
+        // Default the extension by media TYPE so a video with no stored
+        // filename isn't saved as ".jpg" — that makes iOS infer an image
+        // UTI and share the wrong thing (or silently drop the video).
+        const fallbackName = `shared_${item.id}${item.type === 'video' ? '.mp4' : '.jpg'}`;
+        const safeName = (item.filename || fallbackName).replace(/[^\w.\-]/g, '_');
+        // 'shared_' prefix + id: leaked copies get swept by the cacheManager
+        // background sweep, and two items with the same filename can't
+        // clobber each other's download.
+        const dest = `${FileSystem.cacheDirectory}shared_${item.id}_${safeName}`;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const { uri } = await FileSystem.downloadAsync(url, dest);
+            return { uri, item };
+          } catch (e) {
+            if (attempt === 1) {
+              console.warn('[MediaGallery] download failed for', item.id, e?.message || e);
+              return null;
+            }
+          }
+        }
+        return null;
+      };
+      for (let i = 0; i < items.length; i += 4) {
+        const chunk = items.slice(i, i + 4);
+        const got = await Promise.all(chunk.map(downloadOne));
+        local.push(...got.filter(Boolean));
+      }
+      // Drop the overlay BEFORE presenting the sheet so the spinner doesn't
+      // sit under the native share UI — and let it actually leave the screen
+      // (two committed frames) before the native presentation, which
+      // otherwise can be swallowed.
+      setSharePreparing(false);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+      if (local.length === 0) {
+        Alert.alert('Error', 'Could not prepare the selected items');
+        return;
+      }
+
+      // Prefer ONE native share sheet for the whole selection via
+      // react-native-share. We TRY it and only fall back to the per-photo
+      // path if the native module is genuinely missing (build predates the
+      // lib) — so a wrong native-probe can't strand us on the slow path when
+      // the single sheet is usable.
+      let singleSheetDone = false;
+      const RNShare = getRNShare();
+      if (RNShare) {
+        try {
+          // failOnCancel false → a user dismiss resolves quietly (no throw),
+          // so cancelling does NOT trigger the fallback. Multiple local
+          // file:// URIs → ONE OS sheet with all of them.
+          await RNShare.open({
+            urls: local.map((entry) => entry.uri),
+            failOnCancel: false,
+          });
+          singleSheetDone = true;
+        } catch (e) {
+          // Native side unavailable at call time (getEnforcing throw) or the
+          // sheet failed — fall through to per-photo below.
+          console.warn('[MediaGallery] single-sheet share failed, falling back to per-photo:', e?.message || e);
+        }
+      } else if (local.length > 1) {
+        // The ONLY reason a multi-select still prompts once-per-photo:
+        // react-native-share's native module isn't in THIS build. It's in
+        // package.json + autolinkable, so a fresh dev-client build (EAS)
+        // enables the single sheet. Logged so the cause is obvious.
+        console.warn('[MediaGallery] react-native-share native module missing from this build → per-photo fallback. Rebuild the dev client (eas build -p ios --profile development) to enable single-sheet multi-share.');
+      }
+      if (!singleSheetDone) {
+        // Fallback: one expo-sharing sheet per photo. Works, just not
+        // seamless. Present until a build includes react-native-share.
+        for (const entry of local) {
+          await Sharing.shareAsync(entry.uri, {
+            UTI: entry.item.type === 'video' ? 'public.movie' : 'public.image',
+            mimeType: entry.item.type === 'video' ? 'video/mp4' : 'image/jpeg',
+            dialogTitle: local.length > 1 ? `Share (${local.indexOf(entry) + 1} of ${local.length})` : 'Share',
+          });
+        }
+      }
+    } catch (error) {
+      // A real failure (not a dismiss) — worth a line, not an alert.
+      console.warn('[MediaGallery] bulk share failed:', error?.message || error);
+    } finally {
+      bulkShareBusyRef.current = false;
+      setSharePreparing(false);
+      setSharePrepLabel(null);
+      // Delete the cached copies we downloaded just for the share sheet —
+      // otherwise every bulk share leaks originals to disk.
+      for (const entry of local) {
+        try { await FileSystem.deleteAsync(entry.uri, { idempotent: true }); } catch (e) { /* ignore */ }
+      }
+    }
+  }, [getFullUrl]);
+
+  // Tapping Share on a selection now asks which KIND of share, the way a
+  // single item has since videos got link sharing. Resolving the items up
+  // front (rather than inside each branch) means the naming sheet can suggest
+  // a name from their dates the moment it opens.
+  const handleSelectionShare = useCallback(async () => {
+    if (bulkShareBusyRef.current) return;
+    const ids = Array.from(selectedGridItems);
+    if (ids.length === 0) return;
+    const items = await resolveSelectedItems(ids);
+    if (items.length === 0) {
+      Alert.alert('Error', 'Could not prepare the selected items');
+      return;
+    }
+    setSelectionShareChooser(items);
+  }, [selectedGridItems, resolveSelectedItems]);
+
+  // The link is live the moment it's minted — an album page needs no
+  // transcode before its first unfurl, unlike a single video. So this goes
+  // straight to the OS sheet with no waiting overlay.
+  const onSelectionLinkCreated = useCallback(async (share) => {
+    setSelectionLinkItems(null);
+    setIsSelectMode(false);
+    setSelectedGridItems(new Set());
+
+    // Said once, here, rather than discovered by the recipient: some ids were
+    // gone by the time the write landed.
+    if (share.added > 0 && share.added < share.requested) {
+      Alert.alert(
+        'Some items weren’t added',
+        `${share.added} of ${share.requested} made it into the album — the rest are no longer in your vault. The link shares what did.`,
+      );
+    }
+    if (share.reach === 'tailnet' && !tailnetWarnedRef.current) {
+      tailnetWarnedRef.current = true;
+      const send = await confirmAsync(
+        'Only works on your Tailscale network',
+        'Turtle can’t see a public address right now, so anyone outside your tailnet will get a dead link. Turn on Tailscale Funnel to send this to the world.',
+        'Send anyway',
+      );
+      if (!send) return;
+    }
+    // Same iOS trap as everywhere else here: presenting the share sheet in the
+    // tick that tears an overlay down means the sheet never appears.
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    try {
+      await RNShareSheet.share(
+        Platform.OS === 'ios' ? { url: share.url } : { message: share.url },
+      );
+    } catch { /* user dismissed the sheet */ }
+  }, []);
+
+  // ── "Is this photo shared?" ───────────────────────────────────────────────
+  // The viewer shows a link badge when something can currently see the open
+  // photo. Two things make that cost more than it looks:
+  //
+  //   It's TWO requests (its own link, plus every album link whose tag it
+  //   carries), and the viewer is a pager — flicking through fifty photos
+  //   would fire a hundred. Hence the dwell: ask only about a photo someone
+  //   actually stopped on.
+  //
+  //   The answer is per-photo and stable, so it's cached for the life of the
+  //   viewer session. Revoking from the sheet busts the entry rather than the
+  //   whole cache, so the badge updates without re-asking about everything.
+  const exposureCache = useRef(new Map());
+  const [exposure, setExposure] = useState(null);
+  const [photoLinksOpen, setPhotoLinksOpen] = useState(false);
+
+  const readExposure = useCallback(async (mediaId) => {
+    if (exposureCache.current.has(mediaId)) return exposureCache.current.get(mediaId);
+    const res = await loadShareExposure(api, mediaId);
+    // Don't cache a partial answer — a failed lookup that got remembered would
+    // under-report this photo for the rest of the session, which is the one
+    // direction that actually costs someone something.
+    if (!res.errors.length) exposureCache.current.set(mediaId, res);
+    return res;
+  }, [api]);
+
+  const viewerMediaId = selectedMedia?.id || null;
+  useEffect(() => {
+    if (!viewerMediaId) { setExposure(null); return undefined; }
+    const cached = exposureCache.current.get(viewerMediaId);
+    // A known answer paints immediately; an unknown one clears the badge first
+    // so the previous photo's state never bleeds onto this one.
+    setExposure(cached || null);
+    if (cached) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await readExposure(viewerMediaId);
+        if (!cancelled) setExposure(res);
+      } catch (e) {
+        if (__DEV__) console.warn('[MediaGallery] exposure lookup failed:', e?.message || e);
+      }
+    }, 450);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [viewerMediaId, readExposure]);
+
+  const refreshExposure = useCallback(async () => {
+    if (!viewerMediaId) return;
+    exposureCache.current.delete(viewerMediaId);
+    try {
+      const res = await readExposure(viewerMediaId);
+      setExposure(res);
+    } catch { /* the sheet already said what went wrong */ }
+  }, [viewerMediaId, readExposure]);
+
   // Tapping share opens the chooser — for videos too, now. They used to skip
   // straight to downloading the original, which is why the only thing a video
   // share could ever be was a multi-hundred-megabyte upload from the phone.
@@ -4211,16 +4487,24 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               with the same opacity the rest of the chrome uses. */}
           <Animated.View
             // box-none: only the back button is a target, the rest of the
-            // gradient band passes touches through to the pager. When zoomed
-            // the chrome is faded out (zoomChromeAnim) — 'none' so an
-            // invisible back button can't eat taps/pans.
-            pointerEvents={zoomScale > 1.05 ? 'none' : 'box-none'}
+            // gradient band passes touches through to the pager. 'none' once
+            // the chrome is invisible — whether from a zoom or from the tap
+            // toggle — so a back button nobody can see can't eat taps/pans.
+            pointerEvents={zoomScale > 1.05 || !infoVisible ? 'none' : 'box-none'}
             style={{
               position: 'absolute', top: 0, left: 0, right: 0,
               height: insets.top + 68,
+              // infoOpacityAnim is what makes tap-to-hide actually immersive.
+              // Without it the toggle hid the bottom bar and the status bar
+              // and left the back arrow, the pencil and the tags icon sitting
+              // over the photo — half a gesture, and the half you can see is
+              // the half that looks broken.
               // dragChromeOpacity: chrome clears out as soon as a pull-to-
               // dismiss starts moving the photo, iOS-style.
-              opacity: Animated.multiply(zoomChromeAnim, Animated.multiply(opacityAnim, dragChromeOpacity)),
+              opacity: Animated.multiply(
+                zoomChromeAnim,
+                Animated.multiply(Animated.multiply(opacityAnim, infoOpacityAnim), dragChromeOpacity),
+              ),
               zIndex: 5,
             }}
           >
@@ -4245,28 +4529,38 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             </TouchableOpacity>
           </Animated.View>
 
-          {/* Top Right Actions: Edit, Tags */}
+          {/* Top Right Actions: Edit, Tags.
+              Bare icons on the gradient, deliberately — the top band already
+              has a black-to-transparent wash to keep white glyphs legible, so
+              a pill here would be a second, competing background. (It used to
+              declare borderRadius/padding on a style that sets only position,
+              so the rounding and the padding rendered nothing at all while
+              still widening the touch geometry.) The bottom bar has no
+              gradient, which is why it keeps its bezel. */}
           <Animated.View
             style={[
               styles.viewerCloseButton,
               {
                 zIndex: 6,
                 top: insets.top + 16,
-                opacity: Animated.multiply(zoomChromeAnim, Animated.multiply(opacityAnim, dragChromeOpacity)),
+                // Fades with the tap toggle, like everything else. See the top
+                // gradient above for why this matters.
+                opacity: Animated.multiply(
+                  zoomChromeAnim,
+                  Animated.multiply(Animated.multiply(opacityAnim, infoOpacityAnim), dragChromeOpacity),
+                ),
                 flexDirection: 'row',
                 alignItems: 'center',
-                gap: 20, // Clean spacing between action icons
-                borderRadius: 30,
-                paddingHorizontal: 16,
-                paddingVertical: 8,
+                gap: 22,
               }
             ]}
             // box-none, not 'auto': 'auto' made the WHOLE pill (padding and
-            // the 20px gaps between icons) swallow touches, so a swipe
-            // starting there never reached the pager — one of the overlay
-            // dead zones behind "swiping goes dead". The icons are their own
-            // targets; everything between them scrolls the pager.
-            pointerEvents={zoomScale > 1.05 ? 'none' : 'box-none'}
+            // the gaps between icons) swallow touches, so a swipe starting
+            // there never reached the pager — one of the overlay dead zones
+            // behind "swiping goes dead". The icons are their own targets;
+            // everything between them scrolls the pager. 'none' when hidden,
+            // so invisible icons don't keep taking taps.
+            pointerEvents={zoomScale > 1.05 || !infoVisible ? 'none' : 'box-none'}
           >
             {/* Only show Edit button for Images, not Videos */}
             {selectedMedia?.type !== 'video' && (
@@ -4276,7 +4570,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 accessibilityRole="button"
                 accessibilityLabel="Edit image"
               >
-                <Icon name="pencil" size={26} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
+                <Icon name="pencil" size={26} color="#fff" style={VIEWER_ICON_SHADOW} />
               </TouchableOpacity>
             )}
 
@@ -4286,7 +4580,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               accessibilityRole="button"
               accessibilityLabel="Edit tags"
             >
-              <Icon name="tag-multiple" size={26} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
+              <Icon name="tag-multiple" size={26} color="#fff" style={VIEWER_ICON_SHADOW} />
             </TouchableOpacity>
           </Animated.View>
 
@@ -4335,24 +4629,63 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 box-none — the buttons (with their hitSlop) are the targets;
                 the pill's own padding shouldn't be a swipe dead zone. */}
             <View style={[styles.premiumBezel, { flexDirection: 'row', gap: 20, alignItems: 'center', borderRadius: 30, paddingHorizontal: 20, paddingVertical: 10 }]} pointerEvents="box-none">
-              <TouchableOpacity 
+              {/* Shared-state badge. Present ONLY when something can currently
+                  see this photo — there is no "not shared" state to render,
+                  because an icon that is always there tells you nothing, and
+                  the whole point is that this is a fact you'd otherwise have
+                  no way to notice. Tinted like the favourited heart, so "this
+                  is on" reads the same way twice in one bar. */}
+              {exposure?.liveCount > 0 && (
+                <TouchableOpacity
+                  onPress={() => setPhotoLinksOpen(true)}
+                  hitSlop={HIT_SLOP_20}
+                  activeOpacity={0.6}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    exposure.liveCount === 1
+                      ? 'Shared by 1 link. Manage links'
+                      : `Shared by ${exposure.liveCount} links. Manage links`
+                  }
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                    <Icon name="link-variant" size={28} color={theme.colors.accentInfo} style={VIEWER_ICON_SHADOW} />
+                    {exposure.liveCount > 1 && (
+                      <Text style={{
+                        color: theme.colors.accentInfo, fontSize: 13, fontWeight: '800',
+                        textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4,
+                      }}>
+                        {exposure.liveCount}
+                      </Text>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
                 onPress={handleShare}
                 hitSlop={HIT_SLOP_20}
                 activeOpacity={0.6}
+                accessibilityRole="button"
+                accessibilityLabel="Share"
               >
-                <Icon name="share-variant" size={28} color="#fff" style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }} />
+                <Icon name="share-variant" size={28} color="#fff" style={VIEWER_ICON_SHADOW} />
               </TouchableOpacity>
 
               <TouchableOpacity
                 onPress={toggleFavourite}
                 hitSlop={HIT_SLOP_20}
                 activeOpacity={0.6}
+                accessibilityRole="button"
+                accessibilityLabel="Favourite"
               >
                 <Icon
+                  // 28 to match its neighbours. It was 30 — the odd one out in
+                  // a row of three, which reads as a wobble rather than as
+                  // emphasis.
                   name={selectedMedia?.tags?.includes('Favourites') ? "heart" : "heart-outline"}
-                  size={30}
+                  size={28}
                   color={selectedMedia?.tags?.includes('Favourites') ? "#ef4444" : "#ffffff"}
-                  style={{ textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 }}
+                  style={VIEWER_ICON_SHADOW}
                 />
               </TouchableOpacity>
             </View>
@@ -4755,6 +5088,22 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           {/* iOS-style Metadata Drawer */}
           {renderMetadataDrawer()}
 
+          {/* Where this photo is shared, and how to stop it.
+              IN-TREE, a direct child of the viewer, for the same reason as the
+              gather overlay below: this opens from inside the viewer's Modal,
+              and a second Modal over an open one silently fails to show on
+              iOS. Revoking from here busts this photo's exposure cache so the
+              badge in the bar above updates without a re-open. */}
+          <PhotoLinksSheet
+            visible={photoLinksOpen}
+            media={selectedMedia}
+            api={api}
+            theme={theme}
+            onClose={() => setPhotoLinksOpen(false)}
+            onChanged={refreshExposure}
+            bottomInset={tabBarH + 20}
+          />
+
           {/* "Gathering data" overlay while the original downloads, then the OS
               share sheet takes over.
 
@@ -4823,6 +5172,23 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // openPhotosPage — a const referenced before its declaration would throw.
   const openAllPhotos = useCallback(() => openPhotosPage('All'), [openPhotosPage]);
 
+  // ── Arriving from the boards canvas ───────────────────────────────────────
+  // Only the TAB vault answers these. This component is also mounted as an
+  // overlay inside the Turtle chat, and that copy has an `onClose` where the tab
+  // has none (there is nothing to go back to from a tab — the same signal
+  // MusicVault reads). Both listening meant both consuming the one link, in the
+  // same commit, and the hidden one filtering itself to a board nobody asked it
+  // about.
+  const isTabVault = !onClose;
+  // "Open this board's photos in the vault": land on the board's own page with
+  // the filter already applied, rather than on the shelf of every board with
+  // the user left to find it again.
+  useBoardLinkTarget('photos', (board) => {
+    if (board) openPhotosPage(board);
+  }, isTabVault);
+  // Which board the Music page is filtered to, if the canvas sent us there.
+  const [musicBoard, setMusicBoard] = useState(null);
+
   // Pinterest-style underline: a bar the width of the ACTIVE label that slides
   // from title to title. Label widths are measured once by onLayout (text width
   // depends on font metrics and the user's font scale, so it can't be computed).
@@ -4882,6 +5248,18 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       setPagerTab(tab);
     });
   }, [TABS, pagerTab, width]);
+
+  // "Open this board's audio in the music player", from the boards canvas.
+  // Declared HERE, below handleTabPress, purely so the two read in the order
+  // they run.
+  useBoardLinkTarget('audio', (board) => {
+    setMusicBoard(board || null);
+    // The photos page is pushed OVER the pager, so it has to come off first —
+    // otherwise the music page slides in behind a board grid and the tap looks
+    // like it did nothing.
+    setPhotosOpen(false);
+    handleTabPress('music');
+  }, isTabVault);
 
   // SWIPE END: The ScrollView tells React it finished moving.
   const commitTab = useCallback((index) => {
@@ -4993,144 +5371,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 accessibilityLabel="Share selected photos"
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
                 disabled={selectedGridItems.size === 0}
-                onPress={async () => {
-                  // Match native iOS Photos multi-share: download the selected
-                  // originals to cache, then present ONE share sheet with ALL of
-                  // them. expo-sharing can only take a single file (which forced
-                  // an N-sheet slog — one sheet per photo); react-native-share's
-                  // `urls` array hands the whole selection to a single OS sheet.
-                  if (bulkShareBusyRef.current) return; // ignore double-taps
-                  const selectedIds = Array.from(selectedGridItems);
-                  if (selectedIds.length === 0) return;
-                  bulkShareBusyRef.current = true;
-
-                  const local = []; // cached copies to clean up after sharing
-                  // Gather overlay while the originals download — the sheet only
-                  // appears once everything's ready, so it opens fully populated.
-                  setSharePrepLabel(selectedIds.length > 1 ? `Preparing ${selectedIds.length} photos…` : null);
-                  setSharePreparing(true);
-                  try {
-                    // Resolve each selected id → its media object. Start with what's
-                    // resident in the virtualized grid, then backfill anything the
-                    // LRU page cache has evicted (a photo selected, then scrolled
-                    // far past) from the server — so nothing silently drops.
-                    const _disp = uploadItemsForDragRef.current || [];
-                    const _byId = new Map();
-                    for (const di of _disp) if (di && di.id && !di.isSkeleton) _byId.set(di.id, di);
-                    let items = selectedIds.map((id) => _byId.get(id)).filter(Boolean);
-                    if (items.length < selectedIds.length) {
-                      const haveIds = new Set(items.map((it) => it.id));
-                      const missing = selectedIds.filter((id) => !haveIds.has(id));
-                      try {
-                        const resp = await api.post('/media/by-ids', { ids: missing });
-                        if (Array.isArray(resp?.items)) items = items.concat(resp.items);
-                      } catch (e) {
-                        console.warn('[MediaGallery] by-ids backfill failed:', e?.message || e);
-                      }
-                    }
-                    if (items.length === 0) {
-                      Alert.alert('Error', 'Could not prepare the selected items');
-                      return;
-                    }
-
-                    // Download originals in parallel batches of 4 → local file URIs.
-                    // Each download retries ONCE so a transient network blip on one
-                    // photo doesn't silently drop it from the batch.
-                    const downloadOne = async (item) => {
-                      const url = getFullUrl(item.rawUrl || item.url);
-                      // Default the extension by media TYPE so a video with no stored
-                      // filename isn't saved as ".jpg" — that makes iOS infer an image
-                      // UTI and share the wrong thing (or silently drop the video).
-                      const fallbackName = `shared_${item.id}${item.type === 'video' ? '.mp4' : '.jpg'}`;
-                      const safeName = (item.filename || fallbackName).replace(/[^\w.\-]/g, '_');
-                      // 'shared_' prefix + id: leaked copies get swept by the
-                      // cacheManager background sweep, and two items with the
-                      // same filename can't clobber each other's download.
-                      const dest = `${FileSystem.cacheDirectory}shared_${item.id}_${safeName}`;
-                      for (let attempt = 0; attempt < 2; attempt++) {
-                        try {
-                          const { uri } = await FileSystem.downloadAsync(url, dest);
-                          return { uri, item };
-                        } catch (e) {
-                          if (attempt === 1) {
-                            console.warn('[MediaGallery] download failed for', item.id, e?.message || e);
-                            return null;
-                          }
-                        }
-                      }
-                      return null;
-                    };
-                    for (let i = 0; i < items.length; i += 4) {
-                      const chunk = items.slice(i, i + 4);
-                      const got = await Promise.all(chunk.map(downloadOne));
-                      local.push(...got.filter(Boolean));
-                    }
-                    // Drop the overlay BEFORE presenting the sheet so the spinner
-                    // doesn't sit under the native share UI — and let it actually
-                    // leave the screen (two committed frames) before the native
-                    // presentation, which otherwise can be swallowed.
-                    setSharePreparing(false);
-                    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-
-                    if (local.length === 0) {
-                      Alert.alert('Error', 'Could not prepare the selected items');
-                      return;
-                    }
-
-                    // Prefer ONE native share sheet for the whole selection via
-                    // react-native-share. We TRY it and only fall back to the
-                    // per-photo path if the native module is genuinely missing
-                    // (build predates the lib) — so a wrong native-probe can't
-                    // strand us on the slow path when the single sheet is usable.
-                    let singleSheetDone = false;
-                    const RNShare = getRNShare();
-                    if (RNShare) {
-                      try {
-                        // failOnCancel false → a user dismiss resolves quietly
-                        // (no throw), so cancelling does NOT trigger the fallback.
-                        // Multiple local file:// URIs → ONE OS sheet with all of them.
-                        await RNShare.open({
-                          urls: local.map((entry) => entry.uri),
-                          failOnCancel: false,
-                        });
-                        singleSheetDone = true;
-                      } catch (e) {
-                        // Native side unavailable at call time (getEnforcing throw)
-                        // or the sheet failed — fall through to per-photo below.
-                        console.warn('[MediaGallery] single-sheet share failed, falling back to per-photo:', e?.message || e);
-                      }
-                    } else if (local.length > 1) {
-                      // The ONLY reason a multi-select still prompts once-per-photo:
-                      // react-native-share's native module isn't in THIS build. It's
-                      // in package.json + autolinkable, so a fresh dev-client build
-                      // (EAS) enables the single sheet. Logged so the cause is obvious.
-                      console.warn('[MediaGallery] react-native-share native module missing from this build → per-photo fallback. Rebuild the dev client (eas build -p ios --profile development) to enable single-sheet multi-share.');
-                    }
-                    if (!singleSheetDone) {
-                      // Fallback: one expo-sharing sheet per photo. Works, just not
-                      // seamless. Present until a build includes react-native-share.
-                      for (const entry of local) {
-                        await Sharing.shareAsync(entry.uri, {
-                          UTI: entry.item.type === 'video' ? 'public.movie' : 'public.image',
-                          mimeType: entry.item.type === 'video' ? 'video/mp4' : 'image/jpeg',
-                          dialogTitle: local.length > 1 ? `Share (${local.indexOf(entry) + 1} of ${local.length})` : 'Share',
-                        });
-                      }
-                    }
-                  } catch (error) {
-                    // A real failure (not a dismiss) — worth a line, not an alert.
-                    console.warn('[MediaGallery] bulk share failed:', error?.message || error);
-                  } finally {
-                    bulkShareBusyRef.current = false;
-                    setSharePreparing(false);
-                    setSharePrepLabel(null);
-                    // Delete the cached copies we downloaded just for the share
-                    // sheet — otherwise every bulk share leaks originals to disk.
-                    for (const entry of local) {
-                      try { await FileSystem.deleteAsync(entry.uri, { idempotent: true }); } catch (e) { /* ignore */ }
-                    }
-                  }
-                }}
+                onPress={handleSelectionShare}
               >
                 <Icon name="share-variant" size={20} color={theme.colors.primary} />
                 <Text style={{ color: theme.colors.primary, fontWeight: 'bold', fontSize: 15 }}>
@@ -5321,6 +5562,84 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           )}
         </KeyboardAvoidingView>
       )}
+
+      {/* "Link or files?" for a SELECTION — the same question a single item
+          has been asking since videos got link sharing, and deliberately the
+          same two answers in the same order, so the choice reads identically
+          whether you arrived here from one photo or twelve. */}
+      <Modal
+        visible={!!selectionShareChooser}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectionShareChooser(null)}
+      >
+        <Pressable style={styles.shareSheetBackdrop} onPress={() => setSelectionShareChooser(null)}>
+          <Pressable style={styles.shareSheetCard} onPress={() => {}}>
+            <Text style={styles.shareSheetTitle}>
+              Share {selectionShareChooser?.length || 0}{' '}
+              {(selectionShareChooser?.length || 0) === 1 ? 'item' : 'items'}
+            </Text>
+
+            <TouchableOpacity
+              style={styles.shareSheetOption}
+              activeOpacity={0.7}
+              testID="selection-share-link"
+              onPress={() => {
+                const items = selectionShareChooser;
+                setSelectionShareChooser(null);
+                setSelectionLinkItems(items);
+              }}
+            >
+              <Icon name="link-variant" size={22} color={theme.colors.primary} />
+              <View style={styles.shareSheetOptionText}>
+                <Text style={styles.shareSheetOptionTitle}>Send a link</Text>
+                <Text style={styles.shareSheetOptionSub}>
+                  One page they can open · nothing uploads
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.shareSheetOption}
+              activeOpacity={0.7}
+              testID="selection-share-files"
+              onPress={() => {
+                const items = selectionShareChooser;
+                setSelectionShareChooser(null);
+                doBulkFileShare(items);
+              }}
+            >
+              <Icon name="image-size-select-actual" size={22} color={theme.colors.accentInfo} />
+              <View style={styles.shareSheetOptionText}>
+                <Text style={styles.shareSheetOptionTitle}>Send the files</Text>
+                <Text style={styles.shareSheetOptionSub}>
+                  {(selectionShareChooser?.length || 0)} originals · uploads from here
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.shareSheetCancel}
+              activeOpacity={0.7}
+              onPress={() => setSelectionShareChooser(null)}
+            >
+              <Text style={styles.shareSheetCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Name the selection → it becomes an album → that album gets the link.
+          In-tree, not a Modal: the vault already lives inside one. */}
+      <SelectionShareLinkSheet
+        visible={!!selectionLinkItems}
+        items={selectionLinkItems || []}
+        api={api}
+        theme={theme}
+        onClose={() => setSelectionLinkItems(null)}
+        onCreated={onSelectionLinkCreated}
+        bottomInset={Math.max(insets.bottom + 24, tabBarH + 12)}
+      />
 
       {/* Pre-Upload Album Selection Modal (Draggable Bottom-Sheet Style) */}
       <Modal 
@@ -5596,6 +5915,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             <MusicVault
               topInset={(vaultHeaderH || insets.top + 90) + VAULT_PICKER_GAP}
               bottomInset={tabBarH}
+              boardFilter={musicBoard}
+              onClearBoardFilter={() => setMusicBoard(null)}
             />
           </View>
 
@@ -5639,6 +5960,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               actions that used to sit in the vault header. Same styling; the
               left slot is now the page-back affordance for this pushed page. */}
           <View
+            onLayout={(e) => {
+              const h = Math.round(e.nativeEvent.layout.height);
+              if (h > 0 && h !== photosHeaderH) setPhotosHeaderH(h);
+            }}
             style={[
               styles.floatingHeaderContainer,
               {
@@ -5650,8 +5975,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               },
             ]}
           >
-          {/* Top Row: Title & Actions (Compact) */}
-          <View style={[styles.header, { height: 44, paddingHorizontal: 16 }]}>
+          {/* Top Row: Title & Actions. minHeight, not height — a long board
+              name wraps to a second line and the row has to grow with it
+              (gridTopReserve above follows this element's measured height, so
+              the extra line pushes the photos down rather than covering them). */}
+          <View style={[styles.header, { minHeight: 44, paddingHorizontal: 16 }]}>
             {/* Back out of the pushed page — the tap equivalent of the
                 left-edge swipe EdgeSwipePage provides. Deliberately NOT in the
                 fixed 70pt headerLeft slot: that slot exists to keep a centred
@@ -5677,7 +6005,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <View style={{ flexShrink: 1 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                      <Text style={[styles.headerTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+                      {/* Wraps to a SECOND line rather than truncating at one:
+                          a board name is the only thing on this page that says
+                          which board you're in, and "Material Selection - Row…"
+                          doesn't. Capped at two, because the header floats over
+                          the grid and an uncapped title would eat the photos.
+                          flexShrink is what makes it wrap instead of shoving
+                          the globe off the end of the row. */}
+                      <Text
+                        style={[styles.headerTitle, { flexShrink: 1, color: theme.colors.textPrimary }]}
+                        numberOfLines={2}
+                      >
                         {selectedAlbum}
                       </Text>
                       {/* Published-state cue. Deliberately a small tinted globe
@@ -5736,65 +6074,68 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               )}
             </View>
   
-            <View style={[styles.headerRight, { justifyContent: 'center' }]}>
-              {/* Uploads Action: Search & Select Buttons */}
-              {/* Plain View, not Animated: these used to cross-fade with the
-                  pager because the grid was a pager page. On its own page they
-                  are simply always present. */}
-              <View style={{
-                position: 'absolute', right: 0,
-                flexDirection: 'row', alignItems: 'center', gap: 16,
-              }}>
-                {/* Filter & arrange. This replaced a bare icon that flipped
-                    between a camera and a clock: it changed the grid's order
-                    with no word anywhere saying so, and read as a camera
-                    button. Search folded in with it — one control for "what am
-                    I looking at", rather than three unlabelled glyphs.
-                    Long-press lands straight in the search field, so the most
-                    common action still costs one gesture. */}
-                <TouchableOpacity
-                  testID="gallery-filter-toggle"
-                  onPress={() => { setFilterSheetFocusSearch(false); setIsFilterSheetOpen(true); }}
-                  onLongPress={() => { impactHaptic('medium'); setFilterSheetFocusSearch(true); setIsFilterSheetOpen(true); }}
-                  delayLongPress={280}
-                  hitSlop={HIT_SLOP_10}
-                  accessibilityRole="button"
-                  accessibilityLabel={filtersDirty
-                    ? 'Filter and arrange. Filters are active. Long-press to search.'
-                    : 'Filter and arrange. Long-press to search.'}
-                >
-                  <View>
-                    <Icon
-                      name="tune-variant"
-                      size={24}
-                      color={filtersDirty ? theme.colors.primary : theme.colors.textPrimary}
-                    />
-                    {/* Active-state dot. Density changes deliberately don't
-                        light it — badging a viewing preference cries wolf. */}
-                    {filtersDirty && (
-                      <View style={{
-                        position: 'absolute', top: -1, right: -2,
-                        width: 7, height: 7, borderRadius: 4,
-                        backgroundColor: theme.colors.primary,
-                        borderWidth: 1.5, borderColor: theme.colors.background,
-                      }} />
-                    )}
-                  </View>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  testID="gallery-select-toggle"
-                  onPress={() => {
-                    if (isSelectMode) { setIsSelectMode(false); setIsBulkTagging(false); setSelectedGridItems(new Set()); setRangeSelectMode(false); setRangeAnchorIdx(null); rangeAnchorRef.current = null; }
-                    else { setIsSelectMode(true); }
-                  }}
-                  hitSlop={HIT_SLOP_10}
-                >
-                  <Text style={{ color: theme.colors.primary, fontWeight: '600', fontSize: 15, letterSpacing: -0.3 }}>
-                    {isSelectMode ? 'Cancel' : 'Select'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
+            {/* Right-hand actions: filter, then Select.
 
+                These used to be an absolutely-positioned row (`right: 0`)
+                inside the fixed 70pt `headerRight` slot — a leftover from when
+                they cross-faded with the pager and needed to stack. Their real
+                width is ~88pt, so anchoring them to the slot's right edge hung
+                them ~18pt OUT of it, over the end of the title: that is the
+                globe sitting underneath the filter icon.
+
+                In flow and self-sized now. The slot is exactly as wide as its
+                buttons, `flexShrink: 0` keeps it that way, and the title's
+                flex:1 gets precisely what's left — so the two can no longer
+                occupy the same pixels however long the board name is. */}
+            <View style={styles.headerActions}>
+              {/* Filter & arrange. This replaced a bare icon that flipped
+                  between a camera and a clock: it changed the grid's order
+                  with no word anywhere saying so, and read as a camera
+                  button. Search folded in with it — one control for "what am
+                  I looking at", rather than three unlabelled glyphs.
+                  Long-press lands straight in the search field, so the most
+                  common action still costs one gesture. */}
+              <TouchableOpacity
+                testID="gallery-filter-toggle"
+                onPress={() => { setFilterSheetFocusSearch(false); setIsFilterSheetOpen(true); }}
+                onLongPress={() => { impactHaptic('medium'); setFilterSheetFocusSearch(true); setIsFilterSheetOpen(true); }}
+                delayLongPress={280}
+                hitSlop={HIT_SLOP_10}
+                accessibilityRole="button"
+                accessibilityLabel={filtersDirty
+                  ? 'Filter and arrange. Filters are active. Long-press to search.'
+                  : 'Filter and arrange. Long-press to search.'}
+              >
+                <View>
+                  <Icon
+                    name="tune-variant"
+                    size={24}
+                    color={filtersDirty ? theme.colors.primary : theme.colors.textPrimary}
+                  />
+                  {/* Active-state dot. Density changes deliberately don't
+                      light it — badging a viewing preference cries wolf. */}
+                  {filtersDirty && (
+                    <View style={{
+                      position: 'absolute', top: -1, right: -2,
+                      width: 7, height: 7, borderRadius: 4,
+                      backgroundColor: theme.colors.primary,
+                      borderWidth: 1.5, borderColor: theme.colors.background,
+                    }} />
+                  )}
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="gallery-select-toggle"
+                onPress={() => {
+                  if (isSelectMode) { setIsSelectMode(false); setIsBulkTagging(false); setSelectedGridItems(new Set()); setRangeSelectMode(false); setRangeAnchorIdx(null); rangeAnchorRef.current = null; }
+                  else { setIsSelectMode(true); }
+                }}
+                hitSlop={HIT_SLOP_10}
+              >
+                <Text style={{ color: theme.colors.primary, fontWeight: '600', fontSize: 15, letterSpacing: -0.3 }}>
+                  {isSelectMode ? 'Cancel' : 'Select'}
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
   
@@ -5930,7 +6271,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 // clear of the bar — a photo permanently pinned under it could
                 // never be tapped, which is the whole point of the underlay
                 // being allowed only on scrollable content.
-                contentContainerStyle={[styles.gridContent, { paddingBottom: insets.top + 90, paddingTop: Math.max(insets.bottom + 16, tabBarH + 16) }]}
+                contentContainerStyle={[styles.gridContent, { paddingBottom: gridTopReserve, paddingTop: Math.max(insets.bottom + 16, tabBarH + 16) }]}
                 showsVerticalScrollIndicator={false}
                 onRefresh={handleRefresh}
                 refreshing={refreshing}
@@ -6761,10 +7102,18 @@ const createStyles = (theme) =>
       alignItems: 'flex-start',
       justifyContent: 'center',
     },
-    headerRight: {
-      width: 70, // Equal width to headerLeft for true centering
-      alignItems: 'flex-end',
-      justifyContent: 'center',
+    // The photos page's right-hand actions. Sized by its own buttons rather
+    // than pinned to a fixed width — see the JSX: a 70pt slot holding ~88pt of
+    // content is what put the filter icon on top of the title. flexShrink: 0
+    // decides who gives when the board name is long: the title wraps, the
+    // controls never squash (a clipped "Select" is worse than a second line).
+    headerActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: 16,
+      flexShrink: 0,
+      marginLeft: 12,
     },
     iconButton: {
       width: 36,

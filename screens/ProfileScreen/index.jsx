@@ -17,6 +17,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import ConversationsOverlay from '../TurtleScreen/components/ConversationsOverlay';
+import BoardsCanvas from '../TurtleScreen/components/BoardsCanvas';
 import LinkDesktop from '../TurtleScreen/components/LinkDesktop';
 import PasswordsScreen from '../PasswordsScreen';
 import SettingsScreen from '../SettingsScreen';
@@ -62,6 +63,7 @@ export default function ProfileScreen() {
   const [friends, setFriends] = useState([]);
   const [vaultOpen, setVaultOpen] = useState(false);
   const [convosOpen, setConvosOpen] = useState(false);
+  const [canvasOpen, setCanvasOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [turtle3dOpen, setTurtle3dOpen] = useState(false);
@@ -179,6 +181,11 @@ export default function ProfileScreen() {
       sub: 'Your saved logins', onPress: () => { tapHaptic(); setVaultOpen(true); } },
     { key: 'chats', icon: 'forum', label: 'Board conversations',
       sub: 'Per-board chat + activity', onPress: () => { tapHaptic(); setConvosOpen(true); } },
+    // The same boards as the card above, as a MAP rather than a list — sits
+    // next to it deliberately, so the pair reads as two ways into one thing.
+    { key: 'boardmap', icon: 'view-grid-outline', label: 'Board canvas',
+      sub: 'Every board on one movable map',
+      onPress: () => { tapHaptic(); setCanvasOpen(true); } },
     { key: 'claude', icon: 'robot', label: 'Claude session',
       sub: 'Code with Claude in chat', onPress: () => goTab('Turtle') },
     { key: 'terminal', icon: 'console', label: 'Terminal',
@@ -409,6 +416,11 @@ export default function ProfileScreen() {
         // this closes the inbox and switches there.
         onOpenClaude={() => { setConvosOpen(false); goTab('Turtle'); }}
       />
+
+      {/* Board canvas — every board as a pannable, pinchable map. Like the
+          conversations inbox above it, it brings its own EdgeSwipePage, so it
+          is rendered directly rather than wrapped. */}
+      <BoardsCanvas visible={canvasOpen} onClose={() => setCanvasOpen(false)} />
 
       {/* Turtle 3D — read-only status for the collab side of this server. */}
       <EdgeSwipePage overlay visible={turtle3dOpen} onClose={() => setTurtle3dOpen(false)}>

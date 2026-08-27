@@ -3,6 +3,8 @@ import {
   createShareLink,
   waitForPlayable,
   prepareShareLink,
+  loadShareExposure,
+  revokeExposureLink,
 } from '../mediaShareLinks';
 
 /**
@@ -234,5 +236,143 @@ describe('prepareShareLink', () => {
     api.get = jest.fn(async () => { throw new Error('offline'); });
     const result = await settle(prepareShareLink(api, 'vid-1'));
     expect(result.playable).toBe(true);
+  });
+});
+
+/**
+ * Exposure — "who can currently see this photo?"
+ *
+ * The only dangerous direction is under-reporting. A link missing from this
+ * answer is a link the owner does not know exists and therefore cannot turn
+ * off, so every case below is about not losing one.
+ */
+describe('loadShareExposure', () => {
+  const directShare = (over = {}) => ({
+    id: 1, slug: 'd1', url: 'https://s.t3d.ca/m/d1', viewCount: 3,
+    createdAt: 2000, dead: false, ...over,
+  });
+  const albumShare = (over = {}) => ({
+    id: 9, slug: 'a1', url: 'https://s.t3d.ca/s/a1', album: 'Wedding',
+    hasPassword: false, viewCount: 12, createdAt: 1000, revokedAt: null,
+    expiresAt: null, ...over,
+  });
+
+  /** api wrapper serving each router's list independently. */
+  function exposureApi({ direct = [], albums = [], failDirect, failAlbums, unfiltered } = {}) {
+    const asked = [];
+    return {
+      asked,
+      get: jest.fn(async (endpoint) => {
+        asked.push(endpoint);
+        if (endpoint.startsWith('/media-shares?')) {
+          if (failDirect) throw new Error('offline');
+          return { success: true, shares: direct };
+        }
+        if (endpoint.startsWith('/album-shares?')) {
+          if (failAlbums) throw new Error('offline');
+          return { success: true, filteredBy: unfiltered ? null : 'mediaId', shares: albums };
+        }
+        throw new Error(`unexpected GET ${endpoint}`);
+      }),
+    };
+  }
+
+  test('asks BOTH routers — a photo is exposed by two different things', async () => {
+    const api = exposureApi();
+    await loadShareExposure(api, 'p1');
+    expect(api.asked.some((e) => e.startsWith('/media-shares?'))).toBe(true);
+    expect(api.asked.some((e) => e.startsWith('/album-shares?'))).toBe(true);
+  });
+
+  test('merges both kinds, newest first', async () => {
+    const api = exposureApi({ direct: [directShare()], albums: [albumShare()] });
+    const { links, liveCount } = await loadShareExposure(api, 'p1');
+    expect(links.map((l) => l.kind)).toEqual(['direct', 'album']); // 2000 > 1000
+    expect(liveCount).toBe(2);
+    expect(links[1].album).toBe('Wedding');
+  });
+
+  test('an album link with no `dead` flag is still judged dead when revoked', async () => {
+    // The two routers disagree on shape: media shares send `dead`, album
+    // shares send the raw timestamps. Trusting `dead` alone would show a
+    // revoked album link as live.
+    const api = exposureApi({ albums: [albumShare({ revokedAt: 123 })] });
+    const { links, liveCount } = await loadShareExposure(api, 'p1');
+    expect(links[0].dead).toBe(true);
+    expect(liveCount).toBe(0);
+  });
+
+  test('an expired album link counts as dead', async () => {
+    const api = exposureApi({ albums: [albumShare({ expiresAt: Date.now() - 1000 })] });
+    const { liveCount } = await loadShareExposure(api, 'p1');
+    expect(liveCount).toBe(0);
+  });
+
+  test('a dead link is still LISTED — the owner may want the history', async () => {
+    const api = exposureApi({ direct: [directShare({ dead: true })] });
+    const { links, liveCount } = await loadShareExposure(api, 'p1');
+    expect(links).toHaveLength(1);
+    expect(liveCount).toBe(0);
+  });
+
+  test('one router failing does not claim the photo is unshared', async () => {
+    // The under-report that matters: swallowing the error and returning an
+    // empty list would render the viewer's badge as "not shared".
+    const api = exposureApi({ albums: [albumShare()], failDirect: true });
+    const { links, liveCount, errors } = await loadShareExposure(api, 'p1');
+    expect(liveCount).toBe(1);
+    expect(links[0].kind).toBe('album');
+    expect(errors).toContain('direct');
+  });
+
+  test('both failing reports both, rather than throwing', async () => {
+    const api = exposureApi({ failDirect: true, failAlbums: true });
+    const { links, errors } = await loadShareExposure(api, 'p1');
+    expect(links).toEqual([]);
+    expect(errors.sort()).toEqual(['album', 'direct']);
+  });
+
+
+  test('an unfiltered answer is refused, not displayed as this photo’s links', async () => {
+    // The bug this exists to stop: a server too old to understand ?mediaId=
+    // ignored it and returned EVERY album link the user owns, which this
+    // screen then showed under "where this photo is shared". Listing albums a
+    // photo is not in, under that heading, invites revoking the wrong link.
+    const api = exposureApi({
+      albums: [albumShare(), albumShare({ id: 10, album: 'Unrelated' })],
+      unfiltered: true,
+    });
+    const { links, liveCount, errors } = await loadShareExposure(api, 'p1');
+    expect(links).toEqual([]);
+    expect(liveCount).toBe(0);
+    expect(errors).toContain('album');
+  });
+
+  test('a confirmed filter is trusted', async () => {
+    const api = exposureApi({ albums: [albumShare()] });
+    const { links, errors } = await loadShareExposure(api, 'p1');
+    expect(links).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+
+  test('the media id is encoded, so an odd id cannot break the query', async () => {
+    const api = exposureApi();
+    await loadShareExposure(api, 'a b&c');
+    expect(api.asked[0]).toContain('a%20b%26c');
+  });
+});
+
+describe('revokeExposureLink', () => {
+  test('routes each kind to its own router', async () => {
+    const calls = [];
+    const api = { delete: jest.fn(async (e) => { calls.push(e); return { success: true }; }) };
+    await revokeExposureLink(api, { kind: 'direct', id: 4 });
+    await revokeExposureLink(api, { kind: 'album', id: 7 });
+    expect(calls).toEqual(['/media-shares/4', '/album-shares/7']);
+  });
+
+  test('a refusal is raised, not reported as success', async () => {
+    const api = { delete: jest.fn(async () => ({ success: false, error: 'nope' })) };
+    await expect(revokeExposureLink(api, { kind: 'album', id: 7 })).rejects.toThrow('nope');
   });
 });

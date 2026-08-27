@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PhotoVaultBoardCard from './PhotoVaultBoardCard';
+import { normalizeBoardSearch } from '../../../utils/photoVaultBoards';
 
 const SORTS = [
   { mode: 'recent', label: 'Recent', icon: 'clock-outline' },
@@ -74,6 +75,10 @@ const PhotoVaultBoardsPage = forwardRef(({
   const visibleBoards = hasLoadedAlbums ? boards : [];
   const onPrimary = theme.colors.onPrimary ?? theme.colors.background;
   const searchRef = useRef(null);
+  // "Is a search actually narrowing anything" — the same normalization the
+  // filter itself uses, so a field holding only spaces counts as empty here
+  // exactly as it does there.
+  const searching = !!normalizeBoardSearch(query);
 
   // Clearing is part of typing, not the end of it — keep the field focused so the
   // keyboard stays up and the user can retype immediately (standard search UX).
@@ -177,11 +182,19 @@ const PhotoVaultBoardsPage = forwardRef(({
       )}
 
       {/* All Photos — the whole library as a board, pinned above the user's own.
-          Deliberately outside the grid data: it is never filtered by the search
-          field and never reordered by the sort chips, because it is a fixed
-          entry point rather than content. Full width so it reads as the parent
-          of the two-column boards below. */}
-      {allPhotos ? (
+          Outside the grid data: it is never reordered by the sort chips,
+          because it is a fixed entry point rather than content. Full width so
+          it reads as the parent of the two-column boards below.
+
+          It DOES stand down while searching. Someone typing a board name has
+          told you what they want, and a full-width card that matches nothing
+          they typed pushes the actual answer below the fold — on a phone, the
+          best match would land off-screen. Clearing the field brings it
+          straight back; nothing about it is stored.
+
+          Keyed off the normalized query, not the raw one, so a stray space
+          doesn't silently hide it. */}
+      {allPhotos && !searching ? (
         <View style={styles.allPhotosSlot}>
           <PhotoVaultBoardCard
             board={allPhotos}

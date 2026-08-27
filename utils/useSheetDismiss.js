@@ -38,6 +38,8 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { Animated, Dimensions, PanResponder } from 'react-native';
 
+import { SHEET, SPRING, spring, timing } from './motion';
+
 const SCREEN_H = Dimensions.get('window').height || 900;
 export const COMMIT_DY = 90;
 // PanResponder gesture velocity is in px/MILLISECOND (unlike RNGH's px/s).
@@ -115,21 +117,21 @@ export function useSheetDismiss(onClose, visible = true) {
       },
       onPanResponderRelease: (_e, g) => {
         if (shouldCommit(g)) {
-          Animated.timing(dragY, {
-            toValue: SCREEN_H,
-            duration: 200,
-            useNativeDriver: true,
-          }).start(({ finished }) => {
-            // The sheet stays parked off-screen through the host's own exit
-            // animation; the visible-effect above re-zeroes it on next open.
-            if (finished) onCloseRef.current?.();
-          });
+          // A committed pull leaves on exactly the timing a programmatic close
+          // uses, so dismissing a sheet by hand and dismissing it by button
+          // finish the same way.
+          timing(dragY, SCREEN_H, { duration: SHEET.out, easing: SHEET.easing })
+            .start(({ finished }) => {
+              // The sheet stays parked off-screen through the host's own exit
+              // animation; the visible-effect above re-zeroes it on next open.
+              if (finished) onCloseRef.current?.();
+            });
         } else {
-          Animated.spring(dragY, { toValue: 0, useNativeDriver: true, bounciness: 4 }).start();
+          spring(dragY, 0, SPRING.settle).start();
         }
       },
       onPanResponderTerminate: () => {
-        Animated.spring(dragY, { toValue: 0, useNativeDriver: true, bounciness: 4 }).start();
+        spring(dragY, 0, SPRING.settle).start();
       },
     })
   ).current;

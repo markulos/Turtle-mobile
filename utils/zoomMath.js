@@ -158,6 +158,38 @@ export function focalTranslate(focal, origin, nextScale) {
 }
 
 /**
+ * The pan baseline that leaves the surface exactly where it is.
+ *
+ * A pan is applied as `position = start + translation`, so re-anchoring means
+ * choosing the `start` that reproduces the CURRENT position under the CURRENT
+ * translation. Used whenever something other than the finger has moved the
+ * surface — another gesture writing to it, or a jump in what "translation" is
+ * being measured from.
+ */
+export function panBaseline(position, translation) {
+  'worklet';
+  return position - translation;
+}
+
+/**
+ * The pan baseline that absorbs a discontinuity in the measured translation.
+ *
+ * Gesture Handler measures a multi-touch pan from the AVERAGE of the fingers on
+ * the glass. Lift one of two and that average leaps, instantly, by half the
+ * distance between them — with no hand movement at all. Feeding that leap
+ * straight into `start + translation` throws the surface across the screen
+ * towards whichever finger stayed down, which is exactly what a pinch looks
+ * like when it ends one finger at a time.
+ *
+ * Shifting the baseline by the size of the leap cancels it: the surface keeps
+ * the position it had, and the finger that remains carries on from there.
+ */
+export function absorbTouchJump(start, lastTranslation, translation) {
+  'worklet';
+  return start + lastTranslation - translation;
+}
+
+/**
  * The resting position for a given scale: translation clamped inside the pan
  * bounds, and both axes forced to 0 on any axis with no overflow. Used at the
  * end of every gesture — this is the single place that guarantees a zoom-out

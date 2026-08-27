@@ -1,0 +1,128 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useServer } from '../../../context/ServerContext';
+
+/**
+ * useBoardsOverview — the board list, loaded the way the app loads board lists.
+ *
+ * Two surfaces need the identical thing (the conversations inbox and the boards
+ * canvas): every board this user can see, with its latest item, its per-kind
+ * counts, and a collage of its most recent photos. The loading is not a single
+ * fetch — it is a tiered, generation-guarded sequence that took some care to
+ * get right, so it lives here once rather than being copied and left to drift.
+ *
+ * Instagram-style loading: the names list is INSTANT, everything else hydrates
+ * in place. Three tiers —
+ *   0. stale-while-revalidate: whatever list we already have stays visible;
+ *   1. GET /projects (cheap names query) paints rows within ~1 round-trip;
+ *   2. GET /projects-overview (counts + latest item per board, the expensive
+ *      merge) replaces the list with previews + activity ordering when it lands.
+ * A generation counter + an overview-applied flag keep the merges ordered: a
+ * slow names response can never overwrite a newer overview.
+ *
+ * @param active  the surface is on screen — flipping it true triggers a load.
+ * @returns {{
+ *   boards, avatars, mediaBase, loading, refreshing, loadFailed, load,
+ * }}  `boards` rows are { name, counts, total, lastTs, latest }; the names tier
+ *     fills only `name` (with zeroes/null for the rest), so every consumer must
+ *     treat the extras as optional.
+ */
+export default function useBoardsOverview(active) {
+  const { api, getBaseUrl, getMediaBaseUrl } = useServer();
+  // Same origin selection as MediaGallery's getFullUrl: prefer the HTTP/2 media
+  // origin when the probe succeeded (shared expo-image cache, faster
+  // multiplexed loads), fall back to the http origin. thumbnailUrl paths
+  // already start with /api/, so strip the base's own /api suffix.
+  const mediaBase = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '');
+
+  const [boards, setBoards] = useState([]);
+  // { [boardName]: [thumbnailUrl, ...] } — lazily hydrated collage avatars.
+  const [avatars, setAvatars] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  // True when BOTH tiers failed while we had nothing to show — drives the
+  // "couldn't reach the server" + Retry state instead of the misleading
+  // "No boards yet" empty state.
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  const loadGen = useRef(0);
+  const boardsLenRef = useRef(0);
+  boardsLenRef.current = boards.length;
+
+  const load = useCallback(async ({ isRefresh } = {}) => {
+    const gen = ++loadGen.current;
+    let overviewApplied = false;
+    isRefresh ? setRefreshing(true) : setLoading(true);
+
+    // Tier 1 — instant names (only fills an EMPTY list; never downgrades
+    // previews already on screen).
+    if (boardsLenRef.current === 0) {
+      api.get('/projects').then((r) => {
+        if (gen !== loadGen.current || overviewApplied) return;
+        const names = (Array.isArray(r) ? r : [])
+          .filter((n) => typeof n === 'string' && n.trim())
+          .sort((a, b) => a.localeCompare(b));
+        if (names.length) {
+          setBoards((prev) => (prev.length ? prev : names.map((name) => ({
+            name, lastTs: 0, latest: null, counts: null, total: null,
+          }))));
+          setLoadFailed(false);
+          setLoading(false);
+        }
+      }).catch(() => { /* overview below is the authoritative path */ });
+    }
+
+    // Tier 3 — lazy avatar hydration, riding the same trigger as the list
+    // (open / pull-to-refresh / board-close) so collages track renames,
+    // deletions, and new photos. Non-blocking; failure keeps initial discs.
+    api.get('/boards/avatars')
+      .then((r) => { if (gen === loadGen.current && r?.success && r.avatars) setAvatars(r.avatars); })
+      .catch(() => { /* initial discs stay */ });
+
+    // Tier 2 — the full inbox (own + shared boards, latest item per board,
+    // sorted by most recent activity).
+    try {
+      const r = await api.get('/projects-overview');
+      if (gen !== loadGen.current) return;
+      if (r?.success && Array.isArray(r.boards)) {
+        overviewApplied = true;
+        setBoards(r.boards.map((b) => ({
+          name: b.name,
+          lastTs: b.lastTs || 0,
+          latest: b.latest || null,
+          counts: b.counts || null,
+          total: Number.isFinite(Number(b.total)) ? Number(b.total) : null,
+        })));
+        setLoadFailed(false);
+      }
+    } catch {
+      // The names tier (or the previous list) stays on screen when we have
+      // one; with NOTHING on screen this is a real failure — say so instead
+      // of pretending the user has no boards.
+      if (gen === loadGen.current && boardsLenRef.current === 0) setLoadFailed(true);
+    } finally {
+      if (gen === loadGen.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
+  }, [api]);
+
+  useEffect(() => {
+    if (active) load();
+  }, [active, load]);
+
+  // A different server is a different pond — the tier-0 stale cache must not
+  // carry across origins. Wipe it and orphan any in-flight old-server fetches.
+  const prevOriginRef = useRef(mediaBase);
+  useEffect(() => {
+    if (prevOriginRef.current === mediaBase) return;
+    prevOriginRef.current = mediaBase;
+    loadGen.current += 1;
+    setBoards([]);
+    setAvatars({});
+    if (active) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaBase]);
+
+  return { boards, avatars, mediaBase, loading, refreshing, loadFailed, load };
+}

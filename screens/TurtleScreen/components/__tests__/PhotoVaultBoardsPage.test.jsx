@@ -119,19 +119,39 @@ describe('PhotoVaultBoardsPage', () => {
     expect(props.onQueryChange).toHaveBeenCalledWith('');
   });
 
-  test('pins All Photos above the grid, outside search and sort', async () => {
+  test('pins All Photos above the grid while browsing', async () => {
     const onOpenAllPhotos = jest.fn();
     const allPhotos = { name: 'All Photos', covers: [], count: 12480, metadata: '12480 items' };
-    // A query that matches no user board: the pinned card must survive it,
-    // because it is a fixed entry point rather than a search result.
-    const { view } = await renderPage({ allPhotos, onOpenAllPhotos, boards: [], query: 'zzz' });
+    const { view } = await renderPage({ allPhotos, onOpenAllPhotos });
 
     const card = view.getByLabelText(/^All Photos, 12480 items/);
     expect(card).toBeTruthy();
-    expect(view.getByText('No boards match “zzz”.')).toBeTruthy();
 
     await fireEvent.press(card);
     expect(onOpenAllPhotos).toHaveBeenCalledWith('All Photos');
+  });
+
+  test('All Photos stands down while searching, and comes back on clear', async () => {
+    // It is full-width, so leaving it up during a search pushes the actual
+    // best match below the fold on a phone. Someone who has typed a board
+    // name has said what they want.
+    const allPhotos = { name: 'All Photos', covers: [], count: 12480, metadata: '12480 items' };
+    const searching = await renderPage({ allPhotos, boards: [], query: 'zzz' });
+    expect(searching.view.queryByLabelText(/^All Photos/)).toBeNull();
+    expect(searching.view.getByText('No boards match “zzz”.')).toBeTruthy();
+
+    // Clearing restores it — the card is derived from the query, never stored,
+    // so there is no state to get stuck.
+    const cleared = await renderPage({ allPhotos, query: '' });
+    expect(cleared.view.getByLabelText(/^All Photos, 12480 items/)).toBeTruthy();
+  });
+
+  test('a field holding only whitespace is not a search', async () => {
+    // The filter normalizes before matching, so "   " narrows nothing. Hiding
+    // the card for it would blink it away for a stray space.
+    const allPhotos = { name: 'All Photos', covers: [], count: 12480, metadata: '12480 items' };
+    const { view } = await renderPage({ allPhotos, query: '   ' });
+    expect(view.getByLabelText(/^All Photos, 12480 items/)).toBeTruthy();
   });
 
   test('omits the All Photos card when the caller supplies none', async () => {

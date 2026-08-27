@@ -1,0 +1,236 @@
+import React from 'react';
+import { act, fireEvent, render } from '@testing-library/react-native';
+
+/**
+ * BoardsCanvas — the map of every board.
+ *
+ * The geometry itself is covered by utils/__tests__/boardCanvasLayout; what
+ * these lock down is the WIRING, which is where this page can quietly break:
+ * a node per board, disc sizes that follow the activity, a tap that opens the
+ * same conversation the inbox opens, and the not-loaded states not being
+ * mistaken for "you have no boards".
+ *
+ * The transform is mocked away on purpose. Gesture Handler and Reanimated do
+ * their work on the UI thread, which jest does not have — asserting on a
+ * mocked shared value would only be asserting on the mock.
+ */
+
+jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
+jest.mock('expo-image', () => ({ Image: 'ExpoImage' }));
+jest.mock('../../../../utils/haptics', () => ({ tapHaptic: jest.fn() }));
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 47, bottom: 34, left: 0, right: 0 }),
+}));
+
+jest.mock('react-native-gesture-handler', () => {
+  const { View: RNView } = require('react-native');
+  // Every builder method returns the builder, so the real chains
+  // (`.averageTouches(true).onStart(fn)…`) compose without a stub per method.
+  const builder = () => {
+    const chainable = new Proxy({}, { get: () => () => chainable });
+    return chainable;
+  };
+  return {
+    GestureHandlerRootView: RNView,
+    GestureDetector: ({ children }) => children,
+    Gesture: { Pan: builder, Pinch: builder, Simultaneous: builder },
+  };
+});
+
+jest.mock('react-native-reanimated', () => {
+  const { View: RNView } = require('react-native');
+  return {
+    __esModule: true,
+    default: { View: RNView },
+    useSharedValue: (initial) => ({ value: initial }),
+    useAnimatedStyle: () => ({}),
+    withTiming: (value) => value,
+    withDecay: () => 0,
+    cancelAnimation: () => {},
+    runOnJS: (fn) => fn,
+    Easing: { out: () => () => 0, cubic: () => 0 },
+  };
+});
+
+jest.mock('../../../../context/ThemeContext', () => ({
+  useTheme: () => ({
+    theme: {
+      mode: 'dark',
+      colors: {
+        background: '#000',
+        surface: '#0a0a0a',
+        surfaceElevated: '#111',
+        border: '#222',
+        textPrimary: '#fff',
+        textSecondary: '#aaa',
+        textTertiary: '#888',
+        textMuted: '#666',
+      },
+    },
+  }),
+}));
+
+// The page brings its own EdgeSwipePage; here it is just "render when visible".
+jest.mock('../EdgeSwipePage', () => {
+  const { View: RNView } = require('react-native');
+  return ({ visible, children }) => (visible ? <RNView>{children}</RNView> : null);
+});
+
+// A stub, so a node's disc SIZE is assertable — the real collage is covered
+// where it lives.
+jest.mock('../BoardAvatar', () => {
+  const { View: RNView } = require('react-native');
+  const Stub = ({ name, size }) => <RNView testID={`avatar-${name}`} accessibilityValue={{ now: Math.round(size) }} />;
+  return {
+    __esModule: true,
+    default: Stub,
+    boardColor: () => '#888',
+    boardTint: () => 'rgba(136,136,136,0.5)',
+  };
+});
+
+jest.mock('../BoardTimeline', () => {
+  const { Text } = require('react-native');
+  return ({ visible, board }) => (visible ? <Text>{`timeline:${board}`}</Text> : null);
+});
+
+// `mock`-prefixed so jest's mock-factory hoisting will let the factory below
+// close over it.
+const mockOverview = {
+  boards: [],
+  avatars: {},
+  mediaBase: 'http://turtle.local',
+  loading: false,
+  refreshing: false,
+  loadFailed: false,
+  load: jest.fn(),
+};
+jest.mock('../../hooks/useBoardsOverview', () => ({
+  __esModule: true,
+  default: () => mockOverview,
+}));
+
+// eslint-disable-next-line import/first
+import BoardsCanvas from '../BoardsCanvas';
+
+const setOverview = (patch) => Object.assign(mockOverview, patch);
+
+const BOARDS = [
+  { name: 'Recipes', total: 40, lastTs: Date.now() - 60000, counts: {}, latest: null },
+  { name: 'Drone spraying', total: 4, lastTs: Date.now() - 3 * 86400000, counts: {}, latest: null },
+  { name: 'Inbox', total: 0, lastTs: 0, counts: {}, latest: null },
+];
+
+// Nothing lays out until the viewport reports a size — the canvas is
+// positioned against the measured box, never against Dimensions.
+const measure = async (view) => {
+  await act(async () => {
+    fireEvent(view.getByTestId('boards-canvas'), 'layout', {
+      nativeEvent: { layout: { width: 390, height: 800 } },
+    });
+  });
+  return view;
+};
+
+/** Open the page and give it a viewport, which is every test's first two lines. */
+const open = async (props = {}) => measure(await render(<BoardsCanvas visible onClose={jest.fn()} {...props} />));
+
+const discSize = (view, name) => view.getByTestId(`avatar-${name}`).props.accessibilityValue.now;
+
+beforeEach(() => {
+  setOverview({ boards: [], avatars: {}, loading: false, loadFailed: false, load: jest.fn() });
+});
+
+describe('BoardsCanvas', () => {
+  test('renders nothing at all until it is opened', async () => {
+    setOverview({ boards: BOARDS });
+    const view = await render(<BoardsCanvas visible={false} onClose={jest.fn()} />);
+    expect(view.queryByTestId('boards-canvas')).toBeNull();
+  });
+
+  test('puts every board on the map, with its count and age', async () => {
+    setOverview({ boards: BOARDS });
+    const view = await open();
+
+    for (const b of BOARDS) expect(view.getByTestId(`board-node-${b.name}`)).toBeTruthy();
+    expect(view.getByText('Recipes')).toBeTruthy();
+    expect(view.getByText('40 items · 1m')).toBeTruthy();
+    expect(view.getByText('4 items · 3d')).toBeTruthy();
+    // An untouched board says so rather than showing a bare "0".
+    expect(view.getByText('Empty')).toBeTruthy();
+    // The header count is the same population.
+    expect(view.getByText('3')).toBeTruthy();
+  });
+
+  test('sizes each disc by how much is on the board', async () => {
+    setOverview({ boards: BOARDS });
+    const view = await open();
+
+    expect(discSize(view, 'Recipes')).toBeGreaterThan(discSize(view, 'Drone spraying'));
+    expect(discSize(view, 'Drone spraying')).toBeGreaterThan(discSize(view, 'Inbox'));
+  });
+
+  test('opens the board conversation when a node is tapped', async () => {
+    setOverview({ boards: BOARDS });
+    const view = await open();
+
+    expect(view.queryByText('timeline:Recipes')).toBeNull();
+    await act(async () => { fireEvent.press(view.getByTestId('board-node-Recipes')); });
+    expect(view.getByText('timeline:Recipes')).toBeTruthy();
+  });
+
+  test('shows the drag hint until the map has actually been dragged', async () => {
+    setOverview({ boards: BOARDS });
+    expect((await open()).getByText('Drag to explore · pinch to zoom')).toBeTruthy();
+  });
+
+  test('an unreachable server offers a retry rather than claiming there are no boards', async () => {
+    const load = jest.fn();
+    setOverview({ boards: [], loadFailed: true, load });
+    const view = await open();
+
+    expect(view.getByText("Couldn't reach the server.")).toBeTruthy();
+    expect(view.queryByText('No boards yet — create one from Tasks.')).toBeNull();
+    fireEvent.press(view.getByLabelText('Retry loading boards'));
+    expect(load).toHaveBeenCalled();
+  });
+
+  test('a genuinely empty pond says so, with no retry', async () => {
+    setOverview({ boards: [], loadFailed: false });
+    const view = await open();
+
+    expect(view.getByText('No boards yet — create one from Tasks.')).toBeTruthy();
+    expect(view.queryByLabelText('Retry loading boards')).toBeNull();
+  });
+
+  test('a first load in flight is a spinner, not an empty pond', async () => {
+    setOverview({ boards: [], loading: true });
+    const view = await open();
+
+    expect(view.queryByText('No boards yet — create one from Tasks.')).toBeNull();
+    expect(view.queryByText("Couldn't reach the server.")).toBeNull();
+  });
+
+  test('the back chevron closes the page', async () => {
+    const onClose = jest.fn();
+    setOverview({ boards: BOARDS });
+    const view = await open({ onClose });
+
+    fireEvent.press(view.getByLabelText('Back'));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  test('offers both framings — fit everything, and back to the busiest board', async () => {
+    setOverview({ boards: BOARDS });
+    const view = await open();
+
+    expect(view.getByLabelText('Fit every board on screen')).toBeTruthy();
+    expect(view.getByLabelText('Back to the busiest board')).toBeTruthy();
+  });
+
+  test('hides the framing controls while there is nothing to frame', async () => {
+    // They only make sense with a map to frame.
+    setOverview({ boards: [] });
+    expect((await open()).queryByLabelText('Fit every board on screen')).toBeNull();
+  });
+});

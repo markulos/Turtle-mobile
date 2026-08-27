@@ -23,10 +23,15 @@ import { impactHaptic, tapHaptic } from '../utils/haptics';
 const photoWord = (n) => (n === 1 ? 'photo' : 'photos');
 
 function JobCard({ job, theme, onRetry, onDismiss }) {
-  const { board, status, total, done, error, message, kind } = job;
+  const { board, destination, status, total, done, error, message, kind } = job;
   const isAudioJob = kind === 'audio-files' || kind === 'audio-url';
-  // Null board = the default "save as-is" share straight into the photo vault.
-  const boardName = isAudioJob ? 'Music Vault' : (board?.name || 'Photo vault');
+  // A null board is TWO destinations, not one: photos go to the vault, a link
+  // goes to the Inbox. The context resolves which at enqueue time and publishes
+  // it as `destination`; the vault fallback is only for older in-flight jobs
+  // restored from a manifest written before that field existed.
+  const boardName = isAudioJob
+    ? 'Music Vault'
+    : (board?.name || destination || 'Photo vault');
 
   let icon, iconColor, title, subtitle;
   if (status === 'queued') {
@@ -175,3 +180,4 @@ const styles = StyleSheet.create({
   },
   progressFill: { height: 3, borderRadius: 2 },
 });
+

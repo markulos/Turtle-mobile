@@ -10,10 +10,10 @@ import {
   Platform,
   Animated,
   Keyboard,
-  Easing,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
+import { EASE } from '../../../utils/motion';
 
 /**
  * TerminalConsole — a vintage green-phosphor terminal for the `/terminal`
@@ -43,8 +43,9 @@ const VT = {
 const MONO = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
 // The classic iOS keyboard ease — Animated has no built-in "keyboard" curve, so
 // this bezier matches it closely; what really syncs the speed is the OS-reported
-// duration. Module-scope so it's a stable reference (no listener re-subscribe).
-const KB_EASING = Easing.bezier(0.17, 0.59, 0.4, 0.77);
+// duration. Module-scope so it's a stable reference (no listener re-subscribe),
+// and now shared from utils/motion so the consoles can't drift apart.
+const KB_EASING = EASE.keyboard;
 
 export default function TerminalConsole({
   transcript = [],

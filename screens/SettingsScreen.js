@@ -21,6 +21,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
 import SidecarStatusCard from '../components/SidecarStatusCard';
+import ServerStatsPanel from '../components/ServerStatsPanel';
 import { useServer } from '../context/ServerContext';
 import { useTheme, ACCENTS } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -65,6 +66,7 @@ const SETTING_TERMS = {
   defaultParticipants: 'default participants people tasks assign involved pond members',
   calendarPartners: 'calendar partners share sharing partner view only merged tasks',
   serverConnection: 'server connection ip address computer host wifi network connect test pond offline',
+  serverStats: 'database size storage stats analytics disk space sqlite tables rows backups more info usage free space vacuum wal',
   healMedia: 'heal media vault thumbnails previews rebuild repair audit library',
   passwordVault: 'password vault master password change reset security encryption face id touch id',
   noVault: 'password vault set up security encryption missing',
@@ -1148,6 +1150,13 @@ export default function SettingsScreen({ active = true }) {
               )}
 
               </SettingsItem>
+
+              {/* Everything about the database this connection reaches —
+                  collapsed, and nothing is fetched until it's opened. */}
+              <SettingsItem terms={SETTING_TERMS.serverStats}>
+                <ServerStatsPanel />
+              </SettingsItem>
+
               <SettingsItem terms={SETTING_TERMS.healMedia}>
               {isConnected && (
                 <TouchableOpacity
