@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl,
 } from 'react-native';
@@ -90,6 +90,90 @@ export default function Turtle3DPanel({ onClose }) {
   // everyone else and the section simply doesn't render.
   const [activity, setActivity] = useState(null);
 
+  // ── Bridge remote control (owner-only) ──────────────────────────────────
+  // `bridge` is the app server's measured view of the TurtleBridge service on
+  // ITS OWN box: sc.exe state + a loopback /health probe + the build stamp.
+  // null = not asked / not the owner / no install on this pond → card hidden.
+  const [bridge, setBridge] = useState(null);
+  // Local build vs origin/main. null = not asked, 'checking' = in flight.
+  const [fresh, setFresh] = useState(null);
+  // 'start' | 'stop' while a service op is in flight. NOT optimistic on
+  // purpose: this panel's doctrine is measured-only, and a service can
+  // genuinely fail to start — the button shows pending until sc.exe answers.
+  const [bridgeBusy, setBridgeBusy] = useState(null);
+  // Update job status while polling, null otherwise.
+  const [updJob, setUpdJob] = useState(null);
+  const updPollRef = useRef(null);
+
+  const fetchBridgeStatus = useCallback(async () => {
+    try {
+      const r = await api.get('/collab/bridge/status');
+      if (r?.success && r.available) setBridge(r);
+      else setBridge(null); // no install on this pond → nothing to control
+      return r;
+    } catch { setBridge(null); return null; } // non-owner or offline
+  }, [api]);
+
+  const checkFresh = useCallback(async () => {
+    setFresh('checking');
+    try {
+      const r = await api.get('/collab/bridge/freshness');
+      setFresh(r?.freshness || null);
+    } catch { setFresh(null); }
+  }, [api]);
+
+  const stopUpdPoll = useCallback(() => {
+    if (updPollRef.current) { clearInterval(updPollRef.current); updPollRef.current = null; }
+  }, []);
+
+  const pollUpdate = useCallback(() => {
+    stopUpdPoll();
+    updPollRef.current = setInterval(async () => {
+      try {
+        const r = await api.get('/collab/bridge/update/status');
+        setUpdJob(r);
+        if (r && !r.running) {
+          stopUpdPoll();
+          // The job is over — re-measure everything it may have changed.
+          fetchBridgeStatus();
+          checkFresh();
+        }
+      } catch { /* keep polling; transient network is not a verdict */ }
+    }, 2500);
+  }, [api, stopUpdPoll, fetchBridgeStatus, checkFresh]);
+
+  useEffect(() => stopUpdPoll, [stopUpdPoll]); // clear the interval on unmount
+
+  const toggleBridge = useCallback(async () => {
+    if (!bridge || bridgeBusy) return;
+    const starting = bridge.service !== 'RUNNING';
+    setBridgeBusy(starting ? 'start' : 'stop');
+    tapHaptic();
+    try {
+      const r = starting
+        ? await api.post('/collab/bridge/start', {})
+        : await api.post('/collab/bridge/stop', {});
+      setBridge((prev) => (prev ? { ...prev, service: r?.service || prev.service, health: r?.health ?? prev.health } : prev));
+      // The owner's standing ask: every remote start checks whether what just
+      // started is actually the latest build.
+      if (starting && r?.success) checkFresh();
+    } catch { /* the re-fetch below shows the real state */ }
+    await fetchBridgeStatus();
+    setBridgeBusy(null);
+  }, [api, bridge, bridgeBusy, checkFresh, fetchBridgeStatus]);
+
+  const runUpdate = useCallback(async () => {
+    if (updJob?.running) return;
+    tapHaptic();
+    try {
+      const r = await api.post('/collab/bridge/update', {});
+      if (r?.success) {
+        setUpdJob({ running: true, startedAt: r.startedAt, lines: [] });
+        pollUpdate();
+      }
+    } catch { /* a 409 means one is already running — the poll will show it */ pollUpdate(); }
+  }, [api, updJob, pollUpdate]);
+
   const load = useCallback(async () => {
     setError(null);
     // Identity is available to everyone; bridge inventory is owner-gated. They
@@ -122,6 +206,15 @@ export default function Turtle3DPanel({ onClose }) {
       setActivity(r && r.success ? r : null);
     } catch { /* non-owner or offline — the section stays hidden */ }
 
+    // The bridge service on the pond's own box — owner-only remote control.
+    // Freshness rides behind it (a git round-trip, so never on the blocking
+    // path), and an update someone kicked off elsewhere resumes its poll.
+    const b = await fetchBridgeStatus();
+    if (b?.available) {
+      checkFresh();
+      if (b.updating) pollUpdate();
+    }
+
     // The bridge is a DIFFERENT server. This app mints its credentials and
     // has no socket to it, so the only way to learn whether collab is up is
     // to ask the bridge itself — at its own address, never at this one.
@@ -134,7 +227,7 @@ export default function Turtle3DPanel({ onClose }) {
     } finally {
       setProbing(false);
     }
-  }, [api]);
+  }, [api, fetchBridgeStatus, checkFresh, pollUpdate]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -307,6 +400,128 @@ export default function Turtle3DPanel({ onClose }) {
             app server's state as the bridge's, which is the confusion this page
             exists to avoid. This page is about the 3D side only. */}
 
+        {/* Bridge remote control — owner-only, and only on a pond that has a
+            bridge installed beside it. Every row is measured on the pond's own
+            box: sc.exe's word for the service, a loopback probe for the port,
+            the build stamp for what is running. The card renders nothing it
+            cannot back with one of those. */}
+        {bridge && (
+          <View style={styles.card}>
+            <View style={styles.cardHead}>
+              <View style={styles.cardIcon}>
+                <Icon name="server-network" size={18} color={c.accent || c.accentInfo} />
+              </View>
+              <Text style={styles.cardTitle}>Bridge on the pond</Text>
+              <View
+                style={[styles.stateDot, {
+                  backgroundColor: bridge.service === 'RUNNING'
+                    ? (c.accentSuccess || '#4ADE80')
+                    : (c.textTertiary || '#888'),
+                }]}
+              />
+            </View>
+
+            <InfoRow
+              theme={theme}
+              label="Service"
+              value={bridgeBusy
+                ? (bridgeBusy === 'start' ? 'Starting…' : 'Stopping…')
+                : bridge.service === 'RUNNING' ? 'Running'
+                  : bridge.service === 'STOPPED' ? 'Stopped'
+                    : bridge.service}
+            />
+            <InfoRow
+              theme={theme}
+              label="Answering"
+              value={bridge.health?.ok
+                ? `${bridge.health.ms} ms${bridge.health.entities != null ? ` · ${bridge.health.entities} element${bridge.health.entities === 1 ? '' : 's'}` : ''}`
+                : bridge.service === 'RUNNING' ? 'Port not answering' : '—'}
+            />
+            {!!bridge.build?.commit && (
+              <InfoRow
+                theme={theme}
+                label="Build"
+                value={`${String(bridge.build.commit).slice(0, 8)}${bridge.build.builtAt ? ` · ${relativeTime(Date.parse(bridge.build.builtAt))}` : ''}`}
+                mono
+              />
+            )}
+            <InfoRow
+              theme={theme}
+              label="Updates"
+              value={fresh === 'checking' ? 'Checking against main…'
+                : fresh?.upToDate ? 'Up to date with main'
+                  : fresh?.remoteCommit ? `Behind main (${String(fresh.remoteCommit).slice(0, 8)})`
+                    : fresh?.error ? 'Check failed'
+                      : '—'}
+            />
+            {!!fresh?.error && <Text style={styles.footnote}>{String(fresh.error).slice(0, 160)}</Text>}
+
+            {/* One service op at a time; the update button appears once the
+                freshness check has an answer, and turns into progress while a
+                build runs (first build on a fresh toolchain can take 20+ min). */}
+            {updJob?.running ? (
+              <View style={styles.updBox}>
+                <ActivityIndicator size="small" color={c.accent || c.accentInfo} />
+                <Text style={styles.updLine} numberOfLines={2}>
+                  {updJob.lines?.length ? updJob.lines[updJob.lines.length - 1] : 'Updating…'}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.btnRow}>
+                <TouchableOpacity
+                  style={[styles.btn, bridge.service === 'RUNNING' ? styles.btnQuiet : styles.btnGo]}
+                  onPress={toggleBridge}
+                  disabled={!!bridgeBusy}
+                  accessibilityRole="button"
+                >
+                  {bridgeBusy
+                    ? <ActivityIndicator size="small" color={c.textPrimary} />
+                    : (
+                      <>
+                        <Icon
+                          name={bridge.service === 'RUNNING' ? 'stop-circle-outline' : 'play-circle-outline'}
+                          size={17}
+                          color={bridge.service === 'RUNNING' ? c.textPrimary : (c.accentSuccess || '#4ADE80')}
+                        />
+                        <Text style={styles.btnText}>{bridge.service === 'RUNNING' ? 'Stop' : 'Start'}</Text>
+                      </>
+                    )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnQuiet]}
+                  onPress={fresh && fresh !== 'checking' && fresh.upToDate === false ? runUpdate : checkFresh}
+                  disabled={fresh === 'checking'}
+                  accessibilityRole="button"
+                >
+                  <Icon
+                    name={fresh && fresh !== 'checking' && fresh.upToDate === false ? 'download-circle-outline' : 'refresh'}
+                    size={17}
+                    color={c.accent || c.accentInfo}
+                  />
+                  <Text style={styles.btnText}>
+                    {fresh && fresh !== 'checking' && fresh.upToDate === false ? 'Update now' : 'Check updates'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {!updJob?.running && updJob?.result && (
+              <Text style={styles.footnote}>
+                {updJob.result.ok
+                  ? (updJob.result.changed
+                    ? `Updated to ${String(updJob.result.localCommit || '').slice(0, 8)} in ${updJob.result.buildSeconds || '?'}s — health ${updJob.result.health || '?'}`
+                    : 'Already up to date.')
+                  : `Update failed${updJob.result.stage ? ` at ${updJob.result.stage}` : ''}: ${String(updJob.result.error || updJob.error || '').slice(0, 140)}`}
+              </Text>
+            )}
+
+            <Text style={styles.footnote}>
+              Controls the TurtleBridge service on the pond's own machine. Starting it
+              also checks whether the running build matches the repo, so an out-of-date
+              bridge is never silently served.
+            </Text>
+          </View>
+        )}
+
         {/* Collab bridge — a DIFFERENT server, asked directly. This is the one
             measured signal here; everything above it about bridges is derived
             from credential use, not from a heartbeat. */}
@@ -457,5 +672,21 @@ const makeStyles = (theme) => {
       backgroundColor: (c.accentError || '#ff5252') + '18',
     },
     errorText: { fontSize: 12.5, color: c.accentError, flex: 1 },
+    stateDot: { width: 9, height: 9, borderRadius: 4.5 },
+    btnRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+    btn: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      gap: 6, paddingVertical: 10, borderRadius: 12,
+      borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+    },
+    btnGo: { backgroundColor: (c.accentSuccess || '#4ADE80') + '1c' },
+    btnQuiet: { backgroundColor: c.surface || c.background },
+    btnText: { fontSize: 13, fontWeight: '700', color: c.textPrimary },
+    updBox: {
+      flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12,
+      padding: 12, borderRadius: 12,
+      backgroundColor: (c.accent || c.accentInfo || '#4ADE80') + '14',
+    },
+    updLine: { fontSize: 11.5, color: c.textSecondary, flex: 1 },
   });
 };
