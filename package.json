@@ -11,6 +11,7 @@
     "ios": "expo run:ios",
     "build:ios:dev": "eas build --profile development --platform ios",
     "build:ios:dev:json": "eas build --profile development --platform ios --json --non-interactive",
+    "start:r730": "set RCT_METRO_PORT=8181&& set REACT_NATIVE_PACKAGER_HOSTNAME=100.85.19.127&& npx expo start --dev-client --port 8181",
     "start:tunnel": "npx expo start --dev-client --tunnel",
     "test": "jest --runInBand",
     "test:music": "jest --runInBand services/__tests__ context/__tests__ screens/TurtleScreen/components/__tests__/MusicVault.test.jsx"
