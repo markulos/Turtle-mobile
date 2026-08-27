@@ -35,7 +35,7 @@ console.log(`│ project:    ${__dirname}`);
 console.log(`│ node:       ${process.version}`);
 console.log(`│ hostname env (REACT_NATIVE_PACKAGER_HOSTNAME): ${hostnameEnv === undefined ? 'NOT SET → Metro advertises the LAN IP' : JSON.stringify(hostnameEnv)}`);
 console.log(`│ machine IPv4s: ${ipv4s.join('  ·  ') || '(none?!)'}`);
-console.log(`│ phone should connect to: http://${advertised || (ipv4s[0] || 'THIS-MACHINE-IP').split(' ')[0]}:8081`);
+console.log(`│ phone should connect to: http://${advertised || (ipv4s[0] || 'THIS-MACHINE-IP').split(' ')[0]}:${process.env.RCT_METRO_PORT || 8081}`);
 console.log('└─────────────────────────────────────────────────────────────');
 
 // ── 2) Log every incoming request with the caller's IP ────────────────────
