@@ -21,6 +21,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
 import SidecarStatusCard from '../components/SidecarStatusCard';
+import ServerStatsPanel from '../components/ServerStatsPanel';
 import { useServer } from '../context/ServerContext';
 import { useTheme, ACCENTS } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -65,6 +66,7 @@ const SETTING_TERMS = {
   defaultParticipants: 'default participants people tasks assign involved pond members',
   calendarPartners: 'calendar partners share sharing partner view only merged tasks',
   serverConnection: 'server connection ip address computer host wifi network connect test pond offline',
+  serverStats: 'database size storage stats analytics disk space sqlite tables rows backups more info usage free space vacuum wal',
   healMedia: 'heal media vault thumbnails previews rebuild repair audit library',
   passwordVault: 'password vault master password change reset security encryption face id touch id',
   noVault: 'password vault set up security encryption missing',
@@ -158,7 +160,7 @@ async function pollHealToCompletion(api, onProgress, { intervalMs = 2000, maxMs 
 
 export default function SettingsScreen({ active = true }) {
   const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll, accent, setAccent } = useTheme();
-  const { serverIP, isConnected, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
+  const { serverIP, isConnected, pondEnv, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
   const [isHealing, setIsHealing] = useState(false);
   // {processed, total} while the server's heal job is running (null = idle).
   const [healProgress, setHealProgress] = useState(null);
@@ -1108,6 +1110,15 @@ export default function SettingsScreen({ active = true }) {
                 <Text style={styles.statusText}>
                   {loading ? 'Checking...' : (isConnected ? 'Connected' : 'Disconnected')}
                 </Text>
+                {/* Which pond ANSWERED — from /api/health's env field, never
+                    from what this phone has saved, so a phone pointed at the
+                    wrong pond wears the actual pond's colour. Prod shows
+                    nothing: absence of the pill IS the prod signal. */}
+                {pondEnv === 'dev' && (
+                  <View style={styles.pondDevPill}>
+                    <Text style={styles.pondDevPillText}>DEV POND</Text>
+                  </View>
+                )}
               </View>
 
               <Text style={styles.label}>Computer IP Address</Text>
@@ -1148,6 +1159,13 @@ export default function SettingsScreen({ active = true }) {
               )}
 
               </SettingsItem>
+
+              {/* Everything about the database this connection reaches —
+                  collapsed, and nothing is fetched until it's opened. */}
+              <SettingsItem terms={SETTING_TERMS.serverStats}>
+                <ServerStatsPanel />
+              </SettingsItem>
+
               <SettingsItem terms={SETTING_TERMS.healMedia}>
               {isConnected && (
                 <TouchableOpacity
@@ -1573,6 +1591,19 @@ const createStyles = (theme) => StyleSheet.create({
   },
   disconnected: {
     backgroundColor: theme.colors.accentError,
+  },
+  pondDevPill: {
+    marginLeft: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: '#b45309',
+  },
+  pondDevPillText: {
+    color: '#fff7ed',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1.2,
   },
   statusText: {
     fontSize: 15,

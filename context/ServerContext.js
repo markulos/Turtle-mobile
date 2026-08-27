@@ -109,6 +109,9 @@ installFetchAuthInterceptor();
 export const ServerProvider = ({ children }) => {
   const [serverIP, setServerIP] = useState('');
   const [isConnected, setIsConnected] = useState(false);
+  // Which pond the connected server SAYS it is ('dev'|'prod'|null) — from
+  // /api/health, server-driven by design (see checkConnection).
+  const [pondEnv, setPondEnv] = useState(null);
   const [loading, setLoading] = useState(false);
   // Origin for MEDIA bytes. '' = use the plain http origin (the default AND the
   // fallback). Only set to the https://host:3443 HTTP/2 listener after a
@@ -325,6 +328,17 @@ export const ServerProvider = ({ children }) => {
 
       const connected = response.ok;
       setIsConnected(connected);
+      if (connected) {
+        // Which pond answered — the DEV badge renders from THIS, never from
+        // client config, so a phone pointed at the wrong pond wears the actual
+        // pond's colour. Servers predating the field report null.
+        try {
+          const body = await response.json();
+          setPondEnv(body?.env === 'dev' || body?.env === 'prod' ? body.env : null);
+        } catch { setPondEnv(null); }
+      } else {
+        setPondEnv(null);
+      }
       // Reachable over http — now see if HTTP/2 (:3443) is also reachable+trusted
       // for media. Fire-and-forget; updates mediaOrigin when it resolves.
       if (connected) probeHttp2Media(ip);
@@ -332,6 +346,7 @@ export const ServerProvider = ({ children }) => {
       return connected;
     } catch (error) {
       setIsConnected(false);
+      setPondEnv(null);
       setMediaOrigin('');
       return false;
     } finally {
@@ -344,9 +359,9 @@ export const ServerProvider = ({ children }) => {
   // plus stable setState setters, so serverIP/isConnected/loading are the only
   // deps that change what this value represents.
   const value = useMemo(
-    () => ({ serverIP, isConnected, loading, saveIP, checkConnection, getBaseUrl, getMediaBaseUrl, api }),
+    () => ({ serverIP, isConnected, pondEnv, loading, saveIP, checkConnection, getBaseUrl, getMediaBaseUrl, api }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [serverIP, isConnected, loading, mediaOrigin],
+    [serverIP, isConnected, pondEnv, loading, mediaOrigin],
   );
 
   return (
