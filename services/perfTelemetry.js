@@ -60,9 +60,11 @@ export function normalizeRouteKey(url) {
       .split('/')
       .map((seg) => {
         if (!seg) return seg;
-        if (/^\d{4,}$/.test(seg)) return ':x';                       // long numbers
-        if (/^[0-9a-f-]{16,}$/i.test(seg)) return ':x';              // uuids/hashes
-        if (/^(media|task|cs|csa|t)[-_][\w-]{6,}$/i.test(seg)) return ':x'; // app ids
+        // A file extension must not disguise an id: 0794…c.jpg is still an id.
+        const stem = seg.replace(/\.\w{1,5}$/, '');
+        if (/^\d{4,}$/.test(stem)) return ':x';                       // long numbers
+        if (/^[0-9a-f-]{16,}$/i.test(stem)) return ':x';              // uuids/hashes
+        if (/^(media|task|cs|csa|t)[-_][\w-]{6,}$/i.test(stem)) return ':x'; // app ids
         if (seg.length > 40) return ':x';
         return seg;
       })
