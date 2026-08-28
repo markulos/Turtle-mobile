@@ -1,7 +1,7 @@
 {
   "name": "PasswordTaskManager",
   "version": "1.0.0",
-  "main": "expo/AppEntry.js",
+  "main": "index.js",
   "scripts": {
     "start": "npx expo start --dev-client --tunnel",
     "start:vpn": "set REACT_NATIVE_PACKAGER_HOSTNAME=100.105.43.69&& npx expo start --dev-client",
