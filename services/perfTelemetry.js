@@ -30,6 +30,10 @@
 import { AppState, Platform } from 'react-native';
 
 const MODULE_LOAD_AT = Date.now();
+// Under jest the pure exports are the test surface; the live side effects
+// (fetch wrap, heartbeat, flush timers, AppState listener) would hold the
+// event loop open and hang every suite that transitively imports this file.
+const IS_TEST = typeof process !== 'undefined' && !!(process.env && process.env.JEST_WORKER_ID);
 const FLUSH_MS = 60 * 1000;
 const HEARTBEAT_MS = 500;
 const STALL_OVERSHOOT_MS = 100;
@@ -79,7 +83,7 @@ export const _internals = { buffer, get serverOrigin() { return serverOrigin; } 
 
 // ── fetch wrapper ───────────────────────────────────────────────────────────
 const origFetch = global.fetch;
-global.fetch = (input, init) => {
+if (!IS_TEST) global.fetch = (input, init) => {
   let url = '';
   try { url = typeof input === 'string' ? input : (input && input.url) || ''; } catch { /* opaque input */ }
   const isApi = url.includes('/api/');
@@ -106,7 +110,7 @@ global.fetch = (input, init) => {
 
 // ── heartbeat: stalls + cold start ──────────────────────────────────────────
 let lastBeat = Date.now();
-setInterval(() => {
+if (!IS_TEST) setInterval(() => {
   const now = Date.now();
   const overshoot = now - lastBeat - HEARTBEAT_MS;
   lastBeat = now;
@@ -135,5 +139,7 @@ async function flush() {
   } catch { /* dropped — telemetry never retries */ }
 }
 
-setInterval(flush, FLUSH_MS);
-AppState.addEventListener('change', (s) => { if (s === 'background' || s === 'inactive') flush(); });
+if (!IS_TEST) {
+  setInterval(flush, FLUSH_MS);
+  AppState.addEventListener('change', (s) => { if (s === 'background' || s === 'inactive') flush(); });
+}
