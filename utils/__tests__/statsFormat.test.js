@@ -11,9 +11,11 @@ const {
   percentOf,
   precisePercentOf,
   formatDuration,
+  formatMs,
   formatAgo,
   formatMonthYear,
   btreeKindLabel,
+  fileTypeLabel,
 } = require('../statsFormat');
 
 describe('formatBytes', () => {
@@ -107,6 +109,55 @@ describe('formatDuration', () => {
   it('clamps a negative or absent duration to zero', () => {
     expect(formatDuration(-5)).toBe('0s');
     expect(formatDuration(null)).toBe('0s');
+  });
+});
+
+describe('formatMs', () => {
+  it('keeps whole milliseconds where a latency lives', () => {
+    // The unit telemetry arrives in. "0.4 s" throws away the difference
+    // between a fast endpoint and a slow one.
+    expect(formatMs(412)).toBe('412 ms');
+    expect(formatMs(0)).toBe('0 ms');
+    expect(formatMs(999)).toBe('999 ms');
+  });
+
+  it('switches to seconds once the millisecond stops mattering', () => {
+    expect(formatMs(1000)).toBe('1 s');
+    expect(formatMs(3240)).toBe('3.2 s');
+    expect(formatMs(12_400)).toBe('12 s');
+  });
+
+  it('hands the cumulative totals over to formatDuration', () => {
+    expect(formatMs(500_000)).toBe('8m');
+    expect(formatMs(3_600_000)).toBe('1h');
+  });
+
+  it('treats junk and negatives as nothing', () => {
+    expect(formatMs(null)).toBe('0 ms');
+    expect(formatMs(-50)).toBe('0 ms');
+    expect(formatMs('nonsense')).toBe('0 ms');
+  });
+});
+
+describe('fileTypeLabel', () => {
+  it('capitalises the extension, which is right nearly every time', () => {
+    expect(fileTypeLabel('mp4')).toBe('MP4');
+    expect(fileTypeLabel('HEIC')).toBe('HEIC');
+    expect(fileTypeLabel('png')).toBe('PNG');
+  });
+
+  it('spells out the few where capitalising is wrong', () => {
+    expect(fileTypeLabel('jpg')).toBe('JPEG');
+    expect(fileTypeLabel('jpeg')).toBe('JPEG');
+    expect(fileTypeLabel('tif')).toBe('TIFF');
+  });
+
+  it('names the no-extension bucket instead of rendering a blank row', () => {
+    // The server groups every dotless filename under ''; an empty label there
+    // would read as a rendering bug rather than as a real category.
+    expect(fileTypeLabel('')).toBe('No extension');
+    expect(fileTypeLabel(null)).toBe('No extension');
+    expect(fileTypeLabel('   ')).toBe('No extension');
   });
 });
 

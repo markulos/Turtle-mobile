@@ -1,5 +1,5 @@
 /**
- * Formatting for the server stats panel.
+ * Formatting for the server stats and performance panels.
  *
  * Kept free of react-native imports (same rule as `zoomMath` and
  * `boardCanvasLayout`): plain, side-effect-free string building, unit-testable
@@ -80,6 +80,27 @@ export function formatDuration(seconds) {
   return h % 24 ? `${d}d ${h % 24}h` : `${d}d`;
 }
 
+/**
+ * A measured duration in MILLISECONDS — the unit performance telemetry arrives
+ * in, where `formatDuration`'s seconds would round every interesting number to
+ * "0s".
+ *
+ * The scale changes what precision is worth reading. Under a second, whole
+ * milliseconds: 412 ms is a latency, "0.4 s" is a shrug. Past a second the
+ * millisecond is noise and seconds carry it. Past a minute — which only the
+ * cumulative totals reach — it hands off to `formatDuration`, so "8m 20s"
+ * reads the same here as it does for an uptime.
+ */
+export function formatMs(ms) {
+  const n = Math.max(0, finite(ms));
+  if (n < 1000) return `${Math.round(n)} ms`;
+  if (n < 60_000) {
+    const seconds = n / 1000;
+    return `${(seconds < 10 ? seconds.toFixed(1) : String(Math.round(seconds))).replace(/\.0$/, '')} s`;
+  }
+  return formatDuration(Math.round(n / 1000));
+}
+
 /** "4h ago" / "just now" for a timestamp in ms. Empty string for no timestamp,
  *  so a missing value renders as nothing rather than as 1970. */
 export function formatAgo(ms, now = Date.now()) {
@@ -112,4 +133,30 @@ export function btreeKindLabel(name, kind) {
   if (/_fts(_\w+)?$/.test(raw)) return 'search';
   if (kind === 'index' || /^idx_/.test(raw) || /^sqlite_autoindex/.test(raw)) return 'index';
   return 'table';
+}
+
+/**
+ * The name a person uses for a file extension.
+ *
+ * Deliberately almost empty: for nearly every extension the answer is the
+ * extension in capitals — MP4, PNG, HEIC — and a big table of aliases would be
+ * a list to maintain that says nothing the uppercase doesn't. Only the handful
+ * where capitalising is actually WRONG is written down.
+ *
+ * The one entry that isn't cosmetic is the empty string. The server groups
+ * every dotless filename under '', and rendering that as a blank row would
+ * read as a bug; "No extension" is a real category, and on this pond it is
+ * usually imports that arrived without one.
+ */
+const FILE_TYPE_NAMES = {
+  jpg: 'JPEG',
+  jpeg: 'JPEG',
+  tif: 'TIFF',
+  htm: 'HTML',
+};
+
+export function fileTypeLabel(ext) {
+  const raw = String(ext || '').trim().toLowerCase();
+  if (!raw) return 'No extension';
+  return FILE_TYPE_NAMES[raw] || raw.toUpperCase();
 }
