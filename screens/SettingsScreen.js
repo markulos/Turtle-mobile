@@ -22,6 +22,8 @@ import * as ImagePicker from 'expo-image-picker';
 import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
 import SidecarStatusCard from '../components/SidecarStatusCard';
 import ServerStatsPanel from '../components/ServerStatsPanel';
+import PerfFindingsPanel from '../components/PerfFindingsPanel';
+import TranscriptionPanel from '../components/TranscriptionPanel';
 import { useServer } from '../context/ServerContext';
 import { useTheme, ACCENTS } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -66,7 +68,9 @@ const SETTING_TERMS = {
   defaultParticipants: 'default participants people tasks assign involved pond members',
   calendarPartners: 'calendar partners share sharing partner view only merged tasks',
   serverConnection: 'server connection ip address computer host wifi network connect test pond offline',
-  serverStats: 'database size storage stats analytics disk space sqlite tables rows backups more info usage free space vacuum wal',
+  serverStats: 'database size storage stats analytics disk space sqlite tables rows backups more info usage free space vacuum wal file types extensions jpeg heic mp4 video photos breakdown',
+  perfFindings: 'performance findings telemetry slow lag jank latency speed stalls freeze cold start api requests diagnostics log measurements',
+  transcription: 'transcribe transcription transcript audio recording recordings speech to text subtitles whisper whisperx speakers diarize diarization voice notes meeting interview caption dictation language',
   healMedia: 'heal media vault thumbnails previews rebuild repair audit library',
   passwordVault: 'password vault master password change reset security encryption face id touch id',
   noVault: 'password vault set up security encryption missing',
@@ -1166,6 +1170,14 @@ export default function SettingsScreen({ active = true }) {
                 <ServerStatsPanel />
               </SettingsItem>
 
+              {/* …and what using it has actually FELT like, from the app's own
+                  passive telemetry. Sits next to the database panel because both
+                  answer "how is this pond doing", and both are owner-only
+                  disclosures that fetch nothing until opened. */}
+              <SettingsItem terms={SETTING_TERMS.perfFindings}>
+                <PerfFindingsPanel />
+              </SettingsItem>
+
               <SettingsItem terms={SETTING_TERMS.healMedia}>
               {isConnected && (
                 <TouchableOpacity
@@ -1219,6 +1231,21 @@ export default function SettingsScreen({ active = true }) {
             {(searching
               ? matchesQuery(searchQuery, SETTING_TERMS.sidecar)
               : tabKey === 'connection') && <SidecarStatusCard active={active} />}
+
+            {/* Transcription — send an audio to the pond's WhisperX worker and
+                keep the recordings it produced. Its own card for the same
+                reason the sidecar is one: it carries its own search terms, and
+                it removes itself entirely on a pond that has no such route. */}
+            {(searching
+              ? matchesQuery(searchQuery, SETTING_TERMS.transcription)
+              : tabKey === 'connection') && (
+              <TranscriptionPanel
+                active={active}
+                // Seeds the "main speaker" label, so a transcript says the
+                // owner's name instead of "Primary" without anyone typing it.
+                defaultSpeakerName={profile?.displayName || ''}
+              />
+            )}
 
             {/* Password Vault Section */}
             {(searching || tabKey === 'security') && hasVault && (

@@ -13,11 +13,19 @@ export async function streamMultipartUpload({
   label,
   onProgress,
   signal,
+  // The vault's ingest reads a field called 'media'; the transcription route
+  // reads one called 'file'. Defaulted so every existing caller is unchanged.
+  fieldName = 'media',
+  // Retries are safe when the destination dedupes (the vault) and unsafe when
+  // it queues work (transcription: a lost response retried is a second GPU
+  // job for the same audio). Callers that cannot tolerate a duplicate pass 1
+  // and surface an explicit Retry instead.
+  maxAttempts = UPLOAD_MAX_ATTEMPTS,
 }) {
   const cancelledError = () => new Error('Upload cancelled');
   if (signal?.aborted) throw cancelledError();
   let lastErr = null;
-  for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const startedAt = Date.now();
     let lastProgressAt = Date.now();
     let allSentAt = null;
@@ -30,7 +38,7 @@ export async function streamMultipartUpload({
         {
           httpMethod: 'POST',
           uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-          fieldName: 'media',
+          fieldName,
           mimeType,
           parameters,
           headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -104,7 +112,7 @@ export async function streamMultipartUpload({
       }
       lastErr = new Error(`HTTP ${status}: ${String(result?.body || '').slice(0, 300)}`);
       console.warn(
-        `[VaultUpload] ✗ ${label} · HTTP ${status} (attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS})`
+        `[VaultUpload] ✗ ${label} · HTTP ${status} (attempt ${attempt}/${maxAttempts})`
       );
       if (status < 500 && status !== 408 && status !== 429) throw lastErr;
     } catch (error) {
@@ -117,13 +125,13 @@ export async function streamMultipartUpload({
         throw cancelledError();
       }
       console.warn(
-        `[VaultUpload] ✗ ${label} (attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS}): ${error.message}`
+        `[VaultUpload] ✗ ${label} (attempt ${attempt}/${maxAttempts}): ${error.message}`
       );
       if (/HTTP 4\d\d/.test(error.message) && !/HTTP (408|429)/.test(error.message)) break;
     } finally {
       if (abortHandler) signal?.removeEventListener('abort', abortHandler);
     }
-    if (attempt < UPLOAD_MAX_ATTEMPTS) {
+    if (attempt < maxAttempts) {
       if (signal?.aborted) throw cancelledError();
       await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
     }
