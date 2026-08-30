@@ -82,11 +82,66 @@ const authHeader = () => (_apiAuthToken ? { Authorization: `Bearer ${_apiAuthTok
 //   • Skips when Authorization is already set, so api.* calls aren't doubled.
 let _serverApiOrigin = '';
 let _fetchPatched = false;
+
+// ── "no token" and "token not loaded yet" are different states ──────────────
+//
+// AuthContext restores the saved JWT from SecureStore in a mount effect, which
+// is asynchronous. Until it resolves `_apiAuthToken` is null — indistinguishable
+// from a signed-out app — so any request made in that window went out bare and
+// came back 401, with nothing to retry it once the token landed.
+//
+// This was not a rare race. In prod over 2026-08-28..30, 34 of the 36 failed
+// /api/media/gallery requests landed between 0.3s and 0.9s after a cold start,
+// against 35 recorded cold starts: it fired on essentially every launch, and
+// the grid rendered empty until something happened to refetch.
+//
+// Gating each screen on an "auth ready" flag would fix the gallery and leave
+// the trap armed for the next screen someone writes. So the wait lives at the
+// one place every request already passes through. api.* helpers benefit without
+// changing: their own authHeader() is empty that early, and the interceptor is
+// already the thing that fills a missing Authorization in.
+//
+// Fail-open, always: if the settle signal never arrives the gate opens on a
+// timer anyway. A pond that answers 401 is bad; an app whose requests hang
+// forever because a flag was missed is worse.
+const AUTH_SETTLE_TIMEOUT_MS = 3000;
+let _authSettled = false;
+let _authSettleWaiters = [];
+
+/**
+ * Called once the initial token restore has finished — whether or not it found
+ * a token. "Signed out" is a settled answer too, and gating on the presence of
+ * a token would hang every request for a genuinely logged-out app.
+ */
+export const markAuthSettled = () => {
+  if (_authSettled) return;
+  _authSettled = true;
+  const waiters = _authSettleWaiters;
+  _authSettleWaiters = [];
+  for (const w of waiters) { try { w(); } catch { /* one bad waiter must not strand the rest */ } }
+};
+
+export const isAuthSettled = () => _authSettled;
+
+/** Resolves when the restore has settled, or when the fail-open timer fires. */
+const whenAuthSettled = () => new Promise((resolve) => {
+  if (_authSettled) { resolve(); return; }
+  _authSettleWaiters.push(resolve);
+  setTimeout(resolve, AUTH_SETTLE_TIMEOUT_MS);
+});
+
+/**
+ * Test-only. The origin is normally learned from provider render (below), which
+ * a test of the interceptor alone has no reason to stand up.
+ */
+export const _setServerApiOriginForTests = (origin) => { _serverApiOrigin = origin || ''; };
+
 const installFetchAuthInterceptor = () => {
   if (_fetchPatched || typeof global === 'undefined' || !global.fetch) return;
   _fetchPatched = true;
   const orig = global.fetch;
-  global.fetch = (input, init) => {
+
+  const dispatch = (input, init) => {
     try {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
       if (_apiAuthToken && _serverApiOrigin && url.indexOf(_serverApiOrigin) === 0) {
@@ -102,6 +157,26 @@ const installFetchAuthInterceptor = () => {
       }
     } catch (e) { /* never let the interceptor break a request */ }
     return orig(input, init);
+  };
+
+  global.fetch = (input, init) => {
+    try {
+      // Settled is the steady state for all but the first second of a launch,
+      // and it stays SYNCHRONOUS — no extra microtask on the millions of
+      // requests made after startup, and no change to existing call timing.
+      if (_authSettled) return dispatch(input, init);
+
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const targetsPond = !!_serverApiOrigin && url.indexOf(_serverApiOrigin) === 0;
+      // Anything not aimed at our own pond is none of this gate's business —
+      // an Expo push registration or a third-party URL must never wait on our
+      // login state.
+      if (!targetsPond) return dispatch(input, init);
+
+      return whenAuthSettled().then(() => dispatch(input, init));
+    } catch (e) {
+      return dispatch(input, init);
+    }
   };
 };
 installFetchAuthInterceptor();

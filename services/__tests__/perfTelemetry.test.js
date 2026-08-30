@@ -4,7 +4,7 @@
  * The fetch wrapper and timers are integration surface, deliberately not
  * unit-faked here.
  */
-import { normalizeRouteKey, record, _internals } from '../perfTelemetry';
+import { normalizeRouteKey, record, createStallGate, _internals } from '../perfTelemetry';
 
 describe('normalizeRouteKey', () => {
   it('collapses ids, uuids, and app-style keys to :x', () => {
@@ -41,5 +41,58 @@ describe('record buffer', () => {
     record('cold_start', 123.7);
     expect(_internals.buffer[0].ms).toBe(124);
     expect(typeof _internals.buffer[0].at).toBe('number');
+  });
+});
+
+describe('createStallGate', () => {
+  const THRESHOLD = 100;
+
+  it('records a genuine stall while the app stays active', () => {
+    const gate = createStallGate();
+    expect(gate.accept(450, THRESHOLD)).toBe(true);
+  });
+
+  it('ignores a beat that was on time', () => {
+    const gate = createStallGate();
+    expect(gate.accept(12, THRESHOLD)).toBe(false);
+    expect(gate.accept(THRESHOLD, THRESHOLD)).toBe(false); // strictly greater
+  });
+
+  it('drops the beat spanning a background/resume, however huge', () => {
+    const gate = createStallGate();
+    gate.noteAppStateChange();          // → background, timer suspends
+    gate.noteAppStateChange();          // → active, minutes later
+    // The 9.5-minute sample that dominated prod's ranked pitfalls.
+    expect(gate.accept(570614, THRESHOLD)).toBe(false);
+  });
+
+  it('resumes recording on the very next beat', () => {
+    const gate = createStallGate();
+    gate.noteAppStateChange();
+    expect(gate.accept(570614, THRESHOLD)).toBe(false);
+    expect(gate.accept(450, THRESHOLD)).toBe(true);
+  });
+
+  it('spends the amnesty even on a beat that was not late', () => {
+    // Otherwise a quiet return from background leaves the gate armed and
+    // swallows the next REAL stall instead of the suspended interval.
+    const gate = createStallGate();
+    gate.noteAppStateChange();
+    expect(gate.accept(3, THRESHOLD)).toBe(false);
+    expect(gate.accept(450, THRESHOLD)).toBe(true);
+  });
+
+  it('covers a transient inactive with no background event', () => {
+    // iOS control centre / incoming call: 'inactive' then 'active', no
+    // 'background' in between, but the thread was parked all the same.
+    const gate = createStallGate();
+    gate.noteAppStateChange();
+    gate.noteAppStateChange();
+    expect(gate.accept(8000, THRESHOLD)).toBe(false);
+  });
+
+  it('trusts the first beat it sees — cold_start already guards launch', () => {
+    const gate = createStallGate();
+    expect(gate.accept(450, THRESHOLD)).toBe(true);
   });
 });

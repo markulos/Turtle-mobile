@@ -10,7 +10,10 @@
  *   js_stall      event-loop stalls: a 500ms heartbeat that arrives late by
  *                 >100ms means SOMETHING blocked the JS thread that long —
  *                 the exact thing a user feels as a frozen gesture. The
- *                 overshoot is the sample.
+ *                 overshoot is the sample. The beat spanning an AppState
+ *                 change is dropped, because a backgrounded app's timer is
+ *                 suspended and would otherwise report the length of the
+ *                 user's lunch break as jank (see createStallGate).
  *   cold_start    module-load → first idle heartbeat, once per launch.
  *
  * ── Why it can never make things worse ───────────────────────────────────
@@ -110,7 +113,50 @@ if (!IS_TEST) global.fetch = (input, init) => {
   );
 };
 
+/**
+ * Decides whether a late heartbeat is a STALL or just the app having been away.
+ *
+ * The heartbeat measures lateness, and a suspended app is infinitely late: the
+ * OS stops the timer on background and the first beat after resume overshoots
+ * by the whole time the phone was in a pocket. Nothing about that was a blocked
+ * JS thread, but it is indistinguishable from one by lateness alone.
+ *
+ * It is not a rounding error. Over 2026-08-28..30 prod recorded 698 js_stall
+ * samples with a p95 of 55.5 SECONDS and a max of 570,614ms — nine and a half
+ * minutes, on a metric whose threshold is 100ms. That key's total was ~50x the
+ * next worst, so it sat permanently at the top of the owner's ranked pitfalls
+ * and pushed every real finding underneath it. The server's ingest cap is
+ * 10 minutes (routes/perf.js), which is far too loose to catch this — and
+ * should stay loose, since a real chat turn legitimately runs a minute.
+ *
+ * So the gate is a one-beat amnesty: ANY AppState transition makes the next
+ * beat untrustworthy and it is dropped. Deliberately any transition and not
+ * just background→active, because iOS 'inactive' (control centre, an incoming
+ * call, the app switcher) also parks the thread without a background event,
+ * and losing one 500ms sample costs nothing against a metric with hundreds.
+ *
+ * Exported and free of timers, AppState and module state so it can be tested
+ * directly rather than through a fake clock.
+ */
+export function createStallGate() {
+  // Starts trusting: beat 1 never reaches here, because the cold_start branch
+  // below returns first, and beat 2 onwards is a genuine 500ms interval.
+  let suspect = false;
+  return {
+    /** Any AppState change at all — the next beat spans it and cannot be read. */
+    noteAppStateChange() { suspect = true; },
+    /** @returns {boolean} whether `overshoot` should be recorded as a stall. */
+    accept(overshoot, threshold) {
+      // The amnesty is spent whether or not this beat was late, so a quiet
+      // return from background does not leave the gate armed indefinitely.
+      if (suspect) { suspect = false; return false; }
+      return overshoot > threshold;
+    },
+  };
+}
+
 // ── heartbeat: stalls + cold start ──────────────────────────────────────────
+const stallGate = createStallGate();
 let lastBeat = Date.now();
 if (!IS_TEST) setInterval(() => {
   const now = Date.now();
@@ -121,7 +167,7 @@ if (!IS_TEST) setInterval(() => {
     record('cold_start', now - MODULE_LOAD_AT);
     return; // the first interval includes module-eval time; not a stall
   }
-  if (overshoot > STALL_OVERSHOOT_MS) record('js_stall', overshoot);
+  if (stallGate.accept(overshoot, STALL_OVERSHOOT_MS)) record('js_stall', overshoot);
 }, HEARTBEAT_MS);
 
 // ── flush ───────────────────────────────────────────────────────────────────
@@ -143,5 +189,11 @@ async function flush() {
 
 if (!IS_TEST) {
   setInterval(flush, FLUSH_MS);
-  AppState.addEventListener('change', (s) => { if (s === 'background' || s === 'inactive') flush(); });
+  AppState.addEventListener('change', (s) => {
+    // Before the flush, and for EVERY state — the gate has to hear about the
+    // return to 'active' as much as the departure from it, since the beat that
+    // spans a resume is the one carrying the whole suspended interval.
+    stallGate.noteAppStateChange();
+    if (s === 'background' || s === 'inactive') flush();
+  });
 }

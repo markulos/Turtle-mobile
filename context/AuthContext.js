@@ -7,7 +7,7 @@
 
 import React, { createContext, useState, useContext, useEffect, useMemo } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import { useServer, setApiAuthToken, serverOrigin } from './ServerContext';
+import { useServer, setApiAuthToken, markAuthSettled, serverOrigin } from './ServerContext';
 import { clearAllCaches } from '../utils/cacheManager';
 import { getAuthIdentity, getAuthTokenGeneration } from '../utils/authIdentity';
 
@@ -68,6 +68,13 @@ export const AuthProvider = ({ children }) => {
 
         // Malformed expiry → don't spuriously log out; let a real 401 handle it
         if (isNaN(expiryDate.getTime()) || expiryDate > now) {
+          // Pushed into the module holder HERE, synchronously, as well as into
+          // React state. The [token] effect below would do it too, but not
+          // until after a re-render — and markAuthSettled() in the finally
+          // releases every waiting request the moment this function returns.
+          // Relying on the effect would open the gate a render too early and
+          // let exactly the requests this is meant to protect go out bare.
+          setApiAuthToken(savedToken);
           setToken(savedToken);
           setIsAuthenticated(true);
           console.log('[Auth] Token loaded from secure storage');
@@ -81,6 +88,11 @@ export const AuthProvider = ({ children }) => {
       console.error('[Auth] Error loading token:', error);
     } finally {
       setIsLoading(false);
+      // Releases requests held by the interceptor's settle gate. In the finally
+      // on purpose: a SecureStore read that THREW is still a settled answer,
+      // and leaving the gate shut on the error path would trade 401s for a
+      // three-second stall on every request at launch.
+      markAuthSettled();
     }
   };
 
