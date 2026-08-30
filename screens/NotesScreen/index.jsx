@@ -557,14 +557,30 @@ export default function NotesScreen() {
     return () => { cancelled = true; };
   }, [topicSearchOpen, isConnected, api]);
 
-  // Tier 1 index (all notes' text, not just the loaded page) — instant client
-  // filter across every note the account has, fetched once on mount.
+  // The index of every note's text — not just the loaded page — so a search can
+  // reach notes the page never held.
+  //
+  // Fetched on FIRST SEARCH rather than on mount. It is read by exactly one
+  // consumer, the Tier-3 fuzzy fallback below, and that only runs when Tiers 1
+  // and 2 both came back empty. Meanwhile it is the joint-slowest call this
+  // screen makes: prod telemetry puts /api/turtle/notes/index at p95 3,495ms,
+  // level with the note list itself. Loading it eagerly spent that on every
+  // visit to Notes for a value the overwhelming majority of visits never read.
+  //
+  // Firing on ANY query, rather than waiting for a Tier-1/2 miss, is deliberate:
+  // it warms in parallel with the debounced server FTS, so by the time the
+  // fallback needs it it is usually already there. The cost lands on the first
+  // search of a session, which is already the slowest one.
+  const noteIndexLoading = useRef(false);
   useEffect(() => {
-    if (!isConnected) return;
+    if (!isConnected || !search.trim() || noteIndexLoading.current) return;
+    noteIndexLoading.current = true;
     api.get('/turtle/notes/index')
       .then((r) => { noteIndex.current = r.index || []; })
-      .catch(() => {});
-  }, [isConnected, api]);
+      // Cleared so a failed fetch is retried on the next keystroke instead of
+      // leaving Tier 3 permanently empty for the rest of the session.
+      .catch(() => { noteIndexLoading.current = false; });
+  }, [search, isConnected, api]);
 
   // Tier 2 debounced server FTS — catches matches beyond the loaded page.
   useEffect(() => {

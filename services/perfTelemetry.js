@@ -87,6 +87,7 @@ export function record(k, ms, meta) {
 export const _internals = { buffer, get serverOrigin() { return serverOrigin; } };
 
 // ── fetch wrapper ───────────────────────────────────────────────────────────
+const suspension = createSuspensionFilter();
 const origFetch = global.fetch;
 if (!IS_TEST) global.fetch = (input, init) => {
   let url = '';
@@ -95,6 +96,10 @@ if (!IS_TEST) global.fetch = (input, init) => {
   const isSelf = url.endsWith(REPORT_PATH);
   if (!isApi || isSelf) return origFetch(input, init);
   const t0 = Date.now();
+  // Where this measurement STARTED. Compared on settle so a request that lived
+  // across a suspension is discarded rather than reported as a multi-minute
+  // call the pond never actually took that long over.
+  const epoch = suspension.begin();
   return origFetch(input, init).then(
     (res) => {
       try {
@@ -102,16 +107,59 @@ if (!IS_TEST) global.fetch = (input, init) => {
           const m = /^([a-z]+:\/\/[^/]+)\//i.exec(url);
           if (m) serverOrigin = m[1];
         }
-        record(normalizeRouteKey(url), Date.now() - t0, res.ok ? undefined : `http ${res.status}`);
+        if (suspension.accept(epoch)) {
+          record(normalizeRouteKey(url), Date.now() - t0, res.ok ? undefined : `http ${res.status}`);
+        }
       } catch { /* telemetry must never break a request */ }
       return res;
     },
     (err) => {
-      try { record(normalizeRouteKey(url), Date.now() - t0, 'network-error'); } catch { /* ditto */ }
+      // Dropped on a spanned suspension too, and deliberately: a socket the OS
+      // tore down while the app slept is not the pond failing, and counting it
+      // as one puts a phantom in the owner's failure list.
+      try {
+        if (suspension.accept(epoch)) record(normalizeRouteKey(url), Date.now() - t0, 'network-error');
+      } catch { /* ditto */ }
       throw err;
     },
   );
 };
+
+/**
+ * Drops a fetch measurement that spanned a suspension.
+ *
+ * Same disease as createStallGate, different symptom. A request in flight when
+ * the OS suspends the app is frozen with everything else, and `Date.now()` on
+ * resume charges it the whole suspended interval. Worse, the AbortController
+ * that would have timed it out is frozen too — so no client timeout of any
+ * length can fire, and the measurement lands looking like an unbounded hang.
+ *
+ * The case that proved it, from prod on 2026-08-29:
+ *
+ *   11:07:06.315      66ms  api:/api/collab/bridge/update/status   healthy
+ *                  202.6s   no samples at all — the app was suspended
+ *   11:10:28.893  199,715ms js_stall                               resumed heartbeat
+ *   11:10:29.010  200,168ms api:/api/collab/bridge/update/status   'network-error'
+ *
+ * One event, recorded twice: a 200-second poll that never ran for 200 seconds,
+ * and a network error that was a dropped socket rather than an unhealthy pond.
+ * It alone was 98% of that route's total time and dragged a route whose p95 is
+ * 140ms to second place in the ranked pitfalls.
+ *
+ * An epoch counter rather than a flag, because unlike the heartbeat these
+ * measurements overlap: several requests can be in flight across the same
+ * transition, and each has to compare against where it STARTED.
+ */
+export function createSuspensionFilter() {
+  let epoch = 0;
+  return {
+    noteAppStateChange() { epoch += 1; },
+    /** Stamp taken when a request starts. */
+    begin() { return epoch; },
+    /** @returns {boolean} whether a measurement begun at `stamp` is trustworthy. */
+    accept(stamp) { return stamp === epoch; },
+  };
+}
 
 /**
  * Decides whether a late heartbeat is a STALL or just the app having been away.
@@ -194,6 +242,7 @@ if (!IS_TEST) {
     // return to 'active' as much as the departure from it, since the beat that
     // spans a resume is the one carrying the whole suspended interval.
     stallGate.noteAppStateChange();
+    suspension.noteAppStateChange();
     if (s === 'background' || s === 'inactive') flush();
   });
 }

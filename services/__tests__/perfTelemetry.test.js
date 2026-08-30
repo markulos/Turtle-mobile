@@ -4,7 +4,7 @@
  * The fetch wrapper and timers are integration surface, deliberately not
  * unit-faked here.
  */
-import { normalizeRouteKey, record, createStallGate, _internals } from '../perfTelemetry';
+import { normalizeRouteKey, record, createStallGate, createSuspensionFilter, _internals } from '../perfTelemetry';
 
 describe('normalizeRouteKey', () => {
   it('collapses ids, uuids, and app-style keys to :x', () => {
@@ -94,5 +94,41 @@ describe('createStallGate', () => {
   it('trusts the first beat it sees — cold_start already guards launch', () => {
     const gate = createStallGate();
     expect(gate.accept(450, THRESHOLD)).toBe(true);
+  });
+});
+
+describe('createSuspensionFilter', () => {
+  it('keeps a measurement that began and ended in the same run', () => {
+    const f = createSuspensionFilter();
+    const stamp = f.begin();
+    expect(f.accept(stamp)).toBe(true);
+  });
+
+  it('drops the request that lived across a suspension', () => {
+    // The prod case: a poll starts, the OS suspends the app for 200s, the
+    // socket dies, and the rejection arrives carrying 200,168ms.
+    const f = createSuspensionFilter();
+    const stamp = f.begin();
+    f.noteAppStateChange();   // → background
+    f.noteAppStateChange();   // → active, 200s later
+    expect(f.accept(stamp)).toBe(false);
+  });
+
+  it('judges overlapping requests independently', () => {
+    // Unlike the heartbeat, several of these are in flight at once and a
+    // single flag would condemn or spare all of them together.
+    const f = createSuspensionFilter();
+    const before = f.begin();
+    f.noteAppStateChange();
+    const after = f.begin();
+    expect(f.accept(before)).toBe(false); // spanned the transition
+    expect(f.accept(after)).toBe(true);   // started after it
+  });
+
+  it('trusts requests again once the app has settled', () => {
+    const f = createSuspensionFilter();
+    f.noteAppStateChange();
+    const stamp = f.begin();
+    expect(f.accept(stamp)).toBe(true);
   });
 });

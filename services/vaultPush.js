@@ -14,6 +14,40 @@ const PROJECT_ID =
 // pay a native round-trip every time.
 let cachedToken = null;
 
+// The resolution IN PROGRESS, if any.
+//
+// Caching the RESULT is not enough, because the expensive window is before
+// there is a result to cache. Two independent effects ask for the token as the
+// app starts — components/PomodoroNotifications.jsx and
+// screens/TurtleScreen/hooks/usePomodoroSocket.js — and both see a null cache
+// and both call out. Prod telemetry: /--/api/v2/push/getExpoPushToken ran 79
+// times across 32 cold starts, ~2.5 per launch, p50 685ms and p95 1,143ms, for
+// a value that cannot change within a session. Sharing the in-flight promise
+// collapses a stampede into one call without making any caller wait longer.
+let inFlight = null;
+
+/** One shared native round-trip, whoever asks and however many ask at once. */
+function resolveToken() {
+  if (inFlight) return inFlight;
+  inFlight = (async () => {
+    try {
+      const tokenResp = await Notifications.getExpoPushTokenAsync({ projectId: PROJECT_ID });
+      cachedToken = tokenResp?.data || null;
+    } catch {
+      cachedToken = null;
+    } finally {
+      // Cleared so a FAILED resolution can be retried later — push is commonly
+      // unavailable only until permission is granted or the dev build lands,
+      // and caching that "no" for the life of the process would mean the app
+      // never notices it became available. A success needs no retry: the
+      // cachedToken check above short-circuits before this runs again.
+      inFlight = null;
+    }
+    return cachedToken;
+  })();
+  return inFlight;
+}
+
 /**
  * Best-effort fetch of this device's Expo push token, cached after the first
  * success. Returns null (never throws) when push isn't available — before the
@@ -21,13 +55,13 @@ let cachedToken = null;
  */
 export async function getExpoPushTokenSafe() {
   if (cachedToken) return cachedToken;
-  try {
-    const tokenResp = await Notifications.getExpoPushTokenAsync({ projectId: PROJECT_ID });
-    cachedToken = tokenResp?.data || null;
-  } catch {
-    cachedToken = null;
-  }
-  return cachedToken;
+  return resolveToken();
+}
+
+/** Test-only: module state survives between tests in one file. */
+export function _resetPushTokenCacheForTests() {
+  cachedToken = null;
+  inFlight = null;
 }
 
 /**
@@ -67,10 +101,14 @@ export async function registerForVaultPush(getBaseUrl) {
     }
     if (!granted) return { ok: false, reason: 'permission' };
 
-    const tokenResp = await Notifications.getExpoPushTokenAsync({ projectId: PROJECT_ID });
-    const token = tokenResp?.data;
+    // Through the same shared resolution as everyone else. This used to call
+    // getExpoPushTokenAsync directly, which meant registration ignored a token
+    // the app had already fetched and raced any resolution in progress — a
+    // second native round-trip for a value already in hand, on every launch
+    // that registers. The permission gate above still runs first; this only
+    // deduplicates the fetch that follows it.
+    const token = await resolveToken();
     if (!token) return { ok: false, reason: 'no-token' };
-    cachedToken = token;
 
     const res = await fetch(`${getBaseUrl()}/devices/push-token`, {
       method: 'POST',
