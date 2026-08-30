@@ -70,8 +70,33 @@ export function _resetPushTokenCacheForTests() {
  * caller. Remote push requires a dev/standalone build with push enabled; in
  * Expo Go (or before the rebuild) this simply returns { ok:false }.
  */
+// `${origin}|${token}` of the last registration the server ACCEPTED. Only a
+// success is recorded, so a failed attempt is always retried.
+let lastRegistered = null;
+
+/** Test-only, alongside _resetPushTokenCacheForTests. */
+export function _resetRegistrationForTests() { lastRegistered = null; }
+
 export async function registerForVaultPush(getBaseUrl) {
   try {
+    // Already registered THIS token against THIS pond — nothing has changed
+    // and there is nothing to say.
+    //
+    // The caller is an effect keyed on [isAuthenticated, isConnected,
+    // getBaseUrl], and getBaseUrl's identity moves whenever ServerContext's
+    // memo recomputes — on the saved IP arriving, on connection flipping, on
+    // the pond env landing. Each of those re-ran the whole registration: two
+    // native channel calls, a permissions round-trip, and a POST. Prod counted
+    // 89 writes to /devices/push-token across 37 launches, 2.4 per launch, for
+    // a device token that cannot change within a session.
+    //
+    // Keyed on the ORIGIN as well as the token so moving between the dev and
+    // prod ponds still registers with each — the same device token is genuinely
+    // unknown to the pond it has not told yet.
+    if (cachedToken && lastRegistered === `${getBaseUrl()}|${cachedToken}`) {
+      return { ok: true, token: cachedToken, skipped: true };
+    }
+
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('vault-unlock', {
         name: 'Vault unlock',
@@ -110,11 +135,15 @@ export async function registerForVaultPush(getBaseUrl) {
     const token = await resolveToken();
     if (!token) return { ok: false, reason: 'no-token' };
 
-    const res = await fetch(`${getBaseUrl()}/devices/push-token`, {
+    const base = getBaseUrl();
+    const res = await fetch(`${base}/devices/push-token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token, platform: Platform.OS }),
     });
+    // Recorded only on success: a rejected registration must be retried on the
+    // next trigger, not remembered as done.
+    if (res.ok) lastRegistered = `${base}|${token}`;
     return { ok: res.ok, token };
   } catch (e) {
     // Most commonly "remote push not supported here" before the rebuild — fine.

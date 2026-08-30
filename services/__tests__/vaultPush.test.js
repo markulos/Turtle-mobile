@@ -10,6 +10,11 @@ const mockGetExpoPushTokenAsync = jest.fn();
 
 jest.mock('expo-notifications', () => ({
   getExpoPushTokenAsync: (...a) => mockGetExpoPushTokenAsync(...a),
+  getPermissionsAsync: jest.fn(),
+  requestPermissionsAsync: jest.fn(),
+  setNotificationChannelAsync: jest.fn(),
+  AndroidImportance: { HIGH: 4 },
+  IosAuthorizationStatus: { AUTHORIZED: 2, PROVISIONAL: 3 },
 }));
 // __esModule matters: vaultPush uses a DEFAULT import, and without this flag
 // babel's interop hands it the whole mock object, expoConfig reads undefined,
@@ -20,7 +25,13 @@ jest.mock('expo-constants', () => ({
   default: { expoConfig: { extra: { eas: { projectId: 'test-project' } } } },
 }));
 
-const { getExpoPushTokenSafe, _resetPushTokenCacheForTests } = require('../vaultPush');
+const Notifications = require('expo-notifications');
+const {
+  getExpoPushTokenSafe,
+  registerForVaultPush,
+  _resetPushTokenCacheForTests,
+  _resetRegistrationForTests,
+} = require('../vaultPush');
 
 /** A resolution the test controls the timing of, like a real native call. */
 const deferred = () => {
@@ -106,4 +117,59 @@ test('the project id from app config is what gets sent', async () => {
   mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' });
   await getExpoPushTokenSafe();
   expect(mockGetExpoPushTokenAsync).toHaveBeenCalledWith({ projectId: 'test-project' });
+});
+
+describe('registerForVaultPush', () => {
+  const BASE = 'http://100.85.19.127:3000/api';
+  const getBaseUrl = () => BASE;
+
+  beforeEach(() => {
+    _resetRegistrationForTests();
+    Notifications.getPermissionsAsync.mockResolvedValue({ granted: true });
+    Notifications.setNotificationChannelAsync.mockResolvedValue(undefined);
+    mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' });
+    global.fetch = jest.fn().mockResolvedValue({ ok: true });
+  });
+
+  it('registers the token with the pond', async () => {
+    await expect(registerForVaultPush(getBaseUrl)).resolves.toMatchObject({ ok: true });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toBe(`${BASE}/devices/push-token`);
+  });
+
+  it('does NOT re-post when nothing has changed', async () => {
+    // The effect that calls this re-runs whenever getBaseUrl's identity moves,
+    // which happens several times a launch. It used to mean a POST each time.
+    await registerForVaultPush(getBaseUrl);
+    await registerForVaultPush(getBaseUrl);
+    await registerForVaultPush(getBaseUrl);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the native permission and channel work on a repeat too', async () => {
+    await registerForVaultPush(getBaseUrl);
+    Notifications.getPermissionsAsync.mockClear();
+    await registerForVaultPush(getBaseUrl);
+    expect(Notifications.getPermissionsAsync).not.toHaveBeenCalled();
+  });
+
+  it('registers again against a DIFFERENT pond', async () => {
+    // The same device token is genuinely unknown to a pond it has not told.
+    await registerForVaultPush(() => BASE);
+    await registerForVaultPush(() => 'http://100.85.19.127:3100/api');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries after a rejected registration', async () => {
+    global.fetch.mockResolvedValueOnce({ ok: false });
+    await expect(registerForVaultPush(getBaseUrl)).resolves.toMatchObject({ ok: false });
+    await registerForVaultPush(getBaseUrl);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports no-token rather than posting when push is unavailable', async () => {
+    mockGetExpoPushTokenAsync.mockRejectedValue(new Error('unsupported'));
+    await expect(registerForVaultPush(getBaseUrl)).resolves.toMatchObject({ reason: 'no-token' });
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
 });
