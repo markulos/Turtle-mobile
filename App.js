@@ -58,6 +58,17 @@ import gestureProbe from './utils/gestureProbe';
 import DevProfiler from './components/DevProfiler';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
+import ErrorBoundary, { withBoundary } from './components/ErrorBoundary';
+
+// Guarded screens, built ONCE at module scope. A boundary created inside the
+// render would be a new component type on every pass, remounting the screen and
+// throwing away its state — see withBoundary. One tab crashing now costs that
+// tab; the other three stay usable.
+const GuardedTasks = withBoundary(TasksScreen, 'Tasks');
+const GuardedNotes = withBoundary(NotesScreen, 'Notes');
+const GuardedPhotos = withBoundary(PhotosScreen, 'Photos');
+const GuardedVault = withBoundary(PasswordsScreen, 'Vault');
+const GuardedTurtle = withBoundary(TurtleScreen, 'Turtle');
 import { useAppFonts } from './utils/fonts';
 
 // App-wide snappy touch feel: every TouchableOpacity gets a light press-in
@@ -243,17 +254,17 @@ function TabNavigator() {
           Threads pin their compose button to the right. */}
       <Tab.Screen
         name="Tasks"
-        component={TasksScreen}
+        component={GuardedTasks}
         options={{ title: 'TO-DO' }}
       />
       <Tab.Screen
         name="Notes"
-        component={NotesScreen}
+        component={GuardedNotes}
         options={{ title: 'Notes' }}
       />
       <Tab.Screen
         name="Photos"
-        component={PhotosScreen}
+        component={GuardedPhotos}
         // tabBarButtonTestID gives the batch-share E2E flow a stable handle on
         // the icon-only Photos tab (.maestro/batch-share.yaml).
         options={{ title: 'Photos', tabBarButtonTestID: 'tab-photos' }}
@@ -264,13 +275,13 @@ function TabNavigator() {
       {!hideVaultButton && (
         <Tab.Screen
           name="Vault"
-          component={PasswordsScreen}
+          component={GuardedVault}
           options={{ title: 'Vault' }}
         />
       )}
       <Tab.Screen
         name="Turtle"
-        component={TurtleScreen}
+        component={GuardedTurtle}
         options={{ title: 'Turtle' }}
         listeners={{ tabLongPress: () => setConsoleOpen(true) }}
       />
@@ -414,6 +425,12 @@ export default function App() {
       // not lag). Capture + false, so routing is untouched here too.
       onMoveShouldSetResponderCapture={() => { gestureProbe.touchMove(); return false; }}
     >
+      {/* Last resort. It cannot SAVE anything — every provider below is an
+          ancestor of the whole app, so a throw in one blanks the tree whether
+          or not this catches it. What it buys is the difference between a white
+          screen and a screen that names what failed and offers a retry, which
+          on a phone with no console attached is the only diagnosis available. */}
+      <ErrorBoundary label="Turtle">
       <ShareIntentProvider>
         <SafeAreaProvider>
           <ThemeProvider>
@@ -435,26 +452,37 @@ export default function App() {
                        {/* Owns the ghost-download queue socket + REST app-wide, so
                            the floating DownloadsPill and live gallery refresh work
                            on every screen. */}
-                        <AppContent />
+                        <ErrorBoundary label="Turtle"><AppContent /></ErrorBoundary>
+                        {/* Every floating overlay below is a SIBLING of AppContent,
+                            which is what makes guarding them worth doing: none of
+                            them is an ancestor of the app, so a crash in a progress
+                            pill has no business blanking the screen behind it.
+
+                            They fall back to null rather than to a card. These
+                            things float OVER content at fixed corners — an error
+                            box parked there would cover the app it was reporting
+                            on, and would keep covering it. A vanished toast plus a
+                            console line is the honest trade for UI whose whole
+                            purpose is to be transient. */}
                         {/* Floating share-upload progress / outcome toast. Rendered
                             here (NOT inside ShareTargetScreen) so it persists after
                             the share sheet dismisses and overlays the main app. */}
-                        <ShareUploadToast />
+                        <ErrorBoundary label="share toast" fallback={null}><ShareUploadToast /></ErrorBoundary>
                         {/* Floating vault-upload widget: live percentage while a
                             batch runs in the background (any screen), then the
                             finish stats + delete-originals offer. Bottom-anchored
                             so it never collides with the share toast above. */}
-                        <VaultUploadPill />
+                        <ErrorBoundary label="vault upload pill" fallback={null}><VaultUploadPill /></ErrorBoundary>
                         {/* Floating ghost-download progress (links shared into the
                             Download album / enqueued): live % + cancel/retry, sits
                             just above the vault-upload pill. */}
-                        <DownloadsPill />
+                        <ErrorBoundary label="downloads pill" fallback={null}><DownloadsPill /></ErrorBoundary>
                         {/* Cross-device biometric vault unlock: surfaces an approval
                             sheet when the web vault requests an unlock push. */}
-                        <VaultUnlockApproval />
+                        <ErrorBoundary label="vault unlock" fallback={null}><VaultUnlockApproval /></ErrorBoundary>
                         {/* Interactive pomodoro end notifications (Start break /
                             Start focus buttons). Renders nothing. */}
-                        <PomodoroNotifications />
+                        <ErrorBoundary label="pomodoro notifications" fallback={null}><PomodoroNotifications /></ErrorBoundary>
                         {/* DEV ONLY (null in release): watches for gestures the
                             app answered late or not at all, and turns each one
                             into a to-do carrying a ready-to-send fix prompt. */}
@@ -472,6 +500,7 @@ export default function App() {
           </ThemeProvider>
         </SafeAreaProvider>
       </ShareIntentProvider>
+      </ErrorBoundary>
     </GestureHandlerRootView>
   );
 }

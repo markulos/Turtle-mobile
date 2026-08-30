@@ -22,6 +22,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
 import SidecarStatusCard from '../components/SidecarStatusCard';
 import ServerStatsPanel from '../components/ServerStatsPanel';
+import ErrorBoundary from '../components/ErrorBoundary';
 import PerfFindingsPanel from '../components/PerfFindingsPanel';
 import TranscriptionPanel from '../components/TranscriptionPanel';
 import { useServer } from '../context/ServerContext';
@@ -1167,7 +1168,12 @@ export default function SettingsScreen({ active = true }) {
               {/* Everything about the database this connection reaches —
                   collapsed, and nothing is fetched until it's opened. */}
               <SettingsItem terms={SETTING_TERMS.serverStats}>
-                <ServerStatsPanel />
+                {/* Each panel is guarded on its own. All three render numbers
+                    and shapes straight off a server response, and Settings is
+                    where someone goes to FIX a bad connection — a screen that
+                    blanks because a stats payload was malformed takes away the
+                    only control that could repair it. */}
+                <ErrorBoundary label="Database stats" compact><ServerStatsPanel /></ErrorBoundary>
               </SettingsItem>
 
               {/* …and what using it has actually FELT like, from the app's own
@@ -1175,7 +1181,7 @@ export default function SettingsScreen({ active = true }) {
                   answer "how is this pond doing", and both are owner-only
                   disclosures that fetch nothing until opened. */}
               <SettingsItem terms={SETTING_TERMS.perfFindings}>
-                <PerfFindingsPanel />
+                <ErrorBoundary label="Performance findings" compact><PerfFindingsPanel /></ErrorBoundary>
               </SettingsItem>
 
               <SettingsItem terms={SETTING_TERMS.healMedia}>
@@ -1239,12 +1245,14 @@ export default function SettingsScreen({ active = true }) {
             {(searching
               ? matchesQuery(searchQuery, SETTING_TERMS.transcription)
               : tabKey === 'connection') && (
-              <TranscriptionPanel
-                active={active}
-                // Seeds the "main speaker" label, so a transcript says the
-                // owner's name instead of "Primary" without anyone typing it.
-                defaultSpeakerName={profile?.displayName || ''}
-              />
+              <ErrorBoundary label="Transcription" compact>
+                <TranscriptionPanel
+                  active={active}
+                  // Seeds the "main speaker" label, so a transcript says the
+                  // owner's name instead of "Primary" without anyone typing it.
+                  defaultSpeakerName={profile?.displayName || ''}
+                />
+              </ErrorBoundary>
             )}
 
             {/* Password Vault Section */}

@@ -60,6 +60,7 @@ import EdgeSwipePage from './components/EdgeSwipePage';
 import ConversationsOverlay from './components/ConversationsOverlay';
 import ChatComposer from '../../components/ChatComposer';
 import LinkDesktop from './components/LinkDesktop';
+import ErrorBoundary from '../../components/ErrorBoundary';
 import ApiProposalCard from '../../components/ApiProposalCard';
 import { readProposal, requestPath, summarise } from '../../utils/apiProposal';
 import ChatBlocks from '../../components/ChatBlocks';
@@ -1796,12 +1797,17 @@ export default function TurtleScreen() {
 
   const renderMessage = useCallback(({ item: message }) => {
     if (message.type === 'apiProposal' && message.proposal) {
+      // Guarded because the proposal is model-supplied: its shape is validated
+      // by readProposal, but "validated" and "renders" are different claims,
+      // and a bad card must not take the whole transcript down with it.
       return (
-        <ApiProposalCard
-          proposal={message.proposal}
-          theme={theme}
-          onConfirm={runProposal}
-        />
+        <ErrorBoundary label="This proposal" compact>
+          <ApiProposalCard
+            proposal={message.proposal}
+            theme={theme}
+            onConfirm={runProposal}
+          />
+        </ErrorBoundary>
       );
     }
 
@@ -1889,13 +1895,20 @@ export default function TurtleScreen() {
     return (
       <View>
         {bubble}
-        <ChatBlocks
-          blocks={board}
-          theme={theme}
-          api={api}
-          onAsk={askAsUser}
-          onNavigate={navigateFromBlock}
-        />
+        {/* The board is the least trustworthy thing this screen renders — a
+            structure the assistant composed, rebuilt server-side but still
+            arbitrary in its depth and values. drawableBlocks drops kinds it
+            does not know; this catches the ones it DOES know that still fail to
+            draw. The bubble stays either way, so the reply survives its board. */}
+        <ErrorBoundary label="This board" compact>
+          <ChatBlocks
+            blocks={board}
+            theme={theme}
+            api={api}
+            onAsk={askAsUser}
+            onNavigate={navigateFromBlock}
+          />
+        </ErrorBoundary>
       </View>
     );
   }, [styles, theme, getBaseUrl, runProposal, api, askAsUser, navigateFromBlock]);
