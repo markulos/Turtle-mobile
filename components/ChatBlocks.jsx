@@ -407,7 +407,17 @@ const makeStyles = (theme) => {
   return StyleSheet.create({
     // Matches ApiProposalCard's footprint so the two confirm affordances read
     // as the same family rather than as two unrelated widgets.
-    board: { alignSelf: 'flex-start', maxWidth: '92%', gap: 6, marginBottom: theme.spacing.xs },
+    //
+    // `width`, NOT `maxWidth`. A maxWidth is only a cap: with alignSelf
+    // flex-start the board still shrink-wraps, so its real width comes from
+    // whatever its content reports it needs. That is fine for a card full of
+    // text and catastrophic for a checklist, whose labels are `flex: 1,
+    // minWidth: 0` and therefore report an intrinsic width of ZERO. The board
+    // then collapsed to the widest thing that did have an intrinsic width —
+    // the "OPEN TASKS" title — and every task label wrapped to three
+    // characters a line inside it. A definite width takes content measurement
+    // out of the question entirely.
+    board: { alignSelf: 'flex-start', width: '92%', gap: 6, marginBottom: theme.spacing.xs },
 
     card: {
       backgroundColor: c.surface,

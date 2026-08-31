@@ -320,3 +320,34 @@ describe('ChatBlocks', () => {
     expect(view.getByText('read')).toBeTruthy();
   });
 });
+
+describe('board footprint', () => {
+  /**
+   * Regression: the board took a definite width, not a cap.
+   *
+   * With `maxWidth: '92%'` and alignSelf flex-start the board shrink-wrapped,
+   * so its real width came from what its content reported it needed. A
+   * checklist reports almost nothing — its labels are `flex: 1, minWidth: 0`,
+   * an intrinsic width of zero — so the board collapsed to the widest thing
+   * that DID have one, the card title, and every task label wrapped to a few
+   * characters a line. Asserted on the style rather than on measured layout
+   * because jest has no layout engine: the bug was the declaration.
+   */
+  const flatten = (style) => (Array.isArray(style) ? Object.assign({}, ...style.flat(Infinity)) : style);
+
+  it('declares a definite width so content measurement cannot shrink it', async () => {
+    const board = {
+      id: 'b0',
+      kind: 'checklist',
+      title: 'Open tasks',
+      items: [{ id: 'b0.i0', label: 'The Ontario Building Code review for the Guelph site' }],
+    };
+    const { toJSON } = await render(
+      <ChatBlocks blocks={[board]} theme={theme} api={apiOf()} />,
+    );
+    const style = flatten(toJSON().props.style);
+    expect(style.width).toBe('92%');
+    // The cap alone was the bug — a board that only caps still shrink-wraps.
+    expect(style.maxWidth).toBeUndefined();
+  });
+});

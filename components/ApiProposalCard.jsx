@@ -152,7 +152,15 @@ const makeStyles = (theme, tint) => {
       borderColor: tint,
       padding: 14,
       marginVertical: 6,
-      maxWidth: '92%',
+      // Definite width rather than a cap — see the same note in ChatBlocks.
+      // This card survived shrink-wrapping only because its method/path line
+      // and field rows carry real intrinsic width; its own title is
+      // `flex: 1, minWidth: 0` and reports zero, so it was one layout change
+      // away from the same collapse. Fixing both together also keeps the
+      // promise these two files make about being one family: a proposal card
+      // and a board in the same transcript now line up instead of each
+      // shrinking to its own content.
+      width: '92%',
       alignSelf: 'flex-start',
       gap: 8,
     },
