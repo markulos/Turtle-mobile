@@ -128,7 +128,7 @@ import {
 } from './components';
 import FriendCard from '../TurtleScreen/components/FriendCard';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { useCommandBus } from '../../context/CommandBusContext';
 import { useCelebration } from '../../context/CelebrationContext';
 
@@ -485,6 +485,7 @@ export default function TasksScreen() {
   const { isConnected, api } = useServer();
   const { celebrate } = useCelebration();
   const navigation = useNavigation();
+  const route = useRoute();
   const { dispatch: dispatchCommand } = useCommandBus();
   const menuAnimation = useRef(new Animated.Value(0)).current;
   const [showDropdown, setShowDropdown] = useState(false);
@@ -1641,6 +1642,27 @@ export default function TasksScreen() {
     setNewItemDate(date || null);
     setShowTaskForm(true);
   }, []);
+
+  /**
+   * Arrive here already composing.
+   *
+   * The chat's "New task" button is an `open` action carrying { compose: true }
+   * (server: services/chatCommands.js), so the assistant hands off to this
+   * screen's real editor instead of the chat drawing a lesser copy of it.
+   * Anything else that can navigate here — a deep link, the web app — gets the
+   * same behaviour for free by passing the same param.
+   *
+   * The param is CLEARED as it is consumed. React Navigation keeps params on
+   * the route until they are replaced, so leaving it set would mean the form
+   * springs open again every time the user returns to this tab, and a second
+   * press of the same chat button would be a no-op because the params object
+   * never changed and the effect never re-ran.
+   */
+  useEffect(() => {
+    if (!route.params?.compose) return;
+    navigation.setParams({ compose: undefined, composeType: undefined, composeDate: undefined });
+    openCreateForm(route.params.composeType || 'task', route.params.composeDate || null);
+  }, [route.params?.compose, route.params?.composeType, route.params?.composeDate, navigation, openCreateForm]);
 
   const openDetail = (task) => {
     setSelectedTask(task);
