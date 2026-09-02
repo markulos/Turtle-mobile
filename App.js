@@ -59,16 +59,22 @@ import DevProfiler from './components/DevProfiler';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
 import ErrorBoundary, { withBoundary } from './components/ErrorBoundary';
+import { withTabTiming } from './components/withTabTiming';
 
 // Guarded screens, built ONCE at module scope. A boundary created inside the
 // render would be a new component type on every pass, remounting the screen and
 // throwing away its state — see withBoundary. One tab crashing now costs that
 // tab; the other three stay usable.
-const GuardedTasks = withBoundary(TasksScreen, 'Tasks');
-const GuardedNotes = withBoundary(NotesScreen, 'Notes');
-const GuardedPhotos = withBoundary(PhotosScreen, 'Photos');
-const GuardedVault = withBoundary(PasswordsScreen, 'Vault');
-const GuardedTurtle = withBoundary(TurtleScreen, 'Turtle');
+//
+// Timing sits INSIDE the boundary: it reports from an effect in the screen's
+// own commit, so wrapping it outside would time a subtree the boundary might
+// have replaced with an error card and call that "the tab appeared".
+const guarded = (Screen, name) => withBoundary(withTabTiming(Screen, name), name);
+const GuardedTasks = guarded(TasksScreen, 'Tasks');
+const GuardedNotes = guarded(NotesScreen, 'Notes');
+const GuardedPhotos = guarded(PhotosScreen, 'Photos');
+const GuardedVault = guarded(PasswordsScreen, 'Vault');
+const GuardedTurtle = guarded(TurtleScreen, 'Turtle');
 import { useAppFonts } from './utils/fonts';
 
 // App-wide snappy touch feel: every TouchableOpacity gets a light press-in
@@ -252,15 +258,31 @@ function TabNavigator() {
           on the RIGHT, the brand glyph anchors the trailing edge of
           the nav and reads as the user's "home" the way Twitter /
           Threads pin their compose button to the right. */}
+      {/* freezeOnBlur here and on Notes, and deliberately NOWHERE else.
+          A blurred screen still re-renders on every context change — a
+          downloads socket event, a mediaVersion bump — and that work lands on
+          the same JS thread the tab you ARE on needs. Freezing stops it.
+
+          This is NOT the change that was reverted above. That was lazy:false,
+          which mounts screens HIDDEN at boot and makes them measure their
+          layouts against nothing; freeze merely masked the re-measure that
+          would have corrected it. With lazy:true a screen still mounts visible
+          and measures correctly, and freeze only suspends re-renders after it
+          has been seen.
+
+          Restricted to the two list screens because the note's constraint is
+          per-component: Photos and Turtle carry the gallery, whose scrubber
+          extent is measured rather than derived, and that is exactly the kind
+          of geometry a suspended re-render can stale. They keep re-rendering. */}
       <Tab.Screen
         name="Tasks"
         component={GuardedTasks}
-        options={{ title: 'TO-DO' }}
+        options={{ title: 'TO-DO', freezeOnBlur: true }}
       />
       <Tab.Screen
         name="Notes"
         component={GuardedNotes}
-        options={{ title: 'Notes' }}
+        options={{ title: 'Notes', freezeOnBlur: true }}
       />
       <Tab.Screen
         name="Photos"
