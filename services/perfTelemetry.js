@@ -186,6 +186,27 @@ export function createSuspensionFilter() {
  * Exported and free of timers, AppState and module state so it can be tested
  * directly rather than through a fake clock.
  */
+/**
+ * A ceiling past which "stall" stops being a coherent claim.
+ *
+ * createStallGate below drops the beat spanning an AppState transition, which
+ * is the right model and turned out not to be a complete one. In prod it took
+ * suspension artifacts from 1.4 per launch to 0.93 — much better, not gone:
+ * thirteen samples between 41s and 532s still landed in the three days after it
+ * shipped. The gate can only fire if an AppState change is delivered, and the
+ * ways that fails are not worth enumerating in a metric this simple — a device
+ * sleeping, an OS suspension with no transition, or a Fast Refresh in the dev
+ * client leaving a second heartbeat running against one gate.
+ *
+ * So the gate gets a backstop that needs no event at all. The threshold for a
+ * stall is 100ms; a stall of thirty seconds is not jank a user sat through, it
+ * is a thread that was not running. Nobody waits half a minute on a frozen app
+ * — they kill it. Anything past this is discarded rather than clamped, because
+ * a clamped value is a made-up one, and the p99 of samples we believe is 9.9s,
+ * comfortably clear of the line.
+ */
+const STALL_CEILING_MS = 30_000;
+
 export function createStallGate() {
   // Starts trusting: beat 1 never reaches here, because the cold_start branch
   // below returns first, and beat 2 onwards is a genuine 500ms interval.
@@ -198,6 +219,11 @@ export function createStallGate() {
       // The amnesty is spent whether or not this beat was late, so a quiet
       // return from background does not leave the gate armed indefinitely.
       if (suspect) { suspect = false; return false; }
+      // The event-free backstop. Deliberately AFTER the amnesty so an absurd
+      // beat still consumes it — otherwise a suspension that did deliver its
+      // AppState change would leave the gate armed to swallow the next real
+      // stall as well.
+      if (overshoot > STALL_CEILING_MS) return false;
       return overshoot > threshold;
     },
   };

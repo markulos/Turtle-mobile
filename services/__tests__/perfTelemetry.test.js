@@ -132,3 +132,31 @@ describe('createSuspensionFilter', () => {
     expect(f.accept(stamp)).toBe(true);
   });
 });
+
+describe('createStallGate ceiling', () => {
+  const THRESHOLD = 100;
+
+  it('discards an absurd overshoot even when no AppState change was seen', () => {
+    // The thirteen samples between 41s and 532s that survived the gate in prod.
+    // No transition was ever reported for them, so only a value-based rule can
+    // catch them.
+    const gate = createStallGate();
+    expect(gate.accept(41_000, THRESHOLD)).toBe(false);
+    expect(gate.accept(532_000, THRESHOLD)).toBe(false);
+  });
+
+  it('still keeps the worst stall we actually believe', () => {
+    // p99 of the samples that survive scrutiny is 9.9s; the ceiling has to sit
+    // clear of that or the backstop starts eating the findings it exists for.
+    const gate = createStallGate();
+    expect(gate.accept(9_884, THRESHOLD)).toBe(true);
+    expect(gate.accept(14_819, THRESHOLD)).toBe(true);
+  });
+
+  it('an absurd beat still spends the amnesty rather than banking it', () => {
+    const gate = createStallGate();
+    gate.noteAppStateChange();
+    expect(gate.accept(400_000, THRESHOLD)).toBe(false); // amnesty
+    expect(gate.accept(450, THRESHOLD)).toBe(true);      // gate re-armed, not stuck
+  });
+});

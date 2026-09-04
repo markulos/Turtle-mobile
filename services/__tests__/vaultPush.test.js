@@ -173,3 +173,51 @@ describe('registerForVaultPush', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });
+
+describe('registerForVaultPush concurrency', () => {
+  const BASE = 'http://100.85.19.127:3000/api';
+
+  beforeEach(() => {
+    _resetRegistrationForTests();
+    Notifications.getPermissionsAsync.mockResolvedValue({ granted: true });
+    Notifications.setNotificationChannelAsync.mockResolvedValue(undefined);
+    mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' });
+    global.fetch = jest.fn().mockResolvedValue({ ok: true });
+  });
+
+  it('CONCURRENT registrations share one POST — the launch-time race', async () => {
+    // The shape that survived the first fix: an effect keyed on
+    // [isAuthenticated, isConnected, getBaseUrl] runs two or three times as
+    // those settle, and all of them get past the lastRegistered guard before
+    // the first POST returns to set it. Prod kept writing 2.7 times a launch.
+    const getBaseUrl = () => BASE;
+    await Promise.all([
+      registerForVaultPush(getBaseUrl),
+      registerForVaultPush(getBaseUrl),
+      registerForVaultPush(getBaseUrl),
+    ]);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('concurrent registrations to DIFFERENT ponds are not collapsed', async () => {
+    await Promise.all([
+      registerForVaultPush(() => BASE),
+      registerForVaultPush(() => 'http://100.85.19.127:3100/api'),
+    ]);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('the in-flight slot is released, so a later pond change still registers', async () => {
+    await registerForVaultPush(() => BASE);
+    await registerForVaultPush(() => 'http://100.85.19.127:3100/api');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('a rejected registration does not wedge the slot shut', async () => {
+    global.fetch.mockRejectedValueOnce(new Error('offline'));
+    await registerForVaultPush(() => BASE);
+    global.fetch.mockResolvedValue({ ok: true });
+    await registerForVaultPush(() => BASE);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+});

@@ -74,29 +74,51 @@ export function _resetPushTokenCacheForTests() {
 // success is recorded, so a failed attempt is always retried.
 let lastRegistered = null;
 
+// The registration IN PROGRESS, keyed by the pond it is talking to.
+//
+// The `lastRegistered` check below is only reached once a registration has
+// FINISHED, which is not when the duplicates happen. The caller is an effect
+// keyed on [isAuthenticated, isConnected, getBaseUrl] and those settle within
+// milliseconds of each other at launch, so two or three runs sail past the
+// guard together, all of them before the first POST has come back to set it.
+//
+// Measured, not theorised: after shipping the guard, prod still recorded 38
+// writes to /devices/push-token across 14 launches — 2.7 each, unchanged —
+// and every one of them returned ok, so it was never failure-retry. Sharing
+// the in-flight promise is the half of the fix that was missing, exactly as it
+// was for resolveToken above.
+let registerInFlight = null;
+
 /** Test-only, alongside _resetPushTokenCacheForTests. */
-export function _resetRegistrationForTests() { lastRegistered = null; }
+export function _resetRegistrationForTests() {
+  lastRegistered = null;
+  registerInFlight = null;
+}
 
-export async function registerForVaultPush(getBaseUrl) {
+export function registerForVaultPush(getBaseUrl) {
+  let base = '';
+  try { base = getBaseUrl(); } catch { base = ''; }
+
+  // Already registered THIS token against THIS pond — nothing has changed and
+  // nothing to say. Cheap, synchronous, and the steady state after launch.
+  if (cachedToken && lastRegistered === `${base}|${cachedToken}`) {
+    return Promise.resolve({ ok: true, token: cachedToken, skipped: true });
+  }
+
+  // A registration for this same pond is already running: join it rather than
+  // starting a second. Keyed on the pond so a genuine switch between dev and
+  // prod is never mistaken for a duplicate.
+  if (registerInFlight && registerInFlight.base === base) return registerInFlight.promise;
+
+  const promise = doRegisterForVaultPush(getBaseUrl, base).finally(() => {
+    if (registerInFlight && registerInFlight.promise === promise) registerInFlight = null;
+  });
+  registerInFlight = { base, promise };
+  return promise;
+}
+
+async function doRegisterForVaultPush(getBaseUrl, baseFromCaller) {
   try {
-    // Already registered THIS token against THIS pond — nothing has changed
-    // and there is nothing to say.
-    //
-    // The caller is an effect keyed on [isAuthenticated, isConnected,
-    // getBaseUrl], and getBaseUrl's identity moves whenever ServerContext's
-    // memo recomputes — on the saved IP arriving, on connection flipping, on
-    // the pond env landing. Each of those re-ran the whole registration: two
-    // native channel calls, a permissions round-trip, and a POST. Prod counted
-    // 89 writes to /devices/push-token across 37 launches, 2.4 per launch, for
-    // a device token that cannot change within a session.
-    //
-    // Keyed on the ORIGIN as well as the token so moving between the dev and
-    // prod ponds still registers with each — the same device token is genuinely
-    // unknown to the pond it has not told yet.
-    if (cachedToken && lastRegistered === `${getBaseUrl()}|${cachedToken}`) {
-      return { ok: true, token: cachedToken, skipped: true };
-    }
-
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('vault-unlock', {
         name: 'Vault unlock',
@@ -135,7 +157,7 @@ export async function registerForVaultPush(getBaseUrl) {
     const token = await resolveToken();
     if (!token) return { ok: false, reason: 'no-token' };
 
-    const base = getBaseUrl();
+    const base = baseFromCaller || getBaseUrl();
     const res = await fetch(`${base}/devices/push-token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
