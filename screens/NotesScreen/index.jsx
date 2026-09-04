@@ -78,6 +78,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../context/ThemeContext';
 import { useServer } from '../../context/ServerContext';
 import { useClaudeQueue } from '../../context/ClaudeQueueContext';
+import { useBoardLinkTarget } from '../../context/BoardLinkContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
 import { TAP_ONLY } from '../../utils/pressBehavior';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
@@ -317,6 +318,15 @@ export default function NotesScreen() {
   // Topic browsing — null = all topics. Mirrors the web Topics sidebar; ANDs with
   // the type filter above. A topic = the parent segment of a `parent/child` tag.
   const [selectedTopic, setSelectedTopic] = useState(null);
+  // "Show me this board's notes", sent from the boards canvas. Board = project
+  // = topic here, so arriving with one is just this filter, already on. The
+  // type filter is reset with it: landing on a board's notes and being shown
+  // only its to-dos, because that is where the tab happened to be left, reads
+  // as a board with nothing in it.
+  useBoardLinkTarget('notes', (board) => {
+    setSelectedTopic(board || null);
+    setFilter(FILTER_ALL);
+  });
   // Board/topic search sheet (magnify chip at the head of the topic rail).
   const [topicSearchOpen, setTopicSearchOpen] = useState(false);
   // Boards from the server's projects list (board = project = topic), merged

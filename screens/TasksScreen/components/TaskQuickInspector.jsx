@@ -13,7 +13,6 @@ import {
   Keyboard,
   Alert,
   Platform,
-  Easing,
   FlatList,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -22,6 +21,7 @@ import { WheelTimePicker } from './WheelTimePicker';
 import { DatePickerModal } from './DatePickerModal';
 import { isOccurrenceCompleted, isTaskDoneNow } from '../utils/taskHelpers';
 import { tapHaptic, impactHaptic } from '../../../utils/haptics';
+import { EASE } from '../../../utils/motion';
 
 // Minimal, web-inspector-style quick editor that slides up when a task block in
 // the day's hour grid is tapped. Deliberately small: it only does the two
@@ -38,7 +38,8 @@ const SCREEN_W = Dimensions.get('window').width || 390;
 const RESCHEDULE_PAGE_W = SCREEN_W - (18 + 12) * 2;
 // iOS keyboard ease (Animated has no built-in "keyboard" curve); the synced
 // speed comes from the OS-reported duration, this just matches the shape.
-const KB_EASING = Easing.bezier(0.17, 0.59, 0.4, 0.77);
+// Shared from utils/motion — the consoles use the same one.
+const KB_EASING = EASE.keyboard;
 
 const formatTime12 = (t) => {
   if (!t) return null;

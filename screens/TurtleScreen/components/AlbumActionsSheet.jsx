@@ -19,7 +19,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
-  Easing,
   Image,
   Pressable,
   StyleSheet,
@@ -31,13 +30,8 @@ import {
 import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
-import { useSheetDismiss } from '../../../utils/useSheetDismiss';
-
-// Same presentation curve as the music vault's track menu, so every card in
-// the app enters with one motion signature.
-const SHEET_EASING = Easing.bezier(0.32, 0.72, 0, 1);
-const OPEN_MS = 260;
-const CLOSE_MS = 200;
+import { DURATION, EASE, timing, useReduceMotion } from '../../../utils/motion';
+import { useSheetPresentation } from '../../../utils/useSheetPresentation';
 
 const isLiveShare = (s) => !s.revokedAt && !(s.expiresAt && s.expiresAt < Date.now());
 
@@ -70,14 +64,6 @@ export default function AlbumActionsSheet({
   const tint = c.accentInfo || c.primary;
   const liveTint = c.accentSuccess || tint;
 
-  // 0 = off-screen below the edge, 1 = resting open. Drives the card slide and
-  // the scrim fade together so they can never disagree.
-  const anim = useRef(new Animated.Value(0)).current;
-  // Live drag offset (points below rest), kept apart from `anim` so a drag
-  // never fights the open/close timing. Owned by the shared sheet-dismiss hook,
-  // which grabs the pull from anywhere on the card.
-  const { panHandlers, dragY: drag } = useSheetDismiss(onClose, visible);
-
   // The rename field rides the keyboard frame-for-frame. The card already
   // rests on `bottomInset` of dock clearance, so the lift CANCELS exactly that
   // clearance — mixing the two leaves the card floating over the keyboard.
@@ -91,11 +77,20 @@ export default function AlbumActionsSheet({
   // transform is built at render, so a ref would update silently and leave the
   // interpolation stale. Seeded high so the pre-layout first frame is fully
   // off-screen.
-  const [cardH, setCardH] = useState(420);
   const [page, setPage] = useState('actions');
   const [draftName, setDraftName] = useState('');
-  // Kept mounted through the closing animation so the card slides out.
-  const [mounted, setMounted] = useState(visible);
+
+  const sheet = useSheetPresentation({
+    visible,
+    onClose,
+    height: 420,
+    // Every open starts on the actions page with no half-typed rename left over.
+    onOpen: useCallback(() => {
+      setPage('actions');
+      setDraftName('');
+    }, []),
+  });
+  const { mounted, panHandlers } = sheet;
 
   // Is this board already published? Answered by the same endpoint the share
   // sheet uses, so the row can say "live" BEFORE you open it — otherwise the
@@ -131,47 +126,24 @@ export default function AlbumActionsSheet({
 
   // Slow breathing dot — the one thing on the card that moves, so "live" reads
   // as a state rather than another label.
+  //
+  // This is the one motion in the sheet that a shorter duration cannot fix: a
+  // loop that never comes to rest is precisely what "Reduce Motion" is asking us
+  // to stop. So when the switch is on the loop simply never starts and the dot
+  // sits at full opacity — still a solid, legible LIVE badge, just a still one.
+  const reduceMotion = useReduceMotion();
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    if (!isLive || !mounted) return undefined;
+    if (!isLive || !mounted || reduceMotion) return undefined;
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        timing(pulse, 1, { duration: DURATION.breath, easing: EASE.breathe }),
+        timing(pulse, 0, { duration: DURATION.breath, easing: EASE.breathe }),
       ]),
     );
     loop.start();
     return () => loop.stop();
-  }, [isLive, mounted]);
-
-  useEffect(() => {
-    if (visible) {
-      setMounted(true);
-      setPage('actions');
-      setDraftName('');
-      drag.setValue(0);
-      Animated.timing(anim, {
-        toValue: 1,
-        duration: OPEN_MS,
-        easing: SHEET_EASING,
-        useNativeDriver: true,
-      }).start();
-    } else if (mounted) {
-      Animated.timing(anim, {
-        toValue: 0,
-        duration: CLOSE_MS,
-        easing: SHEET_EASING,
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) setMounted(false);
-      });
-    }
-  }, [visible]);
-
-  const translateY = Animated.add(
-    anim.interpolate({ inputRange: [0, 1], outputRange: [cardH, 0] }),
-    drag,
-  );
+  }, [isLive, mounted, reduceMotion, pulse]);
 
   // A no-op rename (empty or unchanged) just closes rather than firing a
   // pointless write across every photo carrying the tag.
@@ -193,7 +165,7 @@ export default function AlbumActionsSheet({
     <View style={[StyleSheet.absoluteFill, styles.layer]} pointerEvents="box-none">
       <Animated.View
         pointerEvents={visible ? 'auto' : 'none'}
-        style={[StyleSheet.absoluteFill, styles.scrim, { opacity: anim }]}
+        style={[StyleSheet.absoluteFill, styles.scrim, sheet.scrimStyle]}
       >
         <Pressable
           style={StyleSheet.absoluteFill}
@@ -209,18 +181,14 @@ export default function AlbumActionsSheet({
         {/* The whole card is the pull-down-to-close zone. */}
         <Animated.View
           {...panHandlers}
-          onLayout={(e) => {
-            const h = Math.round(e.nativeEvent.layout.height);
-            if (h <= 0) return;
-            setCardH((prev) => (prev === h ? prev : h));
-          }}
+          onLayout={sheet.onCardLayout}
           style={[
             styles.card,
             {
               backgroundColor: c.surfaceElevated,
               borderColor: c.border,
               paddingBottom: bottomInset + 10,
-              transform: [{ translateY }],
+              transform: sheet.cardStyle.transform,
             },
           ]}
         >

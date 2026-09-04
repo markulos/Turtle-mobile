@@ -130,6 +130,25 @@ function audioDestinationOnPress(view) {
   throw new Error('Expected the Audio destination to expose an onPress handler');
 }
 
+/**
+ * Hand a deferred to ONE endpoint instead of to whichever POST happens to be
+ * first.
+ *
+ * ShareTargetScreen POSTs /share/preview on mount whenever the payload carries
+ * a link, so `mockReturnValueOnce` no longer reliably lands on the /share call
+ * under test — the preview request gets there first and swallows the deferred,
+ * leaving the real share to fail. Routing by path keeps these tests about the
+ * share body and immune to any other request the screen decides to make.
+ *
+ * Everything else resolves to a bare success so an unrelated request can't
+ * reject and fail the job we're asserting on.
+ */
+function deferPost(endpoint, pending) {
+  mockApiPost.mockImplementation((path) => (
+    path === endpoint ? pending.promise : Promise.resolve({ success: true })
+  ));
+}
+
 async function renderTarget(shareIntent, { boards } = {}) {
   mockApiGet.mockResolvedValueOnce({
     boards: boards || [
@@ -159,6 +178,9 @@ describe('ShareTargetScreen Audio destination', () => {
       authGeneration: 'generation-a',
     };
     jest.clearAllMocks();
+    // deferPost() installs a persistent implementation; clearAllMocks only
+    // wipes recorded calls, so reset the post mock outright between tests.
+    mockApiPost.mockReset();
     mockRandomUUID
       .mockReturnValueOnce('client-import-1')
       .mockReturnValueOnce('client-import-2')
@@ -326,7 +348,7 @@ describe('ShareTargetScreen Audio destination', () => {
 
   test('routes URL-only Audio selection through the existing share body and accepts downloadJobId as queued', async () => {
     const pending = deferred();
-    mockApiPost.mockReturnValueOnce(pending.promise);
+    deferPost('/share', pending);
     const view = await renderTarget({ webUrl: 'https://example.com/not-media-by-extension' });
 
     fireEvent.press(view.getByText('Audio'));
@@ -360,6 +382,9 @@ describe('ShareUploadProvider audio imports', () => {
       authGeneration: 'generation-a',
     };
     jest.clearAllMocks();
+    // deferPost() installs a persistent implementation; clearAllMocks only
+    // wipes recorded calls, so reset the post mock outright between tests.
+    mockApiPost.mockReset();
     mockRandomUUID
       .mockReturnValueOnce('client-import-1')
       .mockReturnValueOnce('client-import-2')
@@ -664,6 +689,9 @@ describe('existing share behavior', () => {
       authGeneration: 'generation-a',
     };
     jest.clearAllMocks();
+    // deferPost() installs a persistent implementation; clearAllMocks only
+    // wipes recorded calls, so reset the post mock outright between tests.
+    mockApiPost.mockReset();
     mockGetInfoAsync.mockResolvedValue({ exists: true });
     mockMakeDirectoryAsync.mockResolvedValue(undefined);
     mockCopyAsync.mockResolvedValue(undefined);
@@ -679,7 +707,7 @@ describe('existing share behavior', () => {
     [{ webUrl: 'https://example.com/article' }, { text: undefined, url: 'https://example.com/article' }],
   ])('keeps text and ordinary link shares on /api/share', async (shareIntent, payload) => {
     const pending = deferred();
-    mockApiPost.mockReturnValueOnce(pending.promise);
+    deferPost('/share', pending);
     const view = await renderTarget(shareIntent);
 
     fireEvent.press(view.getByText('Recipes'));
@@ -703,7 +731,7 @@ describe('existing share behavior', () => {
 
   test('keeps image shares on the sequential base64 /api/share path', async () => {
     const pending = deferred();
-    mockApiPost.mockReturnValueOnce(pending.promise);
+    deferPost('/share', pending);
     const image = {
       path: 'file:///os/turtle.jpg',
       fileName: 'turtle.jpg',
@@ -737,5 +765,215 @@ describe('existing share behavior', () => {
     await act(async () => {
       latestShareUpload.dismissJob(latestShareUpload.jobs[0].id);
     });
+  });
+});
+
+/**
+ * The Inbox tile and the link card above it.
+ *
+ * "Inbox" sends the link with NO board — the server files it as an untagged
+ * note. That request used to be rejected, so the tile fired a success haptic,
+ * dismissed the sheet, and lost the link; the first test here is the guard
+ * against that regression.
+ *
+ * The card is the other half: a shared Facebook or shop link arrives as a few
+ * hundred characters of tracking parameters, and rendering that verbatim told
+ * the user nothing about what they were about to save.
+ */
+describe('ShareTargetScreen Inbox + link preview', () => {
+  const LINK = 'https://dronespraypro.com/pages/dsp-100-demo-booking?fbclid=IwZnRzaAT2Zydw';
+
+  const previewReply = {
+    success: true,
+    preview: {
+      url: LINK,
+      host: 'dronespraypro.com',
+      title: 'DSP-100 Demo Booking',
+      description: 'Book a live demo of the DSP-100 drone spraying system.',
+      thumbUrl: '/api/media/thumbnails/linkthumb-test.jpg',
+      siteName: 'Drone Spray Pro',
+      mediaType: 'link',
+    },
+    suggestions: [
+      { kind: 'project', name: 'Drone spraying', reason: 'Matches this link', source: 'ai' },
+    ],
+    aiSuggestions: true,
+  };
+
+  /** Route by endpoint: the sheet POSTs /share/preview on mount AND /share on tap. */
+  const routePosts = ({ preview = previewReply, share = { success: true } } = {}) => {
+    mockApiPost.mockImplementation((path) => (
+      path === '/share/preview'
+        ? Promise.resolve(preview)
+        : Promise.resolve(share)
+    ));
+  };
+
+  beforeEach(() => {
+    latestShareUpload = null;
+    mockAuth = {
+      isAuthenticated: true,
+      token: 'token-7',
+      authIdentity: 'sub:account-a',
+      authGeneration: 'generation-a',
+    };
+    jest.clearAllMocks();
+    mockApiPost.mockReset();
+    mockGetInfoAsync.mockResolvedValue({ exists: true });
+    mockMakeDirectoryAsync.mockResolvedValue(undefined);
+    mockCopyAsync.mockResolvedValue(undefined);
+    mockDeleteAsync.mockResolvedValue(undefined);
+    mockReadAsStringAsync.mockResolvedValue('base64-image');
+    mockWriteAsStringAsync.mockResolvedValue(undefined);
+    mockReadDirectoryAsync.mockResolvedValue([]);
+    mockGetFreeDiskStorageAsync.mockResolvedValue(10 * 1024 * 1024 * 1024);
+  });
+
+  test('Inbox sends the link with no board and reports it as sent to the Inbox', async () => {
+    routePosts();
+    const view = await renderTarget({ webUrl: LINK });
+
+    fireEvent.press(view.getByText('Inbox'));
+
+    await waitFor(() =>
+      expect(mockApiPost).toHaveBeenCalledWith('/share', {
+        board: undefined,
+        payload: { text: undefined, url: LINK },
+        channel: expect.stringMatching(/^(ios|android)-share$/),
+      })
+    );
+    expect(view.onDismiss).toHaveBeenCalledTimes(1);
+
+    await waitFor(() => expect(latestShareUpload.jobs[0]?.status).toBe('success'));
+    // Without this the toast would say "Photo vault" for a link — a null board
+    // is two different destinations depending on the payload.
+    expect(latestShareUpload.jobs[0].destination).toBe('Inbox');
+
+    await act(async () => {
+      latestShareUpload.dismissJob(latestShareUpload.jobs[0].id);
+    });
+  });
+
+  test('the payload card shows the unfurled page, not the raw URL', async () => {
+    routePosts();
+    const view = await renderTarget({ webUrl: LINK });
+
+    await waitFor(() => expect(view.getByText('DSP-100 Demo Booking')).toBeTruthy());
+    expect(view.getByText('Book a live demo of the DSP-100 drone spraying system.')).toBeTruthy();
+    expect(view.getByText('Drone Spray Pro')).toBeTruthy();
+    // The tracking-laden address itself must not be on screen anywhere.
+    expect(view.queryByText(LINK)).toBeNull();
+  });
+
+  test('iOS sending the same link twice (webUrl + text) renders it once', async () => {
+    routePosts();
+    const view = await renderTarget({ webUrl: LINK, text: LINK });
+
+    await waitFor(() => expect(view.getByText('DSP-100 Demo Booking')).toBeTruthy());
+    expect(view.queryByText(LINK)).toBeNull();
+  });
+
+  test('a link that will not unfurl still shows its host and stays sendable', async () => {
+    routePosts({ preview: { success: true, preview: null, suggestions: [], aiSuggestions: false } });
+    const view = await renderTarget({ webUrl: LINK });
+
+    await waitFor(() => expect(view.getAllByText('dronespraypro.com').length).toBeGreaterThan(0));
+    expect(view.getByText('Inbox')).toBeTruthy();
+  });
+
+  test('a preview request that fails outright never blocks the share', async () => {
+    mockApiPost.mockImplementation((path) => (
+      path === '/share/preview'
+        ? Promise.reject(new Error('server down'))
+        : Promise.resolve({ success: true })
+    ));
+    const view = await renderTarget({ webUrl: LINK });
+
+    fireEvent.press(view.getByText('Inbox'));
+    await waitFor(() => expect(latestShareUpload.jobs[0]?.status).toBe('success'));
+
+    await act(async () => {
+      latestShareUpload.dismissJob(latestShareUpload.jobs[0].id);
+    });
+  });
+
+  test('suggested boards are listed under their own header and send to that board', async () => {
+    routePosts();
+    const view = await renderTarget({ webUrl: LINK }, {
+      boards: [
+        { kind: 'tag', name: 'Recipes', isPinned: true },
+        { kind: 'project', name: 'Drone spraying', isPinned: false },
+      ],
+    });
+
+    await waitFor(() => expect(view.getByText('Suggested for this link')).toBeTruthy());
+    expect(view.getByText('Drone spraying')).toBeTruthy();
+
+    fireEvent.press(view.getByText('Drone spraying'));
+
+    await waitFor(() =>
+      expect(mockApiPost).toHaveBeenCalledWith('/share', {
+        board: { kind: 'project', name: 'Drone spraying' },
+        payload: { text: undefined, url: LINK },
+        channel: expect.stringMatching(/^(ios|android)-share$/),
+      })
+    );
+
+    await waitFor(() => expect(latestShareUpload.jobs[0]?.status).toBe('success'));
+    await act(async () => {
+      latestShareUpload.dismissJob(latestShareUpload.jobs[0].id);
+    });
+  });
+
+  test('a suggested board that does not exist yet is created on send', async () => {
+    routePosts({
+      preview: {
+        ...previewReply,
+        suggestions: [{ kind: 'tag', name: 'drones', reason: 'New tag for this topic', source: 'ai', create: true }],
+      },
+    });
+    const view = await renderTarget({ webUrl: LINK });
+
+    await waitFor(() => expect(view.getByText('drones')).toBeTruthy());
+    fireEvent.press(view.getByText('drones'));
+
+    await waitFor(() =>
+      expect(mockApiPost).toHaveBeenCalledWith('/share', {
+        board: { kind: 'tag', name: 'drones', create: true },
+        payload: { text: undefined, url: LINK },
+        channel: expect.stringMatching(/^(ios|android)-share$/),
+      })
+    );
+
+    await waitFor(() => expect(latestShareUpload.jobs[0]?.status).toBe('success'));
+    await act(async () => {
+      latestShareUpload.dismissJob(latestShareUpload.jobs[0].id);
+    });
+  });
+
+  test('a suggestion naming a board that is gone is dropped', async () => {
+    // Defence in depth: the server only ever returns real boards, but a stale
+    // suggestion must never render a row that would 404 on send.
+    routePosts({
+      preview: {
+        ...previewReply,
+        suggestions: [{ kind: 'tag', name: 'deleted-board', reason: 'nope', source: 'ai' }],
+      },
+    });
+    const view = await renderTarget({ webUrl: LINK });
+
+    await waitFor(() => expect(view.getByText('DSP-100 Demo Booking')).toBeTruthy());
+    expect(view.queryByText('deleted-board')).toBeNull();
+    expect(view.queryByText('Suggested for this link')).toBeNull();
+  });
+
+  test('a photo-only share asks for no preview and offers no Inbox', async () => {
+    routePosts();
+    const view = await renderTarget({
+      files: [{ path: 'file:///os/turtle.jpg', fileName: 'turtle.jpg', mimeType: 'image/jpeg' }],
+    });
+
+    expect(view.queryByText('Inbox')).toBeNull();
+    expect(mockApiPost).not.toHaveBeenCalledWith('/share/preview', expect.anything());
   });
 });

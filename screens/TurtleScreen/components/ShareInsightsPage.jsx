@@ -23,12 +23,13 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, Share,
+  ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView,
   StyleSheet, Text, View,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import EdgeSwipePage from './EdgeSwipePage';
+import shareOneLink from '../../../utils/shareLink';
 import { notifyHaptic, tapHaptic } from '../../../utils/haptics';
 
 const DAY_MS = 86400000;
@@ -412,7 +413,7 @@ export default function ShareInsightsPage({
                       <Text style={styles.linkActionText}>Copy</Text>
                     </Pressable>
                     <Pressable
-                      onPress={() => { tapHaptic(); Share.share({ message: s.url }); }}
+                      onPress={() => { tapHaptic(); shareOneLink(s.url, { title: albumName }); }}
                       style={styles.linkAction}
                       accessibilityRole="button"
                       accessibilityLabel="Send link"

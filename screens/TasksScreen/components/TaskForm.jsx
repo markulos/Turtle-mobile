@@ -204,8 +204,27 @@ export const TaskForm = ({
     const list = q
       ? notes.filter((n) => `${n.content || ''} ${n.description || ''}`.toLowerCase().includes(q))
       : notes;
-    return list.slice(0, 8);
+    return list.slice(0, 12);
   }, [notes, noteQuery]);
+  // A one-line preview of a note's body, shown under its title in the picker so
+  // two notes that start with the same words are still tellable apart.
+  const noteSnippetOf = (n) => {
+    const body = (n?.description || '').trim()
+      || ((n?.content || '').trim().split('\n').slice(1).join(' ').trim());
+    if (!body) return '';
+    return body.length > 70 ? `${body.slice(0, 70)}…` : body;
+  };
+
+  // Full-screen description editor. The inline field is a PREVIEW that always
+  // shows the whole description; tapping it pushes this page, which reads like
+  // opening a note: the task's title on top, the body beneath it, nothing else.
+  const [descEditorOpen, setDescEditorOpen] = useState(false);
+  // Closing is Done, Back and the back-swipe alike: the body is bound straight
+  // to formData, so there's no draft to commit — just dismiss the keyboard.
+  const closeDescEditor = useCallback(() => {
+    Keyboard.dismiss();
+    setDescEditorOpen(false);
+  }, []);
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -337,6 +356,7 @@ export const TaskForm = ({
       setShowSuggestions(false);
       setNoteSearchOpen(false);
       setNoteQuery('');
+      setDescEditorOpen(false);
       setShowMore(!!initialData);
       setBoardListOpen(false);
       setNewBoardOpen(false);
@@ -652,7 +672,14 @@ export const TaskForm = ({
     // No edgeZone override: this page used to widen the grab zone to 110pt on
     // its own, and the app-wide default is now the whole left panel — wider than
     // that — so inheriting it keeps this page in step with every other.
-    <EdgeSwipePage visible={visible} onClose={handleClose} overlay={asOverlay}>
+    // swipeEnabled is dropped while the description editor is up, so its own
+    // left-edge back-swipe can't leak through and close the whole form.
+    <EdgeSwipePage
+      visible={visible}
+      onClose={handleClose}
+      overlay={asOverlay}
+      swipeEnabled={!descEditorOpen}
+    >
       {/* Instagram-style pushed PAGE: EdgeSwipePage slides this full-screen page
           in from the right and owns the left-edge back-swipe. GestureHandlerRootView
           is kept because a Modal renders outside the app's root, so any RNGH
@@ -947,20 +974,35 @@ export const TaskForm = ({
                 and (for events/birthdays) its calendar colour. */}
             <GroupHeader theme={theme} label="Details" />
 
-            {/* Description — moved from the essentials fast path into the
-                expanded block (a pure relocation; same field + handler). */}
+            {/* Description — a PREVIEW, not an input. It grows to fit the whole
+                description (the old fixed-height box clipped long text and let
+                it spill over the field below), and tapping it opens the
+                full-screen editor page. */}
             {!isBirthday && (
               <FormField label="Description">
-                <TextInput
-                  ref={descInputRef}
-                  style={[styles.input, styles.descInput]}
-                  placeholder={isEvent ? 'Event details, location, notes...' : 'Add details...'}
-                  placeholderTextColor={theme.colors.textPlaceholder}
-                  value={formData.description}
-                  onChangeText={text => updateField('description', text)}
-                  multiline
-                  textAlignVertical="top"
-                />
+                <TouchableOpacity
+                  style={styles.descPreview}
+                  activeOpacity={0.7}
+                  onPress={() => { Keyboard.dismiss(); setDescEditorOpen(true); }}
+                  accessibilityRole="button"
+                  accessibilityLabel={formData.description ? 'Edit description' : 'Add a description'}
+                >
+                  <Text
+                    style={[
+                      styles.descPreviewText,
+                      !formData.description && styles.descPreviewPlaceholder,
+                    ]}
+                  >
+                    {formData.description
+                      || (isEvent ? 'Event details, location, notes...' : 'Add details...')}
+                  </Text>
+                  <Icon
+                    name="arrow-expand"
+                    size={16}
+                    color={theme.colors.textTertiary}
+                    style={styles.descPreviewIcon}
+                  />
+                </TouchableOpacity>
               </FormField>
             )}
 
@@ -969,12 +1011,22 @@ export const TaskForm = ({
                 the essentials fast path into the expanded block. */}
             {isTask && (
               <FormField label="Linked note">
-                {formData.linkedNote ? (
+                {formData.linkedNote && !noteSearchOpen ? (
                   <View style={styles.linkedNoteChip}>
                     <Icon name="link-variant" size={16} color={theme.colors.accentInfo} />
-                    <Text style={styles.linkedNoteText} numberOfLines={1}>
-                      Linked to note: {formData.linkedNote.title}
-                    </Text>
+                    {/* Tapping the chip re-opens the search, so swapping the
+                        linked note doesn't mean unlinking first. */}
+                    <TouchableOpacity
+                      style={styles.linkedNoteTextWrap}
+                      activeOpacity={0.7}
+                      onPress={() => { setNoteSearchOpen(true); loadNotesOnce(); }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Linked to note: ${formData.linkedNote.title}. Tap to choose a different note.`}
+                    >
+                      <Text style={styles.linkedNoteText} numberOfLines={1}>
+                        Linked to note: {formData.linkedNote.title}
+                      </Text>
+                    </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => updateField('linkedNote', null)}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -1013,32 +1065,45 @@ export const TaskForm = ({
                         <Icon name="close" size={20} color={theme.colors.textPrimary} />
                       </TouchableOpacity>
                     </View>
-                    <View style={styles.suggestionsContainer}>
+                    <View style={[styles.suggestionsContainer, styles.noteResults]}>
                       <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled>
                         {noteResults.length === 0 ? (
                           <Text style={styles.noteEmptyText}>
                             {notesLoaded ? 'No matching notes' : 'Loading notes…'}
                           </Text>
-                        ) : noteResults.map((n) => (
-                          <TouchableOpacity
-                            key={n.id}
-                            style={styles.suggestionItem}
-                            onPress={() => {
-                              updateField('linkedNote', { id: n.id, title: noteTitleOf(n) });
-                              setNoteSearchOpen(false);
-                              setNoteQuery('');
-                              Keyboard.dismiss();
-                            }}
-                          >
-                            <Icon
-                              name={n.type === 'todo' ? 'checkbox-marked-circle-outline' : 'note-text-outline'}
-                              size={14}
-                              color={theme.colors.textPrimary}
-                            />
-                            <Text style={styles.suggestionText} numberOfLines={1}>{noteTitleOf(n)}</Text>
-                            <Icon name="link-variant" size={16} color={theme.colors.accentInfo} />
-                          </TouchableOpacity>
-                        ))}
+                        ) : noteResults.map((n) => {
+                          const snippet = noteSnippetOf(n);
+                          const picked = formData.linkedNote?.id === n.id;
+                          return (
+                            <TouchableOpacity
+                              key={n.id}
+                              style={styles.suggestionItem}
+                              onPress={() => {
+                                updateField('linkedNote', { id: n.id, title: noteTitleOf(n) });
+                                setNoteSearchOpen(false);
+                                setNoteQuery('');
+                                Keyboard.dismiss();
+                              }}
+                            >
+                              <Icon
+                                name={n.type === 'todo' ? 'checkbox-marked-circle-outline' : 'note-text-outline'}
+                                size={14}
+                                color={theme.colors.textPrimary}
+                              />
+                              <View style={styles.noteResultCol}>
+                                <Text style={[styles.suggestionText, styles.noteResultTitle]} numberOfLines={1}>{noteTitleOf(n)}</Text>
+                                {!!snippet && (
+                                  <Text style={styles.noteResultSnippet} numberOfLines={1}>{snippet}</Text>
+                                )}
+                              </View>
+                              <Icon
+                                name={picked ? 'check-circle' : 'link-variant'}
+                                size={16}
+                                color={theme.colors.accentInfo}
+                              />
+                            </TouchableOpacity>
+                          );
+                        })}
                       </ScrollView>
                     </View>
                   </View>
@@ -1580,6 +1645,84 @@ export const TaskForm = ({
             </View>
           </View>
         </KeyboardAvoidingView>
+
+        {/* ── Description editor ──────────────────────────────────────────────
+            A pushed page that reads like opening a note: the task's title on
+            top, the body under it, no field boxes. `overlay` keeps it IN-TREE:
+            this form is itself a Modal at top level, and iOS won't present a
+            second sibling Modal over an open one. */}
+        <EdgeSwipePage overlay visible={descEditorOpen} onClose={closeDescEditor}>
+          <View style={styles.descPage}>
+            <View style={styles.descNavBar}>
+              <TouchableOpacity
+                onPress={closeDescEditor}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.descNavBack}
+                accessibilityRole="button"
+                accessibilityLabel={`Back to ${copy.label.toLowerCase()}`}
+              >
+                <Icon name="chevron-left" size={30} color={theme.colors.accentInfo} />
+              </TouchableOpacity>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity
+                onPressIn={() => impactHaptic('medium')}
+                onPress={closeDescEditor}
+                style={styles.descNavDone}
+                accessibilityRole="button"
+                accessibilityLabel="Done editing description"
+              >
+                <Text style={styles.descNavDoneText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={styles.kav}
+            >
+              <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={[
+                  styles.descPageBody,
+                  { paddingBottom: (insets.bottom || 0) + 120 },
+                ]}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                showsVerticalScrollIndicator={false}
+              >
+                {/* The task's title, editable in place — a note's first line is
+                    its title, and this page keeps that contract. */}
+                <TextInput
+                  style={styles.descPageTitle}
+                  placeholder={copy.titlePlaceholder}
+                  placeholderTextColor={theme.colors.textPlaceholder}
+                  value={formData.title}
+                  onChangeText={text => updateField('title', text)}
+                  multiline
+                  scrollEnabled={false}
+                />
+                <Text style={styles.descPageMeta}>
+                  {copy.label} description
+                  {formData.project ? ` · ${formData.project}` : ''}
+                </Text>
+
+                {/* Body. scrollEnabled={false} so the PAGE scrolls, not the
+                    input — the whole description is always laid out. */}
+                <TextInput
+                  ref={descInputRef}
+                  style={styles.descPageInput}
+                  placeholder={isEvent ? 'Event details, location, notes…' : 'Start writing…'}
+                  placeholderTextColor={theme.colors.textPlaceholder}
+                  value={formData.description}
+                  onChangeText={text => updateField('description', text)}
+                  multiline
+                  scrollEnabled={false}
+                  autoFocus
+                  textAlignVertical="top"
+                />
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </EdgeSwipePage>
       </GestureHandlerRootView>
     </EdgeSwipePage>
   );
@@ -1839,13 +1982,88 @@ const createStyles = (theme, insets) => StyleSheet.create({
     marginRight: 6,
     fontSize: theme.typography.body
   },
-  descInput: {
-    // Expandable: grows with content from a comfortable minimum up to a cap,
-    // then scrolls internally (instead of a fixed 80px box).
-    minHeight: 80,
-    maxHeight: 220,
+  // Description PREVIEW. Deliberately not built on `styles.input` — that carries
+  // a fixed height: 40, which is what used to clip a two-line description and
+  // let it spill over the "Linked note" label below. No height here at all, so
+  // the card is exactly as tall as the text it holds, however long that is.
+  descPreview: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    minHeight: 64,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: theme.colors.inputBackground,
+  },
+  descPreviewText: {
+    flex: 1,
+    fontSize: theme.typography.body,
+    lineHeight: (theme.typography.body || 15) + 7,
+    color: theme.colors.inputText,
+  },
+  descPreviewPlaceholder: {
+    color: theme.colors.textPlaceholder,
+  },
+  descPreviewIcon: {
+    marginTop: 2,
+  },
+  // ── Full-screen description editor (the note-like page) ──────────────────
+  descPage: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+  },
+  // Nav bar mirrors the note composer's: back on the left, Done on the right,
+  // no centred title — the task's own title is the headline below it.
+  descNavBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: (insets.top || 0) + 6,
+    paddingBottom: 10,
+    paddingHorizontal: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  descNavBack: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: -4,
+  },
+  descNavDone: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  descNavDoneText: {
+    fontSize: theme.typography.body,
+    fontWeight: '700',
+    color: theme.colors.accentInfo,
+  },
+  descPageBody: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+  },
+  // The task's title, sitting where a note's first line sits.
+  descPageTitle: {
+    fontSize: (theme.typography.body || 15) + 11,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
+    padding: 0,
+  },
+  descPageMeta: {
+    marginTop: 6,
+    marginBottom: 14,
+    fontSize: theme.typography.small || 12,
+    color: theme.colors.textTertiary,
+  },
+  // The body. No box, no border — plain paper, exactly like a note.
+  descPageInput: {
+    fontSize: (theme.typography.body || 15) + 2,
+    lineHeight: (theme.typography.body || 15) + 11,
+    color: theme.colors.textPrimary,
+    padding: 0,
     textAlignVertical: 'top',
-    paddingTop: 10,
   },
   // "Link a note" affordance (shown until a note is picked / search is open).
   linkNoteBtn: {
@@ -1877,8 +2095,10 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceElevated,
   },
-  linkedNoteText: {
+  linkedNoteTextWrap: {
     flex: 1,
+  },
+  linkedNoteText: {
     fontSize: theme.typography.body,
     fontWeight: '600',
     color: theme.colors.textPrimary,
@@ -1886,6 +2106,25 @@ const createStyles = (theme, insets) => StyleSheet.create({
   noteEmptyText: {
     padding: 12,
     fontSize: theme.typography.small || 13,
+    color: theme.colors.textTertiary,
+  },
+  // The note picker gets more room than the tag suggester — you're scanning
+  // note titles, not confirming a word you already typed.
+  noteResults: {
+    maxHeight: 260,
+  },
+  noteResultCol: {
+    flex: 1,
+    marginLeft: 8,
+  },
+  // Title inside the two-line result row: the column owns the flex + inset now.
+  noteResultTitle: {
+    flex: 0,
+    marginLeft: 0,
+  },
+  noteResultSnippet: {
+    marginTop: 2,
+    fontSize: theme.typography.small || 12,
     color: theme.colors.textTertiary,
   },
   // Colour swatches (events / birthdays)

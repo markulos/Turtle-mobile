@@ -14,6 +14,37 @@ export const normalizeAlbumsPayload = (response = {}) => ({
 export const normalizeBoardSearch = (value) =>
   String(value ?? '').trim().toLowerCase().replace(/[-_\s]+/g, '');
 
+/**
+ * How well a board name answers a query. Lower is better; 0 is exact.
+ *
+ * Plain `includes` treats "Sum" and "Best of 2019 Summer" as equally good
+ * answers to "sum", so whichever happened to be more recent won — and the
+ * board you were obviously reaching for sat second. These tiers put the
+ * closest name first and leave everything else to the sort you picked.
+ *
+ * Tier 2 is the one worth explaining. `normalizeBoardSearch` strips spaces and
+ * hyphens so that "beach-day" and "Beach Day" match each other, but that also
+ * destroys word boundaries — "summertrip" gives no clue where "trip" starts.
+ * So word starts are checked against the ORIGINAL name, split before it was
+ * flattened. Typing "trip" should find "Summer Trip" ahead of a board that
+ * merely contains the letters mid-word.
+ */
+const MATCH_EXACT = 0;
+const MATCH_PREFIX = 1;
+const MATCH_WORD_START = 2;
+const MATCH_CONTAINS = 3;
+
+export const boardMatchRank = (name, normalizedName, normalizedQuery) => {
+  if (!normalizedQuery) return MATCH_CONTAINS;
+  if (normalizedName === normalizedQuery) return MATCH_EXACT;
+  if (normalizedName.startsWith(normalizedQuery)) return MATCH_PREFIX;
+  const words = String(name ?? '').split(/[\s\-_]+/).filter(Boolean);
+  for (const word of words) {
+    if (normalizeBoardSearch(word).startsWith(normalizedQuery)) return MATCH_WORD_START;
+  }
+  return MATCH_CONTAINS;
+};
+
 const safeCount = (value) => {
   const count = Number(value);
   return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
@@ -91,6 +122,7 @@ export const buildPhotoVaultBoards = ({
         recency: formatBoardRecency(latestDate, now),
         metadata: formatBoardMetadata(count, latestDate, now),
         isLive: liveNames.has(name.toLowerCase()),
+        matchRank: boardMatchRank(name, normalizedName, normalizedQuery),
       };
     })
     .filter((board) => !normalizedQuery || board.normalizedName.includes(normalizedQuery));
@@ -101,6 +133,17 @@ export const buildPhotoVaultBoards = ({
     : sortMode === 'alphabetical'
       ? compareName
       : (a, b) => b.latestDate - a.latestDate || compareName(a, b);
+
+  // While SEARCHING, relevance outranks everything — including the Favourites
+  // pin. Favourites is pinned because it's the one board you always want at
+  // hand when browsing; when you have typed a name, the board you named is the
+  // one you want, and a pin that overrides it is the pin getting in the way.
+  // (It also stops a single letter like "s" floating Favourites above the
+  // "Summer" you were clearly typing.) Within one relevance tier the sort
+  // chips still decide, so they never stop meaning anything.
+  if (normalizedQuery) {
+    return boards.sort((a, b) => a.matchRank - b.matchRank || compare(a, b));
+  }
 
   return boards.sort((a, b) => {
     const aFavourite = a.name.toLowerCase() === 'favourites';

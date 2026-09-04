@@ -76,15 +76,11 @@ export async function getCacheSizeBytes() {
 }
 
 // "1.4 GB" / "327 MB" / "812 KB" / "0 B" — compact human-readable bytes.
-export function formatBytes(bytes) {
-  const n = Number(bytes) || 0;
-  if (n < 1024) return `${n} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let val = n / 1024;
-  let i = 0;
-  while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
-  return `${val < 10 ? val.toFixed(1) : Math.round(val)} ${units[i]}`;
-}
+// Byte sizes are formatted in ONE place app-wide (utils/statsFormat), so the
+// cache size on this screen and the database size two sections below it can't
+// disagree about how to round the same number. Re-exported rather than moved:
+// every existing importer of `cacheManager.formatBytes` keeps working.
+export { formatBytes } from './statsFormat';
 
 // Always-safe, cheap cleanup. Safe to run on every background.
 export async function sweepTransientCaches() {

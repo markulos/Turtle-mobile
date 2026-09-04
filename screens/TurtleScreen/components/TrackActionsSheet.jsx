@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   Animated,
-  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,13 +15,7 @@ import Reanimated, {
 } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
-import { useSheetDismiss } from '../../../utils/useSheetDismiss';
-
-// Sheet-presentation curve — the same weighted ease-out the vault's other
-// bottom-anchored surfaces use, so this card enters like the rest of the app.
-const SHEET_EASING = Easing.bezier(0.32, 0.72, 0, 1);
-const OPEN_MS = 260;
-const CLOSE_MS = 200;
+import { useSheetPresentation } from '../../../utils/useSheetPresentation';
 
 /**
  * TrackActionsSheet — the per-track "⋯" menu in the Music vault, as a card that
@@ -62,15 +55,6 @@ export default function TrackActionsSheet({
   // Same highlight tint the player itself uses (MusicVault's MUSIC_TINT): the
   // user's chosen accent, not a fixed green.
   const tint = c.accent || c.accentInfo || c.primary;
-  // 0 = fully off-screen (below the edge), 1 = resting open. Drives both the
-  // card's slide and the scrim's fade so they can never disagree.
-  const anim = useRef(new Animated.Value(0)).current;
-  // Live drag offset, in points below the resting position. Kept separate from
-  // `anim` so a drag doesn't fight the open/close timing. Owned by the shared
-  // sheet-dismiss hook, which grabs the pull from anywhere on the card and
-  // stands down while the playlist list below is scrolled.
-  const { panHandlers, dragY: drag, scrollProps } = useSheetDismiss(onClose, visible);
-
   // Keyboard lift for the "New playlist…" field — the SAME technique as the
   // Turtle chat composer: one useAnimatedKeyboard shared value driving a
   // translateY on the UI thread, so the card rides the keyboard frame-for-frame
@@ -90,50 +74,28 @@ export default function TrackActionsSheet({
     'worklet';
     return { transform: [{ translateY: -Math.max(keyboard.height.value - bottomInset, 0) }] };
   });
-  // Measured card height, driving BOTH the slide distance and the drag-dismiss
-  // threshold. State (not just a ref) because the transform is built at render:
-  // a ref would update silently and leave the interpolation stale. Seeded high
-  // enough that the pre-layout first frame is always fully off-screen — a low
-  // seed would let the card peek above the edge before it was measured.
-  const [cardH, setCardH] = useState(600);
+
   const [page, setPage] = useState('actions');
   const [newPlaylist, setNewPlaylist] = useState('');
   // Draft title for the rename page. Seeded from `title` each time that page is
   // opened (not on every render) so typing isn't clobbered by a library refresh.
   const [draftTitle, setDraftTitle] = useState('');
-  // Kept mounted through the closing animation so the card slides out instead
-  // of vanishing; unmounts once it's off-screen.
-  const [mounted, setMounted] = useState(visible);
 
-  useEffect(() => {
-    if (visible) {
-      setMounted(true);
+  const sheet = useSheetPresentation({
+    visible,
+    onClose,
+    // Seeded high enough that the pre-layout first frame is always fully
+    // off-screen — a low seed would let the card peek above the edge before it
+    // was measured.
+    height: 600,
+    // Every open lands on the actions page with both drafts cleared.
+    onOpen: useCallback(() => {
       setPage('actions');
       setNewPlaylist('');
       setDraftTitle('');
-      drag.setValue(0);
-      Animated.timing(anim, {
-        toValue: 1,
-        duration: OPEN_MS,
-        easing: SHEET_EASING,
-        useNativeDriver: true,
-      }).start();
-    } else if (mounted) {
-      Animated.timing(anim, {
-        toValue: 0,
-        duration: CLOSE_MS,
-        easing: SHEET_EASING,
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) setMounted(false);
-      });
-    }
-  }, [visible]);
-
-  const translateY = Animated.add(
-    anim.interpolate({ inputRange: [0, 1], outputRange: [cardH, 0] }),
-    drag,
-  );
+    }, []),
+  });
+  const { mounted, panHandlers, scrollProps } = sheet;
 
   const run = useCallback(
     (fn) => () => {
@@ -163,7 +125,7 @@ export default function TrackActionsSheet({
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
       <Animated.View
         pointerEvents={visible ? 'auto' : 'none'}
-        style={[StyleSheet.absoluteFill, styles.scrim, { opacity: anim }]}
+        style={[StyleSheet.absoluteFill, styles.scrim, sheet.scrimStyle]}
       >
         <Pressable
           style={StyleSheet.absoluteFill}
@@ -179,18 +141,14 @@ export default function TrackActionsSheet({
       <Animated.View
         testID="track-actions-card"
         {...panHandlers}
-        onLayout={(e) => {
-          const h = Math.round(e.nativeEvent.layout.height);
-          if (h <= 0) return;
-          setCardH((prev) => (prev === h ? prev : h));
-        }}
+        onLayout={sheet.onCardLayout}
         style={[
           styles.card,
           {
             backgroundColor: c.surfaceElevated,
             borderColor: c.border,
             paddingBottom: bottomInset + 10,
-            transform: [{ translateY }],
+            transform: sheet.cardStyle.transform,
           },
         ]}
       >

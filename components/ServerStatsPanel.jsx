@@ -3,7 +3,8 @@
  *
  * Settings could tell you the app was CONNECTED to a database and nothing else
  * about it. This is the rest of the sentence: how big that database is, what is
- * inside it, what it is a catalogue of, and how much room is left.
+ * inside it, what it is a catalogue of, which kinds of file that catalogue is
+ * made of, and how much room is left.
  *
  * Collapsed by default. Nothing is fetched until it is opened, so the common
  * case — someone editing the server IP — costs a 500 ms query on the server
@@ -46,6 +47,7 @@ import {
   percentOf,
   precisePercentOf,
   btreeKindLabel,
+  fileTypeLabel,
 } from '../utils/statsFormat';
 
 // Bar geometry. Thin — the data is the loud thing, not the chrome — with the
@@ -167,11 +169,18 @@ export default function ServerStatsPanel() {
   const lib = stats?.library;
   const disk = stats?.disk;
   const backups = stats?.backups;
+  const types = stats?.fileTypes;
 
   // Every B-tree the server named, plus the two rows that make the parts add up
   // to the whole: what the top-N didn't name, and the pages that hold nothing.
   const breakdown = db?.breakdown?.available ? db.breakdown.entries : [];
   const barMax = breakdown.reduce((m, e) => Math.max(m, e.bytes), db?.reclaimableBytes || 0);
+
+  // File-type bars get their OWN scale. They measure the library — hundreds of
+  // gigabytes — while the bars above measure the database, hundreds of
+  // megabytes; on one shared scale every B-tree would collapse to a hairline.
+  const typeEntries = types?.entries || [];
+  const typeMax = typeEntries.reduce((m, e) => Math.max(m, e.bytes), types?.otherBytes || 0);
 
   const diskUsedPct = disk ? percentOf(disk.usedBytes, disk.totalBytes) : null;
   const diskColor = diskUsedPct == null ? tint
@@ -337,6 +346,52 @@ export default function ServerStatsPanel() {
                   value={`${formatMonthYear(lib.oldest)} → ${formatMonthYear(lib.newest)}`}
                 />
               )}
+            </>
+          )}
+
+          {/* ── What those items ARE, and what each kind costs ──
+              Same bar table as the B-trees above, for the same reason: a dozen
+              extensions with no natural order, where the question is "which one
+              is eating the disk" rather than "what fraction is each". Ordered by
+              BYTES, not by count — sorted by count this would be a list of
+              JPEGs with the video that actually fills the drive down at the
+              bottom. Its own section rather than a row inside the library block,
+              because it is a table and the block above is figures. */}
+          {typeEntries.length > 0 && (
+            <>
+              <Text style={styles.sectionLabel}>File types</Text>
+              {typeEntries.map((entry) => (
+                <BarRow
+                  key={entry.ext || '(none)'}
+                  styles={styles}
+                  label={fileTypeLabel(entry.ext)}
+                  // No percentage here: the bar already IS the share, and
+                  // printing it beside the bar spends a line saying it twice.
+                  // "video" comes from the server's own type column, so nothing
+                  // here has to keep a list of video extensions.
+                  kind={`${formatCount(entry.items)} files${entry.videos === entry.items ? ' · video' : ''}`}
+                  bytes={entry.bytes}
+                  max={typeMax}
+                  tint={tint}
+                  track={c.surfaceHighlight || c.border}
+                />
+              ))}
+              {types.otherTypes > 0 && (
+                <BarRow
+                  styles={styles}
+                  label="Everything else"
+                  kind={`${formatCount(types.otherTypes)} smaller types · ${formatCount(types.otherItems)} files`}
+                  bytes={types.otherBytes}
+                  max={typeMax}
+                  tint={tint}
+                  track={c.surfaceHighlight || c.border}
+                />
+              )}
+              <Text style={styles.footnote}>
+                {formatBytes(types.totalBytes)} across {formatCount(types.totalItems)} files
+                in {formatCount(types.typeCount)} {types.typeCount === 1 ? 'type' : 'types'} — the
+                originals on disk, not the database.
+              </Text>
             </>
           )}
 

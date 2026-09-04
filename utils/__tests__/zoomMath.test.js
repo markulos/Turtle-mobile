@@ -17,6 +17,8 @@ const {
   fillScale,
   nativeMaxScale,
   settle,
+  panBaseline,
+  absorbTouchJump,
 } = require('../zoomMath');
 
 // A 390 x 700 viewer box, close to the real one on a modern iPhone.
@@ -182,5 +184,66 @@ describe('clamp', () => {
     expect(clamp(10, 5)).toBe(5);
     expect(clamp(-10, 5)).toBe(-5);
     expect(clamp(3, 5)).toBe(3);
+  });
+});
+
+/**
+ * Re-anchoring a pan. Both of these exist for one bug: a pinch that ends one
+ * finger at a time made the boards canvas leap towards whichever finger stayed
+ * down. Gesture Handler measures a multi-touch pan from the AVERAGE of the
+ * fingers, so lifting one moves that average instantly, by half the span
+ * between them, with no hand movement at all.
+ *
+ * The property both functions exist to guarantee is CONTINUITY: whatever else
+ * happened, `start + translation` must still come out at the position the
+ * surface already had.
+ */
+describe('panBaseline', () => {
+  it('reproduces the current position under the current translation', () => {
+    const position = 137;
+    const translation = -412;
+    expect(panBaseline(position, translation) + translation).toBe(position);
+  });
+
+  it('is the identity at rest', () => {
+    expect(panBaseline(0, 0)).toBe(0);
+    expect(panBaseline(90, 0)).toBe(90);
+  });
+});
+
+describe('absorbTouchJump', () => {
+  // The exact shape of the bug: two fingers 200pt apart, one lifts, and the
+  // average the pan is measured from leaps 100pt in a single frame.
+  it('cancels the leap when a finger lifts', () => {
+    const start = 40;
+    const lastTranslation = 60;   // measured from the midpoint of two fingers
+    const position = start + lastTranslation;
+    const translation = 160;      // …and now from the one that stayed down
+    const rebased = absorbTouchJump(start, lastTranslation, translation);
+    expect(rebased + translation).toBe(position);
+  });
+
+  it('cancels it the other way too, when a finger joins', () => {
+    const start = -12;
+    const lastTranslation = 300;
+    const position = start + lastTranslation;
+    const translation = 150;
+    expect(absorbTouchJump(start, lastTranslation, translation) + translation).toBe(position);
+  });
+
+  it('changes nothing when the translation did not jump', () => {
+    expect(absorbTouchJump(40, 60, 60)).toBe(40);
+  });
+
+  // The two compose: the pinch re-baselines every frame while it owns the
+  // transform, and the pan absorbs the count change on the frame after. Doing
+  // both must not double-count.
+  it('composes with panBaseline without double-counting', () => {
+    const position = 512;
+    const duringPinch = 60;
+    const start = panBaseline(position, duringPinch);
+    const afterLift = 160;
+    const rebased = absorbTouchJump(start, duringPinch, afterLift);
+    expect(rebased + afterLift).toBe(position);
   });
 });

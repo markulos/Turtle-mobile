@@ -38,7 +38,6 @@ import Animated, {
   useSharedValue,
   withDecay,
   withTiming,
-  Easing,
 } from 'react-native-reanimated';
 import {
   MIN_SCALE,
@@ -54,12 +53,14 @@ import {
   rubberScale,
   settle,
 } from '../../../utils/zoomMath';
+import { R_TIMING } from '../../../utils/motionReanimated';
 
-// Snap-back / double-tap animation. Short and eased-out: long springs on a
-// zoom surface read as lag when the user is already moving to their next
-// gesture.
-const SETTLE_MS = 220;
-const SETTLE_EASING = Easing.out(Easing.cubic);
+// Snap-back / double-tap animation: the shared `settle` timing. Short and
+// eased-out — long springs on a zoom surface read as lag when the user is
+// already moving to their next gesture. This used to be a local 220ms against
+// the canvas's 240ms, which is the kind of difference nobody sees in one file
+// and everybody feels moving between two screens.
+
 // A zoom is "engaged" (chrome hides, pager locks, HD layer forced) past this.
 const ZOOMED_EPSILON = 1.01;
 // Pinching a NOT-zoomed photo down past this raw scale closes the viewer, the
@@ -207,7 +208,7 @@ const ZoomableView = ({
         containerW.value, containerH.value, aspect.value,
         clampScale(scale.value, MIN_SCALE, maxScale),
       );
-      const timing = { duration: SETTLE_MS, easing: SETTLE_EASING };
+      const timing = R_TIMING.settle;
       if (scale.value !== rest.scale) scale.value = withTiming(rest.scale, timing);
       if (translateX.value !== rest.x) translateX.value = withTiming(rest.x, timing);
       if (translateY.value !== rest.y) translateY.value = withTiming(rest.y, timing);
@@ -243,7 +244,7 @@ const ZoomableView = ({
       const content = containSize(containerW.value, containerH.value, aspect.value);
       const boundX = panBound(content.width, containerW.value, scale.value);
       const boundY = panBound(content.height, containerH.value, scale.value);
-      const timing = { duration: SETTLE_MS, easing: SETTLE_EASING };
+      const timing = R_TIMING.settle;
 
       // Inside the bounds → glide with the flick and stop at the edge.
       // Outside (rubber-banded) → snap straight back.
@@ -275,7 +276,7 @@ const ZoomableView = ({
     .maxDistance(16)
     .onEnd((e) => {
       'worklet';
-      const timing = { duration: SETTLE_MS, easing: SETTLE_EASING };
+      const timing = R_TIMING.settle;
       if (scale.value > ZOOMED_EPSILON) {
         // Already zoomed → back to a centred 1×.
         scale.value = withTiming(1, timing);

@@ -80,6 +80,112 @@ export async function revokeShareLink(api, id) {
   return api.delete(`/media-shares/${id}`);
 }
 
+// ── Who can currently see this photo ────────────────────────────────────────
+// Two independent things expose one picture, and the owner has no way to know
+// about either from looking at it:
+//
+//   the DIRECT link  — /m/<slug>, minted for this item alone.
+//   an ALBUM link    — /s/<slug>, which exposes it because the photo carries
+//                      that album's name as a tag. Nobody "adds a photo to a
+//                      shared album"; it happens as a side effect of tagging,
+//                      possibly months earlier, possibly by someone else's
+//                      upload landing in the same album.
+//
+// The second is the one people forget, so the server resolves it rather than
+// the client: matching a tag list against a share list here would have to
+// re-implement SQLite's NOCASE fold, and getting that wrong under-reports —
+// silently hiding a live link from the person trying to find it.
+
+const isDeadShare = (s) => !!s?.revokedAt || !!(s?.expiresAt && s.expiresAt < Date.now());
+
+/**
+ * Every link that exposes `mediaId`, direct and album, newest first.
+ *
+ * Partial by design: the two lists come from different routers, and one of
+ * them failing is not a reason to claim the photo is unshared. Whatever
+ * answered is returned, and `errors` names what didn't — so the UI can show
+ * the links it knows about AND admit the list may be short, rather than
+ * quietly reporting "not shared" because a request timed out.
+ *
+ * @returns {Promise<{links: object[], liveCount: number, errors: string[]}>}
+ */
+export async function loadShareExposure(api, mediaId) {
+  const id = encodeURIComponent(String(mediaId));
+  const errors = [];
+
+  const [direct, albums] = await Promise.all([
+    api.get(`/media-shares?mediaId=${id}`)
+      .then((r) => (r && r.shares) || [])
+      .catch(() => { errors.push('direct'); return []; }),
+    api.get(`/album-shares?mediaId=${id}`)
+      .then((r) => {
+        // The server says which filter it APPLIED. An older build ignored
+        // ?mediaId= and answered with every album link the user owns — which
+        // this screen would then present as "where this photo is shared".
+        // Showing somebody a list of albums their photo is NOT in, under that
+        // heading, is worse than showing nothing: it invites them to revoke
+        // links that had nothing to do with it.
+        //
+        // So an unconfirmed filter is treated as "couldn't check", never as an
+        // answer. Requires a server new enough to echo `filteredBy`.
+        if (!r || r.filteredBy !== 'mediaId') {
+          errors.push('album');
+          return [];
+        }
+        return r.shares || [];
+      })
+      .catch(() => { errors.push('album'); return []; }),
+  ]);
+
+  // One shape for the list, so the sheet doesn't branch per row. `dead` is
+  // computed here because the two routers disagree: media shares send a `dead`
+  // flag, album shares send the raw revokedAt/expiresAt it's derived from.
+  const links = [
+    ...direct.map((s) => ({
+      kind: 'direct',
+      id: s.id,
+      slug: s.slug,
+      url: s.url,
+      album: null,
+      hasPassword: false,
+      viewCount: s.viewCount || 0,
+      createdAt: s.createdAt,
+      dead: typeof s.dead === 'boolean' ? s.dead : isDeadShare(s),
+      revokedAt: s.revokedAt || null,
+      expiresAt: s.expiresAt || null,
+    })),
+    ...albums.map((s) => ({
+      kind: 'album',
+      id: s.id,
+      slug: s.slug,
+      url: s.url,
+      album: s.album || s.title || null,
+      hasPassword: !!s.hasPassword,
+      viewCount: s.viewCount || 0,
+      createdAt: s.createdAt,
+      dead: isDeadShare(s),
+      revokedAt: s.revokedAt || null,
+      expiresAt: s.expiresAt || null,
+    })),
+  ].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+  return {
+    links,
+    // The badge counts LIVE links only — a turned-off link is history, not
+    // exposure, and counting it would make the viewer cry wolf forever.
+    liveCount: links.filter((l) => !l.dead).length,
+    errors,
+  };
+}
+
+/** Turn off one link, whichever kind it is. */
+export async function revokeExposureLink(api, link) {
+  const path = link.kind === 'album' ? '/album-shares/' : '/media-shares/';
+  const res = await api.delete(`${path}${link.id}`);
+  if (res && res.success === false) throw new Error(res.error || 'Could not turn off the link');
+  return res;
+}
+
 /**
  * Block until the link is safe to hand out.
  *

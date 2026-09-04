@@ -36,7 +36,12 @@ const COMMIT_VX = 0.5;
  *
  * Props:
  *   visible   — show/hide. Toggling it animates the page in/out.
- *   onClose() — called when the page should be dismissed (X or a committed swipe).
+ *   onClose() — called when the page should be dismissed (X or a committed
+ *               swipe). Return TRUE to say "I handled that back myself and the
+ *               page is staying" — the swipe then springs home instead of
+ *               sliding out. That is for a page with its own levels to pop
+ *               (the boards canvas drilling into nested boards); every other
+ *               caller returns nothing and gets the normal dismissal.
  *   children  — the page content (laid out full-screen; add your own top inset).
  *   overlay   — render as an in-tree absolute-fill overlay instead of a Modal.
  *               REQUIRED when stacking over another EdgeSwipePage/Modal: iOS
@@ -113,13 +118,24 @@ export default function EdgeSwipePage({ visible, onClose, children, overlay = fa
             // a fast flick whips out, a slow drag glides. onClose still fires so
             // the page unmounts; the effect's own out-timing then no-ops from
             // ~SCREEN_W.
+            //
+            // Unless the host CONSUMED the back. A page with levels of its own
+            // (the boards canvas drilling into nested boards) pops one and stays
+            // put, and it says so by returning true — without that, `visible`
+            // never flips, the out-effect never runs, and the page sits parked
+            // off the right edge: mounted, interactive, and invisible. onClose
+            // is called first either way, and synchronously, so nothing here
+            // waits a frame longer than it used to.
             const remaining = SCREEN_W - Math.max(0, g.dx);
             const duration = Math.max(
               120,
               Math.min(300, g.vx > 0.1 ? remaining / g.vx : 240),
             );
+            if (onCloseRef.current?.() === true) {
+              Animated.spring(tx, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
+              return;
+            }
             Animated.timing(tx, { toValue: SCREEN_W, duration, useNativeDriver: true }).start();
-            onCloseRef.current?.();
           } else {
             // Short drag → glide back to fully-open with a soft, quick settle.
             Animated.spring(tx, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();

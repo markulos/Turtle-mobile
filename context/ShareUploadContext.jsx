@@ -179,6 +179,9 @@ export function ShareUploadProvider({ children }) {
     setJobs(Array.from(jobsRef.current.values()).map((j) => ({
       id: j.id,
       board: j.board,
+      // Human-readable destination for the boardless case, where `board` alone
+      // can't tell the toast whether this was a vault share or an Inbox link.
+      destination: j.destination || null,
       status: j.status,
       total: j.total,
       done: j.done,
@@ -602,6 +605,10 @@ export function ShareUploadProvider({ children }) {
       kind: 'standard',
       groupId: id,               // stable per-share id the server groups on
       board,
+      // Where a BOARDLESS share lands, resolved here because the server makes
+      // the same call from the same signal: photos with no board go to the
+      // vault, a bare link/text with no board becomes an Inbox note.
+      destination: board ? null : (files.length > 0 ? 'Photo vault' : 'Inbox'),
       text: text || null,
       url: url || null,
       imageFiles: files,         // original OS temp refs {path, fileName, mimeType}
@@ -702,3 +709,4 @@ export const useShareUpload = () => {
   if (!ctx) throw new Error('useShareUpload must be used within a ShareUploadProvider');
   return ctx;
 };
+

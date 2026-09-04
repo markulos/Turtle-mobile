@@ -17,7 +17,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Animated, Pressable, ScrollView, Share, StyleSheet,
+  ActivityIndicator, Alert, Animated, Pressable, ScrollView, StyleSheet,
   Switch, Text, TextInput, View,
 } from 'react-native';
 import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
@@ -26,6 +26,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 import { useSheetDismiss } from '../../../utils/useSheetDismiss';
+import shareOneLink from '../../../utils/shareLink';
 
 const isDead = (s) => !!s.revokedAt || !!(s.expiresAt && s.expiresAt < Date.now());
 
@@ -237,9 +238,9 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
   const shareLink = useCallback(async (share) => {
     tapHaptic();
     try {
-      await Share.share({ message: share.url, url: share.url });
+      await shareOneLink(share.url, { title: albumName });
     } catch { /* user dismissed the sheet */ }
-  }, []);
+  }, [albumName]);
 
   const revoke = useCallback((share) => {
     // The one destructive action: it kills the link for everyone holding it.

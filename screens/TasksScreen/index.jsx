@@ -130,6 +130,7 @@ import FriendCard from '../TurtleScreen/components/FriendCard';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import { useNavigation } from '@react-navigation/native';
 import { useCommandBus } from '../../context/CommandBusContext';
+import { useBoardLinkTarget } from '../../context/BoardLinkContext';
 import { useCelebration } from '../../context/CelebrationContext';
 
 // Must match MAX_HEIGHT in ProjectDropdown.jsx — the page below the picker
@@ -522,6 +523,14 @@ export default function TasksScreen() {
   const [selectedProject, setSelectedProject] = useState('All');
   const [selectedTags, setSelectedTags] = useState([]);
   const [tagFilterMode, setTagFilterMode] = useState('any');
+  // "Show me this board's tasks", sent from the boards canvas. The tag filter
+  // is cleared with it: two filters ANDed is how a board arrives looking empty
+  // when it is not, and the user asked for a board — not for a board AND
+  // whatever tags happened to be left selected here.
+  useBoardLinkTarget('tasks', (board) => {
+    setSelectedProject(board || 'All');
+    setSelectedTags([]);
+  });
   // Shared-calendar "whose tasks" filter. Empty = show everyone's; otherwise a
   // list of user ids to show. The owner identity rides on each task DTO
   // (userId/ownerName) from the server, so the option list is derived straight

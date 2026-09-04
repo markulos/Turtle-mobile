@@ -60,6 +60,10 @@ import EdgeSwipePage from './components/EdgeSwipePage';
 import ConversationsOverlay from './components/ConversationsOverlay';
 import ChatComposer from '../../components/ChatComposer';
 import LinkDesktop from './components/LinkDesktop';
+import ApiProposalCard from '../../components/ApiProposalCard';
+import { readProposal, requestPath, summarise } from '../../utils/apiProposal';
+import ChatBlocks from '../../components/ChatBlocks';
+import { blocksCoverProposal, drawableBlocks } from '../../utils/chatBlocks';
 // SettingsScreen used to be its own tab. We surface it from inside
 // the Turtle page now via the top-right gear icon — the tab bar
 // shed a slot, and Settings reads more like a "preferences sheet"
@@ -1058,7 +1062,11 @@ export default function TurtleScreen() {
           text: msg.text,
           timestamp: msg.createdAt,
           sender: msg.user._id === 1 ? 'user' : 'assistant',
-          isTelegram: msg.source === 'telegram'
+          isTelegram: msg.source === 'telegram',
+          // The interactive board this reply carried, stored server-side with
+          // the message so its buttons are still there after a reload rather
+          // than living only in the response that first delivered them.
+          blocks: drawableBlocks(msg.blocks),
         }));
 
         // APPEND older messages to the end of the array (visually the top of
@@ -1641,18 +1649,42 @@ export default function TurtleScreen() {
         history: chatHistoryArray,
       });
 
-      const { reply, intent } = aiResponse;
+      const { reply, intent, blocks } = aiResponse;
+      const board = drawableBlocks(blocks);
 
-      // Add AI reply
+      // Add AI reply, with whatever interactive cards it carried.
       setMessages(prev => [{
         id: generateId(),
         text: reply || 'Command processed.',
         sender: 'assistant',
         timestamp: new Date().toISOString(),
+        blocks: board,
       }, ...prev]);
 
-      // Handle encrypted intent if present
-      if (intent && typeof intent === 'object' && intent.payload) {
+      // A proposed call against Turtle's own API. Checked BEFORE the legacy
+      // path: this payload is a method and a path, not an executable and args,
+      // so `interceptAndSend` would fail to find anything it recognises and
+      // surface that as an error. It also must not auto-run — the whole point
+      // of a proposal is that the person decides. It becomes a card.
+      // The server emits a proposed write BOTH ways — as an `intent` (this
+      // card, which is all this app used to understand) and as a `call` action
+      // inside the board. That is deliberate: the web app renders only blocks,
+      // and the two clients ship on different days. Now that this app draws
+      // blocks too, showing both would put two buttons on screen for one
+      // change, and a user cannot tell whether pressing both does it twice. The
+      // block wins — it is the one that names the real effect underneath it.
+      const proposal = readProposal(intent);
+      if (proposal && blocksCoverProposal(board, proposal)) {
+        // Already on screen as a button. Nothing more to add.
+      } else if (proposal) {
+        setMessages(prev => [{
+          id: generateId(),
+          type: 'apiProposal',
+          proposal,
+          sender: 'system',
+          timestamp: new Date().toISOString(),
+        }, ...prev]);
+      } else if (intent && typeof intent === 'object' && intent.payload) {
         const serverUrl = getBaseUrl();
         const result = await interceptAndSend(
           intent,
@@ -1720,7 +1752,59 @@ export default function TurtleScreen() {
   // Stable chat renderItem — an inline arrow gave the FlashList a NEW
   // renderItem identity every render (every keystroke), defeating the
   // ViewHolder's built-in memo and re-rendering every visible message row.
+  /**
+   * Run a proposal the user approved.
+   *
+   * Dispatched through the same `api` wrapper every other screen uses, so it
+   * carries the session token and the same base URL — the assistant gets no
+   * privileged channel of its own. The resolved string is what the card shows;
+   * a throw is what it shows as a failure, message and all.
+   */
+  const runProposal = useCallback(async (proposal) => {
+    const send = api[proposal.method.toLowerCase()];
+    if (typeof send !== 'function') throw new Error(`Can't send a ${proposal.method} request.`);
+    const path = requestPath(proposal);
+    // GET and DELETE take no body in this wrapper; the rest do.
+    const result = proposal.body && (proposal.method !== 'DELETE')
+      ? await send(path, proposal.body)
+      : await send(path);
+    // Deliberately no chat refresh here: the only loader on this screen
+    // reloads the transcript from the server, which would replace the local
+    // message list and take this card — and its result — with it.
+    return typeof result?.message === 'string' ? result.message : `${summarise(proposal)} — done.`;
+  }, [api]);
+
+  /**
+   * An `ask` button types for the user.
+   *
+   * Routed through the same `sendMessage` a typed message uses (it already
+   * takes an override string for the global command console), so the turn is
+   * indistinguishable from one they wrote themselves — same history, same
+   * interception, same log.
+   */
+  const askAsUser = useCallback((text) => {
+    const trimmed = String(text || '').trim();
+    if (trimmed) sendMessage(trimmed);
+  }, [sendMessage]);
+
+  /** An `open` button jumps to a tab. Unmapped screens never reach here —
+   *  `tabForScreen` returns null and the button reports it instead. */
+  const navigateFromBlock = useCallback((tab, params) => {
+    tapHaptic();
+    navigation.navigate(tab, params || undefined);
+  }, [navigation]);
+
   const renderMessage = useCallback(({ item: message }) => {
+    if (message.type === 'apiProposal' && message.proposal) {
+      return (
+        <ApiProposalCard
+          proposal={message.proposal}
+          theme={theme}
+          onConfirm={runProposal}
+        />
+      );
+    }
+
     let textToRender = message.text;
     let extractedImage = null;
     const match = message.text?.match(/\[IMG:(.+?)\]/);
@@ -1743,7 +1827,14 @@ export default function TurtleScreen() {
       return `${base}/api/media/raw/${filename}`;
     };
 
-    return (
+    // The reply's interactive board, drawn UNDER the bubble rather than inside
+    // it. A bubble is capped at 80% and gets tighter with every nested view; a
+    // form in there would be unusable. Sitting below at 92% matches
+    // ApiProposalCard, which is the other thing on this screen asking to be
+    // read before it is pressed.
+    const board = message.sender === 'assistant' ? drawableBlocks(message.blocks) : [];
+
+    const bubble = (
       <View style={[
         styles.messageBubble,
         message.isWelcome ? styles.welcomeBubble :
@@ -1792,7 +1883,22 @@ export default function TurtleScreen() {
         )}
       </View>
     );
-  }, [styles, theme, getBaseUrl]);
+
+    if (!board.length) return bubble;
+
+    return (
+      <View>
+        {bubble}
+        <ChatBlocks
+          blocks={board}
+          theme={theme}
+          api={api}
+          onAsk={askAsUser}
+          onNavigate={navigateFromBlock}
+        />
+      </View>
+    );
+  }, [styles, theme, getBaseUrl, runProposal, api, askAsUser, navigateFromBlock]);
 
   // Show Media Gallery overlay when open
   if (isGalleryOpen) {

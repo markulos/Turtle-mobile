@@ -10,10 +10,9 @@
 //
 // Everything applies live. The footer button only dismisses — there is no
 // "Apply", because the results are already visible behind the card.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
-  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -25,12 +24,8 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { impactHaptic, tapHaptic } from '../../../utils/haptics';
-import { useSheetDismiss } from '../../../utils/useSheetDismiss';
+import { useSheetPresentation } from '../../../utils/useSheetPresentation';
 import { COLS_MAX, COLS_MIN } from '../../../utils/galleryFilters';
-
-const OPEN_MS = 240;
-const CLOSE_MS = 180;
-const EASING = Easing.bezier(0.22, 1, 0.36, 1);
 
 // ── Small shared pieces ────────────────────────────────────────────────────
 
@@ -266,26 +261,19 @@ export default function GalleryFilterSheet({
   onClose,
 }) {
   const c = theme.colors;
-  const [mounted, setMounted] = useState(visible);
-  const anim = useRef(new Animated.Value(0)).current;
   const searchRef = useRef(null);
   const [showAllTags, setShowAllTags] = useState(false);
 
-  const { panHandlers, scrollProps, dragY } = useSheetDismiss(onClose, visible);
-
-  useEffect(() => {
-    if (visible) {
-      setMounted(true);
-      setShowAllTags(false);
-      Animated.timing(anim, {
-        toValue: 1, duration: OPEN_MS, easing: EASING, useNativeDriver: true,
-      }).start();
-    } else if (mounted) {
-      Animated.timing(anim, {
-        toValue: 0, duration: CLOSE_MS, easing: EASING, useNativeDriver: true,
-      }).start(({ finished }) => { if (finished) setMounted(false); });
-    }
-  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+  // This card used to run its own 240/180 on a curve of its own, which is how it
+  // ended up the one sheet in the app that entered differently from the rest.
+  // On the shared presentation it matches the board and track menus exactly.
+  const sheet = useSheetPresentation({
+    visible,
+    onClose,
+    height: 600,
+    onOpen: useCallback(() => setShowAllTags(false), []),
+  });
+  const { mounted, panHandlers, scrollProps, dragY } = sheet;
 
   useEffect(() => {
     if (visible && autoFocusSearch) {
@@ -324,7 +312,7 @@ export default function GalleryFilterSheet({
           {
             backgroundColor: 'rgba(0,0,0,0.5)',
             opacity: Animated.multiply(
-              anim,
+              sheet.anim,
               dragY.interpolate({ inputRange: [0, 400], outputRange: [1, 0], extrapolate: 'clamp' }),
             ),
           },
@@ -340,6 +328,7 @@ export default function GalleryFilterSheet({
       <View style={{ flex: 1, justifyContent: 'flex-end' }} pointerEvents="box-none">
         <Animated.View
           {...panHandlers}
+          onLayout={sheet.onCardLayout}
           style={{
             maxHeight: '82%',
             backgroundColor: c.surfaceElevated,
@@ -348,12 +337,7 @@ export default function GalleryFilterSheet({
             borderTopWidth: StyleSheet.hairlineWidth,
             borderColor: c.border,
             paddingBottom: bottomInset,
-            transform: [
-              { translateY: Animated.add(
-                anim.interpolate({ inputRange: [0, 1], outputRange: [600, 0] }),
-                dragY,
-              ) },
-            ],
+            transform: sheet.cardStyle.transform,
           }}
         >
           {/* Handle + title + live count */}

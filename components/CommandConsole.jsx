@@ -8,7 +8,6 @@ import {
   StyleSheet,
   ScrollView,
   Animated,
-  Easing,
   Keyboard,
   Platform,
 } from 'react-native';
@@ -20,11 +19,13 @@ import { useTheme } from '../context/ThemeContext';
 import { blurProps, frostOverlayColor, frostBorderColor } from '../utils/frostedChat';
 import ChatComposer, { ComposerAction } from './ChatComposer';
 import { tapHaptic } from '../utils/haptics';
+import { EASE } from '../utils/motion';
 
 // The iOS keyboard ease — Animated has no built-in "keyboard" curve, so this
 // bezier matches it closely; the OS-reported duration is what really syncs the
-// speed. Mirrors the constant in TerminalConsole.
-const KB_EASING = Easing.bezier(0.17, 0.59, 0.4, 0.77);
+// speed. Shared with TerminalConsole and TaskQuickInspector via utils/motion,
+// which is where it lives now rather than as a third copy of the same numbers.
+const KB_EASING = EASE.keyboard;
 
 // Command names stay monospace — that is the one typographic cue this list
 // shares with the chat's own slash-command dropdown, and it is what makes a
