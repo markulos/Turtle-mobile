@@ -22,6 +22,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
 import SidecarStatusCard from '../components/SidecarStatusCard';
 import ServerStatsPanel from '../components/ServerStatsPanel';
+import UpdatesPanel from '../components/UpdatesPanel';
 import SmsDebugPanel from '../components/SmsDebugPanel';
 import { useServer } from '../context/ServerContext';
 import { useTheme, ACCENTS } from '../context/ThemeContext';
@@ -67,6 +68,7 @@ const SETTING_TERMS = {
   defaultParticipants: 'default participants people tasks assign involved pond members',
   calendarPartners: 'calendar partners share sharing partner view only merged tasks',
   serverConnection: 'server connection ip address computer host wifi network connect test pond offline',
+  appUpdates: 'app version update updates ota over the air check for updates new version restart reload release channel runtime build number what version am i on up to date development build',
   serverStats: 'database size storage stats analytics disk space sqlite tables rows backups more info usage free space vacuum wal',
   smsDebug: 'sms text message texting telnyx otp code login verification debugger test send provider carrier mobile only delivery failed not sending',
   healMedia: 'heal media vault thumbnails previews rebuild repair audit library',
@@ -1161,6 +1163,19 @@ export default function SettingsScreen({ active = true }) {
               )}
 
               </SettingsItem>
+
+              {/* Which code this phone is running, and the one button that moves it
+
+                  forward. Sits directly under the connection because "what version am I
+
+                  on" and "which pond am I talking to" are the same question asked twice. */}
+
+              <SettingsItem terms={SETTING_TERMS.appUpdates}>
+
+                <UpdatesPanel />
+
+              </SettingsItem>
+
 
               {/* Everything about the database this connection reaches —
                   collapsed, and nothing is fetched until it's opened. */}
