@@ -22,6 +22,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
 import SidecarStatusCard from '../components/SidecarStatusCard';
 import ServerStatsPanel from '../components/ServerStatsPanel';
+import SmsDebugPanel from '../components/SmsDebugPanel';
 import { useServer } from '../context/ServerContext';
 import { useTheme, ACCENTS } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -67,6 +68,7 @@ const SETTING_TERMS = {
   calendarPartners: 'calendar partners share sharing partner view only merged tasks',
   serverConnection: 'server connection ip address computer host wifi network connect test pond offline',
   serverStats: 'database size storage stats analytics disk space sqlite tables rows backups more info usage free space vacuum wal',
+  smsDebug: 'sms text message texting telnyx otp code login verification debugger test send provider carrier mobile only delivery failed not sending',
   healMedia: 'heal media vault thumbnails previews rebuild repair audit library',
   passwordVault: 'password vault master password change reset security encryption face id touch id',
   noVault: 'password vault set up security encryption missing',
@@ -1164,6 +1166,14 @@ export default function SettingsScreen({ active = true }) {
                   collapsed, and nothing is fetched until it's opened. */}
               <SettingsItem terms={SETTING_TERMS.serverStats}>
                 <ServerStatsPanel />
+              </SettingsItem>
+
+              {/* Why a text did or didn't go out. Sits beside the database and
+                  telemetry panels for the same reason they sit together: all
+                  three are owner-only answers about how this pond is doing,
+                  and none of them fetch anything until opened. */}
+              <SettingsItem terms={SETTING_TERMS.smsDebug}>
+                <SmsDebugPanel />
               </SettingsItem>
 
               <SettingsItem terms={SETTING_TERMS.healMedia}>
