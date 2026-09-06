@@ -43,7 +43,8 @@
         "UIBackgroundModes": [
           "audio"
         ]
-      }
+      },
+      "buildNumber": "2"
     },
     "android": {
       "package": "com.markulos.passwordtaskmanager",
