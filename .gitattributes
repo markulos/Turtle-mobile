@@ -1,0 +1,28 @@
+# Deterministic line endings on every machine.
+#
+# The Expo runtime fingerprint hashes the RAW BYTES of eas.json and .gitignore.
+# A CRLF checkout on one Windows box and an LF checkout elsewhere therefore
+# produce two different runtime versions for identical code — and an over-the-
+# air update only reaches builds whose runtime matches. That bit us for real:
+# three hashes for the same tree in one afternoon. LF everywhere ends it.
+* text=auto eol=lf
+
+# Never touch binaries.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.mp3 binary
+*.mp4 binary
+*.mov binary
+*.p8 binary
+*.p12 binary
+*.mobileprovision binary
+
+# Keys and certs are text, but must round-trip byte-exact.
+*.pem text eol=lf

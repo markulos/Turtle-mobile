@@ -7,10 +7,15 @@
       "policy": "fingerprint"
     },
     "updates": {
-      "url": "https://u.expo.dev/d7ce39a1-915a-4ee7-990a-6066708faa03",
+      "url": "https://app.t3d.ca/api/mobile-updates/manifest",
       "enabled": true,
       "checkAutomatically": "ON_ERROR_RECOVERY",
-      "fallbackToCacheTimeout": 0
+      "fallbackToCacheTimeout": 0,
+      "codeSigningCertificate": "./certs/certificate.pem",
+      "codeSigningMetadata": {
+        "keyid": "main",
+        "alg": "rsa-v1_5-sha256"
+      }
     },
     "icon": "./assets/icon.png",
     "orientation": "portrait",

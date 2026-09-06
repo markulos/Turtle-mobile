@@ -24,7 +24,8 @@
       "autoIncrement": true,
       "ios": {
         "resourceClass": "m-medium"
-      }
+      },
+      "distribution": "internal"
     }
   },
   "submit": {
