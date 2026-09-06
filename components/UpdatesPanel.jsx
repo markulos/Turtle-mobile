@@ -30,12 +30,13 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View, Text, TouchableOpacity, ActivityIndicator, StyleSheet,
+  View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Switch, Alert,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { useTheme } from '../context/ThemeContext';
+import { useServer } from '../context/ServerContext';
 import { tapHaptic } from '../utils/haptics';
 import { describeBuild, describeUpdateError, formatWhen, shortId } from '../utils/updatesSummary';
 
@@ -98,11 +99,87 @@ export default function UpdatesPanel() {
   // One quiet check when Settings opens — so the pill is true, not stale.
   useEffect(() => { check(); }, [check]);
 
+  // ── Owner-only release steering ──────────────────────────────────────────
+  // The pond keeps two channels: preview (the owner proves a publish on their
+  // own phone) and production (everyone else). Promote and roll back are pointer
+  // moves on the pond among updates it has already built and signed — no build,
+  // no key, so a stolen owner token could only shuffle released artifacts.
+  const { api, isConnected } = useServer();
+  const [releases, setReleases] = useState(null);           // GET /mobile-updates/status
+  const [releasesState, setReleasesState] = useState(null); // 'forbidden' | 'absent' | 'error' | null
+  const [following, setFollowing] = useState(null);         // channel THIS phone asks for
+  const [releaseBusy, setReleaseBusy] = useState(false);
+
+  const loadReleases = useCallback(async () => {
+    if (!isConnected || !canUpdate) return;
+    try {
+      const r = await api.get('/mobile-updates/status');
+      if (r?.success) { setReleases(r); setReleasesState(null); } else setReleasesState('error');
+    } catch (e) {
+      const m = String(e?.message);
+      // 403 = not the owner; 404 = a pond that predates this. Both simply hide it.
+      if (/403|forbidden|owner/i.test(m)) setReleasesState('forbidden');
+      else if (/404|not found/i.test(m)) setReleasesState('absent');
+      else setReleasesState('error');
+    }
+  }, [api, isConnected, canUpdate]);
+
+  const loadFollowing = useCallback(async () => {
+    if (!canUpdate) { setFollowing(null); return; }
+    try {
+      const params = await Updates.getExtraParamsAsync();
+      setFollowing(params?.['turtle-channel'] || Updates.channel || 'production');
+    } catch { setFollowing(Updates.channel || 'production'); }
+  }, [canUpdate]);
+
+  useEffect(() => { loadReleases(); loadFollowing(); }, [loadReleases, loadFollowing]);
+
+  const setPreview = useCallback(async (on) => {
+    try {
+      // Runtime state, outside the native fingerprint — the whole reason ONE
+      // build can serve both channels. Sent with the next check.
+      await Updates.setExtraParamAsync('turtle-channel', on ? 'preview' : null);
+      setFollowing(on ? 'preview' : (Updates.channel || 'production'));
+      check();
+    } catch (e) { setError(describeUpdateError(e)); setPhase('error'); }
+  }, [check]);
+
+  const promote = useCallback(() => {
+    const head = releases?.channels?.preview?.current;
+    if (!head) return;
+    Alert.alert('Promote to production?', `Everyone on production gets update ${shortId(head)} on their next check.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Promote', style: 'destructive', onPress: async () => {
+        setReleaseBusy(true);
+        try { await api.post('/mobile-updates/promote', { updateId: head, channel: 'production' }); }
+        catch (e) { Alert.alert('Promote failed', describeUpdateError(e)); }
+        finally { setReleaseBusy(false); loadReleases(); }
+      } },
+    ]);
+  }, [releases, api, loadReleases]);
+
+  const rollback = useCallback(() => {
+    Alert.alert('Roll production back?', 'Production returns to the update it served before this one.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Roll back', style: 'destructive', onPress: async () => {
+        setReleaseBusy(true);
+        try { await api.post('/mobile-updates/rollback', { channel: 'production' }); }
+        catch (e) { Alert.alert('Rollback failed', describeUpdateError(e)); }
+        finally { setReleaseBusy(false); loadReleases(); }
+      } },
+    ]);
+  }, [api, loadReleases]);
+
   const styles = makeStyles(theme);
   const appVersion = Constants.expoConfig?.version || '—';
   const buildNumber = Constants.expoConfig?.ios?.buildNumber || Constants.nativeBuildVersion || null;
   const runtime = Updates.runtimeVersion ? shortId(Updates.runtimeVersion) : '—';
-  const channel = Updates.channel || (canUpdate ? '—' : 'metro');
+  const channel = following || Updates.channel || (canUpdate ? 'production' : 'metro');
+  const previewHead = releases?.channels?.preview?.current || null;
+  const prodHead = releases?.channels?.production?.current || null;
+  const canPromote = !!previewHead && previewHead !== '__embedded__' && previewHead !== prodHead;
+  const canRollback = (releases?.channels?.production?.history?.length || 0) > 1;
+  const showReleases = canUpdate && !!releases && releasesState === null;
 
   const pill = (() => {
     if (!canUpdate) return { text: 'DEV BUILD', color: c.textSecondary };
@@ -177,6 +254,64 @@ export default function UpdatesPanel() {
           </TouchableOpacity>
         </View>
       ) : null}
+
+      {showReleases ? (
+        <View style={styles.releases}>
+          <Text style={styles.colLabelStrong}>RELEASES · OWNER</Text>
+          {['preview', 'production'].map((name) => {
+            const ch = releases.channels?.[name];
+            const head = ch?.head;
+            return (
+              <View key={name} style={styles.releaseRow}>
+                <Text style={[styles.fact, styles.releaseName]}>{name}</Text>
+                <Text style={styles.releaseHead} numberOfLines={1}>
+                  {ch?.current === '__embedded__'
+                    ? 'factory JavaScript (rolled back to embedded)'
+                    : head
+                      ? `${shortId(head.id)} · ${formatWhen(head.createdAt)}${head.provenance?.message ? ` · ${head.provenance.message}` : ''}`
+                      : '— nothing published'}
+                </Text>
+              </View>
+            );
+          })}
+          <View style={styles.actions}>
+            <TouchableOpacity
+              style={[styles.primaryBtn, { backgroundColor: c.accentInfo, opacity: canPromote && !releaseBusy ? 1 : 0.5 }]}
+              disabled={!canPromote || releaseBusy}
+              onPress={() => { tapHaptic(); promote(); }}
+              accessibilityRole="button"
+              accessibilityLabel="Promote the preview update to production"
+            >
+              {releaseBusy ? <ActivityIndicator size="small" color="#fff" /> : <Icon name="rocket-launch-outline" size={14} color="#fff" />}
+              <Text style={styles.primaryBtnText}>Promote preview → production</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.secondaryBtn, { opacity: canRollback && !releaseBusy ? 1 : 0.5 }]}
+              disabled={!canRollback || releaseBusy}
+              onPress={() => { tapHaptic(); rollback(); }}
+              accessibilityRole="button"
+              accessibilityLabel="Roll production back one release"
+            >
+              <Icon name="undo-variant" size={14} color={c.textSecondary} />
+              <Text style={styles.secondaryBtnText}>Roll back</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.switchRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.switchLabel}>This phone follows preview</Text>
+              <Text style={styles.buildDetail}>Prove a publish here first. Everyone else stays on production until you promote.</Text>
+            </View>
+            <Switch
+              value={following === 'preview'}
+              onValueChange={(v) => { tapHaptic(); setPreview(v); }}
+              accessibilityLabel="Follow the preview channel on this phone"
+            />
+          </View>
+          {!releases.signing ? (
+            <Text style={styles.error}>The pond has no signing key — this build will refuse every update until KEYS_DIR has one.</Text>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -217,5 +352,15 @@ const makeStyles = (theme) => {
       borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
     },
     secondaryBtnText: { color: c.textSecondary, fontSize: 12 },
+    releases: {
+      marginTop: 12, paddingTop: 12, gap: 6,
+      borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border,
+    },
+    colLabelStrong: { fontSize: 10, letterSpacing: 0.6, color: c.textSecondary, fontWeight: '700', marginBottom: 2 },
+    releaseRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    releaseName: { width: 78, color: c.textSecondary },
+    releaseHead: { flex: 1, fontSize: 12, color: c.textPrimary },
+    switchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 8 },
+    switchLabel: { fontSize: 13, fontWeight: '600', color: c.textPrimary },
   });
 };
