@@ -96,7 +96,6 @@ import { FlashList } from '@shopify/flash-list';
 import Reanimated, {
   useSharedValue,
   useAnimatedStyle,
-  withTiming,
   useAnimatedKeyboard,
   withSpring,
   runOnJS,
@@ -1121,13 +1120,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // extra strips). The timeline scrubber anchors BELOW it — measured, not
   // hardcoded, so search bars / context rows can't overlap the rail.
   const [vaultHeaderH, setVaultHeaderH] = useState(0);
-  const vaultHeaderHRef = useRef(0);
-  // Pinterest-style chrome: the floating header slides away at the scroll's
-  // own rate while photos move up, and back at the same rate on the way
-  // down; at either end of the timeline it is fully back. The grid is
-  // MIRRORED, so photos moving UP on screen = the offset going DOWN.
-  const vaultHidden = useSharedValue(0);
-  const vaultChromeStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -vaultHidden.value }] }));
 
   // ── Self-draining, viewport-prioritized page loader ─────────────────────
   // The old loader fetched inline and `break`-ed when the concurrency cap was
@@ -1792,20 +1784,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // No pause-on-scroll: viewability keeps the centermost video playing while
     // it stays on screen and only hands off when it scrolls out (see
     // onViewableItemsChanged), so scrolling past a visible video never reloads it.
-    {
-      const yNow = (ne.contentOffset && ne.contentOffset.y) || 0;
-      const yPrev = scrubLastY.current;
-      const H = vaultHeaderHRef.current;
-      if (H) {
-        const maxY = Math.max(0, gridContentH.current - gridLayoutH.current);
-        if (yNow <= 0 || yNow >= maxY - 1) {
-          vaultHidden.value = withTiming(0, { duration: 160 });
-        } else {
-          const d = yPrev - yNow; // mirrored grid: content up on screen = offset down
-          if (Math.abs(d) <= 120) vaultHidden.value = Math.min(H, Math.max(0, vaultHidden.value + d));
-        }
-      }
-    }
     scrubLastY.current = (ne.contentOffset && ne.contentOffset.y) || 0;
     if (ne.contentSize && ne.contentSize.height) gridContentH.current = ne.contentSize.height;
     if (ne.layoutMeasurement && ne.layoutMeasurement.height) gridLayoutH.current = ne.layoutMeasurement.height;
@@ -4721,15 +4699,13 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: theme.colors.background, zIndex: 30 }} />
 
       {/* 2. Compact Static Header */}
-      <Reanimated.View
+      <View
         onLayout={(e) => {
           const h = Math.round(e.nativeEvent.layout.height);
-          vaultHeaderHRef.current = h;
           if (h > 0 && h !== vaultHeaderH) setVaultHeaderH(h);
         }}
         style={[
           styles.floatingHeaderContainer,
-          vaultChromeStyle,
           {
             paddingTop: insets.top,
             // Solid, not frosted. The header floats over the grid, and a blur
@@ -4826,7 +4802,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             );
           })}
         </View>
-      </Reanimated.View>
+      </View>
 
       {/* Upload progress lives in the app-root VaultUploadPill — shown on every
           screen, and when the user hides it, it COLLAPSES to a small chip
