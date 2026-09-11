@@ -314,6 +314,7 @@ function TaskInspectorSheet({
       </ViewerSheet>
 
       <DatePickerModal
+        theme={theme}
         visible={showDate}
         selectedDate={task.dueDate || null}
         onSelect={(d) => { reschedule({ dueDate: d }); setShowDate(false); }}
