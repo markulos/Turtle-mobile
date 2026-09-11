@@ -49,7 +49,6 @@ import { BlurView } from 'expo-blur';
 import { blurProps, frostOverlayColor, frostBorderColor } from '../../../utils/frostedChat';
 import { useTheme } from '../../../context/ThemeContext';
 import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters, matchesRecurrence, isOccurrenceCompleted, parseLocalYMD, boardLabel } from '../utils/taskHelpers';
-import TaskInspectorSheet from './TaskInspectorSheet';
 import ScheduleCard, { clockLabel, buildCondensedRows } from './ScheduleCard';
 import { HatchBackdrop } from './HatchBackdrop';
 import { TaskSectionFrontier, DAY_SECTION_FIRST_PAINT } from './TaskSectionFrontier';
@@ -1583,6 +1582,10 @@ export const CalendarView = ({
   onTaskPress,
   onTaskLongPress,
   onToggleComplete,
+  // A task block was tapped: (task, dateStr). The inspector itself is mounted
+  // by the SCREEN, over everything — inside the calendar it drew beneath the
+  // header chrome, the tab bar and this host's own clipping.
+  onInspectTask,
   selectedProject,
   selectedTags,
   tagFilterMode,
@@ -1689,15 +1692,12 @@ export const CalendarView = ({
   // Tap the header to fold/unfold; the mode toggle also sets it per mode.
   const [untimedCollapsed, setUntimedCollapsed] = useState(true);
 
-  // Quick inspector — opened by tapping a task block in the hour grid. Holds
-  // the task id (not the object) so the sheet always reflects live edits.
-  const [inspectorTaskId, setInspectorTaskId] = useState(null);
-  const inspectorTask = useMemo(
-    () => (inspectorTaskId ? tasks.find(t => t.id === inspectorTaskId) || null : null),
-    [inspectorTaskId, tasks],
+  // Tapping a task block hands it UP with the day it was tapped on: the
+  // screen mounts the inspector above every other layer in the app.
+  const openInspector = useCallback(
+    (task) => { if (task) onInspectTask?.(task, toDateString(selectedDateRef.current)); },
+    [onInspectTask],
   );
-  const openInspector = useCallback((task) => setInspectorTaskId(task.id), []);
-  const closeInspector = useCallback(() => setInspectorTaskId(null), []);
 
   // Keyboard handling
   const [keyboardHeight, setKeyboardHeight] = useState(0);
@@ -2819,35 +2819,6 @@ export const CalendarView = ({
         </ScrollView.Context.Provider>
         </VirtualizedListContextResetter>
       </Reanimated.View>
-
-      {/* Minimal quick inspector — slides up when a task block in the hour grid
-          is tapped. Rename + change time/date inline (autosaves); "Edit details"
-          hands off to the full form. */}
-      {!!inspectorTask && (
-        <TaskInspectorSheet
-          task={inspectorTask}
-          onClose={closeInspector}
-          onUpdateTask={onUpdateTask}
-          onToggleComplete={onToggleComplete}
-          onDeleteTask={onDeleteTask}
-          // The inspector opens from a day pane's block — its toggle must tick
-          // THAT day's occurrence, and its ring reflect that day's state.
-          contextDate={toDateString(selectedDate)}
-          // On a shared calendar, surface the co-owner so a reschedule can
-          // offer to notify them (onNotifyReschedule sends; absent = no-op).
-          notifyTargetName={multiUser ? (inspectorTask?.ownerName || null) : null}
-          onNotifyReschedule={onNotifyReschedule}
-          boards={projects}
-          colorOf={getProjectColor}
-          use24h={use24h}
-          theme={theme}
-          onOpenFull={() => {
-            const t = inspectorTask;
-            setInspectorTaskId(null);
-            if (t) onTaskLongPress?.(t);
-          }}
-        />
-      )}
 
       {/* Wheel time picker — opened by tapping the time pill on the add-task
           row (the drop-to-create flow). Sets / clears the pending time slot. */}
