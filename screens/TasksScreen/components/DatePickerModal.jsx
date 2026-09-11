@@ -9,6 +9,7 @@ import {
   Dimensions,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useTheme } from '../../../context/ThemeContext';
 
 const { width } = Dimensions.get('window');
 const DAY_WIDTH = (width - 80) / 7;
@@ -24,12 +25,18 @@ export const DatePickerModal = ({
   onClose, 
   onSelect, 
   selectedDate,
-  theme 
+  // Optional: callers that already hold the theme pass it; the rest fall back
+  // to the context. Without this a caller that forgot the prop crashed the
+  // whole screen, because the stylesheet is built from theme.colors on every
+  // render — the picker is in the tree while it is closed too.
+  theme: themeProp,
 }) => {
+  const { theme: ctxTheme } = useTheme();
+  const theme = themeProp || ctxTheme;
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  
-  const styles = createStyles(theme);
+
+  const styles = useMemo(() => createStyles(theme), [theme]);
   
   useEffect(() => {
     if (visible) {
