@@ -667,6 +667,7 @@ const DayPane = React.memo(function DayPane({
   onEditPendingTime,
   onOpenAddTask,
   onPickSuggestion,
+  onOpenFullCreate,
   // Search (active pane only)
   isSearching,
   searchQuery,
@@ -855,25 +856,45 @@ const DayPane = React.memo(function DayPane({
         {isActive && isAddingTask && newTaskTitle.trim().length > 0 && (
           <View style={styles.finderResults}>
             {!searchResults.some((r) => (r.title || '').trim().toLowerCase() === newTaskTitle.trim().toLowerCase()) && (
-              <TouchableOpacity
-                style={styles.finderCreate}
-                onPressIn={() => tapHaptic()}
-                onPress={onSubmitAddTask}
-                activeOpacity={0.6}
-                accessibilityRole="button"
-                accessibilityLabel={`Create task ${newTaskTitle.trim()}`}
-                testID="day-finder-create"
-              >
-                <View style={styles.finderCreateIcon}>
-                  <Icon name="plus" size={16} color={theme.colors.textPrimary} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.finderCreateTitle} numberOfLines={1}>Create "{newTaskTitle.trim()}"</Text>
+              <View style={styles.finderCreate}>
+                <Text style={styles.finderCreateTime} numberOfLines={1}>
+                  {pendingTime ? formatTimeLabel(pendingTime, use24h) : 'new'}
+                </Text>
+                <TouchableOpacity
+                  style={styles.finderCreateCard}
+                  onPressIn={() => tapHaptic()}
+                  onPress={onSubmitAddTask}
+                  activeOpacity={0.6}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Create task ${newTaskTitle.trim()}`}
+                  testID="day-finder-create"
+                >
+                  <View style={styles.finderCreateTop}>
+                    <Text style={styles.finderCreateTitle} numberOfLines={2}>{newTaskTitle.trim()}</Text>
+                    <View style={styles.finderCreateRing}>
+                      <Icon name="plus" size={14} color={theme.colors.textPrimary} />
+                    </View>
+                  </View>
                   <Text style={styles.finderCreateCaption} numberOfLines={1}>
-                    {isViewingToday ? 'today' : formatDueDate(dayStr)}{pendingTime ? ` · ${formatTimeLabel(pendingTime, use24h)}` : ''}
+                    Create · {isViewingToday ? 'today' : formatDueDate(dayStr)}{pendingTime ? ` · ${formatTimeLabel(pendingTime, use24h)}` : ''}
                   </Text>
-                </View>
-              </TouchableOpacity>
+                  <View style={styles.finderCreateBottom}>
+                    <Text style={styles.finderCreateHint} numberOfLines={1}>Return creates</Text>
+                    <TouchableOpacity
+                      onPressIn={() => tapHaptic()}
+                      onPress={onOpenFullCreate}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Open the full form for this day"
+                      testID="day-finder-full-form"
+                      style={styles.finderFullKey}
+                    >
+                      <Icon name="tune-variant" size={13} color={theme.colors.textSecondary} />
+                      <Text style={styles.finderFullKeyText}>Full form</Text>
+                    </TouchableOpacity>
+                  </View>
+                </TouchableOpacity>
+              </View>
             )}
             {searchResults.length > 0 && (
               <Text style={styles.searchResultsTitle}>
@@ -2403,6 +2424,15 @@ export const CalendarView = ({
     return { title: 'Task Schedule', subtitle: dateStr };
   }, [selectedDate]);
 
+  // The finder's "Full form": hand the day to the create form (events,
+  // birthdays, every field) and close the finder.
+  const openFullCreate = useCallback(() => {
+    setIsAddingTask(false);
+    setNewTaskTitle('');
+    setPendingTime(null);
+    onCreateForDate?.(toDateString(selectedDateRef.current));
+  }, [onCreateForDate]);
+
   const handleCancelAdd = useCallback(() => {
     // Swallow the single blur-cancel caused by opening the wheel time picker —
     // the add row must stay alive (and keep its pending time) while the user
@@ -2488,6 +2518,7 @@ export const CalendarView = ({
       onEditPendingTime={openTimeEditor}
       onOpenAddTask={openAddTask}
       onPickSuggestion={handlePickSuggestion}
+      onOpenFullCreate={openFullCreate}
       isSearching={isSearching}
       searchQuery={searchQuery}
       onChangeSearchQuery={setSearchQuery}
@@ -2506,7 +2537,7 @@ export const CalendarView = ({
     onTaskPress, openInspector, onTaskLongPress, onToggleComplete, onOwnerPress, openAddTaskAt,
     isAddingTask, newTaskTitle, handleAddTask, handleCancelAdd, pendingTime, clearPendingTime,
     openTimeEditor,
-    openAddTask, handlePickSuggestion, isSearching, searchQuery, openSearch, closeSearch, searchResults,
+    openAddTask, handlePickSuggestion, openFullCreate, isSearching, searchQuery, openSearch, closeSearch, searchResults,
     handleOpenSearchResult, refreshing, onRefresh, keyboardHeight,
   ]);
 
@@ -2658,35 +2689,22 @@ export const CalendarView = ({
             <Text style={styles.dateSubtitle} numberOfLines={1}>{taskSubtitle}</Text>
           </View>
           <View style={styles.taskListHeaderRight}>
-            {onCreateForDate && (
-              <TouchableOpacity
-                style={styles.headerAddBtn}
-                onPress={(e) => {
-                  e.stopPropagation();
-                  onCreateForDate(toDateString(selectedDate));
-                }}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Add a task on this day"
-              >
-                <Icon name="plus" size={27} color={theme.colors.background} />
-              </TouchableOpacity>
-            )}
-            {/* The search key under the +: opens the finder — one field that
-                searches every task and creates one when nothing matches. */}
+            {/* ONE key: opens the finder — a single field that searches every
+                task and creates one when nothing matches (its create row
+                carries a "Full form" key for events, birthdays and every
+                other field). × while open. */}
             <TouchableOpacity
-              style={[styles.headerSearchKey, isAddingTask && styles.headerSearchKeyLit]}
+              style={styles.headerAddBtn}
               onPressIn={() => tapHaptic()}
               onPress={(e) => { e.stopPropagation(); if (isAddingTask) handleCancelAdd(); else openAddTask(); }}
-              hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
-              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              activeOpacity={0.85}
               accessibilityRole="button"
               accessibilityState={{ expanded: isAddingTask }}
-              accessibilityLabel={isAddingTask ? 'Close search' : 'Search or add a task'}
+              accessibilityLabel={isAddingTask ? 'Close' : 'Search or add a task'}
               testID="day-finder-key"
             >
-              <Icon name={isAddingTask ? 'close' : 'magnify'} size={18} color={isAddingTask ? theme.colors.background : theme.colors.textPrimary} />
+              <Icon name={isAddingTask ? 'close' : 'plus'} size={27} color={theme.colors.background} />
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
@@ -3250,25 +3268,9 @@ const createStyles = (theme) => StyleSheet.create({
   taskListHeaderContent: {
     flex: 1,
   },
-  // The header's right column: the + key with the search key beneath it.
   taskListHeaderRight: {
-    flexDirection: 'column',
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-  },
-  headerSearchKey: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.borderStrong || theme.colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 6,
-  },
-  headerSearchKeyLit: {
-    backgroundColor: theme.colors.textPrimary,
-    borderColor: theme.colors.textPrimary,
   },
   // White "+" add button on the header's right edge — a CIRCLE with a solid
   // primary-ink fill and a background-coloured "+" cut-out. Proportioned to the
@@ -3911,42 +3913,96 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textPlaceholder,
   },
   // The finder's result list (below the one field).
+  // Lines up with the schedule below it (same side paddings → same time
+  // column x).
   finderResults: {
     marginTop: 8,
+    paddingLeft: 8,
+    paddingRight: 16,
   },
+  // The create row = a ScheduleCard row in dashed outline: same time column
+  // (74pt, 14/500), same card metrics (radius 18, 16/14/12 padding, 72 min).
   finderCreate: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: theme.colors.borderStrong || theme.colors.border,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    marginBottom: 10,
+    alignItems: 'flex-start',
+    marginBottom: 12,
   },
-  finderCreateIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+  finderCreateTime: {
+    width: 74,
+    paddingTop: 15,
+    paddingRight: 6,
+    fontSize: 14,
+    fontWeight: '500',
+    color: theme.colors.textSecondary,
+    fontVariant: ['tabular-nums'],
+    letterSpacing: 0.1,
+  },
+  finderCreateCard: {
+    flex: 1,
+    borderRadius: 18,
     borderWidth: 1.5,
     borderStyle: 'dashed',
     borderColor: theme.colors.borderStrong || theme.colors.border,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 12,
+    minHeight: 72,
+  },
+  finderCreateTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  finderCreateRing: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: theme.colors.textPrimary,
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: 1,
   },
   finderCreateTitle: {
-    fontSize: 15,
-    fontWeight: '700',
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    lineHeight: 21,
     color: theme.colors.textPrimary,
   },
   finderCreateCaption: {
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.3,
+    fontSize: 13,
+    fontWeight: '400',
+    color: theme.colors.textSecondary,
+    marginTop: 3,
+  },
+  finderCreateBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  finderCreateHint: {
+    fontSize: 12,
     color: theme.colors.textTertiary,
-    marginTop: 1,
+  },
+  finderFullKey: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    height: 28,
+    paddingHorizontal: 10,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: theme.colors.borderStrong || theme.colors.border,
+  },
+  finderFullKeyText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
+    color: theme.colors.textSecondary,
   },
   finderReadd: {
     width: 36,
