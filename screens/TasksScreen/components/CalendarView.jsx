@@ -668,6 +668,7 @@ const DayPane = React.memo(function DayPane({
   onOpenAddTask,
   onPickSuggestion,
   onOpenFullCreate,
+  onScrollMotion,
   // Search (active pane only)
   isSearching,
   searchQuery,
@@ -776,6 +777,8 @@ const DayPane = React.memo(function DayPane({
         ref={scrollRef}
         style={styles.taskList}
         contentContainerStyle={{ paddingBottom: Math.max(100, keyboardHeight + 20) }}
+        onScroll={isActive && onScrollMotion ? (e) => onScrollMotion(e.nativeEvent.contentOffset.y) : undefined}
+        scrollEventThrottle={16}
         // Let taps on the suggestion rows register on the FIRST tap while the
         // keyboard is up (default would just dismiss the keyboard instead).
         keyboardShouldPersistTaps="handled"
@@ -1609,6 +1612,12 @@ export const CalendarView = ({
   // parent can lock the calendar⇄list pager while it's open — horizontal
   // swipes then page between DAYS instead of switching to the list view.
   onPlannerOpenChange,
+  // The screen's chrome overlay: keep this much headroom, and hand it back
+  // as `chromeHidden` (a shared value) grows. `onScrollMotion(y)` reports
+  // the active day pane's scroll so the chrome can slide with it.
+  topInset = 0,
+  chromeHidden = null,
+  onScrollMotion,
   // Opens the unified create form pre-dated to a given day (YYYY-MM-DD), fired
   // by the day-planner header's "+" button.
   onCreateForDate,
@@ -2433,6 +2442,11 @@ export const CalendarView = ({
     onCreateForDate?.(toDateString(selectedDateRef.current));
   }, [onCreateForDate]);
 
+  // Headroom under the screen's chrome overlay, given back as it slides away.
+  const chromeInsetStyle = useAnimatedStyle(() => ({
+    paddingTop: chromeHidden ? Math.max(0, topInset - chromeHidden.value) : topInset,
+  }), [topInset, chromeHidden]);
+
   const handleCancelAdd = useCallback(() => {
     // Swallow the single blur-cancel caused by opening the wheel time picker —
     // the add row must stay alive (and keep its pending time) while the user
@@ -2519,6 +2533,7 @@ export const CalendarView = ({
       onOpenAddTask={openAddTask}
       onPickSuggestion={handlePickSuggestion}
       onOpenFullCreate={openFullCreate}
+      onScrollMotion={onScrollMotion}
       isSearching={isSearching}
       searchQuery={searchQuery}
       onChangeSearchQuery={setSearchQuery}
@@ -2537,13 +2552,13 @@ export const CalendarView = ({
     onTaskPress, openInspector, onTaskLongPress, onToggleComplete, onOwnerPress, openAddTaskAt,
     isAddingTask, newTaskTitle, handleAddTask, handleCancelAdd, pendingTime, clearPendingTime,
     openTimeEditor,
-    openAddTask, handlePickSuggestion, openFullCreate, isSearching, searchQuery, openSearch, closeSearch, searchResults,
+    openAddTask, handlePickSuggestion, openFullCreate, onScrollMotion, isSearching, searchQuery, openSearch, closeSearch, searchResults,
     handleOpenSearchResult, refreshing, onRefresh, keyboardHeight,
   ]);
 
   return (
-    <View
-      style={styles.container}
+    <Reanimated.View
+      style={[styles.container, chromeInsetStyle]}
       onLayout={(e) => { containerH.value = e.nativeEvent.layout.height; }}
     >
       {/* No collapsible top header — the month/year title now lives
@@ -2842,7 +2857,7 @@ export const CalendarView = ({
         onSelect={setPendingTime}
         onClose={() => setEditingTime(false)}
       />
-    </View>
+    </Reanimated.View>
   );
 };
 

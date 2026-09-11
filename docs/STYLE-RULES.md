@@ -176,6 +176,15 @@ repo skill (loaded before any UI work) and by review.
   a Reanimated shared value if the layout genuinely has to move.
 - Sheets enter in 240 ms ease-out-cubic and leave in 200 ms ease-in-quad.
 
+- COLLAPSING CHROME (Pinterest rule): a screen's non-essential header rows are an OVERLAY that hides at the
+  scroll's own rate while content moves up and returns at the same rate on the way down — a DIFF-CLAMP of
+  the offset (`hidden = clamp(hidden + dy, 0, H)`), never the absolute offset; fully back at offset 0
+  (and, on the mirrored vault grid, at either end). Driven from the list's `onScroll` into a shared
+  value; the header translates on the UI thread; the list keeps a top padding of the chrome height so rows
+  start below it and scroll under it. Each scroll source keeps its own last offset (jumps > 120 pt are
+  ignored) so switching lists never snaps. Tasks screen (`chrome` overlay, fed by the agenda and the day
+  panel) and the vault's floating header (mirrored grid: content up = offset DOWN) do this.
+
 ## 7. State and data
 
 - Every mutation is optimistic: update local state now, persist in the background, revert on

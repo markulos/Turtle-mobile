@@ -494,6 +494,30 @@ export default function TasksScreen() {
   // Boards key opens it, picking a board closes it. The key itself shows the
   // selected board (dot + name) so the scope stays readable with it closed.
   const [railOpen, setRailOpen] = useState(false);
+  // Pinterest-style chrome: the two header rows are an overlay that hides at
+  // the scroll's own rate while content moves up and returns at the same
+  // rate on the way down (a diff-clamp of the offset, not the offset itself).
+  // Fed by whichever list is moving — the agenda, or the day panel inside
+  // the calendar — each with its own last-offset so switching sources never
+  // reads as a jump.
+  const [chromeH, setChromeH] = useState(0);
+  const chromeHRef = useRef(0);
+  const chromeHidden = useSharedValue(0);
+  const chromeLastY = useRef({});
+  const reportScroll = useCallback((source, y) => {
+    const H = chromeHRef.current;
+    if (!H) return;
+    const prev = chromeLastY.current[source];
+    chromeLastY.current[source] = y;
+    if (y <= 0) { chromeHidden.value = withTiming(0, { duration: 160 }); return; }
+    if (prev == null) return;
+    const dy = y - prev;
+    if (Math.abs(dy) > 120) return; // a remount / programmatic jump, not a drag
+    chromeHidden.value = Math.min(H, Math.max(0, chromeHidden.value + dy));
+  }, [chromeHidden]);
+  const reportAgendaScroll = useCallback((y) => reportScroll('agenda', y), [reportScroll]);
+  const reportDayScroll = useCallback((y) => reportScroll('day', y), [reportScroll]);
+  const chromeStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -chromeHidden.value }] }));
   const railProgress = useSharedValue(0);
   useEffect(() => {
     railProgress.value = withTiming(railOpen ? 1 : 0, {
@@ -1780,6 +1804,14 @@ export default function TasksScreen() {
       {/* Header — one row of keys (view pill · status keys · filter · +),
           then the board rail. Nothing collapses, nothing shifts the page:
           the board picker IS the rail, the day count lives on its cards. */}
+      <Reanimated.View
+        style={[styles.chrome, { top: insets.top }, chromeStyle]}
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          chromeHRef.current = h;
+          setChromeH((v) => (v === h ? v : h));
+        }}
+      >
       <View style={styles.header}>
         <View style={styles.viewToggle}>
           {/* Sliding active pill (bound to the pager scroll). */}
@@ -1878,6 +1910,7 @@ export default function TasksScreen() {
           </TouchableOpacity>
         </View>
       </View>
+      </Reanimated.View>
 
       {/* Project-picker overlay host. The picker (rendered at the bottom of
           this host) is an absolute overlay pinned just below the header.
@@ -1888,7 +1921,7 @@ export default function TasksScreen() {
           can't spill over the tab bar / FAB. Modals inside render via RN
           portals, so the transform doesn't touch them. */}
       <View style={styles.dropdownHost}>
-      <Reanimated.View style={[styles.dropdownShiftLayer, contentShiftStyle]}>
+      <Reanimated.View style={[styles.dropdownShiftLayer, hasActiveFilters && { paddingTop: chromeH }, contentShiftStyle]}>
 
       {/* Active Filters */}
       {hasActiveFilters && (
@@ -2112,6 +2145,12 @@ export default function TasksScreen() {
           onUpdateTask={handleUpdateTask}
           onDeleteTask={deleteTask}
           projects={projects}
+          // The chrome overlay above: the calendar keeps that much headroom
+          // and gives it back as the chrome slides away; the day panel's
+          // scroll drives the slide.
+          topInset={hasActiveFilters ? 0 : chromeH}
+          chromeHidden={chromeHidden}
+          onScrollMotion={reportDayScroll}
           onAddTask={(title, project, dueDate, time, extras) => {
             // `time` is the fourth argument — set when the user
             // long-pressed a slot on the day calendar grid. Null for
@@ -2200,6 +2239,7 @@ export default function TasksScreen() {
             // only tracks the offset for the keyboard-scroll helpers.
             onScroll={(e) => {
               scrollY.current = e.nativeEvent.contentOffset.y;
+              reportAgendaScroll(scrollY.current);
             }}
             scrollEventThrottle={16}
             renderItem={({ item, index }) => {
@@ -2325,6 +2365,10 @@ export default function TasksScreen() {
               // Clears the floating tab bar (which no longer reserves space)
               // or the keyboard, whichever is taller.
               paddingBottom: Math.max(tabBarHeight + 24, keyboardHeight + 20),
+              // Rows start below the chrome overlay and scroll under it as
+              // it slides away (with the filters bar in flow the shift layer
+              // carries the inset instead).
+              paddingTop: hasActiveFilters ? 0 : chromeH + 4,
             }}
             // NO RefreshControl — the pull/scroll up is plain native motion
             // into the preloaded skeleton zone; data still refreshes on focus,
@@ -2392,7 +2436,7 @@ export default function TasksScreen() {
           progress that shifts the page — the page stays glued to its bottom
           edge through the open / close. Untouchable while closed. */}
       <Reanimated.View
-        style={[styles.railLayer, railRevealStyle]}
+        style={[styles.railLayer, { top: chromeH }, railRevealStyle]}
         pointerEvents={railOpen ? 'box-none' : 'none'}
         accessibilityElementsHidden={!railOpen}
         importantForAccessibility={railOpen ? 'auto' : 'no-hide-descendants'}
@@ -2733,6 +2777,16 @@ const createStyles = (theme) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 2,
+  },
+  // The chrome overlay (both header rows) over the content host. Above the
+  // rail (2) and the page; below every in-tree page / sheet (150+).
+  chrome: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    elevation: 20,
+    backgroundColor: theme.colors.background,
   },
   // Row 2 under the status keys: Boards + Overview, left-aligned.
   headerRow2: {
