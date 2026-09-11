@@ -105,6 +105,14 @@ repo skill (loaded before any UI work) and by review.
   scroll position (down closes, up expands), and a TAP on it flips between the two detents. Use
   `headerPanHandlers` + `toggle` from useSheetDetents; `PhotoViewer/ViewerSheet` has it built in, so
   reuse it for any dark sheet. The Done button keeps its own press (claim on move, never on start).
+- WHERE a sheet is mounted decides what it can cover. In-tree at the screen root, mounted last with a
+  zIndex, it beats the page, the headers and every other overlay on that screen, but NOT the floating tab
+  bar — those sheets take `bottomInset={tabBarHeight}` so their footer clears it. A sheet that must cover
+  the TAB BAR TOO (the day panel's task inspector) is mounted at the screen root inside a TRANSPARENT
+  `Modal` and takes `bottomInset={insets.bottom}` instead; its own pickers are then Modals NESTED in its
+  tree, which iOS presents fine (a SIBLING Modal over an open one is what disappears). Never leave such a
+  sheet inside the page component that raised it — a parent's zIndex or `overflow: hidden` outranks and
+  clips it no matter what the sheet itself carries.
 - Dark sheets are FROSTED: rgba(10,10,12,.55) over a dark BlurView so what is underneath shows through,
   softened; white text, pills invert to white / black text.
 - The TAGS sheet, whenever it is open, sits above EVERY other overlay on the screen (selection bar,
