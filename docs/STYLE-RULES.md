@@ -42,8 +42,14 @@ repo skill (loaded before any UI work) and by review.
   in the time column. The compact schedule is a CONDENSED HOUR TIMELINE (`buildCondensedRows`): every hour
   from the first task to the last task's end has a row — the card on the hour a task starts (it stands for the
   hours it covers), a dashed rule with the hour label for a free hour, one "Nh free" row for a stretch longer
-  than three free hours. The panel header is ONE
-  line: "Task Schedule" (26 / 600) with the date beside it (12 / 300, 50 % opacity) — no hint text, no count.
+  than three free hours. The panel header is "Task Schedule" (30 / 700) with the day
+  beneath it as a clear subtitle (15 / 500, secondary ink) — no hint text, no count; its right column stacks
+  the + key and, under it, a round search key. ADD + SEARCH are ONE FINDER field, hidden until the search key
+  opens it: typing searches every task (tap opens, + re-adds a copy on this day) and a dashed "Create …" row
+  heads the list when nothing carries that exact title (Return creates too). Tapping a task opens the
+  TASK INSPECTOR SHEET (`TaskInspectorSheet` on ViewerSheet, dark): title + Done ring on top, then priority,
+  When (date / time chips + quick keys), board keys, notes, subtasks, tags, Full editor · Delete — every
+  field commits on its own.
   The panel's SURFACE is the chat composer's FROST (`utils/frostedChat`: BlurView intensity 85 + the
   frost tint rgba(250,250,252,.5) light / rgba(20,20,22,.4) dark, a top hairline only) — transparent, the
   calendar reads through it; nothing inside the panel paints a flat surface over it. NEVER give a full-width
