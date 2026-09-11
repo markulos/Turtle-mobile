@@ -42,8 +42,8 @@ repo skill (loaded before any UI work) and by review.
   in the time column. The compact schedule is a CONDENSED HOUR TIMELINE (`buildCondensedRows`): every hour
   from the first task to the last task's end has a row — the card on the hour a task starts (it stands for the
   hours it covers), a dashed rule with the hour label for a free hour, one "Nh free" row for a stretch longer
-  than three free hours. The panel header is "Task Schedule" in the month header's type — "Task" 26 / 700
-  primary ink beside "Schedule" 26 / 200 secondary ink, baseline-aligned, exactly as "September 2026" reads — with the day
+  than three free hours. The panel header is "Task Schedule" at the month header's size, both words heavy
+  (26 / 700, primary ink — `monthText`'s type) with the day
   beneath it as a clear subtitle (15 / 500, secondary ink) — no hint text, no count; its right column stacks
   the + key and, under it, a round search key. ADD + SEARCH are ONE FINDER field, hidden until the search key
   opens it: typing searches every task (tap opens, + re-adds a copy on this day) and a dashed "Create …" row
