@@ -2433,6 +2433,12 @@ export const CalendarView = ({
     return { title: 'Task Schedule', subtitle: dateStr };
   }, [selectedDate]);
 
+  // The header wears the calendar's month/year type: first word heavy, the
+  // rest hair-thin. Split rather than hardcode so the pair stays whatever the
+  // memo above decides the title is.
+  const [taskTitleLead, ...taskTitleRest] = taskTitle.split(' ');
+  const taskTitleTail = taskTitleRest.join(' ');
+
   // The finder's "Full form": hand the day to the create form (events,
   // birthdays, every field) and close the finder.
   const openFullCreate = useCallback(() => {
@@ -2698,9 +2704,20 @@ export const CalendarView = ({
             <View style={styles.grabHandle} />
           </View>
           <View style={styles.taskListHeaderContent}>
-            {/* "Task Schedule" large and legible; the day beneath it as a
-                clear subtitle — nothing else in the header. */}
-            <Text style={styles.taskListTitle} numberOfLines={1}>{taskTitle}</Text>
+            {/* "Task Schedule" in the calendar's month/year type — heavy word
+                against a hair-thin one, same size as "September 2026" one
+                sheet up, so both headers read as one family. Labelled as a
+                whole so a screen reader says the phrase, not two words. */}
+            <View
+              style={styles.taskListTitleRow}
+              accessibilityRole="header"
+              accessibilityLabel={taskTitle}
+            >
+              <Text style={styles.taskListTitle} numberOfLines={1}>{taskTitleLead}</Text>
+              {!!taskTitleTail && (
+                <Text style={styles.taskListTitleTail} numberOfLines={1}>{taskTitleTail}</Text>
+              )}
+            </View>
             <Text style={styles.dateSubtitle} numberOfLines={1}>{taskSubtitle}</Text>
           </View>
           <View style={styles.taskListHeaderRight}>
@@ -3316,11 +3333,28 @@ const createStyles = (theme) => StyleSheet.create({
   calendarHintBlue: {
     color: '#64B5F6', // Light blue
   },
+  // Title row: the two words share a baseline, exactly as `monthTitleRow`
+  // holds "September" beside "2026".
+  taskListTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    columnGap: 8,
+  },
+  // Deliberately the same 26 / 700 as `monthText` — the sheet header and the
+  // month header are the same voice at the same size, one above the other.
   taskListTitle: {
-    fontSize: 30,
+    fontSize: 26,
     fontWeight: '700',
-    letterSpacing: -0.6,
+    letterSpacing: 0.2,
     color: theme.colors.textPrimary,
+  },
+  // ...and this is `yearText`: '200' rather than '100' because '100' falls
+  // back to regular on Android.
+  taskListTitleTail: {
+    fontSize: 26,
+    fontWeight: '200',
+    letterSpacing: -0.6,
+    color: theme.colors.textSecondary,
   },
   // The day, on its own line under the title — clear, not faint.
   dateSubtitle: {
