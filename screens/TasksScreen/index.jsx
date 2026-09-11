@@ -2,6 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMe
 import {
   View,
   Text,
+  Modal,
   Image,
   SectionList,
   TouchableOpacity,
@@ -130,6 +131,7 @@ import { useCelebration } from '../../context/CelebrationContext';
 import BoardRail from './components/BoardRail';
 import StatusSegment from './components/StatusSegment';
 import BoardManagerSheet from './components/BoardManagerSheet';
+import TaskInspectorSheet from './components/TaskInspectorSheet';
 import OverviewPage from './components/OverviewPage';
 
 
@@ -471,7 +473,7 @@ function FourColorBoardsIcon({ size = 18, gap = 2 }) {
 }
 
 export default function TasksScreen() {
-  const { theme } = useTheme();
+  const { theme, timeFormat } = useTheme();
   const insets = useSafeAreaInsets();
   // The tab bar floats over the page now, so lists clear it themselves.
   const tabBarHeight = useBottomTabBarHeight();
@@ -493,6 +495,16 @@ export default function TasksScreen() {
   // Boards key opens it, picking a board closes it. The key itself shows the
   // selected board (dot + name) so the scope stays readable with it closed.
   const [railOpen, setRailOpen] = useState(false);
+  // The day panel's task inspector. The calendar reports the tap; the sheet is
+  // mounted HERE, in a transparent Modal, so it sits over the header chrome,
+  // the day panel and the tab bar — everything else in the app. Holding the id
+  // (not the task) keeps the sheet on the live row as edits land.
+  const [inspector, setInspector] = useState(null); // { id, date }
+  const inspectorTask = useMemo(
+    () => (inspector ? (tasks || []).find((t) => t && t.id === inspector.id) || null : null),
+    [inspector, tasks],
+  );
+  const closeInspector = useCallback(() => setInspector(null), []);
   // Pinterest-style chrome: the two header rows are an overlay that hides at
   // the scroll's own rate while content moves up and returns at the same
   // rate on the way down (a diff-clamp of the offset, not the offset itself).
@@ -2119,6 +2131,7 @@ export default function TasksScreen() {
           multiUser={multiUser}
           onTaskPress={openDetail}
           onTaskLongPress={openEditForm}
+          onInspectTask={(task, dateStr) => setInspector({ id: task.id, date: dateStr || null })}
           onToggleComplete={handleToggleComplete}
           onUpdateTask={handleUpdateTask}
           onDeleteTask={deleteTask}
@@ -2686,6 +2699,42 @@ export default function TasksScreen() {
           }}
           onSelect={(name) => { setSelectedProject(name); setShowProjectManager(false); }}
         />
+      )}
+
+      {/* The day panel's inspector, in a transparent Modal so it covers the
+          tab bar as well — the one overlay on this screen that has to sit
+          above everything. Its own date / time pickers are Modals NESTED in
+          its tree (not siblings of this one), which iOS presents fine. */}
+      {!!inspectorTask && (
+        <Modal
+          visible
+          transparent
+          animationType="none"
+          statusBarTranslucent
+          onRequestClose={closeInspector}
+          supportedOrientations={['portrait', 'landscape']}
+        >
+          <TaskInspectorSheet
+            task={inspectorTask}
+            onClose={closeInspector}
+            onUpdateTask={handleUpdateTask}
+            onToggleComplete={handleToggleComplete}
+            onDeleteTask={deleteTask}
+            // The tap came from one day's occurrence — tick THAT day.
+            contextDate={inspector?.date || null}
+            // On a shared calendar, name the co-owner so a move can offer to
+            // tell them.
+            notifyTargetName={multiUser ? (inspectorTask.ownerName || null) : null}
+            boards={projects}
+            colorOf={getProjectColor}
+            use24h={timeFormat === '24h'}
+            // Nothing of the app shows under this sheet, so its footer only
+            // has to clear the home indicator.
+            bottomInset={insets.bottom}
+            theme={theme}
+            onOpenFull={() => { closeInspector(); openEditForm(inspectorTask); }}
+          />
+        </Modal>
       )}
     </View>
   );
