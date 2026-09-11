@@ -2110,6 +2110,8 @@ export default function TasksScreen() {
           onTaskLongPress={openEditForm}
           onToggleComplete={handleToggleComplete}
           onUpdateTask={handleUpdateTask}
+          onDeleteTask={deleteTask}
+          projects={projects}
           onAddTask={(title, project, dueDate, time, extras) => {
             // `time` is the fourth argument — set when the user
             // long-pressed a slot on the day calendar grid. Null for

@@ -48,8 +48,8 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { BlurView } from 'expo-blur';
 import { blurProps, frostOverlayColor, frostBorderColor } from '../../../utils/frostedChat';
 import { useTheme } from '../../../context/ThemeContext';
-import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters, matchesRecurrence, isOccurrenceCompleted, parseLocalYMD } from '../utils/taskHelpers';
-import { TaskQuickInspector } from './TaskQuickInspector';
+import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters, matchesRecurrence, isOccurrenceCompleted, parseLocalYMD, boardLabel } from '../utils/taskHelpers';
+import TaskInspectorSheet from './TaskInspectorSheet';
 import ScheduleCard, { clockLabel, buildCondensedRows } from './ScheduleCard';
 import { HatchBackdrop } from './HatchBackdrop';
 import { TaskSectionFrontier, DAY_SECTION_FIRST_PAINT } from './TaskSectionFrontier';
@@ -790,9 +790,10 @@ const DayPane = React.memo(function DayPane({
         {/* Add Task — active pane shows the live input; others a placeholder. */}
         {isActive && isAddingTask ? (
           <View style={styles.addTaskContainer}>
+            <Icon name="magnify" size={18} color={theme.colors.textTertiary} style={{ marginRight: 8 }} />
             <TextInput
               style={styles.addTaskInput}
-              placeholder={pendingTime ? `New task at ${formatTimeLabel(pendingTime, use24h)}` : 'Add a new task'}
+              placeholder={pendingTime ? `New task at ${formatTimeLabel(pendingTime, use24h)}` : 'Search or add a task…'}
               placeholderTextColor={theme.colors.textPlaceholder}
               value={newTaskTitle}
               onChangeText={onChangeNewTaskTitle}
@@ -800,7 +801,8 @@ const DayPane = React.memo(function DayPane({
               autoFocus
               blurOnSubmit={false}
               returnKeyType="done"
-              onBlur={() => setTimeout(onCancelAdd, 200)}
+              accessibilityLabel="Search or add a task"
+              testID="day-finder-input"
             />
             {/* Time slot. With a pending time the pill shows it and TAPS open
                 the wheel picker to fine-tune it (× clears). With no time yet, a
@@ -847,132 +849,77 @@ const DayPane = React.memo(function DayPane({
           </View>
         ) : null}
 
-        {/* Re-add suggestions — existing tasks matching the typed title.
-            Tapping one creates a fresh task on this day, copying the
-            original's description + tags + subtasks (reset to incomplete). */}
-        {isActive && isAddingTask && titleSuggestions.length > 0 && (
-          <View style={styles.suggestionList}>
-            {titleSuggestions.map((s) => {
-              const subCount = Array.isArray(s.subtasks) ? s.subtasks.length : 0;
-              const metaParts = [];
-              if (s.project) metaParts.push(s.project);
-              if (subCount > 0) metaParts.push(`${subCount} subtask${subCount > 1 ? 's' : ''}`);
+        {/* The finder's results: what you typed either MATCHES existing tasks
+            (tap opens one; the + re-adds a copy on this day) or CREATES a new
+            task on this day (the dashed row on top, also Return). */}
+        {isActive && isAddingTask && newTaskTitle.trim().length > 0 && (
+          <View style={styles.finderResults}>
+            {!searchResults.some((r) => (r.title || '').trim().toLowerCase() === newTaskTitle.trim().toLowerCase()) && (
+              <TouchableOpacity
+                style={styles.finderCreate}
+                onPressIn={() => tapHaptic()}
+                onPress={onSubmitAddTask}
+                activeOpacity={0.6}
+                accessibilityRole="button"
+                accessibilityLabel={`Create task ${newTaskTitle.trim()}`}
+                testID="day-finder-create"
+              >
+                <View style={styles.finderCreateIcon}>
+                  <Icon name="plus" size={16} color={theme.colors.textPrimary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.finderCreateTitle} numberOfLines={1}>Create "{newTaskTitle.trim()}"</Text>
+                  <Text style={styles.finderCreateCaption} numberOfLines={1}>
+                    {isViewingToday ? 'today' : formatDueDate(dayStr)}{pendingTime ? ` · ${formatTimeLabel(pendingTime, use24h)}` : ''}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
+            {searchResults.length > 0 && (
+              <Text style={styles.searchResultsTitle}>
+                {searchResults.length} matching · tap to open · + re-adds here
+              </Text>
+            )}
+            {searchResults.map(task => {
+              const overdue = !task.completed && isOverdue(task.dueDate);
               return (
-                <TouchableOpacity
-                  key={s.id}
-                  style={styles.suggestionRow}
-                  activeOpacity={0.7}
-                  onPress={() => onPickSuggestion?.(s)}
-                >
-                  <Icon
-                    name={s.completed ? 'check-circle' : 'history'}
-                    size={16}
-                    color={s.completed ? theme.colors.accentSuccess : theme.colors.accentInfo}
-                  />
-                  <View style={styles.suggestionTextWrap}>
-                    <Text style={styles.suggestionTitle} numberOfLines={1}>{s.title}</Text>
-                    {metaParts.length > 0 && (
-                      <Text style={styles.suggestionMeta} numberOfLines={1}>
-                        {(s.completed ? 'Completed' : 'Pending') + ' · ' + metaParts.join(' · ')}
+                <View key={task.id} style={styles.searchResultItem}>
+                  <TouchableOpacity
+                    style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                    onPress={() => onOpenSearchResult(task)}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open ${task.title}`}
+                  >
+                    <Icon
+                      name={task.completed ? 'check-circle' : (task.dueDate ? 'calendar' : 'calendar-blank-outline')}
+                      size={16}
+                      color={task.completed ? theme.colors.accentSuccess : (overdue ? theme.colors.accentError : theme.colors.textTertiary)}
+                      style={styles.resultIcon}
+                    />
+                    <View style={styles.resultContent}>
+                      <Text style={[styles.resultTitle, task.completed && styles.taskTitleCompleted]} numberOfLines={1}>{task.title}</Text>
+                      <Text style={[styles.resultMeta, overdue && { color: theme.colors.accentError }]} numberOfLines={1}>
+                        {[task.project ? boardLabel(task.project) : null, task.dueDate ? `Due ${formatDueDate(task.dueDate)}${task.time ? ` · ${formatTimeLabel(task.time, use24h)}` : ''}` : 'No due date'].filter(Boolean).join(' · ')}
                       </Text>
-                    )}
-                  </View>
-                  <Icon name="plus" size={16} color={theme.colors.textTertiary} />
-                </TouchableOpacity>
+                    </View>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPressIn={() => tapHaptic()}
+                    onPress={() => onPickSuggestion?.(task)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Re-add ${task.title} on this day`}
+                    style={styles.finderReadd}
+                  >
+                    <Icon name="plus" size={18} color={theme.colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
               );
             })}
           </View>
         )}
 
-        {!isActive || !isAddingTask ? (
-          <TouchableOpacity
-            style={styles.addTaskPlaceholder}
-            onPress={onOpenAddTask}
-            activeOpacity={0.7}
-          >
-            <View style={styles.addTaskInputBox} pointerEvents="none">
-              <Text style={styles.addTaskPlaceholderText}>Add a new task</Text>
-            </View>
-          </TouchableOpacity>
-        ) : null}
-
-        {/* Search */}
-        {isActive && isSearching ? (
-          <View style={styles.searchContainer}>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search tasks..."
-              placeholderTextColor={theme.colors.textPlaceholder}
-              value={searchQuery}
-              onChangeText={onChangeSearchQuery}
-              autoFocus
-            />
-            <TouchableOpacity
-              style={styles.searchClose}
-              onPress={onCloseSearch}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Icon name="close" size={18} color={theme.colors.textTertiary} />
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity
-            style={styles.searchPlaceholder}
-            onPress={onOpenSearch}
-            activeOpacity={0.7}
-          >
-            <View style={styles.searchInputBox} pointerEvents="none">
-              <Icon name="magnify" size={16} color={theme.colors.textPlaceholder} style={styles.searchIcon} />
-              <Text style={styles.searchPlaceholderText}>Search tasks</Text>
-            </View>
-          </TouchableOpacity>
-        )}
-
-        {/* Search Results */}
-        {isActive && isSearching && searchQuery.trim() && (
-          <View style={styles.searchResults}>
-            {searchResults.length > 0 ? (
-              <>
-                <Text style={styles.searchResultsTitle}>
-                  {searchResults.length} {searchResults.length === 1 ? 'task' : 'tasks'} · tap to open
-                </Text>
-                {searchResults.map(task => {
-                  const overdue = !task.completed && isOverdue(task.dueDate);
-                  return (
-                    <TouchableOpacity
-                      key={task.id}
-                      style={styles.searchResultItem}
-                      onPress={() => onOpenSearchResult(task)}
-                    >
-                      <Icon
-                        name={task.dueDate ? 'calendar' : 'calendar-blank-outline'}
-                        size={16}
-                        color={overdue ? theme.colors.accentError : (task.dueDate ? theme.colors.accentSuccess : theme.colors.textTertiary)}
-                        style={styles.resultIcon}
-                      />
-                      <View style={styles.resultContent}>
-                        <Text
-                          style={[styles.resultTitle, task.completed && styles.taskTitleCompleted]}
-                          numberOfLines={1}
-                        >
-                          {task.title}
-                        </Text>
-                        <Text style={[styles.resultMeta, overdue && { color: theme.colors.accentError }]}>
-                          {task.dueDate
-                            ? `Due ${formatDueDate(task.dueDate)}${task.time ? ` · ${formatTimeLabel(task.time, use24h)}` : ''}`
-                            : 'No due date'}
-                        </Text>
-                      </View>
-                      <Icon name="chevron-right" size={18} color={theme.colors.textTertiary} />
-                    </TouchableOpacity>
-                  );
-                })}
-              </>
-            ) : (
-              <Text style={styles.noResultsText}>No tasks found</Text>
-            )}
-          </View>
-        )}
 
         {/* Events & Birthdays for this day — always-visible strip with the
             occasion colour + icon. Tap to open/edit, just like a task. */}
@@ -1627,6 +1574,10 @@ export const CalendarView = ({
   multiUser,
   onAddTask,
   onUpdateTask,
+  // (taskId) => void — the inspector's Delete.
+  onDeleteTask,
+  // The board names, for the inspector's board keys.
+  projects = [],
   refreshing,
   onRefresh,
   onDateChange,
@@ -2472,7 +2423,7 @@ export const CalendarView = ({
   // find any task and see when it's due. Sorted soonest-due first
   // (undated last); tapping a result opens the task.
   const searchResults = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
+    const query = newTaskTitle.trim().toLowerCase();
     if (!query) return [];
 
     return filteredTasks
@@ -2488,15 +2439,16 @@ export const CalendarView = ({
         return 0;
       })
       .slice(0, 25);
-  }, [searchQuery, filteredTasks]);
+  }, [newTaskTitle, filteredTasks]);
 
   // Open a search result for viewing/editing (where the due date can
   // also be changed). Replaces the old tap-to-reassign behaviour so the
   // search reads as a lookup, not a scheduling shortcut.
   const handleOpenSearchResult = useCallback((task) => {
     onTaskPress?.(task);
-    setIsSearching(false);
-    setSearchQuery('');
+    setIsAddingTask(false);
+    setNewTaskTitle('');
+    setPendingTime(null);
   }, [onTaskPress]);
 
   // Render one day page of the horizontal pager. The active page (its date
@@ -2700,12 +2652,10 @@ export const CalendarView = ({
             <View style={styles.grabHandle} />
           </View>
           <View style={styles.taskListHeaderContent}>
-            {/* "Task Schedule" large, the date small and light on the same
-                baseline — nothing else in the header. */}
-            <View style={styles.titleRow}>
-              <Text style={styles.taskListTitle} numberOfLines={1}>{taskTitle}</Text>
-              <Text style={styles.dateSubtitle} numberOfLines={1}>{taskSubtitle}</Text>
-            </View>
+            {/* "Task Schedule" large and legible; the day beneath it as a
+                clear subtitle — nothing else in the header. */}
+            <Text style={styles.taskListTitle} numberOfLines={1}>{taskTitle}</Text>
+            <Text style={styles.dateSubtitle} numberOfLines={1}>{taskSubtitle}</Text>
           </View>
           <View style={styles.taskListHeaderRight}>
             {onCreateForDate && (
@@ -2723,6 +2673,21 @@ export const CalendarView = ({
                 <Icon name="plus" size={27} color={theme.colors.background} />
               </TouchableOpacity>
             )}
+            {/* The search key under the +: opens the finder — one field that
+                searches every task and creates one when nothing matches. */}
+            <TouchableOpacity
+              style={[styles.headerSearchKey, isAddingTask && styles.headerSearchKeyLit]}
+              onPressIn={() => tapHaptic()}
+              onPress={(e) => { e.stopPropagation(); if (isAddingTask) handleCancelAdd(); else openAddTask(); }}
+              hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: isAddingTask }}
+              accessibilityLabel={isAddingTask ? 'Close search' : 'Search or add a task'}
+              testID="day-finder-key"
+            >
+              <Icon name={isAddingTask ? 'close' : 'magnify'} size={18} color={isAddingTask ? theme.colors.background : theme.colors.textPrimary} />
+            </TouchableOpacity>
           </View>
         </TouchableOpacity>
         </GestureDetector>
@@ -2825,27 +2790,31 @@ export const CalendarView = ({
       {/* Minimal quick inspector — slides up when a task block in the hour grid
           is tapped. Rename + change time/date inline (autosaves); "Edit details"
           hands off to the full form. */}
-      <TaskQuickInspector
-        task={inspectorTask}
-        visible={!!inspectorTaskId}
-        onClose={closeInspector}
-        onUpdateTask={onUpdateTask}
-        onToggleComplete={onToggleComplete}
-        // The inspector opens from a day pane's block — its toggle must tick
-        // THAT day's occurrence, and its circle reflect that day's state.
-        contextDate={toDateString(selectedDate)}
-        // On a shared/multi-user calendar, surface the co-owner's name so the
-        // reschedule flow can offer to notify them. onNotifyReschedule does the
-        // actual send (wired by the parent); absent → the prompt's "Notify" is
-        // a no-op until a delivery channel is wired.
-        notifyTargetName={multiUser ? (inspectorTask?.ownerName || null) : null}
-        onNotifyReschedule={onNotifyReschedule}
-        onOpenFull={() => {
-          const t = inspectorTask;
-          setInspectorTaskId(null);
-          if (t) onTaskLongPress?.(t);
-        }}
-      />
+      {!!inspectorTask && (
+        <TaskInspectorSheet
+          task={inspectorTask}
+          onClose={closeInspector}
+          onUpdateTask={onUpdateTask}
+          onToggleComplete={onToggleComplete}
+          onDeleteTask={onDeleteTask}
+          // The inspector opens from a day pane's block — its toggle must tick
+          // THAT day's occurrence, and its ring reflect that day's state.
+          contextDate={toDateString(selectedDate)}
+          // On a shared calendar, surface the co-owner so a reschedule can
+          // offer to notify them (onNotifyReschedule sends; absent = no-op).
+          notifyTargetName={multiUser ? (inspectorTask?.ownerName || null) : null}
+          onNotifyReschedule={onNotifyReschedule}
+          boards={projects}
+          colorOf={getProjectColor}
+          use24h={use24h}
+          theme={theme}
+          onOpenFull={() => {
+            const t = inspectorTask;
+            setInspectorTaskId(null);
+            if (t) onTaskLongPress?.(t);
+          }}
+        />
+      )}
 
       {/* Wheel time picker — opened by tapping the time pill on the add-task
           row (the drop-to-create flow). Sets / clears the pending time slot. */}
@@ -3281,9 +3250,25 @@ const createStyles = (theme) => StyleSheet.create({
   taskListHeaderContent: {
     flex: 1,
   },
+  // The header's right column: the + key with the search key beneath it.
   taskListHeaderRight: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
+    gap: 8,
+  },
+  headerSearchKey: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: theme.colors.borderStrong || theme.colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 6,
+  },
+  headerSearchKeyLit: {
+    backgroundColor: theme.colors.textPrimary,
+    borderColor: theme.colors.textPrimary,
   },
   // White "+" add button on the header's right edge — a CIRCLE with a solid
   // primary-ink fill and a background-coloured "+" cut-out. Proportioned to the
@@ -3315,22 +3300,17 @@ const createStyles = (theme) => StyleSheet.create({
     color: '#64B5F6', // Light blue
   },
   taskListTitle: {
-    fontSize: 26,
-    fontWeight: '600',
-    letterSpacing: -0.4,
+    fontSize: 30,
+    fontWeight: '700',
+    letterSpacing: -0.6,
     color: theme.colors.textPrimary,
   },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-  },
+  // The day, on its own line under the title — clear, not faint.
   dateSubtitle: {
-    fontSize: 12,
-    fontWeight: '300',
-    color: theme.colors.textPrimary,
-    opacity: 0.5,
-    marginLeft: 10,
-    flexShrink: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    color: theme.colors.textSecondary,
+    marginTop: 2,
   },
   // "{N} Tasks" — hairline-thin weight ('200' renders reliably thin on both
   // iOS + Android, unlike '100' which falls back to regular on Android).
@@ -3929,6 +3909,50 @@ const createStyles = (theme) => StyleSheet.create({
   searchPlaceholderText: {
     fontSize: theme.typography.body,
     color: theme.colors.textPlaceholder,
+  },
+  // The finder's result list (below the one field).
+  finderResults: {
+    marginTop: 8,
+  },
+  finderCreate: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: theme.colors.borderStrong || theme.colors.border,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+  },
+  finderCreateIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: theme.colors.borderStrong || theme.colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  finderCreateTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
+  },
+  finderCreateCaption: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+    color: theme.colors.textTertiary,
+    marginTop: 1,
+  },
+  finderReadd: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   searchResults: {
     marginHorizontal: 16,
