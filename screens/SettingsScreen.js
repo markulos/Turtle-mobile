@@ -36,6 +36,7 @@ import { tapHaptic, impactHaptic, notifyHaptic } from '../utils/haptics';
 import { isGestureProbeEnabled, setGestureProbeEnabled, subscribeDebugSettings } from '../utils/debugSettings';
 import { matchesQuery } from '../utils/settingsSearch';
 import { useVaultUploadActions } from '../context/VaultUploadContext';
+import { useOfflineMedia } from '../context/OfflineMediaContext';
 import { getAutoUploadSettings, setAutoUploadEnabled, runAutoUpload } from '../services/cameraRollAutoUpload';
 import PondInvitesSection from '../components/PondInvitesSection';
 
@@ -66,6 +67,7 @@ const SETTING_TERMS = {
   hideVault: 'hide vault button navbar tab bar navigation photos',
   autoUpload: 'auto upload camera roll new photos videos background sync vault automatic icloud',
   cache: 'cache size storage space photos clear free disk measure',
+  offline: 'offline saved photos kept downloaded plane no signal remove free space',
   notifications: 'notifications push alerts reminders test sms text badge sound',
   gestureProbe: 'gesture probe debug developer performance lag jank stalls diagnostics',
   timeFormat: '24 hour time format clock twelve twenty four am pm military',
@@ -208,6 +210,9 @@ export default function SettingsScreen({ active = true }) {
   // null = not yet measured / measuring; number = bytes currently cached.
   const [cacheBytes, setCacheBytes] = useState(null);
   const [measuringCache, setMeasuringCache] = useState(false);
+  // Saved-offline pictures: already measured by the provider (it holds the
+  // index), so unlike the cache there's nothing to walk here.
+  const { bytes: offlineBytes, count: offlineCount, clearAll: clearOffline } = useOfflineMedia();
   const [activeTab, setActiveTab] = useState('general');
   // ── Settings search ─────────────────────────────────────────
   // Filters in place rather than offering a jump list: the point is to see the
@@ -582,6 +587,20 @@ export default function SettingsScreen({ active = true }) {
       measureCache();
     }
   }, [activeTab, cacheBytes, measuringCache, measureCache]);
+
+  // Saved-offline pictures. Confirmed, because unlike the cache these cannot
+  // come back on their own — the phone may well be the only place they are
+  // reachable from right now.
+  const handleClearOffline = useCallback(() => {
+    Alert.alert(
+      'Remove offline pictures',
+      `${offlineCount === 1 ? 'This picture' : `All ${offlineCount} pictures`} will be removed from this phone. They stay in your pond and can be saved again.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: () => { clearOffline(); } },
+      ],
+    );
+  }, [offlineCount, clearOffline]);
 
   const handleClearCache = useCallback(async () => {
     if (isClearingCache) return;
@@ -1022,6 +1041,37 @@ export default function SettingsScreen({ active = true }) {
                 <Text style={styles.secondaryButtonText}>
                   {isClearingCache ? 'Clearing...' : 'Clear photo cache'}
                 </Text>
+              </TouchableOpacity>
+              </SettingsItem>
+
+              {/* Saved-offline pictures are the deliberate opposite of the
+                  cache above: nothing trims them, so this is the only place
+                  their weight is visible and the only way to get it back. */}
+              <SettingsItem terms={SETTING_TERMS.offline}>
+              <Text style={styles.hint}>
+                Pictures you saved for offline stay on this phone until you remove them — the cache
+                sweep above never touches them. Save one from the photo viewer's cloud button.
+              </Text>
+
+              <View style={styles.cacheSizeRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Saved for offline</Text>
+                  <Text style={styles.settingDescription}>
+                    {offlineCount === 1 ? '1 picture' : `${offlineCount} pictures`}
+                  </Text>
+                </View>
+                <Text style={styles.cacheSizeValue}>{formatBytes(offlineBytes)}</Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.secondaryButton, { marginBottom: 0 }, !offlineCount && styles.buttonDisabled]}
+                onPressIn={() => notifyHaptic('warning')}
+                onPress={handleClearOffline}
+                disabled={!offlineCount}
+                activeOpacity={0.7}
+              >
+                <Icon name="cloud-off-outline" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
+                <Text style={styles.secondaryButtonText}>Remove offline pictures</Text>
               </TouchableOpacity>
               </SettingsItem>
             </SettingsSection>

@@ -38,6 +38,7 @@ import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 
 import { useMusicPlayer } from '../../../../context/MusicPlayerContext';
+import { useOfflineMedia } from '../../../../context/OfflineMediaContext';
 import { dismissScale, pageTranslate } from '../../../../utils/viewerGestureMath';
 import { containSize } from '../../../../utils/zoomMath';
 import { useHdReady, useIsActive } from './stores';
@@ -111,7 +112,12 @@ function useMediaStyle(sv) {
 // ── Photo ────────────────────────────────────────────────────────────────────
 const PhotoBody = React.memo(({ item, hdStore, getFullUrl, onAspect }) => {
   const hdReady = useHdReady(hdStore, item.id);
+  const { uriFor } = useOfflineMedia();
   const hasMetaAspect = item.width > 0 && item.height > 0;
+  // A picture the user kept: read the local file and nothing else. These are
+  // the display tier's own bytes, so this is the same picture the HD path
+  // would have fetched — it just doesn't need the pond to be reachable.
+  const offlineUri = uriFor(item.id);
 
   // Fast source: compressed > thumbnail > raw. Thumbnail before raw on purpose
   // — on tunnel mode or unmigrated rows the raw can be a 25MB HEIC, and
@@ -126,7 +132,7 @@ const PhotoBody = React.memo(({ item, hdStore, getFullUrl, onAspect }) => {
   // manager has already prefetched these exact bytes into the disk cache, so
   // this swap decodes from disk — never a cold network fetch on a view.
   const displayUri = getFullUrl(`/api/media/display/${item.id}`);
-  const uri = hdReady ? displayUri : fastUri;
+  const uri = offlineUri || (hdReady ? displayUri : fastUri);
 
   const handleLoad = useCallback((e) => {
     if (hasMetaAspect || !onAspect) return;

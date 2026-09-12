@@ -56,6 +56,7 @@ import { CommandBusProvider } from './context/CommandBusContext';
 import { OpenTargetProvider } from './context/OpenTargetContext';
 import { CelebrationProvider } from './context/CelebrationContext';
 import { DownloadsProvider } from './context/DownloadsContext';
+import { OfflineMediaProvider } from './context/OfflineMediaContext';
 import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
@@ -474,6 +475,10 @@ export default function App() {
                     app-level, so screen/share-sheet unmounts never stop them. */}
                 <ShareUploadProvider>
                   <VaultUploadProvider>
+                  {/* Which pictures are kept on the phone. App-level because
+                      both the viewer's Save button and the page that paints
+                      the picture read it, and Settings reports its size. */}
+                  <OfflineMediaProvider>
                   <DownloadsProvider>
                   <MusicPlayerProvider>
                   <VaultProvider>
@@ -529,6 +534,7 @@ export default function App() {
                   </VaultProvider>
                   </MusicPlayerProvider>
                   </DownloadsProvider>
+                  </OfflineMediaProvider>
                   </VaultUploadProvider>
                 </ShareUploadProvider>
               </AuthProvider>

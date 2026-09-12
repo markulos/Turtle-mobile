@@ -88,6 +88,16 @@ repo skill (loaded before any UI work) and by review.
   action AND its state ("Remove from favourites", "Pause").
 - Overlays that must not eat swipes are `pointerEvents="box-none"` while shown and `"none"` while
   hidden; only their buttons are targets.
+- A toggle that does ASYNC work (the viewer's Save-for-offline key) keeps ONE 44 × 44 footprint across
+  all three of its states — idle icon, spinner, done icon — so the row it sits in cannot reflow
+  mid-action and move the next button under a second tap. Saved state reads as a colour + a changed
+  glyph (`cloud-download-outline` → `cloud-check` in #34d399), the way a favourite goes red.
+- SAVED-OFFLINE pictures (`services/offlineMedia`, `context/OfflineMediaContext`) are NOT cache. They
+  live under `documentDirectory`, which `utils/cacheManager` never walks, so no sweep and no "Clear
+  photo cache" can take them; only the user can, from the viewer's key or Settings → Storage. The
+  index stores the file NAME and rebuilds the absolute uri per read — an iOS container path moves
+  between installs, and a persisted `file:///` uri would rot. What is saved is the DISPLAY tier, the
+  same ~1600 px JPEG the viewer paints at HD, so the offline picture is the online one.
 
 ## 4. Sheets and overlays
 

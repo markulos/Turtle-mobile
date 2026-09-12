@@ -20,7 +20,7 @@
  * flush gate); the callbacks are MediaGallery's optimistic actions.
  */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Dimensions, Modal, PixelRatio, StatusBar, StyleSheet } from 'react-native';
+import { Alert, Dimensions, Modal, PixelRatio, StatusBar, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
@@ -39,6 +39,7 @@ import {
   dismissBackdrop,
 } from '../../../../utils/viewerGestureMath';
 import { MAX_SCALE, nativeMaxScale } from '../../../../utils/zoomMath';
+import { useOfflineMedia } from '../../../../context/OfflineMediaContext';
 import DetailsSheet from './DetailsSheet';
 import TagsSheet from './TagsSheet';
 import ViewerChrome from './ViewerChrome';
@@ -112,6 +113,7 @@ export default function PhotoViewer({
   children,
 }) {
   const sv = useStageValues(WIN_W, WIN_H);
+  const offline = useOfflineMedia();
   const list = items || [];
   const count = list.length;
 
@@ -321,6 +323,23 @@ export default function PhotoViewer({
   const handleEdit = useCallback(() => { if (activeItem) onEditImage?.(activeItem); }, [activeItem, onEditImage]);
   const handleTags = useCallback(() => { setDetailsOpen(false); setTagsOpen(true); }, []);
   const handleShare = useCallback(() => { if (activeItem) onShare?.(activeItem); }, [activeItem, onShare]);
+
+  /**
+   * Keep / unkeep this picture.
+   *
+   * The DISPLAY tier is what gets saved, not the original: it is the exact
+   * ~1600px JPEG this viewer already paints at HD, so the offline copy renders
+   * identically to the online one and a 25 MB HEIC original doesn't buy a
+   * phone-screen view anything. (Saving originals instead is a one-line change
+   * here — `rawUrl || url` — if that's ever the call.)
+   */
+  const handleToggleOffline = useCallback(async () => {
+    const item = activeItem;
+    if (!item?.id) return;
+    if (offline.isSaved(item.id)) { await offline.remove(item.id); return; }
+    const ok = await offline.save(item, getFullUrl(`/api/media/display/${item.id}`));
+    if (!ok) Alert.alert('Not saved', 'Could not save this picture for offline. Check the connection to your pond and try again.');
+  }, [activeItem, offline, getFullUrl]);
   const handleFavourite = useCallback(() => { if (activeItem) onToggleFavourite?.(activeItem); }, [activeItem, onToggleFavourite]);
   const handleTogglePlay = useCallback(() => { videoControlsRef.current?.togglePlay?.(); }, []);
   const handleToggleMute = useCallback(() => { videoControlsRef.current?.toggleMute?.(); }, []);
@@ -354,6 +373,10 @@ export default function PhotoViewer({
     }
     return out;
   }, [list, count, safeIndex, sv, activeStore, hdStore, getFullUrl, handleAspect, handleVideoControls, handleVideoState]);
+
+  const offlineState = activeItem?.id
+    ? (offline.isBusy(activeItem.id) ? 'saving' : (offline.isSaved(activeItem.id) ? 'saved' : 'none'))
+    : 'none';
 
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: sv.openProgress.value * dismissBackdrop(sv.dragY.value, sv.height),
@@ -397,6 +420,8 @@ export default function PhotoViewer({
           onTags={handleTags}
           onShare={handleShare}
           onToggleFavourite={handleFavourite}
+          offlineState={offlineState}
+          onToggleOffline={offline.enabled ? handleToggleOffline : null}
           video={activeItem?.type === 'video' ? videoState : null}
           onTogglePlay={handleTogglePlay}
           onToggleMute={handleToggleMute}
