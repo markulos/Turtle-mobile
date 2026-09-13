@@ -59,7 +59,7 @@ const renderPage = async (overrides = {}) => {
 describe('PhotoVaultBoardsPage', () => {
   test('keeps search and add directly visible and delegates input', async () => {
     const { props, view } = await renderPage();
-    await fireEvent.changeText(view.getByPlaceholderText('Search your boards'), 'warm');
+    await fireEvent.changeText(view.getByLabelText('Search your boards'), 'warm');
     const addButton = view.getByLabelText('Add photos to a board');
     await fireEvent.press(addButton);
 
@@ -92,7 +92,7 @@ describe('PhotoVaultBoardsPage', () => {
   test('uses standard incremental-search input and keyboard behaviour', async () => {
     const ref = React.createRef();
     const { view } = await renderPage({ ref });
-    const input = view.getByPlaceholderText('Search your boards');
+    const input = view.getByLabelText('Search your boards');
     const list = ref.current;
 
     expect(input.props.autoCorrect).toBe(false);
@@ -119,24 +119,55 @@ describe('PhotoVaultBoardsPage', () => {
     expect(props.onQueryChange).toHaveBeenCalledWith('');
   });
 
-  test('pins All Photos above the grid, outside search and sort', async () => {
+  test('pins All Photos above the grid while not searching', async () => {
     const onOpenAllPhotos = jest.fn();
     const allPhotos = { name: 'All Photos', covers: [], count: 12480, metadata: '12480 items' };
-    // A query that matches no user board: the pinned card must survive it,
-    // because it is a fixed entry point rather than a search result.
-    const { view } = await renderPage({ allPhotos, onOpenAllPhotos, boards: [], query: 'zzz' });
+    const { view } = await renderPage({ allPhotos, onOpenAllPhotos });
 
     const card = view.getByLabelText(/^All Photos, 12480 items/);
     expect(card).toBeTruthy();
-    expect(view.getByText('No boards match “zzz”.')).toBeTruthy();
 
     await fireEvent.press(card);
     expect(onOpenAllPhotos).toHaveBeenCalledWith('All Photos');
   });
 
+  test('takes All Photos away while searching — it is not a result', async () => {
+    const allPhotos = { name: 'All Photos', covers: [], count: 12480, metadata: '12480 items' };
+    // Pinned during a search it sat above the matches pretending to be one,
+    // and matched every query precisely because it was never filtered.
+    const { view } = await renderPage({ allPhotos, boards: [], query: 'zzz' });
+
+    expect(view.queryByLabelText(/^All Photos/)).toBeNull();
+    expect(view.getByText('No boards match “zzz”.')).toBeTruthy();
+  });
+
   test('omits the All Photos card when the caller supplies none', async () => {
     const { view } = await renderPage();
     expect(view.queryByLabelText(/^All Photos/)).toBeNull();
+  });
+
+  test('the placeholder is our own Text, and it leaves as soon as there is a query', async () => {
+    // NOT the TextInput's `placeholder` prop: iOS drew that one with wide
+    // tracking under Figtree. A plain Text is the same pipeline as every other
+    // label on the page, so it cannot pick up the artefact.
+    const empty = await renderPage();
+    const input = empty.view.getByLabelText('Search your boards');
+    expect(input.props.placeholder).toBeUndefined();
+
+    const placeholder = empty.view.getByTestId('board-search-placeholder');
+    expect(placeholder.props.children).toBe('Search your boards');
+    // Invisible to touch and to a screen reader — the field already carries
+    // the label, and a second copy would be read twice.
+    expect(placeholder.props.pointerEvents).toBe('none');
+    expect(placeholder.props.accessible).toBe(false);
+    // Same size as the text it stands in for, centred on the field's height.
+    const style = StyleSheet.flatten(placeholder.props.style);
+    expect(style.fontSize).toBe(15);
+    expect(style.lineHeight).toBe(38);
+    expect(style.letterSpacing).toBeUndefined();
+
+    const typed = await renderPage({ query: 'warm' });
+    expect(typed.view.queryByTestId('board-search-placeholder')).toBeNull();
   });
 
   test('renders sort chips in a horizontal non-wrapping scroller', async () => {

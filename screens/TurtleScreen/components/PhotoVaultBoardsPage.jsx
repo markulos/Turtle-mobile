@@ -23,6 +23,9 @@ const SORTS = [
 // same 20px between columns, which lands each card at ~185pt.
 const EDGE_PAD = 7;
 const COLUMN_GAP = 7;
+// The search pill's height, shared by the field and by the placeholder's
+// lineHeight (which is how the placeholder centres itself over the input).
+const SEARCH_HEIGHT = 38;
 // Breathing room between the tab picker in the fixed header above and the
 // search field. `topInset` only clears the header's height, so without this the
 // search field sits flush against the tab underline.
@@ -87,12 +90,17 @@ const PhotoVaultBoardsPage = forwardRef(({
       <View style={styles.searchRow}>
         <View style={[styles.search, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
           <Icon name="magnify" size={21} color={theme.colors.textMuted} />
+          <View style={styles.inputWrap}>
           <TextInput
             ref={searchRef}
             value={query}
             onChangeText={onQueryChange}
-            placeholder="Search your boards"
-            placeholderTextColor={theme.colors.textMuted}
+            // NO `placeholder` prop: iOS builds the placeholder as its own
+            // attributed string and rendered it with wide tracking under the
+            // app's Figtree face — "S e a r c h  y o u r  b o a r…". Every
+            // plain <Text> on this screen is spaced correctly, so the
+            // placeholder is one too: same size, same face, same pipeline,
+            // sitting over the empty field and invisible to touch.
             accessibilityLabel="Search your boards"
             // Incremental search: filter as you type, never take the keyboard
             // away. Submitting is a no-op (blurOnSubmit=false) because results
@@ -106,6 +114,19 @@ const PhotoVaultBoardsPage = forwardRef(({
             clearButtonMode="never"
             style={[styles.searchInput, { color: theme.colors.textPrimary }]}
           />
+          {!query ? (
+            <Text
+              testID="board-search-placeholder"
+              pointerEvents="none"
+              accessible={false}
+              importantForAccessibility="no"
+              numberOfLines={1}
+              style={[styles.searchPlaceholder, { color: theme.colors.textMuted }]}
+            >
+              Search your boards
+            </Text>
+          ) : null}
+          </View>
           {query ? (
             <Pressable
               accessibilityRole="button"
@@ -177,11 +198,15 @@ const PhotoVaultBoardsPage = forwardRef(({
       )}
 
       {/* All Photos — the whole library as a board, pinned above the user's own.
-          Deliberately outside the grid data: it is never filtered by the search
-          field and never reordered by the sort chips, because it is a fixed
-          entry point rather than content. Full width so it reads as the parent
-          of the two-column boards below. */}
-      {allPhotos ? (
+          Deliberately outside the grid data: it is never reordered by the sort
+          chips, because it is a fixed entry point rather than content. Full
+          width so it reads as the parent of the two-column boards below.
+
+          It does go away WHILE SEARCHING, though. Pinned, it sat above the
+          results claiming to be one — a card that matches every query because
+          it was never filtered at all. During a search the only thing on the
+          page should be what matched. */}
+      {allPhotos && !query ? (
         <View style={styles.allPhotosSlot}>
           <PhotoVaultBoardCard
             board={allPhotos}
@@ -280,8 +305,15 @@ const styles = StyleSheet.create({
   // Reference: a 114px (38pt) hairline-bordered pill on a transparent fill —
   // not a filled surface. The search field reads as an outline, and the fill
   // comes from the page behind it.
-  search: { height: 38, flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: 19, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 },
+  search: { height: SEARCH_HEIGHT, flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: 19, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 },
+  // Holds the field and its placeholder in the same box, so the two are the
+  // same text in the same place — the placeholder just isn't editable.
+  inputWrap: { flex: 1, height: '100%' },
   searchInput: { flex: 1, fontSize: 15, height: '100%' },
+  // Centred by lineHeight rather than by flex: an absolutely positioned child
+  // ignores the parent's justifyContent, and matching the pill's height is
+  // what puts the one line on the field's own baseline.
+  searchPlaceholder: { position: 'absolute', left: 0, right: 0, top: 0, fontSize: 15, lineHeight: SEARCH_HEIGHT },
   clearSearch: { width: 44, height: 44, marginRight: -12, alignItems: 'center', justifyContent: 'center' },
   // A bare glyph in the reference, not a filled circle. Keeps a 44pt touch
   // target without drawing a button.

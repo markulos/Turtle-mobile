@@ -17,7 +17,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Animated, Pressable, ScrollView, Share, StyleSheet,
+  ActivityIndicator, Alert, Animated, Platform, Pressable, ScrollView, Share, StyleSheet,
   Switch, Text, TextInput, View,
 } from 'react-native';
 import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
@@ -237,7 +237,12 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
   const shareLink = useCallback(async (share) => {
     tapHaptic();
     try {
-      await Share.share({ message: share.url, url: share.url });
+      // ONE link, not two. iOS reads `url` as a first-class URL item and
+      // `message` as text — sending both puts the same link in the bubble
+      // twice, once as a rich preview and once as bare text. Android's sheet
+      // only reads `message`. (MediaGallery's single-item link share already
+      // splits it this way; this sheet was the one that didn't.)
+      await Share.share(Platform.OS === 'ios' ? { url: share.url } : { message: share.url });
     } catch { /* user dismissed the sheet */ }
   }, []);
 
