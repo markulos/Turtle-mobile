@@ -18,6 +18,7 @@ import {
   RefreshControl,
   Pressable,
   Animated,
+  AppState,
 } from 'react-native';
 import Reanimated, {
   useSharedValue,
@@ -1626,9 +1627,23 @@ export const CalendarView = ({
   // currentMonthIndex is the source of truth for "which month is on
   // screen". currentDate is derived from it so all the existing
   // .getMonth()/.getFullYear() reads keep working unchanged.
-  const [currentMonthIndex, setCurrentMonthIndex] = useState(TODAY_INDEX);
+  // Opens on TODAY'S month and TODAY'S date — derived when the view mounts,
+  // never from the module-load constants.
+  //
+  // MONTHS_LIST / DAYS_LIST are built once at module load and anchored to the
+  // day the JS bundle started. This app stays resident for days, so by the
+  // time the calendar is opened that anchor can be a different day — and
+  // `TODAY_INDEX` / `DAY_TODAY_INDEX` then point at the day the bundle loaded
+  // rather than today. `selectedDate` said today while the pager opened on the
+  // stale page: the highlight and the page disagreed. monthIndexOf/dayIndexOf
+  // measure against the list's own first entry, so they stay right however old
+  // the list is (and clamp, ±10 years / ±2.2 years, so they cannot fall off).
+  const [currentMonthIndex, setCurrentMonthIndex] = useState(() => monthIndexOf(new Date()));
   const currentDate = MONTHS_LIST[currentMonthIndex];
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  // The day pager's page at mount. Same reasoning; read once so the initial
+  // scroll index can never disagree with the initial selection.
+  const initialDayIndexRef = useRef(dayIndexOf(new Date()));
   // The strip is a CONTINUOUS sliding track of day cells under a FIXED centre
   // pill (see stripCenterIndex / windowDays / trackTranslateX below). Each cell is
   // absolutely positioned by its OWN day index and the track translates 1:1 with
@@ -2298,6 +2313,29 @@ export const CalendarView = ({
     scrollToMonth(monthIndexOf(new Date()));
   }, [scrollToMonth, jumpToDate]);
 
+  // Opening the calendar tomorrow must still open it on TOMORROW.
+  //
+  // Mounting anchors on today (see currentMonthIndex / selectedDate), but this
+  // view is not remounted for days — the phone is backgrounded, midnight
+  // passes, and coming back the grid is still sitting on yesterday with
+  // yesterday highlighted. On return to the foreground, if the calendar DAY
+  // has actually moved on, re-anchor exactly as the Today key does.
+  //
+  // Guarded on the day changing, not on every foreground: someone who browsed
+  // to October, answered a message and came back should find October where
+  // they left it.
+  const anchoredDayRef = useRef(toDateString(new Date()));
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      const today = toDateString(new Date());
+      if (today === anchoredDayRef.current) return;
+      anchoredDayRef.current = today;
+      goToToday();
+    });
+    return () => sub?.remove();
+  }, [goToToday]);
+
   // FlatList per-item layout. With every month at exactly `monthH`,
   // this lets initialScrollIndex jump straight to today without measuring.
   const getItemLayout = useCallback((_, index) => ({
@@ -2426,12 +2464,23 @@ export const CalendarView = ({
 
   // The finder's "Full form": hand the day to the create form (events,
   // birthdays, every field) and close the finder.
+  /**
+   * "Full form" carries the work already done in the finder.
+   *
+   * Whatever has been typed, and the time chip if one was set, go with it —
+   * the full form is meant to be the SAME task with more fields, not a blank
+   * one. (This used to clear both and hand over only the date, so anyone who
+   * typed a title and then wanted a board or a note retyped it.) The finder is
+   * cleared after the values are read, not before.
+   */
   const openFullCreate = useCallback(() => {
+    const title = newTaskTitle.trim();
+    const time = pendingTime;
     setIsAddingTask(false);
     setNewTaskTitle('');
     setPendingTime(null);
-    onCreateForDate?.(toDateString(selectedDateRef.current));
-  }, [onCreateForDate]);
+    onCreateForDate?.(toDateString(selectedDateRef.current), { title, time });
+  }, [onCreateForDate, newTaskTitle, pendingTime]);
 
   const handleCancelAdd = useCallback(() => {
     // Swallow the single blur-cancel caused by opening the wheel time picker —
@@ -2781,7 +2830,7 @@ export const CalendarView = ({
           keyExtractor={dayKeyExtractor}
           renderItem={renderDayItem}
           getItemLayout={getDayItemLayout}
-          initialScrollIndex={DAY_TODAY_INDEX}
+          initialScrollIndex={initialDayIndexRef.current}
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}

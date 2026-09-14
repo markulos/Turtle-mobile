@@ -70,6 +70,39 @@ describe('TaskForm Save state', () => {
     expect(saveButton.props.accessibilityState).toMatchObject({ disabled: true });
   });
 
+  test('carries the finder’s title and time into a new full form', async () => {
+    // "Full form" from the day panel's finder continues the SAME task: the
+    // title typed there and the time chip set there arrive filled in, so the
+    // only reason to open the full form (a board, a note, participants) does
+    // not cost you the work already done.
+    const view = await render(
+      <TaskForm {...baseProps} initialDate="2026-09-14" initialTitle="Call the vet" initialTime="14:30" />,
+    );
+
+    expect(view.getByPlaceholderText('What needs to be done?').props.value).toBe('Call the vet');
+    // The time chip renders the seeded time as its label, in 12-hour form.
+    expect(view.getByText('2:30 PM')).toBeTruthy();
+    expect(view.getByLabelText('Add Task').props.accessibilityState).toMatchObject({ disabled: false });
+  });
+
+  test('a new form with no seed is still blank', async () => {
+    const view = await render(<TaskForm {...baseProps} />);
+    expect(view.getByPlaceholderText('What needs to be done?').props.value).toBe('');
+    expect(view.getByText('Time')).toBeTruthy();  // the chip's unset label
+  });
+
+  test('the seed never overrides the item being EDITED', async () => {
+    const view = await render(
+      <TaskForm
+        {...baseProps}
+        initialData={{ id: 7, title: 'Existing task', itemType: 'task', tags: [], dueDate: '2026-09-14' }}
+        initialTitle="Call the vet"
+        initialTime="14:30"
+      />,
+    );
+    expect(view.getByPlaceholderText('What needs to be done?').props.value).toBe('Existing task');
+  });
+
   test('enables event Save when both title and date are present', async () => {
     const view = await render(
       <TaskForm {...baseProps} initialType="event" initialDate="2026-07-29" />,

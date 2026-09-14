@@ -147,6 +147,13 @@ export const TaskForm = ({
   // Ignored when editing or for non-task types (events/birthdays have no board).
   // Still shown/editable via the Board chip — this only seeds the initial value.
   initialProject = null,
+  // Work already done elsewhere, continued here. The calendar day panel's
+  // finder hands over the title typed into it and the time chip when the user
+  // presses "Full form" — the full form is the SAME task with more fields, so
+  // retyping the title would be the one thing it must not ask for. Both are
+  // ignored when editing (the item's own values win).
+  initialTitle = '',
+  initialTime = '',
   // True when this form is mounted somewhere that can only persist a plain
   // task (e.g. a board conversation composer, which saves via a task-only
   // endpoint that doesn't store item_type/meta — see BoardTimeline). Hides
@@ -361,6 +368,8 @@ export const TaskForm = ({
         const newType = initialType || 'task';
         setFormData({
           ...blankForm(newType),
+          title: initialTitle || '',
+          time: initialTime || '',
           dueDate: initialDate || '',
           project: newType === 'task' ? (initialProject || '') : '',
           involvedUsers: newType === 'task' ? partnerIdsRef.current : [],
@@ -376,7 +385,7 @@ export const TaskForm = ({
       setNewBoardOpen(false);
       savingRef.current = false;
     }
-  }, [visible, initialData, initialType, initialDate, initialProject]);
+  }, [visible, initialData, initialType, initialDate, initialProject, initialTitle, initialTime]);
 
   // Cold-start seed: if the partner list resolves AFTER a fresh new-task form
   // is already open, fill the still-empty, untouched involved set with the

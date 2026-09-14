@@ -539,6 +539,10 @@ export default function TasksScreen() {
   // The board a new task is born into (the rail's selection at the moment the
   // + key was pressed; null = the form's own default).
   const [newItemProject, setNewItemProject] = useState(null);
+  // Title + time already entered in the day panel's finder before "Full form"
+  // was pressed. Empty for every other entry point into the form.
+  const [newItemTitle, setNewItemTitle] = useState('');
+  const [newItemTime, setNewItemTime] = useState('');
   const [showDetail, setShowDetail] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   // True when the edit form was reached by continuing the calendar quick
@@ -1682,11 +1686,16 @@ export default function TasksScreen() {
   // point (the FAB-equivalent "Add new task" button and the calendar day "+"
   // both route through it with type 'task') — TaskForm itself opens COLLAPSED
   // for new items (no initialData), so the fast path is preserved.
-  const openCreateForm = useCallback((type, date, project) => {
+  // `seed` carries whatever the caller has already collected — the day
+  // panel's finder hands over the title typed into it and the time chip, so
+  // "Full form" continues that task instead of starting a blank one.
+  const openCreateForm = useCallback((type, date, project, seed = null) => {
     setEditingTask(null);
     setNewItemType(type || 'task');
     setNewItemDate(date || null);
     setNewItemProject(project || null);
+    setNewItemTitle(seed?.title || '');
+    setNewItemTime(seed?.time || '');
     setShowTaskForm(true);
   }, []);
 
@@ -1987,6 +1996,8 @@ export default function TasksScreen() {
         initialType={newItemType}
         initialDate={newItemDate}
         initialProject={newItemProject}
+        initialTitle={newItemTitle}
+        initialTime={newItemTime}
         projects={projects}
         allTags={allTags}
         onAddProject={addProject}
@@ -2162,7 +2173,7 @@ export default function TasksScreen() {
           onPlannerOpenChange={setDayPlannerOpen}
           // The day-planner's "+" creates a task pre-dated to the tapped day;
           // the type is still switchable inside the form.
-          onCreateForDate={(dateStr) => openCreateForm('task', dateStr)}
+          onCreateForDate={(dateStr, seed) => openCreateForm('task', dateStr, null, seed)}
           // Tap a task's owner badge → open that person's profile card.
           onOwnerPress={(t) => { if (t?.userId) setProfileOwner({ userId: t.userId, ownerName: t.ownerName }); }}
         />
