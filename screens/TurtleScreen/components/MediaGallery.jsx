@@ -117,8 +117,17 @@ import {
   normalizeAlbumsPayload,
 } from '../../../utils/photoVaultBoards';
 import { sendOrQueue } from '../../../services/offlineQueue';
+import { buildSlots, patchSlots, patchCost } from '../../../utils/virtualSlots';
 
-// Create an animated version of FlashList to match our existing architecture
+// Create an animated version of FlashList to match our existing architecture.
+//
+// Deliberately RN Animated, and the scroll handler below is deliberately a
+// plain JS callback: FlashList v2 does not forward `onScroll` to its scroll
+// view, it CALLS it from inside its own handler (see RecyclerView's
+// onScrollHandler, which invokes props.onScroll(event)). So a Reanimated
+// `useAnimatedScrollHandler` here would never be attached natively — it would
+// run as ordinary JS on the same thread, plus a runOnJS hop. There is no
+// UI-thread scroll path to be had through this list.
 const AnimatedFlashList = Animated.createAnimatedComponent(FlashList);
 
 // ── Streaming media upload ───────────────────────────────────────────────────
@@ -1099,6 +1108,16 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const virtualEnabledRef = useRef(false);
   const sparseRaf = useRef(null);
   const [sparseVersion, setSparseVersion] = useState(0); // bumps when pages land
+  // Which pages changed since the slot array was last built, so the rebuild can
+  // be a patch of those ranges instead of a pass over the whole library (see
+  // utils/virtualSlots). `null` means "shape changed, rebuild everything".
+  const sparseDirtyRef = useRef(new Set());
+  const markSparseDirty = useCallback((pageIdx) => {
+    if (sparseDirtyRef.current) sparseDirtyRef.current.add(pageIdx);
+  }, []);
+  const markSparseAllDirty = useCallback(() => { sparseDirtyRef.current = null; }, []);
+  // The last built array, kept so the next commit can patch it.
+  const slotsCacheRef = useRef(null); // { prefix, total, slots, prefixIds }
   // Bumped whenever the sparse cache is reset (sort/album/search change) —
   // in-flight page fetches compare against it and drop stale responses.
   const sparseEpochRef = useRef(0);
@@ -1190,13 +1209,20 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         .then((res) => {
           if (epoch === sparseEpochRef.current && res && res.success && Array.isArray(res.items)) {
             sparsePagesRef.current.set(best, res.items);
+            markSparseDirty(best);
             if (sparsePagesRef.current.size > SPARSE_MAX_PAGES) {
               const keys = Array.from(sparsePagesRef.current.keys())
                 .sort((a, b) => Math.abs(b - sparseCenterRef.current) - Math.abs(a - sparseCenterRef.current));
               const drop = keys.slice(0, sparsePagesRef.current.size - SPARSE_MAX_PAGES);
               // Evicting a page's metadata also forgets it was warmed, so a
               // later return to that region re-prefetches its thumbnails.
-              for (const k of drop) { sparsePagesRef.current.delete(k); sparseThumbsPrefetchedRef.current.delete(k); }
+              // An eviction changes slots too — back to skeletons — so it is
+              // just as dirty as a landing.
+              for (const k of drop) {
+                sparsePagesRef.current.delete(k);
+                sparseThumbsPrefetchedRef.current.delete(k);
+                markSparseDirty(k);
+              }
             }
             commitSparsePages();
             // Warm this just-landed region's thumbnails (if it's near the
@@ -1219,7 +1245,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           pumpSparseQueue(); // ← self-draining: each settled fetch pulls the next
         });
     }
-  }, [api, commitSparsePages]);
+  }, [api, commitSparsePages, markSparseDirty]);
 
   const ensureSparseRegion = useCallback((firstIdx, lastIdx, centerIdx) => {
     if (!virtualEnabledRef.current) return;
@@ -1528,24 +1554,48 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       && filters.to == null
       && uploadTimeline.total > filtered.length;
     virtualEnabledRef.current = virtual;
-    if (!virtual) return filtered;
+    // Leaving virtual mode drops the cache: coming back, the prefix may well
+    // be the same array identity while the pages behind it have moved on, and
+    // a patch against that stale base would show the wrong photos.
+    if (!virtual) { slotsCacheRef.current = null; return filtered; }
 
     const total = uploadTimeline.total;
+    const cache = slotsCacheRef.current;
+    const dirty = sparseDirtyRef.current;
+    // PATCH, don't rebuild. A landed page changes only its own slots, so when
+    // the SHAPE is unchanged (same prefix rows, same library length) the new
+    // array is the old one copied with those ranges rewritten. Rebuilding all
+    // ~28k entries per landing wave is the JS-thread cost that used to land
+    // mid-fling; see utils/virtualSlots. `dirty === null` means something
+    // other than a page moved and the whole thing has to be redone.
+    if (cache && dirty && cache.prefix === filtered && cache.total === total && dirty.size) {
+      const cost = patchCost({ pageIndices: dirty, prefixLen: filtered.length, total, pageSize: SPARSE_PAGE });
+      if (cost > 0 && cost < total) {
+        const slots = patchSlots({
+          base: cache.slots,
+          prefixIds: cache.prefixIds,
+          pageIndices: dirty,
+          prefixLen: filtered.length,
+          total,
+          pageSize: SPARSE_PAGE,
+          pages: sparsePagesRef.current,
+          slotAt,
+        });
+        sparseDirtyRef.current = new Set();
+        slotsCacheRef.current = { ...cache, slots };
+        return slots;
+      }
+    }
+
     // Guard against an id appearing in both the prefix and a sparse page
     // (counts can shift between the buckets fetch and a page fetch) — a
     // duplicate key would crash FlashList's keyExtractor contract.
-    const prefixIds = new Set();
-    for (let i = 0; i < filtered.length; i++) prefixIds.add(filtered[i].id);
-    const out = new Array(total);
-    for (let i = 0; i < filtered.length; i++) out[i] = filtered[i];
-    for (let i = filtered.length; i < total; i++) {
-      const page = sparsePagesRef.current.get(Math.floor(i / SPARSE_PAGE));
-      const it = page ? page[i % SPARSE_PAGE] : null;
-      out[i] = (it && it.id && !prefixIds.has(it.id))
-        ? it
-        : slotAt(i);
-    }
-    return out;
+    const { slots, prefixIds } = buildSlots({
+      prefix: filtered, total, pageSize: SPARSE_PAGE, pages: sparsePagesRef.current, slotAt,
+    });
+    sparseDirtyRef.current = new Set();
+    slotsCacheRef.current = { prefix: filtered, total, slots, prefixIds };
+    return slots;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploadItems, loading, uploadsSearchQuery, serverSearch, selectedAlbum, uploadTimeline.total, sparseVersion]);
   // Keep the drag-select range math reading the SAME array the grid renders.
@@ -1641,8 +1691,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     sparsePagesRef.current.clear();
     sparseInflightRef.current.clear();
     sparseThumbsPrefetchedRef.current.clear();
+    // Every slot changed at once, so the next build cannot be a patch of the
+    // old array — that would hand the grid the photos of a dead result set.
+    markSparseAllDirty();
     setSparseVersion((v) => v + 1);
-  }, [selectedAlbum, uploadsSearchQuery, sortMode]);
+  }, [selectedAlbum, uploadsSearchQuery, sortMode, markSparseAllDirty]);
 
   // Scrubber data: cumulative month starts + labels + per-month counts + year
   // marks, from the full-library buckets — falling back to the loaded items
@@ -1797,11 +1850,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // granularity is imperceptible.
     scrubTailFrame.current = (scrubTailFrame.current + 1) & 3;
     if (scrubTailFrame.current !== 0) return;
+    const y = scrubLastY.current;
     // Reveal the "jump to newest" pill only when (1) scrolled a LOT from the
     // newest — ~1.5 screens — and (2) moving TOWARD the newest (offset
     // decreasing = downward swipe in this mirrored grid). Scrolling up into
     // older keeps it hidden so it's never in the way.
-    const y = scrubLastY.current;
     const delta = y - gridJumpLastY.current;
     gridJumpLastY.current = y;
     if (gridJumpingRef.current) {
@@ -1832,7 +1885,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
 
   // Settle triggers: the moment a drag releases or a fling's momentum dies,
   // resolve exactly what the user is looking at — no touch required.
-  const handleGridScrollSettled = useCallback(() => {
+  // The event comes with them, so the refs are synced from the EXACT resting
+  // offset rather than from the tail's ≤4-frame-old copy.
+  const handleGridScrollSettled = useCallback((e) => {
+    const ne = e && e.nativeEvent;
+    if (ne) {
+      if (ne.contentOffset) scrubLastY.current = ne.contentOffset.y || 0;
+      if (ne.contentSize && ne.contentSize.height) gridContentH.current = ne.contentSize.height;
+      if (ne.layoutMeasurement && ne.layoutMeasurement.height) gridLayoutH.current = ne.layoutMeasurement.height;
+    }
     ensureVisibleRegionNow();
     // Hand-off happens live in onViewableItemsChanged; this is only a backstop —
     // if nothing is previewing but a video is centred at rest, seed it. Guarded
@@ -2745,10 +2806,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         if (it && it.id && tagsById[it.id] != null && it.tags !== tagsById[it.id]) { pageTouched = true; return { ...it, tags: tagsById[it.id] }; }
         return it;
       });
-      if (pageTouched) { m.set(pageIdx, next); touched = true; }
+      if (pageTouched) { m.set(pageIdx, next); markSparseDirty(pageIdx); touched = true; }
     }
     if (touched) setSparseVersion((v) => v + 1);
-  }, []);
+  }, [markSparseDirty]);
 
   /** { mediaId: string[] } → every local copy of those photos carries those tags. */
   const applyTagsLocally = useCallback((tagsById) => {
