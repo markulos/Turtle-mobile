@@ -4,8 +4,8 @@
  * Top: a gradient wash with Back on the left and Edit (images only) + Tags on
  * the right. Bottom: the timestamp and resolution on the left, a pill with
  * Save-offline (images only), Share and Favourite on the right (plus
- * play/pause and mute for a video), and — for a video — a scrubber above
- * them: elapsed / duration and a track you can drag to seek.
+ * play/pause, mute and fullscreen for a video), and — for a video — a
+ * scrubber above them: elapsed / duration and a track you can drag to seek.
  *
  * Deliberately flat. Both bands are `box-none` while shown, so only the
  * buttons (and the scrubber track) are touch targets and every other touch
@@ -267,6 +267,7 @@ function ViewerChrome({
   video,
   onTogglePlay,
   onToggleMute,
+  onFullscreen,
   onSeek,
   onScrubStart,
   onScrubEnd,
@@ -338,6 +339,14 @@ function ViewerChrome({
                   onPress={onToggleMute}
                   testID="viewer-mute"
                 />
+                {!!onFullscreen && (
+                  <ChromeButton
+                    icon="fullscreen"
+                    label="Play fullscreen"
+                    onPress={onFullscreen}
+                    testID="viewer-fullscreen"
+                  />
+                )}
               </>
             )}
             {/* Images only: a video's original is tens to hundreds of MB and

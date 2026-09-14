@@ -44,10 +44,22 @@ jest.mock('expo-image', () => {
     }),
   };
 });
-jest.mock('expo-video', () => ({
-  useVideoPlayer: () => ({ play: jest.fn(), pause: jest.fn(), playing: false, muted: true }),
-  VideoView: () => null,
-}));
+const mockFullscreen = { calls: 0, options: null };
+jest.mock('expo-video', () => {
+  const React = require('react');
+  return {
+    useVideoPlayer: () => ({ play: jest.fn(), pause: jest.fn(), playing: false, muted: true }),
+    // Records what the page asked for, and exposes the imperative handle the
+    // chrome's fullscreen key reaches through.
+    VideoView: React.forwardRef((props, ref) => {
+      mockFullscreen.options = props.fullscreenOptions;
+      React.useImperativeHandle(ref, () => ({
+        enterFullscreen: () => { mockFullscreen.calls += 1; return Promise.resolve(); },
+      }));
+      return null;
+    }),
+  };
+});
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: () => null }));
 jest.mock('expo-blur', () => {
   const { View } = require('react-native');
@@ -250,6 +262,24 @@ describe('PhotoViewer', () => {
     expect(screen.getByTestId('viewer-play')).toBeTruthy();
     expect(screen.getByTestId('viewer-mute')).toBeTruthy();
     expect(screen.queryByTestId('viewer-edit')).toBeNull();
+  });
+
+  test('the fullscreen key hands the video to the native landscape player', async () => {
+    mockFullscreen.calls = 0;
+    const { user } = await renderViewer({ initialIndex: 2 });
+
+    // Landscape, and back out when the phone is turned upright again.
+    expect(mockFullscreen.options).toEqual({
+      enable: true, orientation: 'landscape', autoExitOnRotate: true,
+    });
+
+    await user.press(screen.getByTestId('viewer-fullscreen'));
+    expect(mockFullscreen.calls).toBe(1);
+  });
+
+  test('a photo has no fullscreen key — it is the video player going landscape', async () => {
+    await renderViewer();
+    expect(screen.queryByTestId('viewer-fullscreen')).toBeNull();
   });
 
   test('renders nothing while hidden', async () => {

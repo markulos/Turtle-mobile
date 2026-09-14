@@ -343,6 +343,7 @@ export default function PhotoViewer({
   const handleFavourite = useCallback(() => { if (activeItem) onToggleFavourite?.(activeItem); }, [activeItem, onToggleFavourite]);
   const handleTogglePlay = useCallback(() => { videoControlsRef.current?.togglePlay?.(); }, []);
   const handleToggleMute = useCallback(() => { videoControlsRef.current?.toggleMute?.(); }, []);
+  const handleFullscreen = useCallback(() => { videoControlsRef.current?.enterFullscreen?.(); }, []);
   const closeTags = useCallback(() => setTagsOpen(false), []);
   const closeDetails = useCallback(() => setDetailsOpen(false), []);
   const editTagsFromDetails = useCallback(() => { setDetailsOpen(false); setTagsOpen(true); }, []);
@@ -425,6 +426,7 @@ export default function PhotoViewer({
           video={activeItem?.type === 'video' ? videoState : null}
           onTogglePlay={handleTogglePlay}
           onToggleMute={handleToggleMute}
+          onFullscreen={handleFullscreen}
           onSeek={handleSeek}
           onScrubStart={handleScrubStart}
           onScrubEnd={handleScrubEnd}

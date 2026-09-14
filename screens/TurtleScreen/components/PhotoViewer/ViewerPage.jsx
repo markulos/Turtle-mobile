@@ -52,6 +52,17 @@ import { useHdReady, useIsActive } from './stores';
 const ARRIVAL = 0.02;
 /** Seconds between the player's time reports while a video is active. */
 const TIME_UPDATE_INTERVAL = 0.25;
+/**
+ * Fullscreen = landscape, and turning the phone back upright leaves it.
+ *
+ * `autoExitOnRotate` waits until the phone has actually been ROTATED INTO
+ * landscape before it will act on a rotation out of it — otherwise entering
+ * fullscreen while holding the phone upright would exit immediately. So a
+ * video opened with the fullscreen key, then turned sideways, then turned
+ * back, ends where it started. (It also does nothing if rotation lock is on,
+ * which is the correct reading of that setting.)
+ */
+const FULLSCREEN_OPTIONS = { enable: true, orientation: 'landscape', autoExitOnRotate: true };
 
 function usePageStyle(index, sv) {
   return useAnimatedStyle(() => {
@@ -175,6 +186,11 @@ PhotoBody.displayName = 'PhotoBody';
 const VideoBody = React.memo(({ item, isActive, getFullUrl, onVideoControls, onVideoState }) => {
   const sourceUrl = getFullUrl(item.rawUrl || item.url || '');
   const { pause: pauseMusic } = useMusicPlayer();
+  // The native player view, for fullscreen. expo-video presents its own
+  // AVPlayerViewController, which overrides `supportedInterfaceOrientations`
+  // while fullscreen — that is what lets the video turn landscape inside an
+  // app whose every other screen is portrait.
+  const viewRef = useRef(null);
   const player = useVideoPlayer(sourceUrl, (p) => {
     // No loop: a video plays to its end and PAUSES there, like Photos; play
     // from the end starts it over (see togglePlay).
@@ -298,6 +314,17 @@ const VideoBody = React.memo(({ item, isActive, getFullUrl, onVideoControls, onV
         scrubRef.current = { active: false, resume: false };
         if (resume) player.play();
       },
+      // Hand the video to the native fullscreen player: landscape, its own
+      // controls (the platform enables them in fullscreen regardless), and
+      // back out when the phone is turned upright again.
+      enterFullscreen: () => {
+        try {
+          const p = viewRef.current?.enterFullscreen?.();
+          // A rejected promise here is a redbox in dev and nothing useful in
+          // release — the video simply stays inline.
+          if (p && typeof p.catch === 'function') p.catch(() => {});
+        } catch { /* no native view yet */ }
+      },
     };
     onVideoControls(item.id, controls);
     return () => onVideoControls(item.id, null);
@@ -305,10 +332,14 @@ const VideoBody = React.memo(({ item, isActive, getFullUrl, onVideoControls, onV
 
   return (
     <VideoView
+      ref={viewRef}
       style={StyleSheet.absoluteFillObject}
       player={player}
       contentFit="contain"
+      // Inline, the viewer's own chrome is the controls. Fullscreen always
+      // gets the platform's — that is the point of going there.
       nativeControls={false}
+      fullscreenOptions={FULLSCREEN_OPTIONS}
     />
   );
 });
