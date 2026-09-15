@@ -141,3 +141,69 @@ describe('the board finder', () => {
     expect(onAddTask).toHaveBeenCalledWith('Loose end', '');
   });
 });
+
+describe('the stat tiles open what is behind the number', () => {
+  const mixed = [
+    task({ id: 'a', title: 'Late one', dueDate: '2026-09-01' }),
+    task({ id: 'b', title: 'Due today', dueDate: '2026-09-15' }),
+    task({ id: 'c', title: 'Later', dueDate: '2026-12-01' }),
+    task({ id: 'd', title: 'Finished', completed: true, completedAt: 1 }),
+  ];
+
+  test.each([
+    ['overview-tile-late', 'Late · 1', ['a'], ['b', 'c', 'd']],
+    ['overview-tile-today', 'Today · 1', ['b'], ['a', 'c']],
+    ['overview-tile-done', 'Done · 1', ['d'], ['a', 'b', 'c']],
+    ['overview-tile-todo', 'To do · 3', ['a', 'b', 'c'], ['d']],
+  ])('%s opens a list of exactly the right tasks', async (tileId, heading, present, absent) => {
+    const user = userEvent.setup();
+    await render(<OverviewPage {...baseProps({ tasks: mixed })} />);
+
+    await user.press(screen.getByTestId(tileId));
+
+    expect(screen.getByText(heading)).toBeTruthy();
+    for (const id of present) expect(screen.getByTestId(`overview-task-${id}`)).toBeTruthy();
+    for (const id of absent) expect(screen.queryByTestId(`overview-task-${id}`)).toBeNull();
+  });
+
+  test('a tile list names the board under each task — the one thing the title cannot', async () => {
+    const user = userEvent.setup();
+    await render(<OverviewPage {...baseProps({ tasks: [task({ id: 'a', project: 'AMB Architects' })] })} />);
+    await user.press(screen.getByTestId('overview-tile-todo'));
+    // Asserted on the row itself: the board name is also on the page behind
+    // (its board row), so a bare text query would match either.
+    expect(screen.getByTestId('overview-task-a').props.accessibilityLabel)
+      .toMatch(/^Renew the passport, AMB Architects/);
+  });
+
+  test('and a tap there opens the task too', async () => {
+    const onOpenTask = jest.fn();
+    const user = userEvent.setup();
+    await render(<OverviewPage {...baseProps({ tasks: mixed, onOpenTask })} />);
+    await user.press(screen.getByTestId('overview-tile-late'));
+    await user.press(screen.getByTestId('overview-task-a'));
+    expect(onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }));
+  });
+
+  test('an empty bucket says so rather than showing an empty page', async () => {
+    const user = userEvent.setup();
+    await render(<OverviewPage {...baseProps({ tasks: [task({ id: 'c', dueDate: '2026-12-01' })] })} />);
+    await user.press(screen.getByTestId('overview-tile-late'));
+    expect(screen.getByText(/Nothing late/)).toBeTruthy();
+  });
+});
+
+describe('the stats page', () => {
+  test('the header key opens it, and it draws its charts', async () => {
+    const user = userEvent.setup();
+    await render(<OverviewPage {...baseProps()} />);
+
+    await user.press(screen.getByTestId('overview-stats-key'));
+
+    expect(screen.getByTestId('stats-completion')).toBeTruthy();
+    expect(screen.getByTestId('stats-heatmap')).toBeTruthy();
+    expect(screen.getByTestId('stats-weeks')).toBeTruthy();
+    expect(screen.getByTestId('stats-weekdays')).toBeTruthy();
+    expect(screen.getByTestId('stats-boards')).toBeTruthy();
+  });
+});
