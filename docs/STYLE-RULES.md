@@ -41,7 +41,9 @@ repo skill (loaded before any UI work) and by review.
   Stacked task cards sit 8 pt apart, radius 14, title 15 / 600.
 - SCHEDULE CARDS (the calendar's day panel, `TasksScreen/components/ScheduleCard`) are the one exception to
   the charcoal card: a planner page. The TIME sits in a clear column on the LEFT ("08 AM" / "08:30 AM", 14 pt, medium,
-  secondary ink, 74 pt wide, on the card's first line); the card is a soft wash of the board colour (18 % on the light page, 26 % on the dark, radius 18,
+  secondary ink, 74 pt wide, on the card's first line); the card is a soft wash of the board colour (26 % — the
+  panel is a dark surface in both app themes, see below; 18 % is the light-page wash the card still carries for
+  any other caller, radius 18,
   no border, no shadow) with the title (16 / 600), the board name (13), a completion ring and the range
   bottom-right — nothing else; the inspector holds the details. Untimed rows keep the shape with "any time"
   in the time column. The compact schedule is a CONDENSED HOUR TIMELINE (`buildCondensedRows`): every hour
@@ -56,12 +58,28 @@ repo skill (loaded before any UI work) and by review.
   TASK INSPECTOR SHEET (`TaskInspectorSheet` on ViewerSheet, dark): title + Done ring on top, then priority,
   When (date / time chips + quick keys), board keys, notes, subtasks, tags, Full editor · Delete — every
   field commits on its own.
-  The panel's SURFACE is the chat composer's FROST (`utils/frostedChat`: BlurView intensity 85 + the
-  frost tint rgba(250,250,252,.5) light / rgba(20,20,22,.4) dark, a top hairline only) — transparent, the
-  calendar reads through it; nothing inside the panel paints a flat surface over it. NEVER give a full-width
+  The panel FOLLOWS THE APP THEME — white on a light theme, the sheet's dark grey (#1C1C1E) on a dark one.
+  It used to be its own white-on-black room in both, which was defensible while it covered the whole
+  screen; it is a CARD now (it stops `SHEET_RAISED_GAP` = 12 pt below the screen header, which stays up),
+  and a black card on a white page is a hole, not a card. Its SURFACE is the chat composer's FROST
+  (`utils/frostedChat`: BlurView intensity 85, a top hairline only) under a translucent tint, `sheetFrost`
+  — rgba(255,255,255,.74) light / rgba(28,28,30,.42) dark. Higher alpha than the composer's because this
+  pane carries paragraphs over a month grid, not one input line over settled chat; the calendar behind
+  also dims to 42 % rather than disappearing, and the two together are what buy the glass. Nothing inside
+  the panel paints a flat surface over it. Everything INSIDE is drawn with `sheetThemeFrom(theme)`
+  (`CalendarView`) — the live theme with the pane and its cards set ONE RUNG APART on the platform
+  elevation ladder (#FFFFFF/#F2F2F7 light, #1C1C1E/#2C2C2E dark, so a card always has an edge) and the ink
+  pushed to the ends (pure black / pure white, not the app's softened #E0E0E0) because a translucent pane
+  needs the extra contrast. The muted rung is 52 %, not the app's 30 %: it carries real words here. The
+  user's accent and the accent-washed rules carry over untouched. Pass that palette down as the `theme` /
+  `styles` props of everything in the panel (the day panes, the week strip); the calendar BEHIND the sheet
+  keeps the app theme. NEVER give a full-width
   sheet side borders: the day pager pages are SCREEN_W wide and pagingEnabled snaps to the VIEWPORT width,
   so 1 px of side border drifts 2 px per page (hundreds of pages in = a visible offset). A pinned bar lifted
   onto the keyboard keeps 12 pt of air above it.
+  The panel NEVER takes the screen header down with it. The view pill and the Boards key are how you leave
+  the day you are planning; winning a header's height by unmounting them trades navigation for space, and
+  the unmount also made the sheet hop at the end of an otherwise smooth travel. Stop the card short instead.
 - TYPEFACE: Figtree, app-wide, installed once at startup (`utils/installFont` → `utils/fonts.js`
   `installGlobalFont`): every Text / TextInput gets the Figtree face for its `fontWeight` — write weights
   as usual, never a `fontFamily` (an explicit family is left alone: icon glyphs, monospace consoles).

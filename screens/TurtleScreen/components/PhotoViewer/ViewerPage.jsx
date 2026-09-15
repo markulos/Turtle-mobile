@@ -213,6 +213,9 @@ const VideoBody = React.memo(({ item, isActive, getFullUrl, onVideoControls, onV
   // While the scrubber's finger is down: playback paused, the player's own
   // time reports ignored (they would fight the finger), and whether to resume.
   const scrubRef = useRef({ active: false, resume: false });
+  // Native controls, on ONLY while fullscreen — see enterFullscreen below.
+  const [fullscreenControls, setFullscreenControls] = useState(false);
+  const pendingFullscreenRef = useRef(false);
 
   useEffect(() => {
     if (isActive) {
@@ -314,21 +317,51 @@ const VideoBody = React.memo(({ item, isActive, getFullUrl, onVideoControls, onV
         scrubRef.current = { active: false, resume: false };
         if (resume) player.play();
       },
-      // Hand the video to the native fullscreen player: landscape, its own
-      // controls (the platform enables them in fullscreen regardless), and
-      // back out when the phone is turned upright again.
-      enterFullscreen: () => {
-        try {
-          const p = viewRef.current?.enterFullscreen?.();
-          // A rejected promise here is a redbox in dev and nothing useful in
-          // release — the video simply stays inline.
-          if (p && typeof p.catch === 'function') p.catch(() => {});
-        } catch { /* no native view yet */ }
-      },
+      // Hand the video to the native fullscreen player: landscape, the
+      // platform's own controls, and back out when the phone is turned upright
+      // again.
+      //
+      // The controls are the whole reason this is a two-step. The docs say
+      // fullscreen enables them "regardless", and it doesn't: presented from a
+      // view with `nativeControls={false}`, fullscreen is a bare landscape
+      // rectangle — no timeline, no pause, and NO WAY OUT short of guessing
+      // that turning the phone upright works. So the flag is flipped first and
+      // the presentation is opened on the next frame, once that prop has
+      // actually reached the native view; `onFullscreenExit` puts it back so
+      // the inline video returns to the viewer's own chrome.
+      enterFullscreen: () => { pendingFullscreenRef.current = true; setFullscreenControls(true); },
     };
     onVideoControls(item.id, controls);
     return () => onVideoControls(item.id, null);
   }, [isActive, player, item.id, onVideoControls, pauseMusic]);
+
+  // Second half of enterFullscreen: present once `nativeControls` has been
+  // committed to the native view. A frame, not a promise — there is no signal
+  // for "the prop landed", and opening in the same tick presents the player
+  // that was still built without controls.
+  useEffect(() => {
+    if (!fullscreenControls || !pendingFullscreenRef.current) return undefined;
+    const id = requestAnimationFrame(() => {
+      pendingFullscreenRef.current = false;
+      try {
+        const p = viewRef.current?.enterFullscreen?.();
+        // A rejected promise here is a redbox in dev and nothing useful in
+        // release — the video simply stays inline.
+        if (p && typeof p.catch === 'function') p.catch(() => { setFullscreenControls(false); });
+      } catch { setFullscreenControls(false); /* no native view yet */ }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [fullscreenControls]);
+
+  // A page that goes inactive (swiped past, viewer closed) can't be left
+  // holding the fullscreen flag — it would come back wearing platform controls
+  // over the viewer's own chrome.
+  useEffect(() => {
+    if (isActive) return undefined;
+    pendingFullscreenRef.current = false;
+    setFullscreenControls(false);
+    return undefined;
+  }, [isActive]);
 
   return (
     <VideoView
@@ -336,10 +369,15 @@ const VideoBody = React.memo(({ item, isActive, getFullUrl, onVideoControls, onV
       style={StyleSheet.absoluteFillObject}
       player={player}
       contentFit="contain"
-      // Inline, the viewer's own chrome is the controls. Fullscreen always
-      // gets the platform's — that is the point of going there.
-      nativeControls={false}
+      // Inline, the viewer's own chrome IS the controls. Fullscreen gets the
+      // platform's — timeline, pause, and the Done/back affordance that gets
+      // you out of landscape — which only happens if this is true before the
+      // presentation opens.
+      nativeControls={fullscreenControls}
       fullscreenOptions={FULLSCREEN_OPTIONS}
+      // Covers every way out: Done, the back gesture, and the rotate-upright
+      // auto-exit. Whichever fired, the inline video goes back to bare.
+      onFullscreenExit={() => { pendingFullscreenRef.current = false; setFullscreenControls(false); }}
     />
   );
 });

@@ -357,15 +357,27 @@ export function useClaudeSession(serverIP, token) {
     socketRef.current?.emit('claude:start-admin', { token: tokenRef.current, password, model: m });
   }, [push, showBannerOnce]);
 
-  const send = useCallback((text, image) => {
+  /**
+   * One user turn. `attachments` is a single image or a list of them — the
+   * composer can carry several now, and they go as several image blocks.
+   */
+  const send = useCallback((text, attachments) => {
     setMode('session');
     setBusy(true);
-    push({ kind: 'user', text: image ? `🖼 ${text || 'image'}`.trim() : text });
+    const list = (Array.isArray(attachments) ? attachments : [attachments])
+      .filter((im) => im && im.base64)
+      .map((im) => ({ base64: im.base64, mediaType: im.mediaType || 'image/jpeg' }));
+    const n = list.length;
+    push({ kind: 'user', text: n ? `${n > 1 ? `🖼×${n}` : '🖼'} ${text || (n > 1 ? `${n} images` : 'image')}`.trim() : text });
     socketRef.current?.emit('claude:input', {
       token: tokenRef.current,
       text: text || '',
-      // base64 image attachment → sent into the session as an image block.
-      image: image && image.base64 ? { base64: image.base64, mediaType: image.mediaType || 'image/jpeg' } : undefined,
+      // base64 image attachments → image blocks in the turn.
+      images: n ? list : undefined,
+      // ALSO the first one under the old single-image key. A server that
+      // predates the list form reads this and still gets a picture, instead of
+      // silently dropping every attachment the moment the phone updates first.
+      image: n ? list[0] : undefined,
     });
   }, [push]);
 

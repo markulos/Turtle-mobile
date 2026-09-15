@@ -1,6 +1,6 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
-import { fireEvent, render } from '@testing-library/react-native';
+import { Keyboard, StyleSheet } from 'react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import PhotoVaultBoardsPage from '../PhotoVaultBoardsPage';
 
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
@@ -309,6 +309,76 @@ describe('PhotoVaultBoardsPage', () => {
     expect(failedRefresh.view.getByText('No boards match “missing”.')).toBeTruthy();
     expect(failedRefresh.view.queryByText('Unable to load boards')).toBeNull();
     expect(failedRefresh.view.queryByText(unsafeError)).toBeNull();
+  });
+
+  // ── Search mode: the field takes the screen, results come back as rows ────
+  // The grid spends a whole screen on four collages. Searching, you are after
+  // ONE board by name — so the page turns into a name column (Instagram's user
+  // search), the chrome above the field steps aside, and the matches start
+  // directly under it.
+  test('searching swaps the two-up grid for single-column rows', async () => {
+    const ref = React.createRef();
+    const { view } = await renderPage({ ref, query: 'warm' });
+
+    expect(ref.current.props.numColumns).toBe(1);
+    // Rows, not cards: the card builds a three-pane collage, the row does not.
+    expect(view.queryByTestId('board-collage')).toBeNull();
+    expect(view.getByLabelText('Warm interiors, 47 items')).toBeTruthy();
+  });
+
+  test('a search takes the sort chips away and keeps the field', async () => {
+    const browsing = await renderPage();
+    expect(browsing.view.getByTestId('board-sort-scroll')).toBeTruthy();
+
+    const searching = await renderPage({ query: 'warm' });
+    // Nothing between the field and the first match.
+    expect(searching.view.queryByTestId('board-sort-scroll')).toBeNull();
+    expect(searching.view.getByLabelText('Search your boards')).toBeTruthy();
+  });
+
+  test('reports search mode so the vault header can stand down', async () => {
+    const onSearchActiveChange = jest.fn();
+    const { view } = await renderPage({ query: 'warm', onSearchActiveChange });
+
+    expect(onSearchActiveChange).toHaveBeenCalledWith(true);
+    expect(view.getByTestId('board-search-cancel')).toBeTruthy();
+  });
+
+  // Cancel is one movement with an order to it: the keyboard and the header go
+  // on the first frame, the RESULTS ride the page down and are only dropped
+  // once it has landed. Clearing the query first — which is what this used to
+  // do — swapped the rows back to the board grid on frame one, so the page you
+  // watched sliding down was already showing something else.
+  test('Cancel drops the keyboard and the header at once, the results at the end', async () => {
+    const onSearchActiveChange = jest.fn();
+    const onQueryChange = jest.fn();
+    const dismiss = jest.spyOn(Keyboard, 'dismiss');
+    const { view } = await renderPage({ query: 'warm', onSearchActiveChange, onQueryChange });
+
+    await fireEvent.press(view.getByTestId('board-search-cancel'));
+
+    expect(dismiss).toHaveBeenCalled();
+    expect(onSearchActiveChange).toHaveBeenLastCalledWith(false);
+    expect(onQueryChange).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(onQueryChange).toHaveBeenCalledWith(''));
+    dismiss.mockRestore();
+  });
+
+  test('add turns into Cancel while searching — never both', async () => {
+    const browsing = await renderPage();
+    expect(browsing.view.getByLabelText('Add photos to a board')).toBeTruthy();
+    expect(browsing.view.queryByTestId('board-search-cancel')).toBeNull();
+
+    const searching = await renderPage({ query: 'warm' });
+    expect(searching.view.queryByLabelText('Add photos to a board')).toBeNull();
+    expect(searching.view.getByLabelText('Cancel board search')).toBeTruthy();
+  });
+
+  test('opens a board from a result row', async () => {
+    const { props, view } = await renderPage({ query: 'warm' });
+    await fireEvent.press(view.getByLabelText('Warm interiors, 47 items'));
+    expect(props.onOpenBoard).toHaveBeenCalledWith('Warm interiors');
   });
 
   test('forwards the list ref and A–Z scrubber callbacks', async () => {

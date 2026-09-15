@@ -129,7 +129,7 @@ import { useCommandBus } from '../../context/CommandBusContext';
 import { useOpenTarget } from '../../context/OpenTargetContext';
 import { useCelebration } from '../../context/CelebrationContext';
 import BoardRail from './components/BoardRail';
-import StatusSegment from './components/StatusSegment';
+import StatusSegment, { STATUS_OPTIONS } from './components/StatusSegment';
 import BoardManagerSheet from './components/BoardManagerSheet';
 import TaskInspectorSheet from './components/TaskInspectorSheet';
 import OverviewPage from './components/OverviewPage';
@@ -140,7 +140,11 @@ import OverviewPage from './components/OverviewPage';
 // The board rail's reveal: the rail sits ABSOLUTE at the top of the content
 // host and the whole page below slides down by its height on a compositor
 // transform (the old board-dropdown mechanism — the calendar never relayouts).
-const RAIL_H = 80; // BoardRail: 66pt card + 6 + 8 padding
+// The filter panel's height: the status keys' row (32pt box + 6 + 4 padding)
+// on top of the BoardRail (66pt card + 6 + 8 padding). One constant, because it
+// is BOTH the layer's height and how far the page is pushed down to reveal it —
+// if they disagree the page shows a band of nothing, or clips the rail.
+const RAIL_H = 42 + 80;
 const RAIL_OPEN_MS = 280;
 const RAIL_CLOSE_MS = 240;
 const RAIL_EASE = ReEasing.bezier(0.4, 0, 0.2, 1);
@@ -564,6 +568,16 @@ export default function TasksScreen() {
   const doneOnly = statusFilter === 'done';
   const setShowIncompleteOnly = useCallback((v) => setStatusFilter(v ? 'todo' : 'all'), []);
   const [selectedProject, setSelectedProject] = useState('All');
+  // What the one header key says, and whether it lights. The board wins the
+  // label when one is picked — it is the narrower scope, and the status still
+  // reads from the keys inside the panel. Default state ('All' + 'to do') says
+  // plain "Boards" and stays unlit, so a lit key always means the list you are
+  // looking at is not the whole list. The key is named for what it OPENS (the
+  // boards), not for the abstract act of filtering.
+  const filterScoped = selectedProject !== 'All' || statusFilter !== 'todo';
+  const filterKeyLabel = selectedProject !== 'All'
+    ? boardLabel(selectedProject)
+    : (statusFilter === 'todo' ? 'Boards' : STATUS_OPTIONS.find((o) => o.value === statusFilter)?.label || 'Boards');
   const [selectedTags, setSelectedTags] = useState([]);
   const [tagFilterMode, setTagFilterMode] = useState('any');
   // Shared-calendar "whose tasks" filter. Empty = show everyone's; otherwise a
@@ -582,8 +596,18 @@ export default function TasksScreen() {
   const [boardsPageOpen, setBoardsPageOpen] = useState(false);
   // True while the calendar's day-schedule planner (bottom sheet) is raised.
   // When open, the calendar⇄list pager is locked so horizontal swipes page
-  // between DAYS inside the planner instead of switching to the list view.
+  // between DAYS inside the planner instead of switching to the list view —
+  // and the header below stands down, so the planner opens ALL THE WAY to the
+  // top of the screen instead of stopping under two rows of keys it can't use
+  // anyway (the pager is locked; the planner has its own + key).
   const [dayPlannerOpen, setDayPlannerOpen] = useState(false);
+  // The header does NOT stand down when the planner opens — it used to
+  // unmount, then (briefly) fold away on a timing curve, and both were wrong
+  // for the same reason: the view pill and the Boards key are how you get OUT
+  // of the day you are planning, and taking them away to win a header's worth
+  // of height traded navigation for space. `dayPlannerOpen` now does one job,
+  // locking the pager so a horizontal swipe pages between DAYS. The planner
+  // stops below the header instead — see SHEET_RAISED_GAP in CalendarView.
 
   // ── List ⇄ Calendar horizontal pager ─────────────────────────────────
   // The two views sit side by side in a paging ScrollView so the user can
@@ -1779,6 +1803,12 @@ export default function TasksScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* No notch strip and no screen-level StatusBar here any more. Both
+          existed for one case — the planner covering the whole screen, safe
+          area included, so the band at the top had to follow the sheet's colour
+          and the clock had to go light with it. The header stays up now and the
+          planner stops below it, so the safe area is only ever the page's own
+          colour and App.js's StatusBar is already right. */}
       {/* Whisper-faint gradient wash — barely-there white with a
           breath of cool blue at the top, fading to nothing. Reads as
           a soft halo / atmospheric depth cue rather than a visible
@@ -1798,9 +1828,15 @@ export default function TasksScreen() {
         pointerEvents="none"
       />
 
-      {/* Header — one row of keys (view pill · status keys · filter · +),
-          then the board rail. Nothing collapses, nothing shifts the page:
-          the board picker IS the rail, the day count lives on its cards. */}
+      {/* Header — ONE row, and now ONE key: the view pill and Boards. Status
+          (to do / done / all), the board picker and Overview all live behind
+          that key; they used to hold a second row open permanently, and that
+          row was the difference between the day planner opening most of the way
+          and opening all the way.
+
+          The header stays up through everything, the day planner included: it
+          is the only way back to the list view and to the boards, and the
+          planner is a sheet over the page, not a replacement for it. */}
       <View style={styles.header}>
         <View style={styles.viewToggle}>
           {/* Sliding active pill (bound to the pager scroll). */}
@@ -1846,51 +1882,45 @@ export default function TasksScreen() {
           </TouchableOpacity>
         </View>
 
-        <StatusSegment value={statusFilter} onChange={setStatusFilter} theme={theme} />
-      </View>
-
-      {/* Row 2: what the list is scoped to (Boards) and where the numbers live
-          (Overview). The tag / owner filters moved into the Overview page. */}
-      <View style={styles.headerRow2}>
         <View style={styles.headerKeys}>
-          {/* The Boards key: opens / closes the rail; reads the selected board. */}
+          {/* The Boards key — the header's ONLY key now. It opens / closes the
+              panel holding the status keys, the board rail and the Overview
+              key, and reads what you are scoped to so the rows it replaced are
+              still answerable at a glance: the board name when one is picked,
+              otherwise the status when it isn't the default "to do".
+
+              Overview used to sit beside it. It went INTO the panel: two keys
+              competing for the header's right-hand side is what forced this one
+              to ellipsise a board name down to a single letter. */}
           <TouchableOpacity
-            style={[styles.headerBoardKey, (railOpen || selectedProject !== 'All') && styles.headerBoardKeyLit]}
+            style={[styles.headerBoardKey, (railOpen || filterScoped) && styles.headerBoardKeyLit]}
             onPressIn={() => tapHaptic()}
             onPress={() => setRailOpen((v) => !v)}
             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             accessibilityRole="button"
             accessibilityState={{ expanded: railOpen }}
-            accessibilityLabel={`Boards, ${selectedProject === 'All' ? 'all' : boardLabel(selectedProject)}${railOpen ? ', open' : ''}`}
-            testID="header-boards-key"
+            accessibilityLabel={`Boards, ${filterKeyLabel}${railOpen ? ', open' : ''}`}
+            testID="header-filter-key"
           >
-            {selectedProject !== 'All' && (
+            {selectedProject !== 'All' ? (
               <View style={[styles.headerBoardDot, { backgroundColor: getProjectColor(selectedProject) }]} />
+            ) : (
+              /* The four-circle glyph — the same one the All Boards page wears,
+                 so the key and the page it stands for carry one mark. It keeps
+                 its colours when the key lights: they are the point of it. */
+              <FourColorBoardsIcon size={15} gap={2} />
             )}
             <Text
-              style={[styles.headerBoardText, (railOpen || selectedProject !== 'All') && styles.headerBoardTextLit]}
-              numberOfLines={2}
+              style={[styles.headerBoardText, (railOpen || filterScoped) && styles.headerBoardTextLit]}
+              numberOfLines={1}
             >
-              {selectedProject === 'All' ? 'Boards' : boardLabel(selectedProject)}
+              {filterKeyLabel}
             </Text>
             <Icon
               name={railOpen ? 'chevron-up' : 'chevron-down'}
               size={16}
-              color={(railOpen || selectedProject !== 'All') ? theme.colors.background : theme.colors.textTertiary}
+              color={(railOpen || filterScoped) ? theme.colors.background : theme.colors.textTertiary}
             />
-          </TouchableOpacity>
-          {/* The Overview key: every board's numbers on a page over the calendar. */}
-          <TouchableOpacity
-            style={[styles.headerBoardKey, styles.headerOverviewKey, showOverview && styles.headerBoardKeyLit]}
-            onPressIn={() => tapHaptic()}
-            onPress={() => setShowOverview(true)}
-            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            accessibilityRole="button"
-            accessibilityLabel={hasActiveFilters ? `Overview, ${selectedTags.length + selectedOwners.length} filters active` : 'Overview'}
-            testID="header-overview-key"
-          >
-            <Icon name="chart-box-outline" size={15} color={showOverview ? theme.colors.background : theme.colors.textTertiary} />
-            <Text style={[styles.headerBoardText, showOverview && styles.headerBoardTextLit]} numberOfLines={1}>Overview</Text>
             {hasActiveFilters && (
               <View style={styles.headerFilterBadge}>
                 <Text style={styles.headerFilterBadgeText}>{selectedTags.length + selectedOwners.length}</Text>
@@ -2412,15 +2442,41 @@ export default function TasksScreen() {
       </Animated.ScrollView>
       </Reanimated.View>
 
-      {/* The board rail: absolute at the host's top, revealed by the same
+      {/* The filter panel: absolute at the host's top, revealed by the same
           progress that shifts the page — the page stays glued to its bottom
-          edge through the open / close. Untouchable while closed. */}
+          edge through the open / close. Untouchable while closed.
+
+          Status keys first, board rail under them. Both used to sit in the
+          header permanently; behind one key they cost the page nothing until
+          they're asked for. Picking a STATUS leaves the panel open (you are
+          often flipping to do / done on the same board), picking a BOARD
+          closes it, which is the choice that ends the errand. */}
       <Reanimated.View
         style={[styles.railLayer, railRevealStyle]}
         pointerEvents={railOpen ? 'box-none' : 'none'}
         accessibilityElementsHidden={!railOpen}
         importantForAccessibility={railOpen ? 'auto' : 'no-hide-descendants'}
       >
+        <View style={styles.railStatusRow}>
+          <StatusSegment value={statusFilter} onChange={setStatusFilter} theme={theme} />
+          {/* The Overview key: every board's numbers on a page over the
+              calendar. It lives here rather than in the header, directly under
+              the key that opens this panel and on the same right edge it used
+              to sit on — so it drops out of the header rather than moving
+              somewhere new. Opening it closes the panel; you are leaving. */}
+          <TouchableOpacity
+            style={[styles.headerBoardKey, styles.headerOverviewKey, showOverview && styles.headerBoardKeyLit]}
+            onPressIn={() => tapHaptic()}
+            onPress={() => { setRailOpen(false); setShowOverview(true); }}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            accessibilityRole="button"
+            accessibilityLabel={hasActiveFilters ? `Overview, ${selectedTags.length + selectedOwners.length} filters active` : 'Overview'}
+            testID="header-overview-key"
+          >
+            <Icon name="chart-box-outline" size={15} color={showOverview ? theme.colors.background : theme.colors.textTertiary} />
+            <Text style={[styles.headerBoardText, showOverview && styles.headerBoardTextLit]} numberOfLines={1}>Overview</Text>
+          </TouchableOpacity>
+        </View>
         <BoardRail
           boards={projects}
           selected={selectedProject}
@@ -2815,25 +2871,19 @@ const createStyles = (theme) => StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 2,
   },
-  // Row 2 under the status keys: Boards + Overview, left-aligned.
-  headerRow2: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 6,
-  },
-  // The row's keys share the width: the Boards key takes what its title
-  // needs and SHRINKS (its text wrapping to a second line) before it would
-  // push the Overview key past the edge; Overview never shrinks.
+  // The one Boards key takes what the view pill leaves, hugging the right edge
+  // where the status keys used to sit. It still SHRINKS (ellipsising a long
+  // board name) rather than pushing past the edge — but with Overview moved
+  // into the panel it now has the whole right-hand side to spend first.
   headerKeys: {
     flex: 1,
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: 8,
   },
-  // The rail's layer inside the content host: pinned to the top, exactly
-  // RAIL_H tall, over the (shifted-down) page.
+  // The filter panel's layer inside the content host: pinned to the top,
+  // exactly RAIL_H tall, over the (shifted-down) page.
   railLayer: {
     position: 'absolute',
     top: 0,
@@ -2841,6 +2891,18 @@ const createStyles = (theme) => StyleSheet.create({
     right: 0,
     height: RAIL_H,
     zIndex: 2,
+  },
+  // Status keys above the rail, with the Overview key on the far right — which
+  // is exactly where it sat while it was in the header, one row higher. Both
+  // on the rail's own horizontal padding, so the panel's contents line up.
+  railStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 4,
   },
   // The Boards key: a hairline pill that LIGHTS (text colour as fill, page
   // colour as glyph) while the rail is open or a board is selected.

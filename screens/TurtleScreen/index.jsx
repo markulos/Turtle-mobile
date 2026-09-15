@@ -14,6 +14,7 @@ import {
   UIManager,
   Share,
   Alert,
+  ActivityIndicator,
   Vibration,
   useWindowDimensions,
 } from 'react-native';
@@ -25,6 +26,11 @@ import Reanimated, {
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+// `/legacy`: the same entry point the vault's download paths use. The new
+// filesystem API is a different shape, and one screen disagreeing with the
+// rest about which one it means is how you get a working build and a crash on
+// the one code path nobody opened.
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Contacts from 'expo-contacts';
 import * as Haptics from 'expo-haptics';
 // NOTE: expo-clipboard is resolved lazily at call time (see copyInviteLink) — it
@@ -53,6 +59,8 @@ import VaultOverlay from './components/VaultOverlay';
 import TimerMessage from './components/TimerMessage';
 import PomodoroSettings from './components/PomodoroSettings';
 import MediaGallery from './components/MediaGallery';
+import MediaLightbox from '../../components/MediaLightbox';
+import VaultImagePicker from './components/VaultImagePicker';
 import { usePomodoroSocket } from './hooks/usePomodoroSocket';
 import { useClaudeSession } from './hooks/useClaudeSession';
 import { useTerminalSession } from './hooks/useTerminalSession';
@@ -103,6 +111,12 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 // Regex to match /vault command (with optional quoted password)
 const VAULT_COMMAND_REGEX = /^\/vault(?:\s+"([^"]*)")?$/;
+
+// How many images one Claude turn may carry from the composer. Matches the
+// server's own cap on `claude:input` — the socket refuses a payload over 12 MB
+// outright, and eight 1568px JPEGs sit comfortably under that. Enforced here
+// too so the user is stopped at the picker rather than by a dropped message.
+const MAX_COMPOSER_IMAGES = 8;
 
 // Default durations (in minutes)
 const DEFAULT_FOCUS_MINUTES = 25;
@@ -331,7 +345,21 @@ export default function TurtleScreen() {
   const { pending: pendingCommand, clear: clearPendingCommand } = useCommandBus();
   // Image queued for the NEXT Claude message (sent into the session as a
   // base64 block). { base64, mediaType, uri } | null.
-  const [claudeImage, setClaudeImage] = useState(null);
+  // Images queued for the NEXT Claude message (sent as base64 blocks). A LIST:
+  // a turn can carry several pictures, and the two that matter — "here are the
+  // three screenshots" — are useless one at a time.
+  //   [{ base64, mediaType, uri }]
+  const [claudeImages, setClaudeImages] = useState([]);
+  // Long-pressing the composer's attached-image thumb opens it full-screen, so
+  // you can actually check what you're about to send instead of judging it at
+  // 64pt. Holds the URI being previewed (the attachment itself is untouched).
+  const [composerPreviewUri, setComposerPreviewUri] = useState(null);
+  // The vault grid the image key can pick from, and the spinner while the
+  // chosen photo is pulled down and re-encoded (a display variant over a slow
+  // pond is a second or two, and a composer that does nothing for that long
+  // reads as a dropped tap).
+  const [showVaultPicker, setShowVaultPicker] = useState(false);
+  const [vaultPickBusy, setVaultPickBusy] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [debugLogs, setDebugLogs] = useState([]);
@@ -1248,25 +1276,106 @@ export default function TurtleScreen() {
   // Pick + attach an image to the next Claude message. Resizes to Claude's
   // recommended long-edge max (1568px) and JPEG-compresses so the base64
   // payload that rides the socket into the session stays small.
-  const pickClaudeImage = useCallback(async () => {
+  // One place that turns ANY local image file into the attachment shape the
+  // session sends: a JPEG no wider than Claude's 1568px, base64'd. Both
+  // sources below end here, so the phone's camera roll and the vault produce
+  // byte-identical attachments.
+  const attachLocalImage = useCallback(async (uri, width) => {
+    const actions = width && width > 1568 ? [{ resize: { width: 1568 } }] : [];
+    const out = await ImageManipulator.manipulateAsync(uri, actions, {
+      compress: 0.7,
+      format: ImageManipulator.SaveFormat.JPEG,
+      base64: true,
+    });
+    if (!out.base64) return;
+    // Appends, and the cap is enforced HERE as well as at each picker: the two
+    // sources can be used one after the other, so neither of them alone knows
+    // how full the composer already is.
+    setClaudeImages((prev) => (
+      prev.length >= MAX_COMPOSER_IMAGES
+        ? prev
+        : [...prev, { base64: out.base64, mediaType: 'image/jpeg', uri: out.uri }]
+    ));
+  }, []);
+
+  const pickFromCameraRoll = useCallback(async () => {
     try {
+      const room = MAX_COMPOSER_IMAGES - claudeImages.length;
+      if (room <= 0) { Alert.alert('That’s the limit', `You can attach up to ${MAX_COMPOSER_IMAGES} images to one message.`); return; }
       const res = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         quality: 1,
+        // The system picker enforces the remaining room itself, so the user is
+        // told before choosing rather than after.
+        allowsMultipleSelection: room > 1,
+        selectionLimit: room,
       });
-      if (res.canceled || !res.assets || !res.assets[0]) return;
-      const asset = res.assets[0];
-      const actions = asset.width && asset.width > 1568 ? [{ resize: { width: 1568 } }] : [];
-      const out = await ImageManipulator.manipulateAsync(asset.uri, actions, {
-        compress: 0.7,
-        format: ImageManipulator.SaveFormat.JPEG,
-        base64: true,
-      });
-      if (out.base64) setClaudeImage({ base64: out.base64, mediaType: 'image/jpeg', uri: out.uri });
+      if (res.canceled || !res.assets?.length) return;
+      // Sequential, not Promise.all: each one is a decode + re-encode of a
+      // full-size photo, and running eight of those at once is how you get the
+      // OS to kill the app for memory on an older phone.
+      for (const asset of res.assets.slice(0, room)) {
+        await attachLocalImage(asset.uri, asset.width);
+      }
     } catch (e) {
       addDebugLog('Error', `Image pick failed: ${e.message}`);
     }
-  }, [addDebugLog]);
+  }, [addDebugLog, attachLocalImage, claudeImages.length]);
+
+  /**
+   * A photo chosen out of the Turtle vault.
+   *
+   * The DISPLAY derivative, not the original: the server already keeps a
+   * ~1600px variant, which is a hair over what Claude accepts and orders of
+   * magnitude smaller than a 25MB raw. It has to come down to a file before
+   * ImageManipulator can touch it — that library reads local paths, and
+   * handing it an http URL is the kind of thing that works on one platform.
+   */
+  const pickFromVault = useCallback(async (picked) => {
+    setShowVaultPicker(false);
+    const items = (Array.isArray(picked) ? picked : [picked]).filter((it) => it?.id);
+    if (!items.length) return;
+    try {
+      setVaultPickBusy(true);
+      const base = getBaseUrl().replace(/\/api$/, '');
+      // One at a time, and a failure on one does not lose the others: a pond
+      // that drops a connection halfway through five photos should still
+      // attach the four that arrived.
+      let failed = 0;
+      for (const item of items.slice(0, MAX_COMPOSER_IMAGES)) {
+        try {
+          const dl = await FileSystem.downloadAsync(
+            `${base}/api/media/display/${item.id}`,
+            `${FileSystem.cacheDirectory}claude-attach-${item.id}.jpg`,
+          );
+          if (!dl?.uri) throw new Error('download failed');
+          await attachLocalImage(dl.uri, item.width);
+        } catch (e) {
+          failed += 1;
+          addDebugLog('Error', `Vault image pick failed: ${e.message}`);
+        }
+      }
+      if (failed) {
+        Alert.alert(
+          failed === items.length ? 'Could not attach those photos' : 'Some photos didn’t attach',
+          `${failed} of ${items.length} could not be fetched from your pond. Check the connection and try again.`,
+        );
+      }
+    } finally {
+      setVaultPickBusy(false);
+    }
+  }, [addDebugLog, attachLocalImage, getBaseUrl]);
+
+  // The image key asks WHERE first. The phone's camera roll is not the only
+  // library the user has — the vault is on the server, holds what the pond
+  // uploaded, and may hold photos this phone has never had.
+  const pickClaudeImage = useCallback(() => {
+    Alert.alert('Attach a photo', undefined, [
+      { text: 'Turtle photos', onPress: () => setShowVaultPicker(true) },
+      { text: 'Phone library', onPress: () => { pickFromCameraRoll(); } },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [pickFromCameraRoll]);
 
   // Send message handler
   const sendMessage = useCallback(async (overrideText) => {
@@ -1279,7 +1388,7 @@ export default function TurtleScreen() {
     const baseText = injected != null ? injected : inputText;
 
     // A Claude image with no caption is still sendable (image-only turn).
-    const claudeImageReady = claudeUiMode === 'session' && !!claudeImage;
+    const claudeImageReady = claudeUiMode === 'session' && claudeImages.length > 0;
     if ((!baseText.trim() && !claudeImageReady) || !isConnected) {
       addDebugLog('Error', 'Missing input or connection');
       return;
@@ -1347,7 +1456,7 @@ export default function TurtleScreen() {
         return;
       }
       terminalClose();          // mutually exclusive panels — hide the terminal
-      if (rest) { const img = claudeImage; setClaudeImage(null); claudeSend(rest, img); } // lazily opens the session
+      if (rest) { const imgs = claudeImages; setClaudeImages([]); claudeSend(rest, imgs); } // lazily opens the session
       else claudeStart();
       return; // STOP HERE — handled by the Claude console
     }
@@ -1363,9 +1472,9 @@ export default function TurtleScreen() {
     // optional attached image, sent as a base64 block into the session.
     if (claudeUiMode === 'session' && !currentInput.startsWith('/')) {
       setInputText('');
-      const img = claudeImage;
-      setClaudeImage(null);
-      claudeSend(currentInput, img);
+      const imgs = claudeImages;
+      setClaudeImages([]);
+      claudeSend(currentInput, imgs);
       return; // STOP HERE — routed to Claude, not the chat AI
     }
 
@@ -1749,7 +1858,7 @@ export default function TurtleScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [inputText, claudeImage, isConnected, getBaseUrl, api, messages, token, debugMode, addDebugLog, handleOpenVault, handleStartTimer, handleStopTimer, durations, claudeUiMode, claudeSend, claudeStart, claudeStartAdmin, claudeStop, claudeLogin, claudeLoginInput, claudeLoginStop, claudeClose, terminalOpen, terminalSend, terminalStart, terminalStop, terminalClose]);
+  }, [inputText, claudeImages, isConnected, getBaseUrl, api, messages, token, debugMode, addDebugLog, handleOpenVault, handleStartTimer, handleStopTimer, durations, claudeUiMode, claudeSend, claudeStart, claudeStartAdmin, claudeStop, claudeLogin, claudeLoginInput, claudeLoginStop, claudeClose, terminalOpen, terminalSend, terminalStart, terminalStop, terminalClose]);
 
   // Consume a command pushed from the global CommandConsole. Fires once per
   // dispatch through the same send pipeline as typing it; waits for the
@@ -3016,7 +3125,7 @@ export default function TurtleScreen() {
           value={inputText}
           onChangeText={handleInputChange}
           onSend={sendMessage}
-          canSend={(inputText.trim() || (claudeUiMode === 'session' && claudeImage)) && isConnected}
+          canSend={(inputText.trim() || (claudeUiMode === 'session' && claudeImages.length > 0)) && isConnected}
           disabled={!isConnected}
           placeholder={terminalOpen ? 'Run a command…' : claudeUiMode === 'login' ? 'Paste sign-in code…' : claudeUiMode === 'session' ? 'Message Claude…' : 'Message...'}
           inputProps={{
@@ -3028,18 +3137,51 @@ export default function TurtleScreen() {
           }}
           topSlot={
             <>
-              {claudeImage && (
-                <View style={{ position: 'relative' }}>
-                  <Image source={{ uri: claudeImage.uri }} style={styles.composerThumb} contentFit="cover" />
-                  <TouchableOpacity
-                    onPress={() => setClaudeImage(null)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    style={styles.composerThumbX}
-                    accessibilityLabel="Remove attached image"
-                  >
-                    <Icon name="close" size={14} color={theme.colors.textPrimary} />
-                  </TouchableOpacity>
-                </View>
+              {claudeImages.length > 0 && (
+                // A RAIL, not a row: eight 64pt thumbs do not fit a phone, and
+                // the composer must not grow a second line or start squeezing
+                // the bot slot. It scrolls; the slot keeps its place.
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  style={styles.composerThumbRail}
+                  contentContainerStyle={styles.composerThumbRailContent}
+                >
+                  {claudeImages.map((img, index) => (
+                    <View key={img.uri} style={{ position: 'relative' }}>
+                      {/* Hold to open it in the full-screen viewer. A tap is
+                          left alone: the thumb sits next to the X, and a stray
+                          tap taking over the screen mid-sentence would be
+                          worse than no preview at all. */}
+                      <TouchableOpacity
+                        onLongPress={() => {
+                          impactHaptic('light');
+                          // The keyboard floats ABOVE any in-app overlay, so it
+                          // has to go before a full-screen view means anything.
+                          // The draft text is untouched — only focus is dropped.
+                          Keyboard.dismiss();
+                          setComposerPreviewUri(img.uri);
+                        }}
+                        delayLongPress={300}
+                        activeOpacity={0.85}
+                        accessibilityRole="imagebutton"
+                        accessibilityLabel={`Attached image ${index + 1} of ${claudeImages.length}`}
+                        accessibilityHint="Press and hold to view it full screen"
+                      >
+                        <Image source={{ uri: img.uri }} style={styles.composerThumb} contentFit="cover" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => setClaudeImages((prev) => prev.filter((p) => p.uri !== img.uri))}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        style={styles.composerThumbX}
+                        accessibilityLabel={`Remove attached image ${index + 1}`}
+                      >
+                        <Icon name="close" size={14} color={theme.colors.textPrimary} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
               )}
               {/* Bot slot — opens/hides the Claude session; long-press = model picker. */}
               <TouchableOpacity
@@ -3064,7 +3206,7 @@ export default function TurtleScreen() {
             <>
               {claudeUiMode === 'session' && (
                 <TouchableOpacity style={styles.actionCircle} onPressIn={() => tapHaptic()} onPress={pickClaudeImage} accessibilityRole="button" accessibilityLabel="Attach an image to send to Claude">
-                  <Icon name="image-outline" size={14} color={claudeImage ? '#4ADE80' : theme.colors.textPrimary} />
+                  <Icon name="image-outline" size={14} color={claudeImages.length ? '#4ADE80' : theme.colors.textPrimary} />
                 </TouchableOpacity>
               )}
               {(claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && (
@@ -3114,6 +3256,39 @@ export default function TurtleScreen() {
         onSave={handleSaveSettings}
         initialFocusMinutes={durations.focus}
         initialBreakMinutes={durations.break}
+      />
+
+      {/* The vault as a photo source for the composer, alongside the phone's
+          own library. In-tree overlay (not a Modal) so it presents over the
+          chat's other overlays on iOS. */}
+      <VaultImagePicker
+        visible={showVaultPicker}
+        onClose={() => setShowVaultPicker(false)}
+        onPick={pickFromVault}
+        maxSelection={Math.max(1, MAX_COMPOSER_IMAGES - claudeImages.length)}
+        theme={theme}
+        api={api}
+        getFullUrl={(path) => `${getBaseUrl().replace(/\/api$/, '')}${path || ''}`}
+      />
+
+      {/* Fetching + re-encoding the chosen vault photo. Blocks the screen on
+          purpose: the next thing the user does is send, and sending before the
+          attachment lands would send the message without it. */}
+      {vaultPickBusy && (
+        <View style={styles.vaultPickBusy} pointerEvents="auto">
+          <ActivityIndicator size="large" color={theme.colors.textPrimary} />
+          <Text style={styles.vaultPickBusyText}>Attaching photo…</Text>
+        </View>
+      )}
+
+      {/* Full view of the composer's attached image — held open from the
+          thumb. Same in-tree lightbox the board timeline uses (an absolute
+          overlay, not a Modal: it has to sit above the chat's own overlays,
+          which a sibling Modal wouldn't on iOS). */}
+      <MediaLightbox
+        visible={!!composerPreviewUri}
+        uri={composerPreviewUri}
+        onClose={() => setComposerPreviewUri(null)}
       />
 
       {/* Claude model picker — revealed by long-pressing the robot icon. */}
@@ -3846,6 +4021,37 @@ const createStyles = (theme, insets) =>
       height: 64,
       borderRadius: 18,
       backgroundColor: theme.colors.surfaceElevated,
+    },
+    // The rail of attached thumbs. `flexShrink: 1` so it gives way to the bot
+    // slot beside it rather than pushing it off the composer, and the vertical
+    // padding is the room the X badges need to hang outside their thumbs
+    // without being clipped by the scroll view.
+    composerThumbRail: {
+      flexShrink: 1,
+      marginVertical: -8,
+    },
+    composerThumbRailContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 8,
+      paddingRight: 6,
+    },
+    // Above the vault picker's own overlay (1100) — it is dismissed the moment
+    // a photo is chosen, but the spinner has to outrank whatever is left.
+    vaultPickBusy: {
+      ...StyleSheet.absoluteFillObject,
+      zIndex: 1200,
+      elevation: 1200,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 14,
+      backgroundColor: theme.mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.72)',
+    },
+    vaultPickBusyText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: theme.colors.textPrimary,
     },
     // X badge on the thumb — its own dark disc, like the reference.
     composerThumbX: {

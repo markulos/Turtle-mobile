@@ -29,6 +29,7 @@ import Reanimated, {
   Easing,
   runOnJS,
   interpolate,
+  interpolateColor,
   Extrapolation,
   FadeIn,
   FadeOut,
@@ -47,7 +48,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { VirtualizedListContextResetter } from 'react-native/Libraries/Lists/VirtualizedListContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { BlurView } from 'expo-blur';
-import { blurProps, frostOverlayColor, frostBorderColor } from '../../../utils/frostedChat';
+import { blurProps, frostBorderColor } from '../../../utils/frostedChat';
 import { useTheme } from '../../../context/ThemeContext';
 import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters, matchesRecurrence, isOccurrenceCompleted, parseLocalYMD, boardLabel } from '../utils/taskHelpers';
 import ScheduleCard, { clockLabel, buildCondensedRows } from './ScheduleCard';
@@ -123,6 +124,14 @@ const MONTH_HEIGHT = MONTH_TITLE_HEIGHT + DAYS_HEADER_HEIGHT + GRID_PADDING_TOP 
 // the calendar viewport down to (but not behind) this. Mirrors the
 // `calendarContent` paddingBottom so the dynamic month-height math lines up.
 const SHEET_PEEK_RESERVE = 80;
+// The air between the screen header and the RAISED day-planner card. The sheet
+// used to travel all the way to the top of its container; the header then had
+// to stand down to avoid being covered, which cost you the view pill and the
+// Boards key for as long as you were planning a day. Stopping the card short
+// instead keeps both, and the gap is what tells you this is a card over the
+// page rather than a new screen. It is subtracted from the sheet's travel as
+// well as added to its `top` — see sheetStyle.
+const SHEET_RAISED_GAP = 12;
 // No reserved strip at the top of the calendar viewport: the up-caret hint
 // floats TRANSPARENTLY over the month title, exactly like the down-caret floats
 // over the next month below. A reserved band read as an opaque header strip and
@@ -236,6 +245,86 @@ const WEEKDAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WEEK_SELECT_BG = '#F5A623';
 const WEEK_SELECT_FG = '#1A1A1A';
 
+// ── The Task Schedule sheet takes the PAGE's side ───────────────────────────
+// It used to be its own dark room in both app themes — a white-on-black pane
+// over a white page. That was a defensible call while the pane covered the
+// whole screen and had to be legible over any month colour behind it, but the
+// sheet is a CARD now: it stops below the header (SHEET_RAISED_GAP) with the
+// page visible around it, and a black card on a white page is a hole. So the
+// pane follows the app theme — WHITE on a light theme, the same dark grey as
+// before on a dark one.
+//
+// The surface is still the chat composer's frost: BlurView at composer
+// strength under a translucent tint, so what's behind reads softly through.
+// Nothing inside the panel paints a flat surface over it.
+//
+// Alpha is higher than the composer's (0.74 vs ~0.4/0.5) for one reason: this
+// pane carries paragraphs, not a one-line input, and it has a whole month grid
+// behind it rather than a settled chat. It is the lowest number at which the
+// day's text stays comfortably readable — the calendar behind also dims to 42 %
+// (calendarStyle), and the two together are what buy the glass.
+const sheetFrost = (theme) =>
+  theme.mode === 'dark' ? 'rgba(28, 28, 30, 0.42)' : 'rgba(255, 255, 255, 0.74)';
+// The sheet's base grey as a SOLID colour, kept for the dark palette below.
+// Exported because components/index.jsx re-exports it.
+export const SHEET_SOLID = '#1C1C1E';
+// The sheet's top hairline and the same colour at zero alpha, per theme.
+// Raised, the sheet is a card sitting under the header; a rule across its top
+// edge only ever drew a second line under the one the header already has, so it
+// fades out as the sheet parks (see sheetShapeStyle). Written out rather than
+// read from frostBorderColor() because interpolateColor needs literal ends.
+const SHEET_BORDER = { dark: 'rgba(255, 255, 255, 0.12)', light: 'rgba(0, 0, 0, 0.10)' };
+const SHEET_BORDER_CLEAR = { dark: 'rgba(255, 255, 255, 0)', light: 'rgba(0, 0, 0, 0)' };
+
+/**
+ * The palette everything INSIDE the sheet is drawn with.
+ *
+ * Built from the LIVE app theme — mode included — so the components that branch
+ * on `theme.mode === 'dark'` (ScheduleCard's board-colour wash, the week strip's
+ * today pill, the hour grid's rules) take the branch that actually matches the
+ * pane they are sitting on. It departs from the app theme in two ways, in both
+ * modes:
+ *
+ *   • the pane and its cards are set ONE RUNG APART on the platform's own
+ *     elevation ladder (#1C1C1E under #2C2C2E on dark, #FFFFFF under #F2F2F7 on
+ *     light), because a card whose fill matches the pane has no edge left;
+ *   • the ink is pushed to the ends (pure white / pure black rather than the
+ *     app's softened #E0E0E0) — the pane is translucent, so its text needs the
+ *     extra contrast against whatever is blurring through.
+ *
+ * The muted rung sits at 52 % rather than the app's 30 %: it is used for real
+ * words here — the time column beside a task, the hint on an empty day — and at
+ * 30 % over a translucent pane that measured ~3.5:1, under the 4.5:1 body text
+ * has to clear.
+ *
+ * The user's accent carries over untouched, so the sheet still belongs to the
+ * app they picked. The BORDERS deliberately do not: the accent tints them, and
+ * every divider in here came out a muddy amber that read as a colour decision
+ * rather than a rule. A divider's job is to be barely there.
+ */
+const sheetThemeFrom = (theme) => {
+  const dark = theme.mode === 'dark';
+  return {
+    ...theme,
+    colors: {
+      ...theme.colors,
+      background: dark ? SHEET_SOLID : '#FFFFFF',
+      surface: dark ? '#2C2C2E' : '#F2F2F7',
+      surfaceElevated: dark ? '#2C2C2E' : '#F2F2F7',
+      surfaceHighlight: dark ? '#3A3A3C' : '#E6E6EB',
+      textPrimary: dark ? '#FFFFFF' : '#000000',
+      textSecondary: dark ? 'rgba(255, 255, 255, 0.78)' : 'rgba(0, 0, 0, 0.78)',
+      textTertiary: dark ? 'rgba(255, 255, 255, 0.62)' : 'rgba(0, 0, 0, 0.62)',
+      textMuted: dark ? 'rgba(255, 255, 255, 0.52)' : 'rgba(0, 0, 0, 0.52)',
+      textPlaceholder: dark ? 'rgba(255, 255, 255, 0.55)' : 'rgba(0, 0, 0, 0.55)',
+      inputBackground: dark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)',
+      inputText: dark ? '#FFFFFF' : '#000000',
+      border: dark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.10)',
+      borderStrong: dark ? 'rgba(255, 255, 255, 0.22)' : 'rgba(0, 0, 0, 0.18)',
+    },
+  };
+};
+
 // Build the months array ONCE at module load. The range is anchored
 // to the date the module is first evaluated — fine for an app session,
 // and the ±10y window means the user is extremely unlikely to scroll
@@ -289,6 +378,22 @@ const dayIndexOf = (date) => {
   const idx = Math.round((d.getTime() - DAYS_LIST_START.getTime()) / MS_PER_DAY);
   return Math.max(0, Math.min(DAYS_LIST.length - 1, idx));
 };
+
+/**
+ * Where "today" sits in each list, measured WHEN CALLED.
+ *
+ * Both lists are built once at module load and anchored to the day the JS
+ * bundle started; this app then stays resident for days. `TODAY_INDEX` and
+ * `DAY_TODAY_INDEX` therefore mean "the day the bundle loaded", which is only
+ * today on the first day. Every piece of mount state that means "today" reads
+ * these instead — they measure against each list's own first entry, so they
+ * stay right however stale the list is, and clamp inside it.
+ *
+ * Exported so the property can be tested directly: the answer must MOVE when
+ * the date does, without the module being re-imported.
+ */
+export const todayDayIndex = () => dayIndexOf(new Date());
+export const todayMonthIndex = () => monthIndexOf(new Date());
 
 // Contribution heat colours — green → yellow → orange → red.
 const CONTRIBUTION_COLORS = ['#9e9e9e', '#81c784', '#ffca28', '#ff9800', '#e57373'];
@@ -652,6 +757,9 @@ const DayPane = React.memo(function DayPane({
   onTaskLongPress,
   onToggleComplete,
   onUpdateTask, // used to pull an OPEN/pending task onto the viewed day
+  // (task, dayStr) — tapping a row's time column opens the wheel picker on
+  // that task, for the day this pane is showing.
+  onEditTaskTime,
   // Owner-badge tap (shared calendar). Was referenced but never declared as a
   // prop — pressing a badge threw "ReferenceError: onOwnerPress is not defined".
   onOwnerPress,
@@ -684,6 +792,11 @@ const DayPane = React.memo(function DayPane({
   const scrollRef = useRef(null);
   const dayStr = toDateString(date);
   const isViewingToday = dayStr === todayStr;
+
+  // Stable per-pane binding of the time-column tap, so the memoised
+  // ScheduleCards don't take a fresh callback on every pane render.
+  const handleEditTime = useCallback((task) => onEditTaskTime?.(task, dayStr), [onEditTaskTime, dayStr]);
+  const onTimePress = onEditTaskTime ? handleEditTime : undefined;
 
   // Title suggestions for the re-add flow — only on the active pane while the
   // add-task input is open and the user has typed ≥2 chars.
@@ -1022,11 +1135,15 @@ const DayPane = React.memo(function DayPane({
             exiting={FadeOut.duration(160)}
             style={styles.collapsedSchedule}
           >
-            {segments.length === 0 ? (
-              <Text style={styles.collapsedEmpty}>
-                No timed tasks yet. Tap + above, or expand to the timeline and long-press a slot.
-              </Text>
-            ) : buildCondensedRows(segments).map((row) => {
+            {/* No empty-state copy here. The compact view's whole job is to take
+                up as little of the day panel as it can, and a day with nothing
+                timed already says so — "0 timed" is in the toolbar directly
+                above, and the day's untimed tasks start immediately below. A
+                three-line paragraph explaining the timeline pushed them down
+                the screen to make a point nobody was asking about. The hint
+                lives on the timeline itself now, where the slot it tells you to
+                long-press is actually on screen. */}
+            {segments.length === 0 ? null : buildCondensedRows(segments).map((row) => {
               // The condensed hour timeline: every hour from the first task
               // to the last task's end gets a row — a card on the hour a task
               // starts (it stands for the hours it covers), a dashed line for
@@ -1065,6 +1182,7 @@ const DayPane = React.memo(function DayPane({
                   onToggle={(it) => onToggleComplete?.(it.id, dayStr)}
                   owner={multiUser && seg.task.userId ? { name: seg.task.ownerName || 'Unknown', color: ownerColor(seg.task.userId) } : null}
                   onOwnerPress={onOwnerPress}
+                  onTimePress={onTimePress}
                   testID={`schedule-card-${seg.task.id}`}
                 />
               );
@@ -1073,6 +1191,14 @@ const DayPane = React.memo(function DayPane({
         ) : (
         /* Expanded view — full 24-row hour grid; timed blocks absolutely placed. */
         <Reanimated.View key="grid" entering={FadeIn.duration(240)} exiting={FadeOut.duration(160)}>
+        {/* The "how do I put something here" hint, on the view where the answer
+            is visible. Only when the day has nothing timed on it — once there
+            is a block on the grid the affordance has explained itself. */}
+        {timedTasks.length === 0 && (
+          <Text style={styles.timelineEmpty}>
+            No timed tasks yet. Tap + above, or long-press an hour below.
+          </Text>
+        )}
         <Pressable
           style={styles.hourGrid}
           onLongPress={handleLongPress}
@@ -1173,7 +1299,9 @@ const DayPane = React.memo(function DayPane({
               <Text style={styles.untimedCount}>{untimedTasks.length}</Text>
             </View>
             {/* Same planner row as the schedule, with a quiet "any time" in
-                the time column so the cards keep one straight left edge. */}
+                the time column so the cards keep one straight left edge.
+                Tapping it is how a To-Do gets an hour: the wheel opens on the
+                task and the pick lands on the day this pane is showing. */}
             <TaskSectionFrontier
               items={untimedTasks}
               sectionLabel="To-Do"
@@ -1194,6 +1322,8 @@ const DayPane = React.memo(function DayPane({
                     onToggle={(it) => onToggleComplete?.(it.id, dayStr)}
                     owner={multiUser && task.userId ? { name: task.ownerName || 'Unknown', color: ownerColor(task.userId) } : null}
                     onOwnerPress={onOwnerPress}
+                    onTimePress={onTimePress}
+                    testID={`todo-card-${task.id}`}
                   />
                 );
               }}
@@ -1638,12 +1768,12 @@ export const CalendarView = ({
   // stale page: the highlight and the page disagreed. monthIndexOf/dayIndexOf
   // measure against the list's own first entry, so they stay right however old
   // the list is (and clamp, ±10 years / ±2.2 years, so they cannot fall off).
-  const [currentMonthIndex, setCurrentMonthIndex] = useState(() => monthIndexOf(new Date()));
+  const [currentMonthIndex, setCurrentMonthIndex] = useState(todayMonthIndex);
   const currentDate = MONTHS_LIST[currentMonthIndex];
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   // The day pager's page at mount. Same reasoning; read once so the initial
   // scroll index can never disagree with the initial selection.
-  const initialDayIndexRef = useRef(dayIndexOf(new Date()));
+  const initialDayIndexRef = useRef(todayDayIndex());
   // The strip is a CONTINUOUS sliding track of day cells under a FIXED centre
   // pill (see stripCenterIndex / windowDays / trackTranslateX below). Each cell is
   // absolutely positioned by its OWN day index and the track translates 1:1 with
@@ -1655,14 +1785,21 @@ export const CalendarView = ({
   useEffect(() => {
     onSelectedDateChange?.(selectedDate);
   }, [selectedDate, onSelectedDateChange]);
-  const [isExpanded, setIsExpanded] = useState(true);
-  // Tell the parent when the planner opens/closes (raised = !isExpanded) so it
+  // Docked or raised, as a REF rather than state. Nothing in the render reads
+  // it any more — the sheet's entire appearance is driven off the `sheet`
+  // shared value on the UI thread — and the setState that used to live here
+  // landed a full CalendarView render on the FIRST frame of every spring,
+  // which is the hitch you feel as the panel starts moving. The ref flips the
+  // instant a snap is committed, so a second tap mid-flight still computes the
+  // right direction. true = docked.
+  const dockedRef = useRef(true);
+  // Tell the parent when the planner opens/closes (raised = !docked) so it
   // can lock the calendar⇄list pager while the day schedule is up.
   //
   // DEFERRED, not effect-driven: this flips `dayPlannerOpen` in the PARENT,
   // which re-renders the whole TasksScreen (both pager pages). Running it off
-  // the `isExpanded` effect landed that heavy render mid-spring — the stutter
-  // felt on pull up/down. Instead the snap's spring-completion callback fires
+  // an effect on the docked/raised state landed that heavy render mid-spring —
+  // the stutter felt on pull up/down. Instead the snap's completion callback fires
   // it AFTER the animation settles, so the sheet glides on the UI thread and
   // the React churn happens once it's already parked. `raise` = planner open.
   const notifyPlanner = useCallback((raise) => {
@@ -1737,12 +1874,12 @@ export const CalendarView = ({
   //   1 = raised  (panel pulled up to full height, calendar hidden behind)
   //
   // A Pan gesture on the header drives `sheet` 1:1 with the finger; on
-  // release it springs to the nearer snap (velocity-projected). The
-  // existing `isExpanded` boolean is kept in lock-step at the snap
-  // endpoints (isExpanded === true ⟺ docked ⟺ sheet 0) so all the
-  // existing isExpanded-keyed UI (filter toggle, hint text, auto-scroll)
-  // keeps working unchanged.
-  const sheet = useSharedValue(0);          // starts docked (isExpanded=true)
+  // release it springs to the nearer snap, CARRYING THE FLING'S VELOCITY
+  // into the spring so the sheet never stops dead at the moment your finger
+  // leaves it. `dockedRef` is kept in lock-step at the snap endpoints
+  // (dockedRef === true ⟺ docked ⟺ sheet 0) for the handlers that need to
+  // know which way a toggle should go.
+  const sheet = useSharedValue(0);          // starts docked (dockedRef=true)
   const sheetStart = useSharedValue(0);     // sheet value at gesture start
   // Seed containerH with the window height so the very first frame
   // computes a sensible (docked) translateY — otherwise travel=0 would
@@ -1779,14 +1916,40 @@ export const CalendarView = ({
     // partly behind the dock instead of fully above it. Closed, the sheet shows
     // its whole header ABOVE the dock; the horizontal list below it is free to
     // tuck under the dock until you pull up.
-    const travel = Math.max(0, containerH.value - headerH.value - dockH);
+    //
+    // SHEET_RAISED_GAP comes off the travel because the sheet's own `top` is
+    // already offset by it: the two have to agree or the docked peek drifts
+    // down by exactly that gap.
+    const travel = Math.max(0, containerH.value - headerH.value - dockH - SHEET_RAISED_GAP);
     return { transform: [{ translateY: travel * (1 - sheet.value) }] };
   });
-  // Calendar fades out as the sheet covers it, so it isn't visible through
-  // the sheet's rounded top corners on the last few pixels of travel.
+  // The sheet is a CARD at both ends of the travel now — it stops below the
+  // header rather than becoming the page — so the corners stay rounded the
+  // whole way. Only the top hairline goes: raised, the card's top edge sits a
+  // few points under the header's own rule, and two parallel lines that close
+  // to each other read as a mistake. The border goes by COLOUR, not width:
+  // width is layout, and changing it mid-spring would move the header (and with
+  // it headerH, and with it the travel the spring is animating against).
+  const sheetBorderOn = theme.mode === 'dark' ? SHEET_BORDER.dark : SHEET_BORDER.light;
+  const sheetBorderOff = theme.mode === 'dark' ? SHEET_BORDER_CLEAR.dark : SHEET_BORDER_CLEAR.light;
+  const sheetShapeStyle = useAnimatedStyle(() => ({
+    borderTopColor: interpolateColor(sheet.value, [0.82, 1], [sheetBorderOn, sheetBorderOff]),
+  }));
+  // The header's own hairline — on when the sheet is raised (it separates the
+  // title block from the week strip), off at the docked peek where the header
+  // is a floating card edge. Opacity, not border width: see taskListHeader.
+  const headerRuleStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(sheet.value, [0.5, 1], [0, 1], Extrapolation.CLAMP),
+  }));
+  // The calendar DIMS behind the sheet instead of disappearing. The sheet is
+  // frosted glass (see sheetFrost), and glass with a blank wall behind it is
+  // just a wall: the month has to stay on screen for there to be anything to
+  // blur. It goes far enough down that the day's text still reads cleanly over
+  // it, and no further. The strip left visible ABOVE the raised card is the
+  // calendar too — dimmed, so the gap reads as depth rather than a seam.
   const calendarStyle = useAnimatedStyle(() => ({
-    // Sheet-cover fade × first-paint gate: both must be "open" to show the grid.
-    opacity: contentReady.value * interpolate(sheet.value, [0, 0.85], [1, 0], Extrapolation.CLAMP),
+    // Sheet-cover dim × first-paint gate: both must be "open" to show the grid.
+    opacity: contentReady.value * interpolate(sheet.value, [0, 0.85], [1, 0.42], Extrapolation.CLAMP),
   }));
 
   // Memoized so `styles` keeps a STABLE identity across renders. Unmemoized this
@@ -1795,6 +1958,14 @@ export const CalendarView = ({
   // renderDayItem deps + the React.memo'd DayPane prop, defeating EVERY memo
   // boundary in the file. This one line is the dominant calendar-lag fix.
   const styles = useMemo(() => createStyles(theme), [theme]);
+
+  // The same sheet built against the sheet's own palette. The calendar
+  // BEHIND the sheet keeps `styles`/`theme`; everything the sheet paints — its
+  // header, the week strip, every day pane — takes these instead. Memoized for
+  // the same reason as `styles` above: their identity flows into renderDayItem's
+  // deps and DayPane's memo boundary.
+  const sheetTheme = useMemo(() => sheetThemeFrom(theme), [theme]);
+  const sheetStyles = useMemo(() => createStyles(sheetTheme), [sheetTheme]);
 
   // ── Fill-the-screen month sizing ─────────────────────────────
   // We measure the calendar area (`calAreaH`) and grow each cell so the
@@ -1838,23 +2009,24 @@ export const CalendarView = ({
     transform: [{ translateY: hintSV.value * 4 }],
   }));
 
-  // Snap the sheet to docked/raised and keep `isExpanded` in sync.
-  // `raise=true` → panel up (isExpanded false); `raise=false` → docked.
+  // Snap the sheet to docked/raised and keep `dockedRef` in sync.
+  // `raise=true` → panel up (docked false); `raise=false` → docked.
   const snapSheet = useCallback((raise) => {
-    setIsExpanded(!raise);
+    dockedRef.current = !raise;
     // Parent notify rides the spring's completion (see notifyPlanner) so the
-    // heavy TasksScreen re-render lands after the settle, not during it.
+    // heavy TasksScreen re-render lands after the settle, not during it. The
+    // local side is now a ref, so NOTHING re-renders as the spring starts.
     sheet.value = withSpring(raise ? 1 : 0, SHEET_SPRING, (finished) => {
       'worklet';
       if (finished) runOnJS(notifyPlanner)(raise);
     });
   }, [sheet, notifyPlanner]);
 
-  // Called from the Pan gesture's onEnd via runOnJS to commit the
-  // React-side boolean once the finger lifts (the spring itself is
-  // already running on the UI thread by then).
+  // Called from the Pan gesture's onEnd via runOnJS once the finger lifts, to
+  // record which end the spring is heading for (the spring itself is already
+  // running on the UI thread by then).
   const commitSheet = useCallback((raise) => {
-    setIsExpanded(!raise);
+    dockedRef.current = !raise;
   }, []);
 
   // Pan gesture on the header. activeOffsetY means a short tap (no
@@ -1867,26 +2039,36 @@ export const CalendarView = ({
       sheetStart.value = sheet.value;
     })
     .onUpdate((e) => {
-      const travel = Math.max(1, containerH.value - headerH.value);
+      // The SAME travel sheetStyle uses, dock and raised-gap included. It used
+      // to leave both out, so a drag moved the sheet slightly further than the
+      // finger and the card crept ahead of your thumb over a long pull.
+      const travel = Math.max(1, containerH.value - headerH.value - dockH - SHEET_RAISED_GAP);
       // Drag up (negative translationY) raises the sheet toward 1.
       const next = sheetStart.value - e.translationY / travel;
       sheet.value = Math.min(1, Math.max(0, next));
     })
     .onEnd((e) => {
-      const travel = Math.max(1, containerH.value - headerH.value);
+      const travel = Math.max(1, containerH.value - headerH.value - dockH - SHEET_RAISED_GAP);
       // Project a little along the fling so a fast flick commits even
       // from past the midpoint.
-      const projected = sheet.value + (-e.velocityY / travel) * 0.12;
+      const normalizedV = -e.velocityY / travel;
+      const projected = sheet.value + normalizedV * 0.12;
       const raise = projected >= 0.5;
-      // Commit the local boolean now (cheap; heavy children are memoized), but
-      // defer the parent pager-lock notify to the spring's settle so the big
+      // Hand the fling's speed to the spring, in the sheet's own 0→1 units.
+      // Without it the spring starts from rest: the sheet was tracking your
+      // finger at speed and then, the instant you let go, restarted from a
+      // dead stop — a visible break in one continuous gesture. With it the
+      // release is just the point where the finger stops steering and the
+      // spring takes over at the same speed.
+      //
+      // The parent pager-lock notify still waits for the settle, so the big
       // TasksScreen re-render never lands mid-animation (the pull stutter).
-      sheet.value = withSpring(raise ? 1 : 0, SHEET_SPRING, (finished) => {
+      sheet.value = withSpring(raise ? 1 : 0, { ...SHEET_SPRING, velocity: normalizedV }, (finished) => {
         'worklet';
         if (finished) runOnJS(notifyPlanner)(raise);
       });
       runOnJS(commitSheet)(raise);
-    }), [sheet, sheetStart, containerH, headerH, commitSheet, notifyPlanner]);
+    }), [sheet, sheetStart, containerH, headerH, dockH, commitSheet, notifyPlanner]);
 
   // ── Horizontal day pager ─────────────────────────────────────────────
   //
@@ -1902,13 +2084,22 @@ export const CalendarView = ({
   // The page index currently centred. Held in a ref (not state) so the
   // momentum/jump handlers can read+write it without re-render churn; the
   // visible day is mirrored into `selectedDate` for the rest of the UI.
-  const currentDayIndexRef = useRef(DAY_TODAY_INDEX);
+  // Seeded from the day this view MOUNTED, not from the day the bundle loaded.
+  // `DAY_TODAY_INDEX` is a module-load constant, and the app stays resident for
+  // days — see the note on currentMonthIndex. (The same constant is still the
+  // right thing at lines ~1547 / ~2023: there it is a coordinate ORIGIN that
+  // cancels out of the translate, so it only has to be the same on both sides.)
+  const currentDayIndexRef = useRef(initialDayIndexRef.current);
 
   // Live horizontal scroll offset of the day pager, captured natively so the
   // week-strip highlight can track the swipe 1:1 (mirrors the photo-vault tab
   // indicator). Seeded at today's offset so the pill is correctly placed on
   // the very first frame, before any scroll event fires.
-  const dayScrollX = useRef(new Animated.Value(DAY_TODAY_INDEX * SCREEN_W)).current;
+  // THE pill's position on frame one. This is what made "today" look unselected
+  // on opening: the pager starts on today's page (initialScrollIndex) while this
+  // seed still pointed at the bundle-load day, so the week strip's highlight sat
+  // on a different date until the first scroll event corrected it.
+  const dayScrollX = useRef(new Animated.Value(initialDayIndexRef.current * SCREEN_W)).current;
   // Week-strip geometry, measured via onLayout so the sliding pill lines up
   // with the day cells on any screen width / font metrics. Seeded with
   // computed defaults and refined once laid out.
@@ -1983,7 +2174,7 @@ export const CalendarView = ({
   //   • pillLeft   — horizontal position of the fixed pill (slot STRIP_CENTER_CELL)
   //   • base       — inside trackTranslateX; nudges the whole track left/right
   //   • STRIP_CENTER_CELL — which of the 7 visible slots (0..6) the pill sits over
-  const [stripCenterIndex, setStripCenterIndex] = useState(DAY_TODAY_INDEX);
+  const [stripCenterIndex, setStripCenterIndex] = useState(() => initialDayIndexRef.current);
   const STRIP_HALF_WIN = 14;     // cells rendered each side of centre (fling buffer; re-window is invisible now, so generous)
   const STRIP_CENTER_CELL = 3;   // the pill sits over the middle of the 7 visible cells
 
@@ -2055,20 +2246,20 @@ export const CalendarView = ({
   // Header tap toggles the sheet between docked and raised. (Drags are
   // handled separately by the Pan gesture wrapping the header.)
   const toggleExpand = useCallback(() => {
-    snapSheet(isExpanded); // isExpanded(docked) → raise; raised → dock
-  }, [isExpanded, snapSheet]);
+    snapSheet(dockedRef.current); // docked → raise; raised → dock
+  }, [snapSheet]);
 
   // ── Day-pane control callbacks (passed to each DayPane) ───────────────
   // Opening the add-task / search inputs from a docked calendar first raises
   // the panel so the input isn't hidden behind it.
   const openAddTask = useCallback(() => {
     setIsAddingTask(true);
-    if (isExpanded) toggleExpand();
-  }, [isExpanded, toggleExpand]);
+    if (dockedRef.current) toggleExpand();
+  }, [toggleExpand]);
   const openSearch = useCallback(() => {
     setIsSearching(true);
-    if (isExpanded) toggleExpand();
-  }, [isExpanded, toggleExpand]);
+    if (dockedRef.current) toggleExpand();
+  }, [toggleExpand]);
   const closeSearch = useCallback(() => {
     setIsSearching(false);
     setSearchQuery('');
@@ -2092,6 +2283,27 @@ export const CalendarView = ({
     skipBlurCancelRef.current = true;
     setEditingTime(true);
   }, []);
+
+  // Tapping an EXISTING row's time column opens the same wheel on that task.
+  // Held here rather than in DayPane because three panes are mounted at once
+  // and only one picker may be up.
+  const [timeEditTarget, setTimeEditTarget] = useState(null); // { task, dayStr }
+  const openTaskTimeEditor = useCallback((task, dayStr) => {
+    if (task) setTimeEditTarget({ task, dayStr });
+  }, []);
+  const closeTaskTimeEditor = useCallback(() => setTimeEditTarget(null), []);
+  const commitTaskTime = useCallback((t) => {
+    const { task, dayStr } = timeEditTarget || {};
+    if (!task) return;
+    const patch = { time: t || '' };
+    // The time lands on the day you set it FROM — that is what "give this
+    // To-Do an hour" means when you're looking at Thursday. A repeating task
+    // is the exception: its dueDate is the series anchor, so moving it would
+    // drag every future occurrence along. Those just take the new time.
+    const repeats = (task.recurring || task.recurrence || 'none') !== 'none';
+    if (!repeats && dayStr && task.dueDate !== dayStr) patch.dueDate = dayStr;
+    onUpdateTask?.(task.id, patch);
+  }, [timeEditTarget, onUpdateTask]);
 
   // Fold/unfold the "All Day" untimed strip. Native LayoutAnimation
   // gives the height change a smooth ease without us animating a
@@ -2310,7 +2522,7 @@ export const CalendarView = ({
     // the ACTUAL current month even if the app has been open across midnight
     // into a new month — otherwise the day pager shows today while the month
     // grid sits on last month.
-    scrollToMonth(monthIndexOf(new Date()));
+    scrollToMonth(todayMonthIndex());
   }, [scrollToMonth, jumpToDate]);
 
   // Opening the calendar tomorrow must still open it on TOMORROW.
@@ -2541,8 +2753,8 @@ export const CalendarView = ({
       getDayTasks={getDayTasks}
       todayStr={todayStr}
       multiUser={multiUser}
-      theme={theme}
-      styles={styles}
+      theme={sheetTheme}
+      styles={sheetStyles}
       use24h={use24h}
       nowMinutes={nowMinutes}
       pendingTasks={pendingTasks}
@@ -2555,6 +2767,7 @@ export const CalendarView = ({
       onTaskLongPress={onTaskLongPress}
       onToggleComplete={onToggleComplete}
       onUpdateTask={onUpdateTask}
+      onEditTaskTime={openTaskTimeEditor}
       onOwnerPress={onOwnerPress}
       onOpenAddTaskAt={openAddTaskAt}
       isAddingTask={isAddingTask}
@@ -2581,9 +2794,10 @@ export const CalendarView = ({
     />
   ), [
     selectedStr, tasks, getDayTasks, todayStr,
-    multiUser, theme, styles, use24h, nowMinutes, pendingTasks, untimedCollapsed,
+    multiUser, sheetTheme, sheetStyles, use24h, nowMinutes, pendingTasks, untimedCollapsed,
     toggleUntimedCollapsed, scheduleCollapsed, toggleScheduleCollapsed,
-    onTaskPress, openInspector, onTaskLongPress, onToggleComplete, onOwnerPress, openAddTaskAt,
+    onTaskPress, openInspector, onTaskLongPress, onToggleComplete, onUpdateTask, openTaskTimeEditor,
+    onOwnerPress, openAddTaskAt,
     isAddingTask, newTaskTitle, handleAddTask, handleCancelAdd, pendingTime, clearPendingTime,
     openTimeEditor,
     openAddTask, handlePickSuggestion, openFullCreate, isSearching, searchQuery, openSearch, closeSearch, searchResults,
@@ -2709,41 +2923,52 @@ export const CalendarView = ({
           calendar). The header is wrapped in a Pan GestureDetector so
           it can be dragged up/down by the finger; a plain tap still
           toggles via the TouchableOpacity onPress. */}
-      <Reanimated.View style={[styles.sheet, sheetStyle]}>
-        {/* The chat composer's frost (utils/frostedChat): a transparent sheet
-            whose surface is a BlurView + a light translucent tint, so the
+      <Reanimated.View style={[sheetStyles.sheet, sheetStyle, sheetShapeStyle]}>
+        {/* The chat composer's frost, in dark grey: a transparent sheet whose
+            surface is a BlurView + a translucent tint (sheetFrost), so the
             calendar behind reads softly through it. Sections inside stay
-            transparent. */}
-        <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
-        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
+            transparent — this is the only surface the pane has.
+
+            Nothing opaque is painted over it. The sheet used to cross-fade to a
+            solid fill as it parked, which meant the frost was only ever visible
+            in transit; it is glass the whole way up now. */}
+        <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(sheetTheme)} />
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: sheetFrost(sheetTheme) }]} />
         {/* Only the header is the docked "peek" (its measured height drives the
             sheet travel). The week strip lives BELOW it, so it's off-screen
             when docked and slides into view only as the sheet is brought up. */}
         <GestureDetector gesture={headerPan}>
         <TouchableOpacity
-          style={[styles.taskListHeader, isExpanded && styles.taskListHeaderCollapsed]}
+          // ONE style, in both states. The docked variant used to drop the
+          // bottom hairline, which is half a point of HEIGHT — it re-fired this
+          // onLayout mid-spring, changed headerH, and so changed the very travel
+          // the spring was animating against. The lift shadow is simply always
+          // on: raised, it falls off the top of the sheet where nothing can see
+          // it anyway.
+          style={sheetStyles.taskListHeader}
           onPress={toggleExpand}
           activeOpacity={1}
           onLayout={(e) => { headerH.value = e.nativeEvent.layout.height; }}
         >
+          <Reanimated.View pointerEvents="none" style={[sheetStyles.taskListHeaderRule, headerRuleStyle]} />
           {/* Grab handle — a little pill that reads as "drag me". Centered via a
               full-width wrapper (alignItems) so padding/layout can't offset it. */}
-          <View style={styles.grabHandleWrap} pointerEvents="none">
-            <View style={styles.grabHandle} />
+          <View style={sheetStyles.grabHandleWrap} pointerEvents="none">
+            <View style={sheetStyles.grabHandle} />
           </View>
-          <View style={styles.taskListHeaderContent}>
+          <View style={sheetStyles.taskListHeaderContent}>
             {/* "Task Schedule" at the month header's size, both words heavy;
                 the day beneath it as a clear subtitle — nothing else here. */}
-            <Text style={styles.taskListTitle} accessibilityRole="header" numberOfLines={1}>{taskTitle}</Text>
-            <Text style={styles.dateSubtitle} numberOfLines={1}>{taskSubtitle}</Text>
+            <Text style={sheetStyles.taskListTitle} accessibilityRole="header" numberOfLines={1}>{taskTitle}</Text>
+            <Text style={sheetStyles.dateSubtitle} numberOfLines={1}>{taskSubtitle}</Text>
           </View>
-          <View style={styles.taskListHeaderRight}>
+          <View style={sheetStyles.taskListHeaderRight}>
             {/* ONE key: opens the finder — a single field that searches every
                 task and creates one when nothing matches (its create row
                 carries a "Full form" key for events, birthdays and every
                 other field). × while open. */}
             <TouchableOpacity
-              style={styles.headerAddBtn}
+              style={sheetStyles.headerAddBtn}
               onPressIn={() => tapHaptic()}
               onPress={(e) => { e.stopPropagation(); if (isAddingTask) handleCancelAdd(); else openAddTask(); }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -2753,7 +2978,7 @@ export const CalendarView = ({
               accessibilityLabel={isAddingTask ? 'Close' : 'Search or add a task'}
               testID="day-finder-key"
             >
-              <Icon name={isAddingTask ? 'close' : 'plus'} size={27} color={theme.colors.background} />
+              <Icon name={isAddingTask ? 'close' : 'plus'} size={27} color={sheetTheme.colors.background} />
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
@@ -2764,7 +2989,7 @@ export const CalendarView = ({
             the hourly breakdown below slides day-to-day. Tap a day to jump
             (with the same slide as a swipe). */}
         <View
-          style={styles.weekStrip}
+          style={sheetStyles.weekStrip}
           onLayout={(e) => setStripW(e.nativeEvent.layout.width)}
         >
           {/* Fixed centre highlight pill (painted first, BEHIND the cells). The
@@ -2773,7 +2998,7 @@ export const CalendarView = ({
           <Animated.View
             pointerEvents="none"
             style={[
-              styles.weekPill,
+              sheetStyles.weekPill,
               { top: pillTop, height: pillH, width: PILL_W, left: pillLeft },
             ]}
           />
@@ -2783,7 +3008,7 @@ export const CalendarView = ({
               pager drives the translate 1:1, so weeks flow past the fixed pill
               continuously. overflow:hidden on weekStrip clips the off-screen cells. */}
           <Animated.View
-            style={[styles.weekTrack, { transform: [{ translateX: trackTranslateX }] }]}
+            style={[sheetStyles.weekTrack, { transform: [{ translateX: trackTranslateX }] }]}
           >
             {windowDays.map(({ idx, date: d }) => {
               const key = toDateString(d);
@@ -2797,7 +3022,7 @@ export const CalendarView = ({
                   isActive={key === selectedStr}
                   isToday={key === todayStr}
                   dayScrollX={dayScrollX}
-                  styles={styles}
+                  styles={sheetStyles}
                   onPress={goToDate}
                   onPillSlotLayout={idx === stripCenterIndex ? measurePillSlot : undefined}
                 />
@@ -2848,7 +3073,7 @@ export const CalendarView = ({
           initialNumToRender={1}
           maxToRenderPerBatch={2}
           extraData={renderDayItem}
-          style={styles.taskList}
+          style={sheetStyles.taskList}
         />
         </ScrollView.Context.Provider>
         </VirtualizedListContextResetter>
@@ -2861,6 +3086,16 @@ export const CalendarView = ({
         initialTime={pendingTime}
         onSelect={setPendingTime}
         onClose={() => setEditingTime(false)}
+      />
+
+      {/* The same wheel for an EXISTING row — opened by tapping its time
+          column. "Clear time" hands back null, which drops the task into the
+          day's To-Do list rather than off the day. */}
+      <WheelTimePicker
+        visible={!!timeEditTarget}
+        initialTime={timeEditTarget?.task?.time || null}
+        onSelect={commitTaskTime}
+        onClose={closeTaskTimeEditor}
       />
     </View>
   );
@@ -2881,7 +3116,7 @@ const createStyles = (theme) => StyleSheet.create({
   // now driven entirely by the task panel header below.
   //
   // calendarContent now flex-fills the screen above the (absolutely-
-  // positioned, when isExpanded) task panel header. justifyContent
+  // positioned) task panel header. justifyContent
   // 'center' vertically centres the title + days row + month grid as
   // a group — so on a tall phone the calendar sits nicely centred
   // with breathing room above and below instead of being top-piled.
@@ -3221,14 +3456,18 @@ const createStyles = (theme) => StyleSheet.create({
     fontWeight: 'bold',
     marginLeft: 1,
   },
-  // The day-tasks bottom sheet. Always full-height and absolutely
-  // positioned over the calendar; `sheetStyle` translateY slides it
-  // between docked (only the header strip visible at the bottom) and
-  // raised (covering the calendar). overflow:hidden clips the body to
-  // the rounded top corners.
+  // The day-tasks bottom sheet. Absolutely positioned over the calendar;
+  // `sheetStyle` translateY slides it between docked (only the header strip
+  // visible at the bottom) and raised. overflow:hidden clips the body to the
+  // rounded top corners.
+  //
+  // `top` is SHEET_RAISED_GAP, not 0: raised, the card stops that far below the
+  // screen header instead of swallowing it, which is what leaves the view pill
+  // and the Boards key reachable while you plan a day. sheetStyle takes the
+  // same gap off the travel so the docked peek is unmoved.
   sheet: {
     position: 'absolute',
-    top: 0,
+    top: SHEET_RAISED_GAP,
     left: 0,
     right: 0,
     bottom: 0,
@@ -3262,16 +3501,15 @@ const createStyles = (theme) => StyleSheet.create({
     borderRadius: 2.5,
     backgroundColor: theme.colors.borderStrong || theme.colors.border,
   },
-  // Docked peek lift — matched to the add-task card's soft upward shadow so the
-  // collapsed strip reads as the same floating card.
-  taskListHeaderCollapsed: {
-    borderBottomWidth: 0,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.22,
-    shadowRadius: 20,
-    elevation: 18,
-  },
+  // The sheet's grab header. Matched to the add-task card's soft upward shadow
+  // so the docked peek reads as the same floating card — and the shadow stays
+  // on when the sheet is raised, where it has nothing above it to fall on.
+  //
+  // NO border, and nothing here varies with docked/raised: this view's measured
+  // height IS the sheet's travel (headerH), so any style that changes with the
+  // sheet's state changes the distance the sheet is in the middle of covering.
+  // The line under the header when raised is drawn by taskListHeaderRule, an
+  // absolute hairline that costs no layout.
   taskListHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3281,9 +3519,22 @@ const createStyles = (theme) => StyleSheet.create({
     // title; bottom stays 12 for a balanced strip.
     paddingTop: 18,
     paddingBottom: 12,
-    borderBottomWidth: 0.5,
-    borderBottomColor: theme.colors.border,
     backgroundColor: 'transparent',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 20,
+    elevation: 18,
+  },
+  // The hairline the header used to carry as a real border. Absolute, so it
+  // paints without occupying any height (see taskListHeader).
+  taskListHeaderRule: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: theme.colors.border,
   },
   taskListHeaderContent: {
     flex: 1,
@@ -3628,11 +3879,15 @@ const createStyles = (theme) => StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 24,
   },
-  collapsedEmpty: {
+  // The empty-day hint, now shown only above the expanded timeline (it used to
+  // sit in the compact view, where it was the tallest thing on an empty day).
+  // One line, tight padding: it sits between the toolbar and the hour grid.
+  timelineEmpty: {
     fontSize: 13,
     color: theme.colors.textTertiary,
     textAlign: 'center',
-    paddingVertical: 28,
+    paddingTop: 10,
+    paddingBottom: 14,
     paddingHorizontal: 24,
     lineHeight: 19,
   },

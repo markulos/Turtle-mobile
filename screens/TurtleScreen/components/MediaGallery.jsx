@@ -107,7 +107,7 @@ import EdgeSwipePage from './EdgeSwipePage';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
 import { useMediaVersion } from '../../../context/DownloadsContext';
 import { useTheme } from '../../../context/ThemeContext';
-import PhotoVaultBoardsPage from './PhotoVaultBoardsPage';
+import PhotoVaultBoardsPage, { SEARCH_ENTER, SEARCH_EXIT } from './PhotoVaultBoardsPage';
 import AlbumShareSheet from './AlbumShareSheet';
 import AlbumActionsSheet from './AlbumActionsSheet';
 import ShareInsightsPage from './ShareInsightsPage';
@@ -345,6 +345,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const gridJumpingRef = useRef(false); // true during a tap-to-latest animation
   const gridJumpIdleTimer = useRef(null); // idle auto-hide: fades the pill once the grid stops moving
   const scrubTailFrame = useRef(0); // throttles handleGridScroll's JS-only tail (pill/idle/prefetch) to every 4th frame
+  // True between the first scroll frame and the settle that follows it. The
+  // video preview reads it to avoid mounting a decoder mid-fling.
+  const gridMovingRef = useRef(false);
   // The pill's fade lives lower down (see `gridJumpVisible`): besides the scroll
   // intent it also folds in "is an overlay covering the grid?", and those
   // overlay states (viewer / select mode / upload sheet) are declared further below.
@@ -539,6 +542,29 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const [albumsLoadError, setAlbumsLoadError] = useState(null);
   const [hasLoadedAlbums, setHasLoadedAlbums] = useState(false);
   const [albumSearchQuery, setAlbumSearchQuery] = useState(''); // Album search filter
+  // True while the boards page is in search mode. The vault's title + tab
+  // picker stand down for the duration so the search field rises to the top of
+  // the screen and the results start directly under it — the header is the
+  // reason the field sat ~86pt down, and none of it is any use mid-search.
+  const [boardSearchActive, setBoardSearchActive] = useState(false);
+  // Gated on the pager page too: swiping to Music mid-search must not leave the
+  // vault wearing no header, and the boards page keeps its query for when you
+  // swipe back.
+  const boardHeaderCollapsed = boardSearchActive && pagerTab === 'albums' && !photosOpen;
+  // 0 = header in place, 1 = header parked above the screen. The boards page
+  // runs the same curve on its own lift, so the field and the header move as
+  // one piece (Facebook's search: the chrome leaves, the field takes its
+  // place — nothing teleports).
+  const boardSearchAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(boardSearchAnim, {
+      toValue: boardHeaderCollapsed ? 1 : 0,
+      // The page's own timings, imported rather than copied — see the note on
+      // SEARCH_ENTER: one movement, two components, one set of numbers.
+      ...(boardHeaderCollapsed ? SEARCH_ENTER : SEARCH_EXIT),
+      useNativeDriver: true,
+    }).start();
+  }, [boardHeaderCollapsed, boardSearchAnim]);
   const searchInputRef = useRef(null);
   // === BROWSE MODEL ===
   // Every knob the "Filter & arrange" sheet offers — date basis, direction,
@@ -1822,6 +1848,19 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // none is active) do we commit the centermost visible video as the new one.
     // Guarded so an identical commit never triggers a re-render.
     if (active && activeStillVisible) return;
+    // WHILE THE GRID IS MOVING, only RELEASE — never start.
+    //
+    // Starting a preview mounts an expo-video player: a native decoder plus a
+    // React subtree, on the JS thread, on a frame the fling needs. Flinging
+    // through a video-heavy stretch used to do that once per video that became
+    // centremost, mounting and tearing down decoders the whole way down. The
+    // candidate is already tracked above (viewableVideoRef), and
+    // handleGridScrollSettled commits it the moment motion stops — which is
+    // what the preview was always documented to do.
+    if (gridMovingRef.current) {
+      if (active) setActiveVideoId(null);   // the active one left the screen
+      return;
+    }
     if (active !== best) setActiveVideoId(best);
   }).current;
 
@@ -1834,6 +1873,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const handleGridScroll = useCallback((e) => {
     const ne = e && e.nativeEvent;
     if (!ne) return;
+    gridMovingRef.current = true;
     // No pause-on-scroll: viewability keeps the centermost video playing while
     // it stays on screen and only hands off when it scrolls out (see
     // onViewableItemsChanged), so scrolling past a visible video never reloads it.
@@ -1888,6 +1928,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // The event comes with them, so the refs are synced from the EXACT resting
   // offset rather than from the tail's ≤4-frame-old copy.
   const handleGridScrollSettled = useCallback((e) => {
+    gridMovingRef.current = false;
     const ne = e && e.nativeEvent;
     if (ne) {
       if (ne.contentOffset) scrubLastY.current = ne.contentOffset.y || 0;
@@ -1895,9 +1936,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       if (ne.layoutMeasurement && ne.layoutMeasurement.height) gridLayoutH.current = ne.layoutMeasurement.height;
     }
     ensureVisibleRegionNow();
-    // Hand-off happens live in onViewableItemsChanged; this is only a backstop —
-    // if nothing is previewing but a video is centred at rest, seed it. Guarded
-    // so it never restarts a preview that's already playing.
+    // THIS is where a preview starts. While the grid was moving, viewability
+    // only tracked the candidate and released anything that scrolled off (see
+    // onViewableItemsChanged) — so a decoder is mounted once, here, on a still
+    // grid. A preview that stayed visible through the scroll is still playing
+    // and `active` is not null, which is what keeps this from restarting it.
     if (GRID_VIDEO_PREVIEW && activeVideoIdRef.current == null && viewableVideoRef.current) {
       setActiveVideoId(viewableVideoRef.current);
     }
@@ -4202,6 +4245,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               sortMode={boardSortMode}
               theme={theme}
               topInset={vaultHeaderH || insets.top + 90}
+              searchTopInset={insets.top}
               resolveCoverUrl={getFullUrl}
               onQueryChange={setAlbumSearchQuery}
               onSortModeChange={setBoardSortMode}
@@ -4210,6 +4254,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               onOpenBoard={openPhotosPage}
               onLongPressBoard={showAlbumOptions}
               onOpenShareInsights={setInsightsAlbumName}
+              onSearchActiveChange={setBoardSearchActive}
               onScroll={handleAlbumsScroll}
               onContentSizeChange={(w, h) => {
                 albumsContentH.current = h;
@@ -4759,8 +4804,16 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       {/* Notch Shield */}
       <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: theme.colors.background, zIndex: 30 }} />
 
-      {/* 2. Compact Static Header */}
-      <View
+      {/* 2. Compact Static Header.
+          It SLIDES away while the boards page is being searched rather than
+          unmounting — that is the whole difference between the field jumping
+          to the top and gliding there. Staying mounted also keeps
+          `vaultHeaderH` (and so every page's `topInset`) constant, so nothing
+          below relayouts; the boards page lifts itself by the same distance on
+          the same curve. Absolutely positioned, so this transform costs a
+          composite and nothing else. */}
+      <Animated.View
+        pointerEvents={boardHeaderCollapsed ? 'none' : 'auto'}
         onLayout={(e) => {
           const h = Math.round(e.nativeEvent.layout.height);
           if (h > 0 && h !== vaultHeaderH) setVaultHeaderH(h);
@@ -4769,6 +4822,20 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           styles.floatingHeaderContainer,
           {
             paddingTop: insets.top,
+            transform: [{
+              translateY: boardSearchAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, -(vaultHeaderH || insets.top + 90)],
+              }),
+            }],
+            // Gone before it has finished travelling: a header reading
+            // "Media Vault" sliding up behind the notch shield is motion you
+            // don't want to watch, you just want the room it was using.
+            opacity: boardSearchAnim.interpolate({
+              inputRange: [0, 0.55],
+              outputRange: [1, 0],
+              extrapolate: 'clamp',
+            }),
             // Solid, not frosted. The header floats over the grid, and a blur
             // here meant photos smeared through the title and tab picker as
             // they scrolled under it — busy behind an area that has to stay
@@ -4863,7 +4930,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             );
           })}
         </View>
-      </View>
+      </Animated.View>
 
       {/* Upload progress lives in the app-root VaultUploadPill — shown on every
           screen, and when the user hides it, it COLLAPSES to a small chip

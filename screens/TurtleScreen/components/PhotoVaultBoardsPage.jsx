@@ -1,7 +1,9 @@
-import React, { forwardRef, useCallback, useRef } from 'react';
+import React, { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
+  Easing,
+  Keyboard,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,8 +11,10 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PhotoVaultBoardCard from './PhotoVaultBoardCard';
+import { TAP_ONLY_PRESSABLE } from '../../../utils/pressBehavior';
 
 const SORTS = [
   { mode: 'recent', label: 'Recent', icon: 'clock-outline' },
@@ -39,6 +43,69 @@ const HIT_SLOP_8 = { top: 8, bottom: 8, left: 8, right: 8 };
 const CARD_WIDTH = (Dimensions.get('window').width - EDGE_PAD * 2 - COLUMN_GAP) / 2;
 const LOAD_ERROR_COPY = 'Unable to load boards';
 const REFRESH_ERROR_COPY = 'Couldn’t refresh boards.';
+// The search result row's cover square. A row is ~62pt tall, so ~14 boards fit
+// a screen against the grid's 4 — which is the whole point of the mode.
+const ROW_COVER = 46;
+
+// ── The search transition's timings ─────────────────────────────────────────
+// Exported because TWO things move on them: this page lifts, and the vault
+// header above it slides away (MediaGallery). They are one movement seen in
+// two components, so they cannot each own a copy of the numbers — the moment
+// those disagree you get the header and the field arriving separately.
+//
+// Both curves DECELERATE into rest (ease-out, not ease-in): the element is
+// settling into a position, and a curve that accelerates into the end is what
+// makes a close feel like a snap rather than a close. Out is shorter than in —
+// leaving a search is a dismissal, and a slow one feels like the app arguing.
+export const SEARCH_ENTER = { duration: 280, easing: Easing.out(Easing.cubic) };
+export const SEARCH_EXIT = { duration: 240, easing: Easing.out(Easing.cubic) };
+
+/**
+ * One search result: cover square, name, count — the shape Instagram's user
+ * search uses, for the same reason. While searching you are looking for ONE
+ * board by name; a two-up grid of collages spends the whole screen proving
+ * what four of them look like. Rows put the names in a column you can run your
+ * eye down.
+ */
+const BoardRow = React.memo(function BoardRow({ board, theme, resolveCoverUrl, onPress, onLongPress, onPressIn }) {
+  const cover = board.covers?.[0];
+  return (
+    <Pressable
+      {...TAP_ONLY_PRESSABLE}
+      accessibilityRole="button"
+      accessibilityLabel={`${board.name}, ${board.count} item${board.count === 1 ? '' : 's'}${board.isLive ? ', shared on the web' : ''}`}
+      onPress={() => onPress(board.name)}
+      onLongPress={() => onLongPress(board.name)}
+      onPressIn={onPressIn}
+      delayLongPress={500}
+      style={({ pressed }) => [styles.row, { opacity: pressed ? 0.86 : 1 }]}
+    >
+      <View style={[styles.rowCover, { backgroundColor: theme.colors.surfaceElevated }]}>
+        {cover ? (
+          <Image
+            source={{ uri: resolveCoverUrl(cover) }}
+            style={StyleSheet.absoluteFillObject}
+            contentFit="cover"
+            transition={120}
+            recyclingKey={`row:${cover}`}
+          />
+        ) : (
+          <Icon name="image-multiple-outline" size={20} color={theme.colors.textMuted} />
+        )}
+      </View>
+      <View style={styles.rowText}>
+        <Text style={[styles.rowName, { color: theme.colors.textPrimary }]} numberOfLines={1}>{board.name}</Text>
+        <Text style={[styles.rowMeta, { color: theme.colors.textTertiary ?? theme.colors.textSecondary }]} numberOfLines={1}>
+          {board.itemLabel ?? board.metadata}
+          {board.recency ? `  ${board.recency}` : ''}
+        </Text>
+      </View>
+      {board.isLive ? (
+        <View style={[styles.rowSharedDot, { backgroundColor: theme.colors.accentInfo || theme.colors.primary }]} />
+      ) : null}
+    </Pressable>
+  );
+});
 
 function BoardSkeleton({ index, theme }) {
   return (
@@ -73,10 +140,87 @@ const PhotoVaultBoardsPage = forwardRef(({
   onScroll,
   onContentSizeChange,
   onLayout,
+  // Fires when the page enters / leaves search mode, so the vault's title +
+  // Boards/Music tabs can stand down and let the field rise to the top.
+  onSearchActiveChange,
+  // The top inset the page keeps while SEARCHING — the bare safe area, once
+  // the vault header has slid away. The difference between this and `topInset`
+  // is how far the page lifts.
+  searchTopInset,
 }, ref) => {
   const visibleBoards = hasLoadedAlbums ? boards : [];
   const onPrimary = theme.colors.onPrimary ?? theme.colors.background;
   const searchRef = useRef(null);
+
+  // Search mode: the field is focused, or something is typed in it. Focus is
+  // half of it on purpose — tapping the field is the moment you want the room,
+  // not the first keystroke — and the query is the other half so the mode
+  // survives the keyboard being dismissed with results on screen.
+  const [focused, setFocused] = useState(false);
+  const searching = focused || !!query;
+
+  // ── The lift ────────────────────────────────────────────────────────────
+  // How far the page rises when search takes over: exactly the height of the
+  // vault header it is being allowed to use (topInset covers that header;
+  // searchTopInset is the bare safe area left once it has gone).
+  //
+  // It is a TRANSFORM, not a change of padding, and the wrapper carries a
+  // permanent `marginBottom: -lift` so it is already that much taller than the
+  // screen. So nothing in here ever relayouts — a padding animation would run
+  // a full layout pass over a list of boards on every frame of the transition,
+  // which is precisely the jank this is meant to remove. The list's content
+  // gets the same `lift` back as bottom padding, so while browsing (translate
+  // 0) the last board can still be scrolled clear of the screen edge.
+  const lift = Math.max(0, topInset - (searchTopInset ?? topInset));
+  const liftAnim = useRef(new Animated.Value(0)).current;
+  // Invalidates a cancel that is still gliding. Tap the field again before it
+  // lands and the pending "clear the query" must not fire into the search you
+  // have just reopened.
+  const cancelRunRef = useRef(0);
+
+  // Entering. Leaving does NOT go through here — cancelSearch drives its own
+  // animation so it can clear the query on the way OUT (see there). This still
+  // catches an exit the caller made some other way, e.g. the query being
+  // cleared from outside while the field is not focused.
+  useEffect(() => {
+    onSearchActiveChange?.(searching);
+    Animated.timing(liftAnim, {
+      toValue: searching ? 1 : 0,
+      ...(searching ? SEARCH_ENTER : SEARCH_EXIT),
+      useNativeDriver: true,
+    }).start();
+  }, [searching, liftAnim, onSearchActiveChange]);
+  const liftStyle = {
+    transform: [{ translateY: liftAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -lift] }) }],
+  };
+
+  /**
+   * Cancel: keyboard down, page down, header back — then the results go.
+   *
+   * The order is the whole point. Clearing the query first (what this used to
+   * do) swapped the rows back to the board grid on the FIRST frame of the
+   * glide, so the page you watched sliding down was already showing something
+   * else — it read as two things happening badly rather than one thing
+   * closing. The query is dropped in the animation's completion callback
+   * instead, so the results ride the page down and the swap happens at rest.
+   *
+   * The keyboard goes first and on its own: iOS dismisses over about the same
+   * quarter-second, so starting it on this frame means it lands with the page
+   * instead of lingering under a page that has already parked.
+   */
+  const cancelSearch = useCallback(() => {
+    Keyboard.dismiss();
+    searchRef.current?.blur();
+    setFocused(false);
+    // The header starts coming back NOW, with the page — it is the other half
+    // of the same movement, and it must not wait for the query to clear.
+    onSearchActiveChange?.(false);
+    const run = ++cancelRunRef.current;
+    Animated.timing(liftAnim, { toValue: 0, ...SEARCH_EXIT, useNativeDriver: true })
+      .start(({ finished }) => {
+        if (finished && cancelRunRef.current === run) onQueryChange('');
+      });
+  }, [onQueryChange, onSearchActiveChange, liftAnim]);
 
   // Clearing is part of typing, not the end of it — keep the field focused so the
   // keyboard stays up and the user can retype immediately (standard search UX).
@@ -85,8 +229,13 @@ const PhotoVaultBoardsPage = forwardRef(({
     searchRef.current?.focus();
   }, [onQueryChange]);
 
-  const renderHeader = () => (
-    <View style={[styles.header, { paddingTop: topInset + PICKER_GAP, backgroundColor: theme.colors.background }]}>
+  // The search dock is OUTSIDE the list, always. It used to ride in the list's
+  // header, which made the field a child of whichever list was mounted — and
+  // switching between the two-up grid and the results rows remounts the list
+  // (numColumns can only change across a remount). That would have torn the
+  // focused TextInput out mid-keystroke and dropped the keyboard.
+  const renderSearchDock = () => (
+    <View style={[styles.searchDock, { paddingTop: topInset + PICKER_GAP, backgroundColor: theme.colors.background }]}>
       <View style={styles.searchRow}>
         <View style={[styles.search, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
           <Icon name="magnify" size={21} color={theme.colors.textMuted} />
@@ -112,6 +261,10 @@ const PhotoVaultBoardsPage = forwardRef(({
             returnKeyType="search"
             blurOnSubmit={false}
             clearButtonMode="never"
+            onFocus={() => { cancelRunRef.current += 1; setFocused(true); }}
+            // NOT onBlur→false: dismissing the keyboard to scroll the results
+            // would otherwise throw the header back up and shove the matches
+            // down the screen mid-read. Only Cancel leaves search mode.
             style={[styles.searchInput, { color: theme.colors.textPrimary }]}
           />
           {!query ? (
@@ -138,16 +291,58 @@ const PhotoVaultBoardsPage = forwardRef(({
             </Pressable>
           ) : null}
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Add photos to a board"
-          onPress={onAdd}
-          hitSlop={HIT_SLOP_8}
-          style={styles.addButton}
-        >
-          <Icon name="plus" size={28} color={theme.colors.textPrimary} />
-        </Pressable>
+        {/* One key, two jobs: add photos when browsing, leave the search when
+            searching. They are never both wanted, and the second is the only
+            way back to the header the field displaced. */}
+        {searching ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Cancel board search"
+            onPress={cancelSearch}
+            hitSlop={HIT_SLOP_8}
+            style={styles.cancelButton}
+            testID="board-search-cancel"
+          >
+            <Text style={[styles.cancelText, { color: theme.colors.textPrimary }]} numberOfLines={1}>Cancel</Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Add photos to a board"
+            onPress={onAdd}
+            hitSlop={HIT_SLOP_8}
+            style={styles.addButton}
+          >
+            <Icon name="plus" size={28} color={theme.colors.textPrimary} />
+          </Pressable>
+        )}
       </View>
+
+      {/* A refresh that failed is reported under the field in BOTH modes. It
+          used to live with the sort chips, which search takes away — and
+          "nothing matched" reads very differently when the list you searched
+          is a stale one. */}
+      {error && hasLoadedAlbums && (
+        <View style={[styles.retryBanner, { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.border }]}>
+          <Text style={[styles.retryBannerText, { color: theme.colors.textSecondary }]}>{REFRESH_ERROR_COPY}</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading boards"
+            onPress={onRetry}
+            style={styles.retryBannerAction}
+          >
+            <Text style={[styles.retryBannerActionText, { color: theme.colors.primary }]}>Retry</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
+  );
+
+  // Everything the grid shows ABOVE the boards: the sort chips and the pinned
+  // All Photos card. None of it survives into search mode — the results start
+  // directly under the field, which is the whole ask.
+  const renderGridHeader = () => (
+    <View style={styles.gridHeader}>
       <ScrollView
         testID="board-sort-scroll"
         horizontal
@@ -183,19 +378,6 @@ const PhotoVaultBoardsPage = forwardRef(({
           );
         })}
       </ScrollView>
-      {error && hasLoadedAlbums && (
-        <View style={[styles.retryBanner, { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.border }]}>
-          <Text style={[styles.retryBannerText, { color: theme.colors.textSecondary }]}>{REFRESH_ERROR_COPY}</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading boards"
-            onPress={onRetry}
-            style={styles.retryBannerAction}
-          >
-            <Text style={[styles.retryBannerActionText, { color: theme.colors.primary }]}>Retry</Text>
-          </Pressable>
-        </View>
-      )}
 
       {/* All Photos — the whole library as a board, pinned above the user's own.
           Deliberately outside the grid data: it is never reordered by the sort
@@ -262,46 +444,72 @@ const PhotoVaultBoardsPage = forwardRef(({
   };
 
   return (
-    <Animated.FlatList
-      ref={ref}
-      data={visibleBoards}
-      keyExtractor={(board) => board.name}
-      numColumns={2}
-      renderItem={({ item }) => (
-        <PhotoVaultBoardCard
-          board={item}
-          width={CARD_WIDTH}
-          theme={theme}
-          resolveCoverUrl={resolveCoverUrl}
-          onPress={onOpenBoard}
-          onLongPress={onLongPressBoard}
-          onPressIn={onCardPressIn}
-          onPressShared={onOpenShareInsights}
-        />
-      )}
-      // Elements, NOT functions. VirtualizedList renders a function-valued
-      // ListHeaderComponent as `<ListHeaderComponent />`; a header function
-      // defined in this render body is a new identity — and therefore a new
-      // element type — on every render, so React tore down and rebuilt the
-      // header on each keystroke, killing the focused TextInput and dismissing
-      // the keyboard. Passing the rendered element keeps the type stable.
-      ListHeaderComponent={renderHeader()}
-      ListEmptyComponent={renderEmpty()}
-      contentContainerStyle={[styles.content, { backgroundColor: theme.colors.background }]}
-      columnWrapperStyle={visibleBoards.length ? styles.row : undefined}
-      keyboardShouldPersistTaps="handled"
-      keyboardDismissMode="on-drag"
-      onScroll={onScroll}
-      onContentSizeChange={onContentSizeChange}
-      onLayout={onLayout}
-    />
+    <View style={[styles.page, { backgroundColor: theme.colors.background }]}>
+      <Animated.View style={[styles.lift, { marginBottom: -lift }, liftStyle]}>
+      {renderSearchDock()}
+      <Animated.FlatList
+        // The key is what swaps the layout: numColumns cannot change on a
+        // mounted list (RN says so outright), so grid ⇄ rows is a remount. The
+        // search field is deliberately not inside this subtree, so the remount
+        // costs nothing but the scroll offset.
+        key={searching ? 'boards-rows' : 'boards-grid'}
+        ref={ref}
+        data={visibleBoards}
+        keyExtractor={(board) => board.name}
+        numColumns={searching ? 1 : 2}
+        renderItem={({ item }) => (searching ? (
+          <BoardRow
+            board={item}
+            theme={theme}
+            resolveCoverUrl={resolveCoverUrl}
+            onPress={onOpenBoard}
+            onLongPress={onLongPressBoard}
+            onPressIn={onCardPressIn}
+          />
+        ) : (
+          <PhotoVaultBoardCard
+            board={item}
+            width={CARD_WIDTH}
+            theme={theme}
+            resolveCoverUrl={resolveCoverUrl}
+            onPress={onOpenBoard}
+            onLongPress={onLongPressBoard}
+            onPressIn={onCardPressIn}
+            onPressShared={onOpenShareInsights}
+          />
+        ))}
+        // Elements, NOT functions. VirtualizedList renders a function-valued
+        // ListHeaderComponent as `<ListHeaderComponent />`; a header function
+        // defined in this render body is a new identity — and therefore a new
+        // element type — on every render, so React tore down and rebuilt the
+        // header on each keystroke. (The field has since moved out of the list
+        // entirely, but the sort chips would still churn.)
+        ListHeaderComponent={searching ? null : renderGridHeader()}
+        ListEmptyComponent={renderEmpty()}
+        contentContainerStyle={[styles.content, { backgroundColor: theme.colors.background, paddingBottom: 24 + lift }]}
+        columnWrapperStyle={!searching && visibleBoards.length ? styles.gridRow : undefined}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        onScroll={onScroll}
+        onContentSizeChange={onContentSizeChange}
+        onLayout={onLayout}
+      />
+      </Animated.View>
+    </View>
   );
 });
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: EDGE_PAD, paddingBottom: 24 },
-  header: { marginHorizontal: -EDGE_PAD, paddingHorizontal: EDGE_PAD, paddingBottom: 16 },
-  searchRow: { flexDirection: 'row', gap: 10 },
+  page: { flex: 1 },
+  // The lifting layer. Its negative bottom margin is static: it is always
+  // `lift` taller than the page, so the rise is a transform with nothing
+  // underneath it to re-lay out.
+  lift: { flex: 1 },
+  content: { paddingHorizontal: EDGE_PAD },
+  // The dock the field lives in, above the list rather than inside it.
+  searchDock: { paddingHorizontal: EDGE_PAD, paddingBottom: 10 },
+  gridHeader: { marginHorizontal: -EDGE_PAD, paddingHorizontal: EDGE_PAD, paddingBottom: 16 },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   // Reference: a 114px (38pt) hairline-bordered pill on a transparent fill —
   // not a filled surface. The search field reads as an outline, and the fill
   // comes from the page behind it.
@@ -318,6 +526,18 @@ const styles = StyleSheet.create({
   // A bare glyph in the reference, not a filled circle. Keeps a 44pt touch
   // target without drawing a button.
   addButton: { width: 44, height: 38, alignItems: 'center', justifyContent: 'center' },
+  // Cancel is a word, so it sizes to its text — but never narrower than a 44pt
+  // target, and it never shrinks the field below usable (the field is flex:1
+  // and this is not, so the row can't overset).
+  cancelButton: { minWidth: 44, height: 38, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
+  cancelText: { fontSize: 15, fontWeight: '600' },
+  // ── Search result row (Instagram-style) ────────────────────────────────
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8, paddingHorizontal: 2 },
+  rowCover: { width: ROW_COVER, height: ROW_COVER, borderRadius: 10, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  rowText: { flex: 1, minWidth: 0 },
+  rowName: { fontSize: 15, lineHeight: 19, fontWeight: '600' },
+  rowMeta: { fontSize: 13, lineHeight: 17, marginTop: 1 },
+  rowSharedDot: { width: 7, height: 7, borderRadius: 3.5 },
   sortScroller: { marginTop: 14 },
   allPhotosSlot: { marginTop: 16 },
   sorts: { flexDirection: 'row', gap: 8, paddingRight: EDGE_PAD },
@@ -329,7 +549,7 @@ const styles = StyleSheet.create({
   retryBannerText: { fontSize: 14, fontWeight: '600' },
   retryBannerAction: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
   retryBannerActionText: { fontSize: 14, fontWeight: '700' },
-  row: { gap: COLUMN_GAP },
+  gridRow: { gap: COLUMN_GAP },
   skeletonGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: COLUMN_GAP },
   skeleton: { marginBottom: 26 },
   skeletonCollage: { aspectRatio: 1.46, borderRadius: 12 },

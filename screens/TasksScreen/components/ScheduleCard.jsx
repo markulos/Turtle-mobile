@@ -36,15 +36,34 @@ export function tintOf(hex, alpha, fallback) {
 
 function ScheduleCard({
   task, timeLabel, range, color, done, theme, onPress, onLongPress, onToggle, owner, onOwnerPress, trailing, subtitle, testID,
+  // Tap the time column to re-time the task. Omitted where the column carries
+  // something that isn't a time (the Pending strip shows a due DATE there), so
+  // the gesture only exists where it means what it looks like.
+  onTimePress,
 }) {
   const c = theme.colors;
   const dark = theme.mode === 'dark';
   const fill = tintOf(color, dark ? 0.26 : 0.18, dark ? c.surfaceElevated : c.surface);
   const title = task?.title || 'Untitled';
   const sub = subtitle !== undefined ? subtitle : (task?.project ? boardLabel(task.project) : '');
+  const timeText = (
+    <Text style={[styles.time, { color: c.textSecondary }]} numberOfLines={1}>{timeLabel}</Text>
+  );
   return (
     <View style={styles.row} testID={testID}>
-      <Text style={[styles.time, { color: c.textSecondary }]} numberOfLines={1}>{timeLabel}</Text>
+      {onTimePress ? (
+        <Pressable
+          onPressIn={() => tapHaptic()}
+          onPress={() => onTimePress(task)}
+          hitSlop={{ top: 10, bottom: 10, left: 12, right: 4 }}
+          accessibilityRole="button"
+          accessibilityLabel={`Edit the time for ${title}, currently ${timeLabel}`}
+          testID={testID ? `${testID}-time` : undefined}
+          style={({ pressed }) => [pressed && styles.pressed]}
+        >
+          {timeText}
+        </Pressable>
+      ) : timeText}
       <Pressable
         onPressIn={() => tapHaptic()}
         onPress={() => onPress?.(task)}
@@ -156,11 +175,18 @@ const styles = StyleSheet.create({
   // The time reads CLEARLY beside its card (the reference's "08 AM"): a
   // mid-size medium-weight label in the secondary ink, on the card's first
   // line. Minutes stay ("08:30 AM"); the column is wide enough for them.
+  //
+  // It LINES UP with that first line rather than floating above it: the same
+  // top inset as the card (14) and the same lineHeight as the title (21), so
+  // the two line boxes start at the same y and are the same height — the ink
+  // centres identically in both. It used to guess with paddingTop 15 against
+  // the title's natural leading and sat a few points high.
   time: {
     width: TIME_COL_W,
-    paddingTop: 15,
+    paddingTop: 14,
     paddingRight: 6,
     fontSize: 14,
+    lineHeight: 21,
     fontWeight: '500',
     fontVariant: ['tabular-nums'],
     letterSpacing: 0.1,
