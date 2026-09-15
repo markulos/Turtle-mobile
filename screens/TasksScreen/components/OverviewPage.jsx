@@ -16,7 +16,7 @@
  * the Tasks header gave its filter key to this page.
  */
 import React, { memo, useMemo, useState, useEffect } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
@@ -84,19 +84,126 @@ function BoardRow({ row, dot, sharedBy, selected, pal, onPress }) {
   );
 }
 
-function TaskRow({ t, done, todayStr, pal }) {
+/**
+ * One task in a board's list — an INSET CARD, like every other task surface in
+ * the app (docs/STYLE-RULES.md §1).
+ *
+ * It used to be a bare row drawn straight on the page while taking its colours
+ * from the inset-card palette — i.e. WHITE text on the WHITE light-mode page.
+ * The only parts you could see were the red overdue icon and the red date; the
+ * titles were there the whole time, in white, on white. Giving each task the
+ * charcoal panel the palette was written for fixes both modes at once: the
+ * panel is dark on the light page and a step above black on the dark one, so
+ * the white title reads either way.
+ *
+ * Tapping opens the task — the list is the obvious place to reach for one, and
+ * until now it was the one task list in the app that did nothing when pressed.
+ */
+function TaskRow({ t, done, todayStr, pal, onPress }) {
   const overdue = !done && t.dueDate && t.dueDate < todayStr;
+  const when = t.dueDate
+    ? (t.dueDate === todayStr ? 'Today' : t.dueDate.slice(5)) + (t.time ? ` · ${t.time}` : '')
+    : '—';
   return (
-    <View style={[styles.taskRow, { borderBottomColor: pal.border }]}>
+    <Pressable
+      onPressIn={() => tapHaptic()}
+      onPress={onPress}
+      disabled={!onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${t.title || 'Untitled'}${done ? ', done' : ''}${overdue ? ', late' : ''}, ${when}`}
+      testID={`overview-task-${t.id}`}
+      style={({ pressed }) => [
+        styles.taskCard,
+        { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop },
+        pressed && styles.pressed,
+      ]}
+    >
       <Icon
         name={done ? 'check-circle' : overdue ? 'alert-circle-outline' : 'circle-outline'}
         size={18}
-        color={done ? pal.text : overdue ? '#F87171' : pal.muted}
+        color={done ? pal.sub : overdue ? '#F87171' : pal.muted}
       />
-      <Text style={[styles.taskTitle, { color: done ? pal.muted : pal.text }, done && styles.taskDone]} numberOfLines={1}>{t.title || 'Untitled'}</Text>
-      <Text style={[styles.taskMeta, { color: overdue ? '#F87171' : pal.muted }]} numberOfLines={1}>
-        {t.dueDate ? (t.dueDate === todayStr ? 'Today' : t.dueDate.slice(5)) + (t.time ? ` · ${t.time}` : '') : '—'}
+      <Text
+        style={[styles.taskTitle, { color: done ? pal.muted : pal.text }, done && styles.taskDone]}
+        numberOfLines={1}
+      >
+        {t.title || 'Untitled'}
       </Text>
+      <Text style={[styles.taskMeta, { color: overdue ? '#F87171' : pal.sub }]} numberOfLines={1}>
+        {when}
+      </Text>
+    </Pressable>
+  );
+}
+
+/**
+ * Search this board, or add to it — one field, the way the day panel's finder
+ * works. Typing filters the two lists below; when nothing on the board carries
+ * that exact title, a create row appears under the field and makes the task
+ * ON THIS BOARD, which is the whole reason to add it from here.
+ *
+ * The placeholder is our own <Text>, not the TextInput's `placeholder` prop:
+ * iOS builds that one as its own attributed string and renders it with wide
+ * tracking under the app's Figtree face (the same artefact fixed on the vault's
+ * board search).
+ */
+function BoardFinder({ query, onChangeQuery, onCreate, boardName, pal, canCreate }) {
+  return (
+    <View style={[styles.finder, { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop }]}>
+      <View style={styles.finderField}>
+        <Icon name="magnify" size={18} color={pal.muted} />
+        <View style={styles.finderInputWrap}>
+          <TextInput
+            value={query}
+            onChangeText={onChangeQuery}
+            accessibilityLabel={`Search or add a task in ${boardLabel(boardName)}`}
+            testID="overview-board-finder"
+            autoCorrect={false}
+            autoCapitalize="sentences"
+            returnKeyType="done"
+            style={[styles.finderInput, { color: pal.text }]}
+            onSubmitEditing={canCreate ? onCreate : undefined}
+          />
+          {!query ? (
+            <Text
+              testID="overview-finder-placeholder"
+              pointerEvents="none"
+              accessible={false}
+              importantForAccessibility="no"
+              numberOfLines={1}
+              style={[styles.finderPlaceholder, { color: pal.muted }]}
+            >
+              Search or add a task…
+            </Text>
+          ) : null}
+        </View>
+        {query ? (
+          <Pressable
+            onPress={() => onChangeQuery('')}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+            testID="overview-finder-clear"
+          >
+            <Icon name="close-circle" size={18} color={pal.muted} />
+          </Pressable>
+        ) : null}
+      </View>
+      {canCreate && (
+        <Pressable
+          onPressIn={() => tapHaptic()}
+          onPress={onCreate}
+          accessibilityRole="button"
+          accessibilityLabel={`Create task ${query.trim()} in ${boardLabel(boardName)}`}
+          testID="overview-finder-create"
+          style={({ pressed }) => [styles.finderCreate, { borderTopColor: pal.border }, pressed && styles.pressed]}
+        >
+          <Icon name="plus-circle-outline" size={18} color={pal.text} />
+          <Text style={[styles.finderCreateText, { color: pal.text }]} numberOfLines={2}>
+            Create “{query.trim()}” in {boardLabel(boardName)}
+          </Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -126,9 +233,28 @@ function TagRows({ rows, pal }) {
   ));
 }
 
-function BoardDetail({ row, tasks, todayStr, pal, theme, onBack, onShow, isShown }) {
+function BoardDetail({ row, tasks, todayStr, pal, theme, onBack, onShow, isShown, onOpenTask, onAddTask }) {
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
   const pending = tasks.filter((t) => !(t.completed || isTaskDoneNow(t, todayStr))).sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999'));
   const done = tasks.filter((t) => t.completed || isTaskDoneNow(t, todayStr)).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+  // The query filters what is LISTED; the counts in the headings follow it, so
+  // "To do · 2" always describes the two rows under it.
+  const matches = (t) => !q || (t.title || '').toLowerCase().includes(q);
+  const pendingShown = pending.filter(matches);
+  const doneShown = done.filter(matches);
+  // Offer to create only when nothing on this board already carries that exact
+  // title — a near-match is what the list below is for.
+  const canCreate = !!onAddTask && q.length > 0
+    && !tasks.some((t) => (t.title || '').trim().toLowerCase() === q);
+  const createHere = () => {
+    if (!canCreate) return;
+    // NO_BOARD is a DISPLAY sentinel for "this task has no board" (see
+    // overviewStats) — never a board name. Creating with it would give the
+    // task a real board literally called "No Project".
+    onAddTask(query.trim(), row.name === NO_BOARD ? '' : row.name);
+    setQuery('');
+  };
   const tags = new Map();
   for (const t of tasks) for (const tag of (t.tags || [])) { const e = tags.get(tag) || { total: 0, done: 0 }; e.total += 1; if (t.completed) e.done += 1; tags.set(tag, e); }
   const tagRows = Array.from(tags.entries()).map(([tag, s]) => ({ tag, ...s })).sort((a, b) => b.total - a.total);
@@ -166,10 +292,28 @@ function BoardDetail({ row, tasks, todayStr, pal, theme, onBack, onShow, isShown
             <TagRows rows={tagRows} pal={pal} />
           </>
         )}
-        <Text style={[styles.section, { color: c.textTertiary }]}>To do · {pending.length}</Text>
-        {pending.length === 0 ? <Text style={[styles.empty, { color: pal.muted }]}>All clear.</Text> : pending.map((t) => <TaskRow key={t.id} t={t} done={false} todayStr={todayStr} pal={pal} />)}
-        <Text style={[styles.section, { color: c.textTertiary }]}>Done · {done.length}</Text>
-        {done.length === 0 ? <Text style={[styles.empty, { color: pal.muted }]}>None yet.</Text> : done.map((t) => <TaskRow key={t.id} t={t} done todayStr={todayStr} pal={pal} />)}
+
+        <BoardFinder
+          query={query}
+          onChangeQuery={setQuery}
+          onCreate={createHere}
+          canCreate={canCreate}
+          boardName={row.name}
+          pal={pal}
+        />
+
+        <Text style={[styles.section, { color: c.textTertiary }]}>To do · {pendingShown.length}</Text>
+        {pendingShown.length === 0
+          ? <Text style={[styles.empty, { color: c.textTertiary }]}>{q ? 'Nothing to do matches.' : 'All clear.'}</Text>
+          : pendingShown.map((t) => (
+            <TaskRow key={t.id} t={t} done={false} todayStr={todayStr} pal={pal} onPress={onOpenTask ? () => onOpenTask(t) : null} />
+          ))}
+        <Text style={[styles.section, { color: c.textTertiary }]}>Done · {doneShown.length}</Text>
+        {doneShown.length === 0
+          ? <Text style={[styles.empty, { color: c.textTertiary }]}>{q ? 'Nothing done matches.' : 'None yet.'}</Text>
+          : doneShown.map((t) => (
+            <TaskRow key={t.id} t={t} done todayStr={todayStr} pal={pal} onPress={onOpenTask ? () => onOpenTask(t) : null} />
+          ))}
       </ScrollView>
     </View>
   );
@@ -178,6 +322,11 @@ function BoardDetail({ row, tasks, todayStr, pal, theme, onBack, onShow, isShown
 function OverviewPage({
   visible, onClose, tasks, boards, colorOf, sharedIn, selectedProject, calendarDate,
   onSelectBoard, onOpenFilters, filterCount = 0, bottomInset = 0, theme,
+  // (task) => void — a tap on a task in a board's list opens it for editing.
+  onOpenTask,
+  // (title, boardName) => void — the finder's create row, which is the point
+  // of it: a task added from here is born on the board you are looking at.
+  onAddTask,
 }) {
   const insets = useSafeAreaInsets();
   const pal = useMemo(() => insetCardPalette(theme), [theme]);
@@ -266,6 +415,8 @@ function OverviewPage({
               onBack={() => setBoard(null)}
               isShown={selectedProject === detailRow.name}
               onShow={() => onSelectBoard(detailRow.name)}
+              onOpenTask={onOpenTask}
+              onAddTask={onAddTask}
             />
           </View>
         )}
@@ -338,9 +489,43 @@ const styles = StyleSheet.create({
   late: { color: '#F87171' },
   track: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 3 },
   fill: { height: 3 },
-  taskRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
-  taskTitle: { flex: 1, fontSize: 14 },
+  // One task = one inset card, stacked. The 8pt gap is the same rhythm as the
+  // board rows above, so a board's tasks read as the same kind of object.
+  taskCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 8,
+  },
+  // 15/600 rather than the old 14/400: this is the title of a card now, not a
+  // line in a list, and it has to hold its own against the figures above it.
+  taskTitle: { flex: 1, fontSize: 15, fontWeight: '600' },
   taskDone: { textDecorationLine: 'line-through' },
-  taskMeta: { fontSize: 12, flexShrink: 0 },
+  taskMeta: { fontSize: 12, fontWeight: '600', flexShrink: 0, fontVariant: ['tabular-nums'] },
+  finder: {
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 18,
+    overflow: 'hidden',
+  },
+  finderField: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, height: 46 },
+  finderInputWrap: { flex: 1, height: '100%' },
+  finderInput: { flex: 1, fontSize: 15, height: '100%', padding: 0 },
+  // Centred by lineHeight against the field's height — an absolutely
+  // positioned child ignores the parent's justifyContent.
+  finderPlaceholder: { position: 'absolute', left: 0, right: 0, top: 0, fontSize: 15, lineHeight: 46 },
+  finderCreate: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  finderCreateText: { flex: 1, fontSize: 14, fontWeight: '600' },
   pressed: { opacity: 0.6 },
 });

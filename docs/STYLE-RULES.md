@@ -34,6 +34,11 @@ repo skill (loaded before any UI work) and by review.
   filled with the card's text colour + a check in the card colour, not done = a 1.5 pt ring in the text colour);
   the card reserves 46 pt on the right for it.
 
+- A TASK LIST NEVER DRAWS ON THE PAGE. Every task row is an inset card, in both modes — the palette's
+  `text` is WHITE, so a row that takes `insetCardPalette` colours while sitting on the page background is
+  invisible on the light page (the Overview's board lists shipped that way: red icons and red dates
+  visible, every title white on white). If a row reads from that palette it must also wear `pal.card`.
+  Stacked task cards sit 8 pt apart, radius 14, title 15 / 600.
 - SCHEDULE CARDS (the calendar's day panel, `TasksScreen/components/ScheduleCard`) are the one exception to
   the charcoal card: a planner page. The TIME sits in a clear column on the LEFT ("08 AM" / "08:30 AM", 14 pt, medium,
   secondary ink, 74 pt wide, on the card's first line); the card is a soft wash of the board colour (18 % on the light page, 26 % on the dark, radius 18,

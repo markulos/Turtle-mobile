@@ -2659,6 +2659,27 @@ export default function TasksScreen() {
         filterCount={selectedTags.length + selectedOwners.length}
         bottomInset={tabBarHeight}
         theme={theme}
+        // The overview stays up: TaskDetail is a sibling Modal and presents
+        // OVER this in-tree overlay, so closing it would only lose the place
+        // the user was reading.
+        onOpenTask={openDetail}
+        // Born on the board being looked at, with no due date — the finder is
+        // a capture field, not the full form (which is one tap further in,
+        // from the task itself).
+        onAddTask={(title, project) => {
+          handleSaveTask({
+            title,
+            description: '',
+            priority: 'medium',
+            completed: false,
+            project,
+            dueDate: '',
+            tags: [],
+            subtasks: [],
+            id: Date.now().toString(),
+            createdAt: Date.now(),
+          });
+        }}
       />
 
       {/* Board manager: the app's sheet shell, mounted LAST so it draws over
