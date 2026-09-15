@@ -26,6 +26,7 @@ import UpdatesPanel from '../components/UpdatesPanel';
 import SmsDebugPanel from '../components/SmsDebugPanel';
 import ErrorBoundary from '../components/ErrorBoundary';
 import PerfFindingsPanel from '../components/PerfFindingsPanel';
+import ShareUploadLimitCard from '../components/ShareUploadLimitCard';
 import TranscriptionPanel from '../components/TranscriptionPanel';
 import { useServer } from '../context/ServerContext';
 import { useTheme, ACCENTS } from '../context/ThemeContext';
@@ -68,6 +69,7 @@ const SETTING_TERMS = {
   autoUpload: 'auto upload camera roll new photos videos background sync vault automatic icloud',
   cache: 'cache size storage space photos clear free disk measure',
   offline: 'offline saved photos kept downloaded plane no signal remove free space',
+  shareUploads: 'share link upload limit size drive host visitors drop box unlimited megabytes guests',
   notifications: 'notifications push alerts reminders test sms text badge sound',
   gestureProbe: 'gesture probe debug developer performance lag jank stalls diagnostics',
   timeFormat: '24 hour time format clock twelve twenty four am pm military',
@@ -1073,6 +1075,19 @@ export default function SettingsScreen({ active = true }) {
                 <Icon name="cloud-off-outline" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
                 <Text style={styles.secondaryButtonText}>Remove offline pictures</Text>
               </TouchableOpacity>
+              </SettingsItem>
+            </SettingsSection>
+            )}
+
+            {/* Shared links — the pond acting as a drive for people with no
+                account here. The one thing an owner actually wants to change
+                about that is how much a stranger may push into it. */}
+            {(searching || tabKey === 'general') && (
+            <SettingsSection title="Shared links" icon="link-variant" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.shareUploads}>
+                <ErrorBoundary label="Share uploads">
+                  <ShareUploadLimitCard styles={styles} />
+                </ErrorBoundary>
               </SettingsItem>
             </SettingsSection>
             )}
