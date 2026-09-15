@@ -33,6 +33,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTaskData } from './hooks/useTaskData';
 import { useCollapsibleTasks } from './hooks/useCollapsibleTasks';
 import { advanceDueDate, minDate, maxDate, localTodayStr, lastCompletedDate, isTaskDoneNow, matchesRecurrence, nextOccurrenceAfter, itemTypeOf, taskPassesFilters, boardLabel } from './utils/taskHelpers';
+import { completionChange } from './utils/completionChange';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
 
 // An event is "over" once its end is in the past — start time + duration (a
@@ -693,7 +694,7 @@ export default function TasksScreen() {
   
   const {
     tasks, setTasks, projects, allTags,
-    loadData, saveTasks, collectTags, addProject, renameProject, deleteProject,
+    loadData, saveTasks, saveTaskPatch, collectTags, addProject, renameProject, deleteProject,
     handleAddSubtask,
     handleToggleSubtask,
     handleDeleteSubtask,
@@ -1480,7 +1481,6 @@ export default function TasksScreen() {
   // even though `completed` stays false. Non-recurring tasks (and
   // un-completing anything) fall through to the plain boolean toggle.
   const handleToggleComplete = async (id, occurrenceDate) => {
-    const now = Date.now();
     const task = tasksRef.current.find(t => t.id === id);
     if (!task) return;
 
@@ -1488,95 +1488,19 @@ export default function TasksScreen() {
     // order snapshot (see agendaOrder), so a tick — any tick: plain, overdue,
     // recurring, untick — repaints the row in its existing slot and cannot
     // restructure the list. No position-pin choreography needed here anymore.
-
-    const rec = task.recurring || task.recurrence || 'none';
-    if (rec && rec !== 'none') {
-      // RECURRING: per-occurrence completion is ADDITIVE (mirrors web). Ticking a
-      // day records it in meta.completedDates (so it renders ticked on its day)
-      // AND advances dueDate (so the next one shows). Un-ticking removes the date
-      // and pulls dueDate back to it. `completed` stays false so the series keeps
-      // repeating.
-      //
-      // Callers WITH a day context (day panel) pass occurrenceDate. Single-row
-      // views (Upcoming, project/tag tree, detail) pass none — resolve it here:
-      //   • already done-now → UNTICK the most recent ticked occurrence
-      //   • else → TICK max(dueDate, today), so completing an OVERDUE series
-      //     marks TODAY done (row shows the check) instead of back-filling a
-      //     missed day and instantly re-rendering as "due today, unchecked".
-      const today = localTodayStr();
-      const last = lastCompletedDate(task);
-      // done-now must MIRROR isTaskDoneNow (incl. a legacy completed=true flag —
-      // reachable via the auto-complete event sweep or editing a completed task
-      // into a recurring one) — otherwise the row reads checked while the
-      // handler ticks, and the checkmark can never be cleared.
-      const doneNow = task.completed || (!!last && last >= today);
-      // occ can be null: legacy completed=true with no ticked dates — the tap
-      // then simply clears the flag below.
-      const occ = occurrenceDate || (doneNow ? last : (maxDate(task.dueDate, today) || today));
-      const prev = Array.isArray(task.meta?.completedDates) ? task.meta.completedDates : [];
-      const isTicking = !!occ && !prev.includes(occ);
-      const nextCompletedDates = !occ
-        ? prev
-        : isTicking
-          ? [...new Set([...prev, occ])] // dedup: a rapid double-tap can't duplicate the date
-          : prev.filter(d => d !== occ);
-      // dueDate mechanics (an UNDATED recurring task stays undated — a
-      // tick/untick round-trip must fully revert):
-      //   TICK, on-pattern occ  → advance one period from it, never below the
-      //         current anchor (back-filling a past day can't regress).
-      //   TICK, OFF-pattern occ (overdue series completed from a single-row
-      //         view records TODAY) → jump to the next ON-PATTERN date after it,
-      //         preserving the weekly/monthly anchor (Mon stays Mon).
-      //   UNTICK, on-pattern occ → re-expose that day (min); off-pattern → the
-      //         anchor never moved for it, so leave dueDate alone.
-      let nextDueDate = task.dueDate;
-      if (occ && task.dueDate) {
-        if (isTicking) {
-          const onPattern = occ === task.dueDate || occ < task.dueDate || matchesRecurrence(task.dueDate, rec, occ);
-          const stepped = onPattern ? advanceDueDate(occ, rec) : nextOccurrenceAfter(task.dueDate, rec, occ);
-          nextDueDate = maxDate(task.dueDate, stepped);
-        } else {
-          const onPattern = occ === task.dueDate || matchesRecurrence(occ, rec, task.dueDate) || matchesRecurrence(task.dueDate, rec, occ);
-          nextDueDate = onPattern ? minDate(task.dueDate, occ) : task.dueDate;
-        }
-      }
-      const newTasks = tasksRef.current.map(t =>
-        t.id === id
-          ? {
-              ...t,
-              dueDate: nextDueDate,
-              // A live series never holds the done-forever flag; clearing it
-              // also un-sticks legacy completed=true recurring rows.
-              completed: false,
-              completedAt: isTicking ? now : t.completedAt,
-              completedTime: isTicking ? new Date(now).toISOString() : t.completedTime,
-              meta: { ...(t.meta || {}), completedDates: nextCompletedDates },
-            }
-          : t
-      );
-      await saveTasks(newTasks);
-      // Celebrate a fresh occurrence tick (not an untick) — AFTER the save is
-      // confirmed. saveTasks reverts + re-throws on failure, so a rolled-back
-      // completion never gets confetti/points.
-      if (isTicking) celebrate({ points: 10, kind: 'task' });
-      return;
-    }
-
-    const willComplete = !task.completed;
-    const newTasks = tasksRef.current.map(t => {
-      if (t.id !== id) return t;
-      const completed = !t.completed;
-      return {
-        ...t,
-        completed,
-        completedAt: completed ? now : null,
-        completedTime: completed ? new Date(now).toISOString() : null
-      };
-    });
-    await saveTasks(newTasks);
-    // Celebrate completing (not un-completing) a one-off task — after the save
-    // is confirmed (saveTasks reverts + re-throws on failure).
-    if (willComplete) celebrate({ points: 10, kind: 'task' });
+    //
+    // WHAT it becomes (including every recurrence rule) lives in
+    // utils/completionChange.js, shared with the tests. HOW it is saved is the
+    // part that matters for sync: one MERGING patch of this row, never the
+    // whole list — a list save is a delete-and-reinsert on the server, so the
+    // last device to save used to overwrite the other one's ticks.
+    const { next, patch, isTicking } = completionChange(task, occurrenceDate);
+    const newTasks = tasksRef.current.map(t => (t.id === id ? next : t));
+    await saveTaskPatch(id, patch, newTasks);
+    // Celebrate a fresh tick (never an undo) — AFTER the save is confirmed.
+    // saveTaskPatch reverts + re-throws on failure, so a rolled-back
+    // completion never gets confetti or points.
+    if (isTicking) celebrate({ points: 10, kind: 'task' });
   };
   
   const handleUpdateTask = async (taskId, updates) => {

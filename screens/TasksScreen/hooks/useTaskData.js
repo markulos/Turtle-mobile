@@ -224,6 +224,42 @@ export const useTaskData = (api, isConnected, onTaskCompleted) => {
     }
   };
 
+  /**
+   * Persist ONE task's change, without republishing the list.
+   *
+   * The whole-list POST above is a delete-and-reinsert on the server, so two
+   * devices saving from their own snapshots overwrite each other — a tick made
+   * here vanished the moment the desktop saved anything, and the reverse. A
+   * completion is a few fields on one row, so it goes as a PATCH the server
+   * MERGES, and nothing another device did meanwhile is touched.
+   *
+   * Otherwise identical to saveTasks: paint now, persist behind it, revert and
+   * say so if the server refuses. Offline, the outbox keys the write PER TASK,
+   * so two offline ticks on different tasks both survive — a list snapshot
+   * could only carry the last one.
+   */
+  const saveTaskPatch = async (id, patch, nextTasks) => {
+    const prevTasks = tasksRef.current;
+    const nextRow = nextTasks.find((t) => t.id === id);
+    pendingRef.current.set(id, { sig: completionSig(nextRow || {}), at: Date.now() });
+    setTasks(nextTasks);
+    try {
+      await sendOrQueue(api, {
+        method: 'patch',
+        path: `/tasks/${encodeURIComponent(id)}`,
+        body: patch,
+        key: `task:${id}:completion`,
+        label: 'task',
+      });
+    } catch (error) {
+      console.error('Save task patch error:', error);
+      pendingRef.current.delete(id);
+      setTasks(prevTasks);
+      Alert.alert('Error', 'Failed to save — that change was undone');
+      throw error;
+    }
+  };
+
   // Subtask handlers
   const handleAddSubtask = async (taskId, title) => {
     try {
@@ -462,7 +498,7 @@ export const useTaskData = (api, isConnected, onTaskCompleted) => {
 
   return {
     tasks, setTasks, projects, setProjects, allTags, setAllTags, loading,
-    loadData, saveTasks, collectTags, addProject, renameProject, deleteProject, deleteTask,
+    loadData, saveTasks, saveTaskPatch, collectTags, addProject, renameProject, deleteProject, deleteTask,
     handleAddSubtask,
     handleToggleSubtask,
     handleDeleteSubtask,
