@@ -472,86 +472,131 @@ export default function SettingsScreen({ active = true }) {
     }
   };
 
+  /**
+   * Run the server's heal pass and report what it did.
+   *
+   * `dryRun` audits and writes nothing — the server has always supported it,
+   * and after the 2026-08 incident (a heal pass that misread tunnel rows) it is
+   * the right first press on a library you have not healed in a while.
+   */
+  const runHeal = useCallback(async ({ dryRun = false } = {}) => {
+    setIsHealing(true);
+    setHealProgress(null);
+    try {
+      const authHeaders = getAuthHeaders();
+      const started = await api.post('/media/heal', { dryRun }, authHeaders);
+      if (!started?.success) throw new Error(started?.error || 'Failed to start the heal.');
+
+      // The pass is a background job now: poll until it reports done,
+      // so a big library isn't cut off by the request timeout.
+      const res = await pollHealToCompletion(api, setHealProgress);
+
+      if (res && res.success) {
+        // Wipe the local image cache ONLY when the pass actually rebuilt
+        // something. Thumbnails are re-downloaded over the tunnel, so a blanket
+        // wipe after a no-op audit costs a full library's bytes for nothing —
+        // and an audit writes nothing at all, so there is never anything stale
+        // to drop after one.
+        const st = res.stats || {};
+        const rebuiltSomething = !st.dryRun && ((st.regenerated || 0) > 0 || (st.webpConverted || 0) > 0 || (st.rescued || 0) > 0);
+        try {
+          if (rebuiltSomething) {
+            console.log('[Settings] Server rebuilt thumbnails. Flushing local app cache...');
+
+          // Wipe the actual image bytes (expo-image disk+RAM, temp dirs,
+          // share files) — the heal regenerated thumbnails server-side, so
+          // the device must drop its stale copies to pull the fresh ones.
+          await clearAllCaches();
+
+          // Also drop any media-related AsyncStorage keys.
+          const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+          const keys = await AsyncStorage.getAllKeys();
+          const mediaCacheKeys = keys.filter(k => k.includes('media') || k.includes('gallery') || k.includes('image'));
+          if (mediaCacheKeys.length > 0) {
+            await AsyncStorage.multiRemove(mediaCacheKeys);
+            console.log(`[Settings] Cleared ${mediaCacheKeys.length} cache keys`);
+          }
+
+            console.log('[Settings] Local cache successfully purged.');
+          }
+        } catch (cacheErr) {
+          console.warn('[Settings] Cache wipe encountered an issue:', cacheErr);
+        }
+
+        const s = st;
+        const lines = [
+          `Healthy rows: ${s.healthy ?? 0}`,
+          `Thumbnails rebuilt: ${s.regenerated ?? 0}`,
+          `WebP upgrades: ${s.webpConverted ?? 0}`,
+          `Blurhashes filled: ${s.blurhashed ?? 0}`,
+        ];
+        // Reported, never acted on: a tunnel photo's bytes live on the
+        // host PC, so "unreachable" means that folder is offline.
+        if (s.offline > 0) lines.push(`On an offline folder (untouched): ${s.offline}`);
+        if (s.ghosts > 0) lines.push(`Missing originals, rows kept: ${s.ghosts}`);
+        if (s.storageDetached) {
+          lines.push('\n⚠ Most originals were unreadable — that looks like a disconnected drive, so nothing was rewritten.');
+        }
+        // Say what actually happened rather than always claiming a wipe.
+        const title = s.dryRun
+          ? 'Audit only — nothing written'
+          : (s.stopped ? 'Heal stopped' : 'Vault healed');
+        const tail = s.dryRun
+          ? '\n\nThese are the numbers a real run would act on.'
+          : (rebuiltSomething
+              ? '\n\nLocal image cache flushed, so the rebuilt thumbnails come down fresh.'
+              : '\n\nNothing needed rebuilding, so the local cache was left alone.');
+        Alert.alert(title, `${lines.join('\n')}${tail}`);
+      } else {
+        Alert.alert('Error', res?.error || 'Failed to heal the vault.');
+      }
+    } catch (error) {
+      console.error('[Settings] Heal error:', error);
+      Alert.alert('Error', error?.message || 'Network request failed.');
+    } finally {
+      setIsHealing(false);
+      setHealProgress(null);
+    }
+
+  }, [api]);
+
+  /**
+   * The row's press. While a pass is running it offers to stop it (the server
+   * exposes a cooperative stop; the phone could not reach it before, so a
+   * 28k-row pass had to be waited out).
+   */
   const triggerMediaHeal = useCallback(async () => {
+    if (isHealing) {
+      Alert.alert(
+        'Stop the heal?',
+        'The server finishes the row it is on and stops. Nothing it has already rebuilt is undone.',
+        [
+          { text: 'Keep going', style: 'cancel' },
+          {
+            text: 'Stop',
+            style: 'destructive',
+            onPress: async () => {
+              try { await api.post('/media/heal/stop', {}, getAuthHeaders()); } catch (e) {
+                Alert.alert('Error', e?.message || 'Could not reach the server to stop it.');
+              }
+            },
+          },
+        ],
+      );
+      return;
+    }
     Alert.alert(
       'Heal Media Vault',
       'Scans the server library and rebuilds missing thumbnails, blurhashes and previews. '
       + 'It runs in the background on the server and never deletes a photo — anything it '
-      + "can't reach is reported. Proceed?",
+      + "can't reach is reported. Audit only reports the same numbers and writes nothing.",
       [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Run Heal',
-          onPress: async () => {
-            setIsHealing(true);
-            setHealProgress(null);
-            try {
-              const authHeaders = getAuthHeaders();
-              const started = await api.post('/media/heal', {}, authHeaders);
-              if (!started?.success) throw new Error(started?.error || 'Failed to start the heal.');
-
-              // The pass is a background job now: poll until it reports done,
-              // so a big library isn't cut off by the request timeout.
-              const res = await pollHealToCompletion(api, setHealProgress);
-
-              if (res && res.success) {
-                // --- 🧹 DUAL-ACTION: LOCAL CACHE WIPE ---
-                try {
-                  console.log('[Settings] Server healed. Flushing local app cache...');
-
-                  // Wipe the actual image bytes (expo-image disk+RAM, temp dirs,
-                  // share files) — the heal regenerated thumbnails server-side, so
-                  // the device must drop its stale copies to pull the fresh ones.
-                  await clearAllCaches();
-
-                  // Also drop any media-related AsyncStorage keys.
-                  const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-                  const keys = await AsyncStorage.getAllKeys();
-                  const mediaCacheKeys = keys.filter(k => k.includes('media') || k.includes('gallery') || k.includes('image'));
-                  if (mediaCacheKeys.length > 0) {
-                    await AsyncStorage.multiRemove(mediaCacheKeys);
-                    console.log(`[Settings] Cleared ${mediaCacheKeys.length} cache keys`);
-                  }
-
-                  console.log('[Settings] Local cache successfully purged.');
-                } catch (cacheErr) {
-                  console.warn('[Settings] Cache wipe encountered an issue:', cacheErr);
-                }
-                // ----------------------------------------
-
-                const s = res.stats || {};
-                const lines = [
-                  `Healthy rows: ${s.healthy ?? 0}`,
-                  `Thumbnails rebuilt: ${s.regenerated ?? 0}`,
-                  `WebP upgrades: ${s.webpConverted ?? 0}`,
-                  `Blurhashes filled: ${s.blurhashed ?? 0}`,
-                ];
-                // Reported, never acted on: a tunnel photo's bytes live on the
-                // host PC, so "unreachable" means that folder is offline.
-                if (s.offline > 0) lines.push(`On an offline folder (untouched): ${s.offline}`);
-                if (s.ghosts > 0) lines.push(`Missing originals, rows kept: ${s.ghosts}`);
-                if (s.storageDetached) {
-                  lines.push('\n⚠ Most originals were unreadable — that looks like a disconnected drive, so nothing was rewritten.');
-                }
-                Alert.alert(
-                  s.stopped ? 'Heal Stopped' : 'Vault Healed & Cache Cleared ✅',
-                  `${lines.join('\n')}\n\nLocal app memory has been flushed.`
-                );
-              } else {
-                Alert.alert('Error', res?.error || 'Failed to heal the vault.');
-              }
-            } catch (error) {
-              console.error('[Settings] Heal error:', error);
-              Alert.alert('Error', error?.message || 'Network request failed.');
-            } finally {
-              setIsHealing(false);
-              setHealProgress(null);
-            }
-          }
-        }
-      ]
+        { text: 'Audit only', onPress: () => runHeal({ dryRun: true }) },
+        { text: 'Run Heal', onPress: () => runHeal({ dryRun: false }) },
+      ],
     );
-  }, [api]);
+  }, [api, isHealing, runHeal]);
 
   // Manual cache wipe — clears expo-image's disk+RAM cache, the throwaway temp
   // dirs, and any leftover share files. Photos re-download from the server on
@@ -1255,9 +1300,13 @@ export default function SettingsScreen({ active = true }) {
                     marginTop: 12,
                   }}
                   onPressIn={() => tapHaptic()}
+                  // Pressable WHILE healing on purpose: that press offers to
+                  // stop the pass. A 28k-row library used to have to be waited
+                  // out from the phone even though the server takes a stop.
                   onPress={triggerMediaHeal}
-                  disabled={isHealing}
                   activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel={isHealing ? 'Stop the media heal' : 'Heal the media vault'}
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
                     <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(239, 68, 68, 0.1)', justifyContent: 'center', alignItems: 'center' }}>
@@ -1270,9 +1319,9 @@ export default function SettingsScreen({ active = true }) {
                       <Text style={{ color: theme.colors.textSecondary, fontSize: 13, marginTop: 2 }}>
                         {isHealing
                           ? (healProgress?.total
-                              ? `Auditing ${healProgress.processed.toLocaleString()} / ${healProgress.total.toLocaleString()}…`
-                              : 'Starting audit…')
-                          : 'Rebuild thumbnails & previews'}
+                              ? `${healProgress.processed.toLocaleString()} / ${healProgress.total.toLocaleString()} — tap to stop`
+                              : 'Starting… tap to stop')
+                          : 'Rebuild thumbnails & previews · audit first'}
                       </Text>
                     </View>
                   </View>
