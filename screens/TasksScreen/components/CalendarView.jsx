@@ -51,6 +51,8 @@ import { BlurView } from 'expo-blur';
 import { blurProps, frostBorderColor } from '../../../utils/frostedChat';
 import { useTheme } from '../../../context/ThemeContext';
 import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters, matchesRecurrence, isOccurrenceCompleted, parseLocalYMD, boardLabel } from '../utils/taskHelpers';
+import { monthLayout } from '../utils/monthLayout';
+import { LinearGradient } from 'expo-linear-gradient';
 import ScheduleCard, { clockLabel, buildCondensedRows } from './ScheduleCard';
 import { HatchBackdrop } from './HatchBackdrop';
 import { TaskSectionFrontier, DAY_SECTION_FIRST_PAINT } from './TaskSectionFrontier';
@@ -116,13 +118,39 @@ const CALENDAR_HORIZONTAL_PADDING = 16;
 // With the left/right chevron header + standalone Today button gone,
 // the grid claims that freed space.
 const CELL_HEIGHT = DAY_WIDTH + 10;
+// How tall a cell may GROW to fill a big screen. Past this the grid stops
+// reading as a calendar and starts reading as a stretched table, and the space
+// is better spent as symmetric air above and below the month — see
+// `monthTopInset`. A cell still holds the day number + three task pills here.
+const MAX_CELL_HEIGHT = DAY_WIDTH + 16;
 // 6 rows of day cells. Each cell occupies DAY_WIDTH × CELL_HEIGHT of
 // layout space. Plus the title, day-of-week labels, and paddingTop,
 // this is the per-month FlatList page height.
-const MONTH_HEIGHT = MONTH_TITLE_HEIGHT + DAYS_HEADER_HEIGHT + GRID_PADDING_TOP + 6 * CELL_HEIGHT;
-// Bottom strip reserved for the docked task-panel header peek — the grid fills
-// the calendar viewport down to (but not behind) this. Mirrors the
-// `calendarContent` paddingBottom so the dynamic month-height math lines up.
+// How far the top-edge fade reaches PAST the margin, over the first points of
+// the month page. Enough that a month scrolled up dissolves at the list's top
+// edge instead of being hard-cut by calendarContent's overflow clip, and short
+// of the month title's text (which starts ~20pt into its 72pt band).
+const TOP_FADE_FEATHER = 18;
+// How far the moving-list fade reaches INTO the month — the iOS Calendar read,
+// where scrolling weeks dissolve at the top edge instead of being cut off by it.
+//
+// This is depth past the top margin, NOT the height of the band, and the
+// difference is the whole reason a previous attempt showed no gradient at all:
+// the margin is empty page background, so page-coloured pixels over it are
+// invisible by definition. A band that fits inside the margin fades nothing.
+// The visible gradient is only ever the part lying over the grid, so the band
+// has to span the margin AND this much beyond it.
+//
+// Shallow: enough to dissolve a week, not so much that it washes the month.
+const TOP_FADE_SCROLL_DEPTH = 34;
+// Everything on a month page ABOVE the six week rows — title, weekday labels,
+// the pad under them. Constant per page, whatever the cell height works out to.
+const MONTH_CHROME_HEIGHT = MONTH_TITLE_HEIGHT + DAYS_HEADER_HEIGHT + GRID_PADDING_TOP;
+const MONTH_HEIGHT = MONTH_CHROME_HEIGHT + 6 * CELL_HEIGHT;
+// FLOOR for the bottom strip reserved for the docked task-panel header peek —
+// the grid fills the calendar viewport down to (but not behind) this. The real
+// reserve is the sheet header's measured height (see `peekReserve`); this is
+// only what's used for the frames before that measurement lands.
 const SHEET_PEEK_RESERVE = 80;
 // The air between the screen header and the RAISED day-planner card. The sheet
 // used to travel all the way to the top of its container; the header then had
@@ -225,6 +253,35 @@ const hexToRgba = (hex, alpha) => {
   const g = parseInt(h.slice(2, 4), 16);
   const b = parseInt(h.slice(4, 6), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+// ── The soft edge ───────────────────────────────────────────────────────────
+// A two-stop gradient ramps its alpha in a straight line, and a straight line
+// is what makes a fade read as a BAND: the eye finds the point where it stops,
+// because the rate of change is constant right up to it. These stops follow
+// (1-t)² instead — most of the opacity goes in the first third, then a long
+// faint tail that has no findable end.
+//
+// `t` is progress through the fading part only; the run before it is solid, and
+// softFadeLocations places that solid run for a given margin and depth.
+const SOFT_FADE_STOPS = [
+  { t: 0, alpha: 1 },
+  { t: 0.15, alpha: 0.72 },
+  { t: 0.3, alpha: 0.49 },
+  { t: 0.5, alpha: 0.25 },
+  { t: 0.7, alpha: 0.09 },
+  { t: 0.85, alpha: 0.02 },
+  { t: 1, alpha: 0 },
+];
+
+/**
+ * Gradient stop positions for a band `solid + fade` tall: opaque across the
+ * solid run, then SOFT_FADE_STOPS over the rest.
+ */
+const softFadeLocations = (solid, fade) => {
+  const total = solid + fade;
+  const start = total > 0 ? solid / total : 0;
+  return SOFT_FADE_STOPS.map((s) => start + s.t * (1 - start));
 };
 
 const toDateString = (date) => {
@@ -1886,6 +1943,11 @@ export const CalendarView = ({
   // briefly render the sheet raised before onLayout corrects it.
   const containerH = useSharedValue(WINDOW_HEIGHT);
   const headerH = useSharedValue(84);       // measured via onLayout; est. default
+  // The SAME measurement, in React state. The calendar's bottom reserve has to
+  // be what the docked sheet really occupies, and the month-size memo can't
+  // read a shared value. Rounded + thresholded so a sub-pixel re-measure can't
+  // churn the layout.
+  const [sheetHeaderH, setSheetHeaderH] = useState(SHEET_PEEK_RESERVE);
   // Gates the calendar's first paint. The month grid renders once at a static
   // fallback height (calAreaH=0) and again — grown to fill the screen — the
   // instant the area is measured, which reads as a visible "pop/resize" on
@@ -1905,7 +1967,13 @@ export const CalendarView = ({
   // Exact dock occupancy from the dock's own constants — see dockOccupied.
   // Zero when there's no tab bar (the calendar also renders outside one).
   const dockH = tabBarH > 0 ? dockOccupied(insets.bottom) : 0;
-  const peekReserve = SHEET_PEEK_RESERVE + dockH;
+  // What the calendar must keep clear at the bottom. The docked sheet parks at
+  // `containerH - headerH - dockH` (see sheetStyle), so the reserve has to be
+  // the header's MEASURED height — a flat SHEET_PEEK_RESERVE left the last week
+  // of the month sitting behind a header that measures taller than 80 once the
+  // "Task Schedule" title and its date subtitle are in it. The constant stays
+  // as the floor, for the frames before the header has been measured.
+  const peekReserve = Math.max(SHEET_PEEK_RESERVE, sheetHeaderH) + dockH;
 
   const sheetStyle = useAnimatedStyle(() => {
     // Closed, the sheet rests with its header peeking at the bottom — minus the
@@ -1977,17 +2045,19 @@ export const CalendarView = ({
   const [calAreaH, setCalAreaH] = useState(0);
   // The bottom strip the calendar must keep clear now includes the FLOATING tab
   // bar: the day-panel peek, the jump-to-today button and the swipe hint all
-  const { monthH, cellH } = useMemo(() => {
-    const usable = calAreaH > 0 ? calAreaH - peekReserve : 0;
-    if (usable <= 0) return { monthH: MONTH_HEIGHT, cellH: CELL_HEIGHT };
-    const gridH = usable - MONTH_TITLE_HEIGHT - DAYS_HEADER_HEIGHT - GRID_PADDING_TOP;
-    // Never shrink below the original cell size; only grow to fill.
-    const cell = Math.max(CELL_HEIGHT, gridH / 6);
-    return {
-      monthH: MONTH_TITLE_HEIGHT + DAYS_HEADER_HEIGHT + GRID_PADDING_TOP + 6 * cell,
-      cellH: cell,
-    };
+  const { monthH, cellH, monthTopInset } = useMemo(() => {
+    const laid = monthLayout({
+      areaH: calAreaH,
+      bottomReserve: peekReserve,
+      chromeH: MONTH_CHROME_HEIGHT,
+      minCell: CELL_HEIGHT,
+      maxCell: MAX_CELL_HEIGHT,
+    });
+    // Not measured yet — the static page height, top-anchored, for one frame.
+    if (!laid) return { monthH: MONTH_HEIGHT, cellH: CELL_HEIGHT, monthTopInset: 0 };
+    return { monthH: laid.monthH, cellH: laid.cellH, monthTopInset: laid.topInset };
   }, [calAreaH, peekReserve]);
+
 
   // Faint swipe-hint carets (up = previous month, down = next month).
   // A single shared value loops 0→1→0; the two chevrons read it with
@@ -2498,6 +2568,37 @@ export const CalendarView = ({
     }
   }, [currentMonthIndex, monthH]);
 
+  // ── The moving-list top fade (iOS Calendar) ──────────────────
+  // Deep enough to dissolve scrolling weeks under the top edge, and only up
+  // while the list is actually moving. Driven by the discrete drag/momentum
+  // events rather than onScroll: a per-frame JS scroll handler on this list is
+  // exactly the kind of thing the rest of this file goes out of its way to
+  // avoid, and the fade only needs to know "moving or not".
+  const scrollFade = useSharedValue(0);
+  const scrollFadeStyle = useAnimatedStyle(() => ({ opacity: scrollFade.value }));
+  const fadeOutTimer = useRef(null);
+  const showScrollFade = useCallback(() => {
+    if (fadeOutTimer.current) { clearTimeout(fadeOutTimer.current); fadeOutTimer.current = null; }
+    scrollFade.value = withTiming(1, { duration: 140 });
+  }, [scrollFade]);
+  const hideScrollFade = useCallback(() => {
+    if (fadeOutTimer.current) clearTimeout(fadeOutTimer.current);
+    // A drag release is followed by onMomentumScrollBegin a frame or two later
+    // when the flick had any speed in it. Waiting that out means the fade
+    // doesn't blink off and straight back on between the two events — and a
+    // release with NO momentum (where onMomentumScrollEnd never fires at all)
+    // still settles, which is what this timer is really here for.
+    fadeOutTimer.current = setTimeout(() => {
+      scrollFade.value = withTiming(0, { duration: 260 });
+      fadeOutTimer.current = null;
+    }, 120);
+  }, [scrollFade]);
+  useEffect(() => () => { if (fadeOutTimer.current) clearTimeout(fadeOutTimer.current); }, []);
+  const handleMonthMomentumEnd = useCallback((e) => {
+    onMomentumScrollEnd(e);
+    hideScrollFade();
+  }, [onMomentumScrollEnd, hideScrollFade]);
+
   // Scroll to a given month index. Used by the chevrons + Today
   // button. We set currentMonthIndex up front so the visible state
   // matches before the scroll animation finishes — `onMomentumScrollEnd`
@@ -2848,7 +2949,11 @@ export const CalendarView = ({
             getItemLayout={getItemLayout}
             initialScrollIndex={currentMonthIndex}
             onScrollToIndexFailed={onScrollToIndexFailed}
-            onMomentumScrollEnd={onMomentumScrollEnd}
+            // Discrete move/settle events drive the top fade (see scrollFade).
+            onScrollBeginDrag={showScrollFade}
+            onMomentumScrollBegin={showScrollFade}
+            onScrollEndDrag={hideScrollFade}
+            onMomentumScrollEnd={handleMonthMomentumEnd}
             // Signals FlatList that visible cells should re-render when
             // selectedDate changes — otherwise the "selected" highlight can
             // lag behind taps until the user scrolls. (No longer keyed on the
@@ -2877,8 +2982,57 @@ export const CalendarView = ({
             updateCellsBatchingPeriod={30}
             initialNumToRender={3}
             removeClippedSubviews
-            style={{ height: monthH, marginBottom: peekReserve }}
+            style={{ height: monthH, marginTop: monthTopInset, marginBottom: peekReserve }}
           />
+
+          {/* Top-edge fade. The margin above the month is TRANSPARENT — the
+              page's backdrop washes through it — with the page colour held
+              solid only at the very top edge and dissolved out before the
+              month title. White on the light page, near-black on the dark one:
+              it's theme.colors.background either way, so the one gradient
+              covers both modes. It feathers a few points past the list's top
+              edge as well, so a month scrolled up dissolves there rather than
+              being hard-cut by calendarContent's overflow clip. */}
+          {monthTopInset > 0 && (
+            <LinearGradient
+              pointerEvents="none"
+              colors={[
+                hexToRgba(theme.colors.background, 1),
+                hexToRgba(theme.colors.background, 0.35),
+                hexToRgba(theme.colors.background, 0),
+              ]}
+              locations={[0, 0.55, 1]}
+              style={[styles.topFade, { height: monthTopInset + TOP_FADE_FEATHER }]}
+            />
+          )}
+
+          {/* The moving-list fade — the iOS Calendar behaviour: weeks dissolve
+              at the top edge as they scroll past instead of being cut off by
+              the overflow clip.
+
+              Solid from the very top down to where the month list begins, then
+              dissolving over TOP_FADE_SCROLL_DEPTH into the grid. The solid run
+              is invisible (page colour over page colour) and is there to put
+              the gradient's fully-opaque point exactly on the list's top edge:
+              a week arriving there is hidden, and is revealed over the next
+              34pt. That second part is the gradient you actually see, which is
+              why the band has to reach past the margin to exist at all.
+
+              It rides an opacity so the resting month is never touched. */}
+          <Reanimated.View
+            pointerEvents="none"
+            style={[
+              styles.topFade,
+              { height: monthTopInset + TOP_FADE_SCROLL_DEPTH },
+              scrollFadeStyle,
+            ]}
+          >
+            <LinearGradient
+              colors={SOFT_FADE_STOPS.map((s) => hexToRgba(theme.colors.background, s.alpha))}
+              locations={softFadeLocations(monthTopInset, TOP_FADE_SCROLL_DEPTH)}
+              style={StyleSheet.absoluteFill}
+            />
+          </Reanimated.View>
 
           {/* Faint animated swipe-hint carets — up = previous month, down = next
               month. pointerEvents none so they never intercept a tap/scroll; they
@@ -2948,7 +3102,14 @@ export const CalendarView = ({
           style={sheetStyles.taskListHeader}
           onPress={toggleExpand}
           activeOpacity={1}
-          onLayout={(e) => { headerH.value = e.nativeEvent.layout.height; }}
+          onLayout={(e) => {
+            const h = e.nativeEvent.layout.height;
+            headerH.value = h;
+            // Also drives the calendar's bottom reserve. Thresholded: this fires
+            // again on any re-layout, and a state write per sub-pixel wobble
+            // would re-run the month-size memo (and with it every mounted page).
+            setSheetHeaderH((prev) => (Math.abs(prev - h) >= 1 ? Math.round(h) : prev));
+          }}
         >
           <Reanimated.View pointerEvents="none" style={[sheetStyles.taskListHeaderRule, headerRuleStyle]} />
           {/* Grab handle — a little pill that reads as "drag me". Centered via a
@@ -3122,12 +3283,23 @@ const createStyles = (theme) => StyleSheet.create({
   // with breathing room above and below instead of being top-piled.
   calendarContent: {
     flex: 1,
-    // The month grid now fills this area (cells grow via `cellH`), so no
-    // vertical centring. The top/bottom strips are reserved by the
-    // FlatList's own margins (not padding here) so the absolute caret
-    // hints keep a stable top/bottom origin regardless of Yoga's
-    // padding-vs-absolute behaviour.
+    // The month grid grows to fill this area (via `cellH`) up to a cap, and
+    // whatever is left over is split above and below it (`monthTopInset`) so
+    // the month sits centred rather than piled at the top. The top/bottom
+    // strips are reserved by the FlatList's own margins (not padding here) so
+    // the absolute caret hints keep a stable top/bottom origin regardless of
+    // Yoga's padding-vs-absolute behaviour.
     overflow: 'hidden',
+  },
+  // The fade over the top margin. zIndex 4 puts it above the month list and
+  // below the swipe-hint caret (5), so the chevron reads ON the fade rather
+  // than through it.
+  topFade: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 4,
   },
   // Faint swipe-hint carets, centred horizontally at the top/bottom
   // edges of the calendar viewport. The bottom one sits just above the
