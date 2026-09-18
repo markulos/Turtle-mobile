@@ -2381,6 +2381,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // that leaves nothing to show, decline to open rather than falling back
   // to a solo item that might itself be one.
   const openViewerFromList = useCallback((items, item) => {
+    if (isDocument(item)) return;
     const list = (items || []).filter((it) => it && !isDocument(it));
     if (list.length === 0) return;
     const index = Math.max(0, list.findIndex((it) => it.id === item.id));
@@ -2728,7 +2729,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       tags,
       folderId: uploadFolderIdRef.current,
     });
-    uploadFolderIdRef.current = null;
     if (!started) {
       Alert.alert('Upload in progress', 'Another vault upload is still running — let it finish (or dismiss it from the pill) first.');
       return;
@@ -3026,10 +3026,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       if (!wasExternal) {
         setIsSelectMode(false);
         setSelectedGridItems(new Set());
+        setRangeSelectMode(false);
+        setRangeAnchorIdx(null);
+        rangeAnchorRef.current = null;
       }
-      setRangeSelectMode(false);
-      setRangeAnchorIdx(null);
-      rangeAnchorRef.current = null;
     }
   }, []);
 
