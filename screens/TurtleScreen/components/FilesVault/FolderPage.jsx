@@ -38,6 +38,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   const [sheet, setSheet] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [progress, setProgress] = useState({}); // id → 0..1
+  const [refreshing, setRefreshing] = useState(false);
   const busyRef = useRef(false);
 
   const isUnfiled = parent === 'unfiled';
@@ -52,7 +53,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   const media = useMemo(() => items.filter((i) => !isDocument(i)), [items]);
   const thumbOf = useCallback((i) => (i.thumbnailUrl ? getFullUrl(i.thumbnailUrl) : null), [getFullUrl]);
 
-  const toggle = useCallback((id) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; }), []);
+  const toggle = useCallback((id) => { setMenuOpen(false); setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; }); }, []);
   const clearSelection = useCallback(() => setSelected(new Set()), []);
   const selectedItems = useMemo(() => items.filter((i) => selected.has(i.id)), [items, selected]);
 
@@ -149,7 +150,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
     <EdgeSwipePage overlay visible={visible} onClose={selectMode ? () => { clearSelection(); return true; } : onClose} swipeEnabled={!sheet && !selectMode}>
       <View style={[styles.page, { backgroundColor: c.background, paddingTop: topInset }]}>
         <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
-          <Pressable onPress={() => { tapHaptic(); onClose(); }} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back" style={styles.iconBtn}>
+          <Pressable onPress={onClose} onPressIn={tapHaptic} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back" style={({ pressed }) => [styles.iconBtn, { opacity: pressed ? 0.6 : 1 }]}>
             <Icon name="chevron-left" size={28} color={c.textPrimary} />
           </Pressable>
           <View style={styles.crumbs}>
@@ -160,12 +161,12 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
               </React.Fragment>
             ))}
           </View>
-          <Pressable onPress={() => { tapHaptic(); setMenuOpen((v) => !v); }} hitSlop={10} accessibilityRole="button" accessibilityLabel="More actions" style={styles.iconBtn}>
+          <Pressable onPress={() => setMenuOpen((v) => !v)} onPressIn={tapHaptic} hitSlop={10} accessibilityRole="button" accessibilityLabel="More actions" style={({ pressed }) => [styles.iconBtn, { opacity: pressed ? 0.6 : 1 }]}>
             <Icon name="dots-horizontal" size={24} color={c.textPrimary} />
           </Pressable>
         </View>
         {menuOpen && (
-          <View style={[styles.menu, { backgroundColor: c.surfaceElevated || c.surface, borderColor: c.border }]}>
+          <View style={[styles.menu, { top: insets.top + 6 + 44 + 8 + 4, backgroundColor: c.surfaceElevated || c.surface, borderColor: c.border }]}>
             {!isUnfiled && <MenuRow icon="folder-plus-outline" label="New folder" theme={theme} onPress={() => { setMenuOpen(false); setSheet({ kind: 'new' }); }} />}
             {!isUnfiled && <MenuRow icon="tray-arrow-up" label="Upload here" theme={theme} onPress={() => { setMenuOpen(false); onUploadHere(folderId); }} />}
             <MenuRow icon="sort" label="Sort & search" theme={theme} onPress={() => { setMenuOpen(false); setSheet({ kind: 'sort' }); }} />
@@ -182,7 +183,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
             )}
             ListHeaderComponent={header}
             ListFooterComponent={footer}
-            refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} tintColor={c.textSecondary} />}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); try { await refresh(); } finally { setRefreshing(false); } }} tintColor={c.textSecondary} />}
             keyboardDismissMode="on-drag"
             scrollIndicatorInsets={{ right: 1 }}
             indicatorStyle={theme.mode === 'dark' ? 'white' : 'default'}
@@ -229,7 +230,7 @@ const styles = StyleSheet.create({
   crumb: { fontSize: 13, flexShrink: 1 },
   crumbTail: { fontSize: 15, fontWeight: '700', flexShrink: 1 },
   crumbSep: { fontSize: 13 },
-  menu: { position: 'absolute', right: 12, top: 96, zIndex: 20, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 4, minWidth: 200 },
+  menu: { position: 'absolute', right: 12, zIndex: 20, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 4, minWidth: 200 },
   menuRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 44, paddingHorizontal: 14 },
   menuText: { fontSize: 14.5, fontWeight: '600', flexShrink: 1 },
   discs: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8, paddingBottom: 6 },
