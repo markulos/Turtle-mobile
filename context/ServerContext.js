@@ -270,7 +270,11 @@ export const ServerProvider = ({ children }) => {
       method: 'DELETE',
       headers: { ...authHeader() },
     });
-    if (!response.ok) throw new Error('API Error');
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error(`[API ERROR] ${response.status}: ${errorText}`);
+      throw new Error(`API Error ${response.status}: ${errorText}`);
+    }
     return response.json();
   };
 
