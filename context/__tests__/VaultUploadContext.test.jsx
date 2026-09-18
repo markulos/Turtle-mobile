@@ -329,4 +329,19 @@ describe('VaultUploadProvider ownership and idempotency', () => {
     expect(mockStreamMultipartUpload).not.toHaveBeenCalled();
     expect(latestState.state).toBeNull();
   });
+
+  test('a batch enqueued with a folderId sends parameters.folderId on every file', async () => {
+    await render(
+      <VaultUploadProvider>
+        <Probe />
+      </VaultUploadProvider>
+    );
+    await act(async () => {
+      latestActions.enqueue({ assets: [asset('one')], tags: [], folderId: 'fld_aaaaaaaaaaaa' });
+    });
+    await waitFor(() => expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1));
+
+    expect(mockStreamMultipartUpload.mock.calls[0][0].parameters.folderId).toBe('fld_aaaaaaaaaaaa');
+    expect(mockStreamMultipartUpload.mock.calls[0][0].parameters.tags).toBe(JSON.stringify(['Phone Uploads']));
+  });
 });
