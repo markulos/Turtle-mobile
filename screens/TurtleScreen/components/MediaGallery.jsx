@@ -105,6 +105,7 @@ import TimelineScrubber from './TimelineScrubber';
 import { dockOccupied } from '../../../components/tabBarLayout';
 import MusicVault from './MusicVault';
 import FilesVault from './FilesVault/FilesVault';
+import { isDocument } from './FilesVault/filesUtils';
 import EdgeSwipePage from './EdgeSwipePage';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
 import { useMediaVersion } from '../../../context/DownloadsContext';
@@ -1301,6 +1302,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const dismissUploadModal = useCallback(() => {
     Keyboard.dismiss();
     setUploadModalVisible(false);
+    uploadFolderIdRef.current = null;
     setPendingAssets([]);
   }, []);
 
@@ -2341,6 +2343,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // Dev probe: the tap-to-open path is the most latency-visible in the app.
     gestureProbe.respond('grid:openPhoto');
     const executeOpen = () => {
+      // The grid path never depends on the close path having already run —
+      // drop any Files-tab folder override so the grid's own list wins.
+      setViewerListOverride(null);
       // Index into the SAME array the viewer walks (and the grid renders), so
       // the tapped photo is found and left/right swipe works across the whole
       // loaded set. Only fall back to a solo list if it's genuinely absent.
@@ -2372,10 +2377,14 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   }, []);
 
   // Files tab: open the viewer over a FOLDER's media (not the grid's list).
+  // A document must never enter the photo viewer — filter it out, and if
+  // that leaves nothing to show, decline to open rather than falling back
+  // to a solo item that might itself be one.
   const openViewerFromList = useCallback((items, item) => {
-    const list = (items || []).filter((it) => it && it.type !== 'document');
+    const list = (items || []).filter((it) => it && !isDocument(it));
+    if (list.length === 0) return;
     const index = Math.max(0, list.findIndex((it) => it.id === item.id));
-    setViewerListOverride(list.length ? list : [item]);
+    setViewerListOverride(list);
     setViewerSoloItem(null);
     setViewerInitialIndex(index);
     setViewerOrigin(null);
@@ -2548,12 +2557,21 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     );
   }, [selectedMedia]);
 
+  // The folder a "Files tab → Upload here" batch is filed into. Set at the
+  // exact moment a pick succeeds (handleUpload, below) and cleared on every
+  // path away from a pending pick — permission denial, cancel, error, a
+  // dismissed pre-upload modal, or a spent/empty batch — so it can never
+  // outlive the batch it was meant for and misfile the next, unrelated
+  // upload.
+  const uploadFolderIdRef = useRef(null);
+
   // Upload photos/videos - Unlocked Selection Limit
-  const handleUpload = useCallback(async () => {
+  const handleUpload = useCallback(async (folderId = null) => {
     try {
       // Request permissions
       const { status: pickerStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (pickerStatus !== 'granted') {
+        uploadFolderIdRef.current = null;
         Alert.alert('Permission Required', 'Please allow access to photos and videos to upload.');
         return;
       }
@@ -2577,25 +2595,25 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       });
 
       if (result.canceled || !result.assets || result.assets.length === 0) {
+        uploadFolderIdRef.current = null;
         return;
       }
 
       // Show pre-upload modal with album selection
+      uploadFolderIdRef.current = folderId || null;
       setPendingAssets(result.assets);
       // Preset the current album as a tag if inside a specific album
       setSelectedTags(selectedAlbum !== 'All' ? [selectedAlbum] : []);
       setUploadModalVisible(true);
     } catch (error) {
+      uploadFolderIdRef.current = null;
       console.error('[MediaGallery] Upload error:', error);
       Alert.alert('Error', 'Failed to open image picker.');
     }
   }, [selectedAlbum]);
 
   // Files tab: "Upload here" — the normal picker, the batch filed into a folder.
-  const pickForFolder = useCallback((folderId) => {
-    uploadFolderIdRef.current = folderId || null;
-    handleUpload();
-  }, [handleUpload]);
+  const pickForFolder = useCallback((folderId) => handleUpload(folderId || null), [handleUpload]);
 
   // === SMART SYNC FUNCTIONS ===
   const fetchLocalMedia = useCallback(async (loadMore = false) => {
@@ -2689,9 +2707,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // the next launch), duplicates are fingerprint-checked and skipped before
   // any bytes move, and the finish stats + delete-originals offer (uploaded +
   // duplicates) surface in the pill.
-  const uploadFolderIdRef = useRef(null);
   const executeUpload = useCallback(() => {
-    if (pendingAssets.length === 0) return;
+    if (pendingAssets.length === 0) {
+      uploadFolderIdRef.current = null;
+      return;
+    }
 
     const tags = selectedTags.length > 0 ? selectedTags : ['Phone Uploads'];
     const started = vaultActions.enqueue({
@@ -2723,6 +2743,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       setGlobalAlbums(prev => Array.from(new Set([...prev, ...selectedTags])).sort());
     }
 
+    uploadFolderIdRef.current = null;
     setPendingAssets([]);
     setUploadModalVisible(false);
   }, [pendingAssets, selectedTags, vaultActions, setUploadModalVisible, setGlobalAlbums]);
@@ -2995,13 +3016,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   }, [api, displayById, applyTagsLocally]);
 
   const closeBulkTags = useCallback(() => {
+    const wasExternal = externalBulkItemsRef.current.size > 0;
     setBulkTagsOpen(false);
     externalBulkItemsRef.current = new Map();
     // Tags were changed → the job is done, leave select mode (as Save did).
     // Nothing changed → the selection stays for the next action.
     if (bulkDirtyRef.current) {
-      setIsSelectMode(false);
-      setSelectedGridItems(new Set());
+      // The external (Files-tab) path has no grid selection to clear.
+      if (!wasExternal) {
+        setIsSelectMode(false);
+        setSelectedGridItems(new Set());
+      }
       setRangeSelectMode(false);
       setRangeAnchorIdx(null);
       rangeAnchorRef.current = null;
@@ -4225,7 +4250,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               resolveCoverUrl={getFullUrl}
               onQueryChange={setAlbumSearchQuery}
               onSortModeChange={setBoardSortMode}
-              onAdd={handleUpload}
+              onAdd={() => handleUpload()}
               onRetry={fetchAlbums}
               onOpenBoard={openPhotosPage}
               onLongPressBoard={showAlbumOptions}
@@ -4662,7 +4687,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                     </View>
                     <View style={{ alignItems: 'center', width: '100%', marginTop: 8 }}>
                       <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-                        <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPress={handleUpload} disabled={uploadBusy} activeOpacity={0.7}>
+                        <TouchableOpacity style={[styles.actionButton, { flex: 1, backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]} onPress={() => handleUpload()} disabled={uploadBusy} activeOpacity={0.7}>
                           <View style={[styles.actionButtonIcon, { backgroundColor: theme.colors.primary + '20' }]}><Icon name="image-plus" size={18} color={theme.colors.primary} /></View>
                           <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Upload</Text>
                         </TouchableOpacity>

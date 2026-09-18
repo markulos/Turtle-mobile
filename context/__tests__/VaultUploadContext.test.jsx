@@ -337,11 +337,12 @@ describe('VaultUploadProvider ownership and idempotency', () => {
       </VaultUploadProvider>
     );
     await act(async () => {
-      latestActions.enqueue({ assets: [asset('one')], tags: [], folderId: 'fld_aaaaaaaaaaaa' });
+      latestActions.enqueue({ assets: [asset('one'), asset('two')], tags: [], folderId: 'fld_aaaaaaaaaaaa' });
     });
-    await waitFor(() => expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(2));
 
     expect(mockStreamMultipartUpload.mock.calls[0][0].parameters.folderId).toBe('fld_aaaaaaaaaaaa');
+    expect(mockStreamMultipartUpload.mock.calls[1][0].parameters.folderId).toBe('fld_aaaaaaaaaaaa');
     expect(mockStreamMultipartUpload.mock.calls[0][0].parameters.tags).toBe(JSON.stringify(['Phone Uploads']));
   });
 });
