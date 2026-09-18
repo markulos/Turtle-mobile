@@ -54,6 +54,10 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
     const all = sortFolderItems(data?.items || [], sort, order);
     return q ? all.filter((i) => String(i.originalName || i.filename || '').toLowerCase().includes(q)) : all;
   }, [data, sort, order, query]);
+  // The unfiltered page size, for the truncation footer below — `items` is
+  // query-filtered, so gating/printing off it made an in-folder search claim
+  // a false "showing the first N" truncation.
+  const pageCount = (data?.items || []).length;
   const docs = useMemo(() => items.filter(isDocument), [items]);
   const media = useMemo(() => items.filter((i) => !isDocument(i)), [items]);
   const thumbOf = useCallback((i) => (i.thumbnailUrl ? getFullUrl(i.thumbnailUrl) : null), [getFullUrl]);
@@ -152,8 +156,8 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
           faithfully returns pagination.hasMore/.total — say so instead of
           silently truncating while FolderDisc shows the true itemCount next
           to it. Full paging is a follow-up; this is the honest stopgap. */}
-      {!!data?.pagination && (data.pagination.hasMore || data.pagination.total > items.length) && (
-        <Text style={[styles.capNotice, { color: c.textMuted }]}>{`Showing the first ${items.length} of ${data.pagination.total}`}</Text>
+      {!!data?.pagination && !query.trim() && (data.pagination.hasMore || data.pagination.total > pageCount) && (
+        <Text style={[styles.capNotice, { color: c.textMuted }]}>{`Showing the first ${pageCount} of ${data.pagination.total}`}</Text>
       )}
       {data && items.length === 0 && !data.folders?.length && (
         <Text style={[styles.empty, { color: c.textMuted }]}>{query ? 'Nothing matches.' : 'Nothing here yet.'}</Text>

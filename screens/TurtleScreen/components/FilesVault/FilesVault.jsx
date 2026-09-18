@@ -14,7 +14,7 @@
  * split ownership avoids; see the "zIndex is load-bearing" note on
  * MediaGallery's photos page.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,7 +26,7 @@ import FolderDisc from './FolderDisc';
 import { FolderNameSheet } from './FolderSheets';
 import { messageOf } from './filesUtils';
 
-export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia, onBulkTag, onUploadHere, getFullUrl, base, target = null, onTargetConsumed, theme: themeProp, stack = [], onStackChange }) {
+export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia, onBulkTag, onUploadHere, getFullUrl, base, target = null, onTargetConsumed, theme: themeProp, stack = [], onStackChange = () => {} }) {
   const themeCtx = useTheme();
   const theme = themeProp || themeCtx.theme;
   const c = theme.colors;
@@ -36,7 +36,11 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia,
   const [naming, setNaming] = useState(null); // null | { error }
   const [refreshing, setRefreshing] = useState(false);
 
-  const push = useCallback((parent) => onStackChange([...stack, { parent }]), [stack, onStackChange]);
+  // Always-current snapshot of `stack`, so push never appends onto a copy
+  // captured by a stale closure — same pattern as useFolderData's dataRef.
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
+  const push = useCallback((parent) => onStackChange([...stackRef.current, { parent }]), [onStackChange]);
 
   // Search hit → the crumb chain of the target folder (a document's folder,
   // or Unfiled), one page per crumb, so Back walks up naturally.
