@@ -13,13 +13,13 @@ import {
   LayoutAnimation,
   Platform,
   UIManager,
-  TextInput,
   Keyboard,
   RefreshControl,
   Pressable,
   Animated,
   AppState,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
 import Reanimated, {
   useSharedValue,
   useAnimatedStyle,
@@ -31,9 +31,6 @@ import Reanimated, {
   interpolate,
   interpolateColor,
   Extrapolation,
-  FadeIn,
-  FadeOut,
-  LinearTransition,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 // Resets the VirtualizedList "am I nested?" context for a subtree. The day
@@ -52,12 +49,19 @@ import { blurProps, frostBorderColor } from '../../../utils/frostedChat';
 import { useTheme } from '../../../context/ThemeContext';
 import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters, matchesRecurrence, isOccurrenceCompleted, parseLocalYMD, boardLabel } from '../utils/taskHelpers';
 import { monthLayout } from '../utils/monthLayout';
+import { topFadeStops } from '../utils/topFadeStops';
 import { LinearGradient } from 'expo-linear-gradient';
-import ScheduleCard, { clockLabel, buildCondensedRows } from './ScheduleCard';
-import { HatchBackdrop } from './HatchBackdrop';
+import ScheduleCard, { clockLabel, TIME_COL_W } from './ScheduleCard';
+import { buildCompactRows, gapHourMarks, gapKey, gapNowOffset, minutesToTimeString } from '../utils/compactSchedule';
+import { insetCardPalette } from '../utils/cardPalette';
+import { finderDestination, KIND_SEP, FIELD_SEP } from '../utils/finderDestination';
+import TaskFinderOverlay from './TaskFinderOverlay';
+// (HatchBackdrop's import went with the task-card hatch. The month grid's
+// today marker uses the local DiagonalHatch below, not this component.)
 import { TaskSectionFrontier, DAY_SECTION_FIRST_PAINT } from './TaskSectionFrontier';
 import { WheelTimePicker } from './WheelTimePicker';
 import { tapHaptic } from '../../../utils/haptics';
+import { useTapOnly } from '../../../utils/pressBehavior';
 
 // Spring used for every snap of the day-tasks bottom sheet (drag release,
 // tap-toggle, programmatic open). Tuned snappy-but-soft; expect on-device
@@ -126,23 +130,17 @@ const MAX_CELL_HEIGHT = DAY_WIDTH + 16;
 // 6 rows of day cells. Each cell occupies DAY_WIDTH × CELL_HEIGHT of
 // layout space. Plus the title, day-of-week labels, and paddingTop,
 // this is the per-month FlatList page height.
-// How far the top-edge fade reaches PAST the margin, over the first points of
-// the month page. Enough that a month scrolled up dissolves at the list's top
-// edge instead of being hard-cut by calendarContent's overflow clip, and short
-// of the month title's text (which starts ~20pt into its 72pt band).
+// How far the fade reaches PAST the margin, into the first points of the month
+// page. This is the part that turns the list's overflow clip into a dissolve:
+// the gradient is at full page colour ON the clip and lets go over these few
+// points, so a month scrolled up melts instead of being sliced through its
+// glyphs. Short on purpose — the month title's text starts ~20pt into its 72pt
+// band, so 18 lands on the leading above it and never on the words.
 const TOP_FADE_FEATHER = 18;
-// How far the moving-list fade reaches INTO the month — the iOS Calendar read,
-// where scrolling weeks dissolve at the top edge instead of being cut off by it.
-//
-// This is depth past the top margin, NOT the height of the band, and the
-// difference is the whole reason a previous attempt showed no gradient at all:
-// the margin is empty page background, so page-coloured pixels over it are
-// invisible by definition. A band that fits inside the margin fades nothing.
-// The visible gradient is only ever the part lying over the grid, so the band
-// has to span the margin AND this much beyond it.
-//
-// Shallow: enough to dissolve a week, not so much that it washes the month.
-const TOP_FADE_SCROLL_DEPTH = 34;
+// Compact ⇄ timeline used to cross-fade two layouts over a height-animating
+// wrapper (SCHEDULE_FADE_MS / SCHEDULE_SWAP_MS). There is one layout now, so
+// there is nothing to fade between: the switch opens or closes every gap, and
+// the gaps' own transform (GAP_OPEN_MS below) is the whole animation.
 // Everything on a month page ABOVE the six week rows — title, weekday labels,
 // the pad under them. Constant per page, whatever the cell height works out to.
 const MONTH_CHROME_HEIGHT = MONTH_TITLE_HEIGHT + DAYS_HEADER_HEIGHT + GRID_PADDING_TOP;
@@ -167,28 +165,314 @@ const SHEET_RAISED_GAP = 12;
 
 // ── Hourly timetable constants ────────────────────────────────
 //
-// The selected-day task list renders as an hour-by-hour timetable
-// (mirrors the web app's calendar preview). Each hour gets a row;
-// timed tasks are absolutely positioned at their start minute.
+// An HOUR, in points — the scale the schedule draws empty time at. Only empty
+// time: a task is a card of its own fixed height (ScheduleCard.CARD_H) saying
+// what it runs from and to, because a block sized by duration made a 20-minute
+// task 16 pt tall with its title clipped, and the shortest tasks are not the
+// least important ones. An empty HOUR has nothing to say but how long it is, so
+// it is the thing that gets to be measured in points.
 //
-// HOUR_HEIGHT = 48 → ~2× the web app's 36px so finger taps land
-// comfortably and a 30-minute task is still readable (24px tall).
+// 48 → ~2× the web app's 36px, which is also what makes an open hour a slot you
+// can actually aim at (§3's 44 pt, with room to spare).
 const HOUR_HEIGHT = 48;
-const HOUR_LABEL_WIDTH = 56;
-const HOUR_GRID_HEIGHT = HOUR_HEIGHT * 24;
+// ONE gutter for the whole day view. The hour labels inside an open gap and the
+// cards' own time column are the same column — they interleave — so they cannot
+// each own a width. ScheduleCard's is the one that has to hold "12:38 PM" in
+// full, so it is the one that sets it.
+const HOUR_LABEL_WIDTH = TIME_COL_W;
 const { width: SCREEN_W } = Dimensions.get('window'); // off-screen start for the day-swipe slide
 const DEFAULT_TASK_DURATION_MIN = 60;
-const MIN_TASK_BLOCK_HEIGHT = 28;
 
-// Format an hour-of-day number as a clock label. 24h → "15:00"; otherwise the
-// 12-hour AM/PM form ("3 PM", "12 AM"). `use24h` flows from the timeFormat pref.
-const formatHourLabel = (h, use24h = false) => {
-  if (use24h) return `${String(h).padStart(2, '0')}:00`;
-  if (h === 0)  return '12 AM';
-  if (h < 12)   return `${h} AM`;
-  if (h === 12) return '12 PM';
-  return `${h - 12} PM`;
-};
+// ── Expanding a gap ────────────────────────────────────────────────────────
+// One hour row inside an expanded gap. FIXED, and that is what makes the
+// animation honest: the open height is `rows × this`, known before a single
+// pixel moves, so nothing has to be measured first and the expansion can start
+// on the same frame as the tap. Measure-then-animate would cost a layout pass
+// and show one frame at the wrong size.
+// An expanded gap IS a slice of the timeline, so it is drawn at the timeline's
+// own scale. At 26 the hours were a cramped list you could read but not aim
+// at — and now that each one is a tap target for "make a task here", it has to
+// be a slot you can actually hit (§3's 44 pt, with room to spare).
+const GAP_HOUR_H = HOUR_HEIGHT;
+// The rule row at the top of each slot: the hour label and its line. Fixed so
+// the band can be placed against the line rather than against the row.
+const GAP_RULE_H = 18;
+// Where the hairline actually SITS inside that row. The row is 18 tall and
+// centres its line, so the line is half way down — which is why a band drawn
+// from the row's top edge started 9 pt above the line it was supposed to begin
+// at, and ended 9 pt short of the next one. Everything that should line up
+// with the LINE is offset by this, not by 0.
+const GAP_LINE_Y = GAP_RULE_H / 2;
+// Quick, and the same curve both ways. What makes this read as smooth is not
+// the curve — it is that NO LAYOUT RUNS WHILE IT MOVES. The gap takes its full
+// height in ONE layout pass on the frame of the tap, and everything below is
+// translated straight back up by exactly that much; the animation is then a
+// single translateY running to zero on the UI thread. The old version animated
+// the box's `height`, which re-ran Yoga for the whole schedule every frame and
+// left the ancestor's LinearTransition chasing a target that moved under it —
+// that chase, not the easing, was the stutter.
+const GAP_OPEN_MS = 190;
+const GAP_CLOSE_MS = 160;
+const GAP_EASE = Easing.out(Easing.quad);
+
+/**
+ * gapOffset — how far an opening gap's content is displaced from where it will
+ * sit once the gap has settled, in points. The moving half of a reserve.
+ *
+ * A gap holds its space as real layout height and then TRANSLATES what that
+ * space displaced back up by the same amount, so claiming the room moves
+ * nothing; the animation is the translate running to zero. `reserved` is
+ * whether the room is claimed at all, `progress` how far through the reveal it
+ * is.
+ *
+ * ZERO AT REST — both rests, open and shut — and that is not an aesthetic
+ * point. On Fabric a view whose content sits outside its own bounds is a view
+ * whose content cannot be TOUCHED: `RCTViewComponentView.hitTest` rejects any
+ * point outside bounds unless Yoga measured an `overflowInset`, and Yoga has
+ * never heard of transforms. A settled gap with a live translate on it is a
+ * column of hour slots you can see, and a `+` on each one you cannot press.
+ * (It shipped that way for one update: the tap target died two views above the
+ * slot.) So the displacement exists only while something is actually moving.
+ */
+export function gapOffset(reserved, progress, openH) {
+  'worklet';
+  return reserved ? (progress - 1) * openH : 0;
+}
+
+/**
+ * CompactGap — the "6h30m" line between two scheduled tasks, the hours it opens
+ * into, and EVERYTHING BELOW IT in the list, passed as children.
+ *
+ * The rest of the list is nested inside the gap rather than following it as a
+ * sibling because that is what lets the whole expansion be one transform: the
+ * same translateY that slides the hour rows down out from under the task above
+ * carries the cards below down the page, in lockstep, so the block stays rigid
+ * and nothing can drift out of step with anything else. Nesting each gap inside
+ * the previous one makes the offsets compose for free — a card under two open
+ * gaps inherits both without anyone summing anything.
+ *
+ * `reserved` is the LAYOUT state, `open` the intent. They differ only while a
+ * close is in flight, which is exactly the point: the space has to outlive the
+ * animation that gives it up, or the cards would arrive before it left. Both
+ * `reserved` and the reveal are shared values, on the UI thread, for the reason
+ * in the effect below.
+ */
+/**
+ * GapHourSlot — one empty hour inside an opened gap, and the target that turns
+ * it into a task.
+ *
+ * The RULE is drawn at the top with the + centred ON it, and the tappable BAND
+ * is the space strictly between this rule and the next — the hour itself. The
+ * band used to start at the rule and run the slot's full height, so it painted
+ * over its own line and butted into the next one; the lines are the thing you
+ * are reading the grid by, so the highlight goes between them, not across them.
+ *
+ * The press is `useTapOnly`: a slot is 48 pt of a scrolling, horizontally-paging
+ * surface, so a swipe that begins on one must not light it or create anything.
+ */
+function GapHourSlot({ minute, label, onPick, styles, theme }) {
+  const tap = useTapOnly(() => onPick?.(minute));
+  return (
+    <Pressable
+      disabled={!onPick}
+      accessibilityRole="button"
+      accessibilityLabel={`Add a task at ${label}`}
+      testID={`gap-hour-${minute}`}
+      style={styles.compactGapHour}
+      // The target is the BAND, not the layout box. The box starts at this
+      // hour's rule ROW, whose hairline sits GAP_LINE_Y down inside it, so the
+      // box runs from 9 pt above this hour's line to 9 pt above the next —
+      // while the hour you can SEE runs line to line. Left alone, the bottom
+      // 9 pt of a lit band belonged to the slot below it, and a tap there made
+      // a task an hour later than the one it landed on. Shifting the target
+      // down by the same offset the band uses makes what you press the thing
+      // you pressed.
+      hitSlop={{ top: -GAP_LINE_Y, bottom: GAP_LINE_Y }}
+      {...tap.props}
+    >
+      {({ pressed }) => (
+        <>
+          {/* Lit only for a press that has held still — `settled` goes false
+              the moment the finger travels, so a scroll never leaves a band
+              glowing behind it. */}
+          <View style={[styles.compactGapBand, pressed && tap.settled && styles.compactGapBandOn]} />
+          <View style={styles.compactGapRule}>
+            <Text style={styles.hourLabel} numberOfLines={1}>{label}</Text>
+            <View style={styles.compactGapHourLine} />
+          </View>
+          {/* The + is the hour's hint, so it sits in the middle of the HOUR —
+              vertically centred in the slot, on the right. On the rule it read
+              as belonging to the line rather than to the space under it. */}
+          {!!onPick && (
+            <View style={styles.compactGapHourPlus} pointerEvents="none">
+              <Icon name="plus" size={14} color={theme.colors.textMuted} />
+            </View>
+          )}
+        </>
+      )}
+    </Pressable>
+  );
+}
+
+function CompactGap({ row, open, onToggle, onPickHour, styles, theme, use24h, nowMinutes, showNow, children }) {
+  const hours = useMemo(() => gapHourMarks(row.from, row.to), [row.from, row.to]);
+  const openH = hours.length * GAP_HOUR_H;
+
+  // Where NOW falls inside this stretch, in points down from the top of the
+  // hour rows — or null when the clock is elsewhere, or this is not today. The
+  // arithmetic is `gapNowOffset`; all this adds is the day.
+  const nowY = useMemo(
+    () => (showNow ? gapNowOffset(row.from, row.to, nowMinutes, { hourHeight: GAP_HOUR_H, lineY: GAP_LINE_Y }) : null),
+    [showNow, row.from, row.to, nowMinutes],
+  );
+
+  // ── The reserve lives on ONE thread ─────────────────────────────────────
+  //
+  // `reserved` is whether the space is claimed, `progress` how far through the
+  // reveal we are. Together they are one state — height openH with the content
+  // held at -openH is "open but not yet revealed" — and the pair must never be
+  // READ from different frames: height openH with the content NOT held is a
+  // whole gap's worth of empty space, which is the list below dropping ~openH
+  // and snapping back.
+  //
+  // `reserved` used to be React state, which put the two halves on two
+  // pipelines: the height came from a React commit, the offset from a
+  // Reanimated worklet that had `reserved` in its deps and so had to rebuild
+  // and apply on its own next UI flush. Usually the same frame. Occasionally
+  // one apart — the intermittent jump. (Moving the offset into React instead
+  // fixed the jump and cost the touches; see `gapOffset`.)
+  //
+  // So BOTH are shared values. The height and the offset are two mappers
+  // reading one value, dirtied together and flushed in the same UI frame, which
+  // is one commit. Nothing can catch them apart, and claiming the space needs
+  // no render at all — so there is no second pass to wait for either.
+  const reserved = useSharedValue(open ? 1 : 0);
+  // Starts settled rather than animating from 0 on mount: a gap that is already
+  // open (it survived a re-render) must not replay its entrance.
+  const progress = useSharedValue(open ? 1 : 0);
+
+  useEffect(() => {
+    if (open) {
+      reserved.value = 1;
+      progress.value = withTiming(1, { duration: GAP_OPEN_MS, easing: GAP_EASE });
+      return;
+    }
+    // Already shut — every closed gap on every pane mount lands here, and there
+    // is no animation worth running from nothing to nothing.
+    if (!reserved.value) return;
+    progress.value = withTiming(0, { duration: GAP_CLOSE_MS, easing: GAP_EASE }, (finished) => {
+      // Hand the space back only once the cards are standing on it again — on
+      // the same thread, in the same frame the movement settles. An interrupted
+      // close reports `finished` false, so a re-open never has the floor pulled
+      // out from under it.
+      if (finished) reserved.value = 0;
+    });
+  }, [open, reserved, progress]);
+
+  // The SPACE. A step, not an animation: it takes two values and changes twice
+  // per toggle, so no Yoga runs while anything is moving. It must not read
+  // `progress` for that reason — a mapper that does would re-commit a layout
+  // prop on every frame of the reveal, which is the whole-schedule relayout
+  // this design exists to avoid.
+  const bodyStyle = useAnimatedStyle(() => ({
+    height: reserved.value * openH,
+  }), [openH]);
+
+  // The MOVEMENT. Two identical hooks rather than one shared style object,
+  // because an animated style belongs to a single component.
+  const hoursStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: gapOffset(reserved.value, progress.value, openH) }],
+  }), [openH]);
+  const shiftStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: gapOffset(reserved.value, progress.value, openH) }],
+  }), [openH]);
+
+  const chevronStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${progress.value * 180}deg` }],
+  }));
+
+  const durText = fmtDur(row.minutes);
+
+  return (
+    <View style={styles.compactGapWrap}>
+      {/* The clipping box. Its height is a step on the UI thread, set once per
+          toggle; the rows inside are what move. They start a full box-height up
+          — tucked behind the task above — and are uncovered as they travel
+          down, which is why this reads as the space revealing them rather than
+          them sliding out of a box that was already there.
+          ONE view for the space and one for the movement, and at rest the
+          movement is zero — which is what keeps the slots inside it pressable
+          (see `gapOffset`). */}
+      <Reanimated.View style={[styles.compactGapBody, bodyStyle]}>
+        <Reanimated.View style={hoursStyle}>
+          {/* Drawn with the schedule's own label and rule styles, in its own
+              gutter, so an open gap IS a slice of the timeline — not a third
+              kind of row that happens to list hours. Open every one of them and
+              what you have is the whole day, hour by hour: that is all the
+              "Timeline" control does. */}
+          {hours.map((minute) => (
+            /* Each hour is a SLOT: tap it and the finder opens with that time
+               already pending, so "I have nothing at 4" and "put something at
+               4" are the same gesture. The hours were only ever a readout
+               before — you had to close the gap again and go find the + . */
+            <GapHourSlot
+              key={`gap-hour-${minute}`}
+              minute={minute}
+              label={clockLabel(minute, use24h, { pad: false })}
+              onPick={onPickHour}
+              styles={styles}
+              theme={theme}
+            />
+          ))}
+          {/* NOW. Inside the hours' own transform, so it is revealed with them
+              rather than sitting still while the grid it belongs to slides out
+              from under it — and inside the clipping box, so a gap closing
+              takes the line with it. */}
+          {nowY != null && (
+            <View pointerEvents="none" style={[styles.gapNowLine, { top: nowY - 1 }]} testID={`gap-now-${row.from}`}>
+              <View style={styles.nowDot} />
+              <View style={styles.nowBar} />
+            </View>
+          )}
+        </Reanimated.View>
+      </Reanimated.View>
+
+      {/* The control and the whole rest of the list ride the same offset, so
+          the block stays rigid.
+          The control stays put UNDER the hours, so the tap that opened it is
+          the tap that closes it — it has simply been carried down the page by
+          the thing it revealed. One chevron that turns over, not two icons
+          swapping: a swap is a cut, and a cut is the one thing an organic
+          expansion cannot have in it. */}
+      <Reanimated.View style={shiftStyle}>
+        <View style={styles.compactGapRow}>
+          <View style={styles.compactGapSpacer} />
+          <View style={styles.compactGapLine} />
+          <Pressable
+            onPress={onToggle}
+            hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: open }}
+            accessibilityLabel={
+              open
+                ? `Collapse the ${durText} between these tasks`
+                : `Show the ${durText} between these tasks, hour by hour`
+            }
+            testID={`schedule-gap-${row.from}-${row.to}`}
+            style={({ pressed }) => [styles.compactGapLabel, pressed && { opacity: 0.55 }]}
+          >
+            <Text style={styles.compactGapText} numberOfLines={1}>{durText}</Text>
+            <Reanimated.View style={chevronStyle}>
+              <Icon name="chevron-down" size={13} color={theme.colors.textTertiary} />
+            </Reanimated.View>
+          </Pressable>
+          <View style={styles.compactGapLine} />
+        </View>
+        {children}
+      </Reanimated.View>
+    </View>
+  );
+}
 
 // Format a HH:MM string as a clock time. 24h → "15:45"; otherwise 12-hour
 // AM/PM ("3:45 PM"). `use24h` flows from the timeFormat pref.
@@ -225,18 +509,6 @@ const fmtDur = (mins) => {
   return `${m}m`;
 };
 
-// Snap a Y coordinate inside the hour grid to the nearest 15-minute slot,
-// returned as an "HH:MM" string. Module-level (pure) so the day-pager's
-// per-day panes can share it.
-const yToTimeString = (locationY) => {
-  const totalMinutes = Math.round((locationY / HOUR_HEIGHT) * 60);
-  const snapped = Math.round(totalMinutes / 15) * 15;
-  const clamped = Math.max(0, Math.min(24 * 60 - 15, snapped));
-  const hh = Math.floor(clamped / 60);
-  const mm = clamped % 60;
-  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-};
-
 // ── Pure date helpers (no theme / state dependency) ──────────
 //
 // Pulled out of the component so they aren't redefined on every render
@@ -253,35 +525,6 @@ const hexToRgba = (hex, alpha) => {
   const g = parseInt(h.slice(2, 4), 16);
   const b = parseInt(h.slice(4, 6), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-};
-
-// ── The soft edge ───────────────────────────────────────────────────────────
-// A two-stop gradient ramps its alpha in a straight line, and a straight line
-// is what makes a fade read as a BAND: the eye finds the point where it stops,
-// because the rate of change is constant right up to it. These stops follow
-// (1-t)² instead — most of the opacity goes in the first third, then a long
-// faint tail that has no findable end.
-//
-// `t` is progress through the fading part only; the run before it is solid, and
-// softFadeLocations places that solid run for a given margin and depth.
-const SOFT_FADE_STOPS = [
-  { t: 0, alpha: 1 },
-  { t: 0.15, alpha: 0.72 },
-  { t: 0.3, alpha: 0.49 },
-  { t: 0.5, alpha: 0.25 },
-  { t: 0.7, alpha: 0.09 },
-  { t: 0.85, alpha: 0.02 },
-  { t: 1, alpha: 0 },
-];
-
-/**
- * Gradient stop positions for a band `solid + fade` tall: opaque across the
- * solid run, then SOFT_FADE_STOPS over the rest.
- */
-const softFadeLocations = (solid, fade) => {
-  const total = solid + fade;
-  const start = total > 0 ? solid / total : 0;
-  return SOFT_FADE_STOPS.map((s) => start + s.t * (1 - start));
 };
 
 const toDateString = (date) => {
@@ -302,7 +545,7 @@ const WEEKDAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WEEK_SELECT_BG = '#F5A623';
 const WEEK_SELECT_FG = '#1A1A1A';
 
-// ── The Task Schedule sheet takes the PAGE's side ───────────────────────────
+// ── The TO-DO List sheet takes the PAGE's side ──────────────────────────────
 // It used to be its own dark room in both app themes — a white-on-black pane
 // over a white page. That was a defensible call while the pane covered the
 // whole screen and had to be legible over any month colour behind it, but the
@@ -315,13 +558,53 @@ const WEEK_SELECT_FG = '#1A1A1A';
 // strength under a translucent tint, so what's behind reads softly through.
 // Nothing inside the panel paints a flat surface over it.
 //
-// Alpha is higher than the composer's (0.74 vs ~0.4/0.5) for one reason: this
-// pane carries paragraphs, not a one-line input, and it has a whole month grid
-// behind it rather than a settled chat. It is the lowest number at which the
-// day's text stays comfortably readable — the calendar behind also dims to 42 %
-// (calendarStyle), and the two together are what buy the glass.
+// Alpha is far higher than the composer's, for one reason: this pane carries
+// paragraphs, not a one-line input, and it has a whole MONTH GRID behind it
+// rather than a settled chat. At 0.74 the grid's own type — "September 2026",
+// the day numbers, the little task chips — read straight through the panel and
+// competed with the list for the same eye. 0.90 / 0.72 keeps the glass (you can
+// still see the month move behind it) while making the panel's own text the
+// only thing you can actually READ. The calendar behind also dims to 42 %
+// (calendarStyle); the three together are what buy the glass.
 const sheetFrost = (theme) =>
-  theme.mode === 'dark' ? 'rgba(28, 28, 30, 0.42)' : 'rgba(255, 255, 255, 0.74)';
+  theme.mode === 'dark' ? 'rgba(28, 28, 30, 0.72)' : 'rgba(255, 255, 255, 0.90)';
+
+// The blur under that tint. The composer's 85 is tuned for a bar over chat;
+// this is a full pane over a grid of small type, and type is exactly what a
+// blur has to destroy for a frost to read as a surface rather than as a dirty
+// window. 100 is the top of expo-blur's range.
+const SHEET_BLUR = 100;
+
+/**
+ * The SHEEN — a vertical wash over the tint, and the thing that makes the pane
+ * read as a pane of glass rather than as a flat translucent rectangle. Real
+ * glass catches the light along its top edge and falls off quickly; that is all
+ * this is.
+ *
+ * Three stops, not two, with the mid stop pulled up to 0.35: a straight
+ * two-stop ramp over a tall pane spreads the falloff across the whole height,
+ * which reads as a grey cast rather than as light, and is where gradient
+ * banding shows. Front-loading it keeps the transition inside the top third,
+ * where there are enough pixels per step that the steps are invisible.
+ *
+ * Very low alphas on purpose — at these values you should not be able to point
+ * at a gradient, only notice that the top of the panel is lit.
+ */
+const sheetSheen = (theme) => (theme.mode === 'dark'
+  ? {
+    // On dark glass the light is the only thing that shows, so it works from
+    // white rather than from the surface colour.
+    colors: ['rgba(255,255,255,0.10)', 'rgba(255,255,255,0.03)', 'rgba(255,255,255,0)'],
+    locations: [0, 0.35, 1],
+  }
+  : {
+    // On light glass a WHITE sheen is invisible against a near-white tint, so
+    // the falloff is the other way round: pure white at the top, settling into
+    // the faintest cool shade at the foot. The cool end is what stops a big
+    // white pane looking like paper.
+    colors: ['rgba(255,255,255,0.85)', 'rgba(255,255,255,0.25)', 'rgba(228,232,240,0.16)'],
+    locations: [0, 0.35, 1],
+  });
 // The sheet's base grey as a SOLID colour, kept for the dark palette below.
 // Exported because components/index.jsx re-exports it.
 export const SHEET_SOLID = '#1C1C1E';
@@ -578,6 +861,33 @@ const EMPTY_DAY_TASKS = Object.freeze([]);
 // (through the same matchesRecurrence oracle, so semantics can't drift).
 // Cell task-order matches the old filter exactly: tasks are pushed in list
 // order, so each day's array is the original order.
+/**
+ * The figures that share the board's line under the panel header: the SHAPE of
+ * the day the list is showing, as an array of already-worded facts.
+ *
+ * Deliberately NOT the timed count or the hours (the strip under the week row
+ * says "3 timed · 3h") and not the backlog (the Pending section carries its own
+ * count) — a subtitle that repeats what is already two rows below it is noise
+ * dressed as detail. What it says is the one thing the panel says nowhere else:
+ * the day's TOTAL, which includes its untimed tasks, and how much of it is
+ * behind you.
+ *
+ * `total` is every task on the day, `open` the ones still to do.
+ */
+export const dayFacts = (total, open) => {
+  const all = Math.max(0, Number(total) || 0);
+  const left = Math.min(all, Math.max(0, Number(open) || 0));
+  const done = all - left;
+  // An empty day SAYS so, rather than "0 tasks · 0 done" — a row of zeroes
+  // reads as a broken count, not as a clear day.
+  if (all === 0) return ['nothing planned'];
+  const facts = [`${all} ${all === 1 ? 'task' : 'tasks'}`];
+  // "all done" rather than "5 done" once there is nothing left: at that point
+  // the fact worth reading is that the day is finished, not the arithmetic.
+  if (done > 0) facts.push(left === 0 ? 'all done' : `${done} done`);
+  return facts;
+};
+
 export const buildMonthCells = (filteredTasks, targetDate, hideCompletedOccurrences = false) => {
   const year = targetDate.getFullYear();
   const month = targetDate.getMonth();
@@ -755,10 +1065,6 @@ const resetSubtasksForReuse = (subtasks) =>
     completedTime: null,
   }));
 
-// Static 0..23 row indexes for the hour grid — hoisted so the pane doesn't
-// rebuild the array (and 24 fresh objects) on every render.
-const HOURS = Array.from({ length: 24 }, (_, h) => h);
-
 // Props that only drive the ACTIVE pane's live inputs (add-task / search).
 // When a keystroke updates these, the two INACTIVE neighbour panes bail out of
 // re-rendering entirely (see dayPaneEqual) — typing used to re-render all
@@ -813,10 +1119,26 @@ const DayPane = React.memo(function DayPane({
   onTaskInspect,
   onTaskLongPress,
   onToggleComplete,
+  // (task) — start a focus timer for a row, from the circle key beside it.
+  onStartPomodoro,
+  // (task) — a LIVE key was pressed: open the running timer rather
+  // than starting a second block on the same task.
+  onOpenPomodoro,
   onUpdateTask, // used to pull an OPEN/pending task onto the viewed day
   // (task, dayStr) — tapping a row's time column opens the wheel picker on
   // that task, for the day this pane is showing.
   onEditTaskTime,
+  // (userId, fallbackName) => { id, name, color, avatarUrl, … } | null. One
+  // place that knows what a person looks like, for the owner and for everyone
+  // else involved in a task.
+  memberOf,
+  // (people, task, anchor) — a card's avatar stack was tapped. The SCREEN owns
+  // the list it opens: a popover mounted in here would be clipped by the pane,
+  // the pager and the sheet in turn.
+  onPeoplePress,
+  // (taskId) => { count, endsAt } | null — focus spent on a task, and a block
+  // running on it right now.
+  pomodoroFor,
   // Owner-badge tap (shared calendar). Was referenced but never declared as a
   // prop — pressing a badge threw "ReferenceError: onOwnerPress is not defined".
   onOwnerPress,
@@ -849,6 +1171,49 @@ const DayPane = React.memo(function DayPane({
   const scrollRef = useRef(null);
   const dayStr = toDateString(date);
   const isViewingToday = dayStr === todayStr;
+
+  // ── The mode IS the gaps' default ──────────────────────────────────────
+  //
+  // There is ONE schedule. "Timeline" is not a second layout — it is this list
+  // with every gap open, and "Compact" is the same list with them shut. So
+  // `scheduleCollapsed` sets the DEFAULT each gap takes, and this map holds the
+  // per-gap departures from it: one stretch opened on an otherwise compact day,
+  // one hour-by-hour run closed inside an otherwise exploded one. Keyed by the
+  // stretch a gap spans (gapKey), so retiming a task collapses the gap that no
+  // longer exists rather than transferring the state to whatever row took its
+  // index — and a gap that appears later (a task moved, a new one added) takes
+  // the mode's default rather than inheriting a stale entry.
+  //
+  // Per-pane: paging to another day starts from the mode's default.
+  const [gapOverrides, setGapOverrides] = useState(() => new Map());
+  const gapIsOpen = useCallback(
+    (key) => (gapOverrides.has(key) ? gapOverrides.get(key) : !scheduleCollapsed),
+    [gapOverrides, scheduleCollapsed],
+  );
+  const toggleGap = useCallback((key, open) => {
+    tapHaptic();
+    setGapOverrides((prev) => {
+      const next = new Map(prev);
+      next.set(key, !open);
+      return next;
+    });
+  }, []);
+
+  // Switching modes RE-STATES every gap: the exploded timeline must not come up
+  // with a hole in it where a gap was left shut, and the compact list must not
+  // come back still carrying one open. Cleared during render rather than in an
+  // effect, so the commit that changes the mode is also the one that moves the
+  // gaps — an effect would show one frame of the old set first.
+  const [prevMode, setPrevMode] = useState(scheduleCollapsed);
+  if (prevMode !== scheduleCollapsed) {
+    setPrevMode(scheduleCollapsed);
+    setGapOverrides((prev) => (prev.size ? new Map() : prev));
+  }
+
+  // The inset dark card the Tasks tab uses (utils/cardPalette). The schedule's
+  // cards are the same object as that list's, so they read from the same
+  // palette rather than a second copy of the same intent.
+  const inset = useMemo(() => insetCardPalette(theme), [theme]);
 
   // Stable per-pane binding of the time-column tap, so the memoised
   // ScheduleCards don't take a fresh callback on every pane render.
@@ -884,9 +1249,9 @@ const DayPane = React.memo(function DayPane({
     return { occasions: occ, timedTasks: timed, untimedTasks: untimed };
   }, [dayTasks]);
 
-  // Collapsed-schedule model: each timed task as a {start,end,duration} segment
-  // (sorted by start) plus the gap (minutes of empty time) to the NEXT task, so
-  // the compact view can stack the tasks and label the gaps between them. Also
+  // Schedule model: each timed task as a {start,end,duration} segment (sorted
+  // by start) plus the gap (minutes of empty time) to the NEXT task, so the
+  // schedule can stack the tasks and label the stretches between them. Also
   // the day's total tracked minutes for the header count.
   const { segments, totalTimedMin } = useMemo(() => {
     const segs = timedTasks
@@ -905,6 +1270,12 @@ const DayPane = React.memo(function DayPane({
     return { segments: segs, totalTimedMin: total };
   }, [timedTasks]);
 
+  // The day as rows: the tasks, and the stretches of empty time between and
+  // around them. An empty day is ONE row — a single 24 h gap — rather than
+  // nothing at all, so a day with no plan on it is still the same timeline,
+  // openable hour by hour like any other stretch.
+  const scheduleRows = useMemo(() => buildCompactRows(segments), [segments]);
+
   // The cross-day Pending backlog. Carry-overs are computed against TODAY, so
   // on a PAST pane that day's own leftovers would appear twice — once in its
   // grid/TBD list, once in the strip. Drop this pane's own date here.
@@ -913,31 +1284,130 @@ const DayPane = React.memo(function DayPane({
     [pendingTasks, dayStr],
   );
 
-  // Auto-scroll to a useful hour on mount (now-1h today, else 8 AM) so a
-  // freshly-swiped day lands on working hours rather than midnight. Mount-
-  // only — later now-line ticks must not yank the user's scroll position.
-  useEffect(() => {
-    const ref = scrollRef.current;
-    if (!ref) return;
-    // Only meaningful for the tall hour grid; the compact view starts at the
-    // first task, so don't yank it down to "working hours".
-    if (scheduleCollapsed) return;
-    const anchor = isViewingToday ? Math.max(0, nowMinutes - 60) : 8 * 60;
-    const id = requestAnimationFrame(() => {
-      ref.scrollTo({ y: (anchor / 60) * HOUR_HEIGHT, animated: false });
-    });
-    return () => cancelAnimationFrame(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheduleCollapsed]);
+  // No auto-scroll to "working hours" any more. That existed because the
+  // expanded view was a fixed 24 × HOUR_HEIGHT grid whose midnight-to-8am was
+  // dead space you had to be scrolled past — a y for any minute was a division.
+  // The unified schedule has no such mapping (a task is a card of its own
+  // height, wherever it sits in the day) and no dead space to skip: the tasks
+  // are at the top, one line per empty stretch between them. There is nothing
+  // left to scroll past, so the pane opens where the day does.
 
-  // Long-press an empty slot → open the add-task input pre-filled with that
-  // time, then bring the (top-of-list) input into view.
-  const handleLongPress = (e) => {
-    const y = e?.nativeEvent?.locationY ?? 0;
-    onOpenAddTaskAt(yToTimeString(y));
-    requestAnimationFrame(() => {
-      scrollRef.current?.scrollTo({ y: 0, animated: true });
-    });
+  /**
+   * Everyone on a task, owner first: the badges a card carries.
+   *
+   * The OWNER only counts on a shared pond — a solo pond's every task is
+   * yours, and a badge saying so on each row is noise. Anyone INVOLVED counts
+   * always: they are there because someone put them there, which is exactly
+   * the thing worth showing, and a task with involved people is multi-person
+   * whatever the pond is. So the owner joins the line whenever the line would
+   * exist at all, because "who else" is only meaningful next to "whose".
+   *
+   * De-duplicated: the owner is routinely in their own involvedUsers, and two
+   * of the same face in a stack reads as a bug.
+   */
+  const rosterFor = useCallback((task) => {
+    if (!memberOf || !task) return [];
+    const involved = Array.isArray(task.involvedUsers) ? task.involvedUsers.filter(Boolean) : [];
+    if (!involved.length && !multiUser) return [];
+    const ids = [];
+    for (const id of [task.userId, ...involved]) {
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+    return ids
+      .map((id) => memberOf(id, id === task.userId ? task.ownerName : null))
+      .filter(Boolean);
+  }, [memberOf, multiUser]);
+
+  // ── The compact list is built NESTED, not mapped flat ──────────────────
+  // Everything after a gap row is rendered as that gap's CHILDREN, so the one
+  // transform that opens the gap carries the whole tail of the list down with
+  // it (see CompactGap). A `.map` cannot nest its own tail, hence the walk.
+  const renderCompactRow = (row) => {
+    const { seg } = row;
+    const task = seg.task;
+    const done = task.completed || isOccurrenceCompleted(task, dayStr);
+    // The SAME card as the Pending and To-Do rows below it — ScheduleCard, a
+    // soft wash of the board's colour with its keys beside it.
+    //
+    // It used to be the Tasks tab's inset CHARCOAL panel with the completion
+    // ring overlaid inside its right edge, which made the one list read as two:
+    // dark slabs on top, pale planner cards underneath, for rows that differ
+    // only in whether a time is set. The board colour that ran down the left
+    // edge is not lost — it IS the card's wash now, which is a louder signal
+    // than a 3 pt rule was.
+    //
+    // NOW passes THROUGH the card when the clock is inside the task's own
+    // stretch — the timeline's red line, cut to a stub on the card's left edge
+    // (see ScheduleCard's `nowMark`). Placed by how far through the task the
+    // minute is, not by an absolute y: a card is a fixed height whatever its
+    // duration, so a proportion is the only reading of "where in this task we
+    // are" that means anything. A zero-length segment has no inside to be in.
+    const span = seg.end - seg.start;
+    const nowAt = (isViewingToday && span > 0 && nowMinutes >= seg.start && nowMinutes < seg.end)
+      ? (nowMinutes - seg.start) / span
+      : null;
+    return (
+      <ScheduleCard
+        key={task.id}
+        nowAt={nowAt}
+        task={task}
+        theme={theme}
+        timeLabel={clockLabel(seg.start, use24h, { pad: false })}
+        range={`${clockLabel(seg.start, use24h, { pad: false })} – ${clockLabel(seg.end, use24h, { pad: false })}`}
+        color={getProjectColor(task.project)}
+        done={done}
+        // A plain tap edits, a long press inspects — the order this list has
+        // always used; the inspector is still the fastest read of a task.
+        onPress={onTaskLongPress || onTaskPress}
+        onLongPress={onTaskInspect || onTaskPress}
+        // (id, dayStr) — what the handler actually takes. The ring this
+        // replaced handed it the whole TASK, so `tasks.find(t => t.id === task)`
+        // matched nothing and ticking a timed card quietly did nothing at all.
+        onToggle={(it) => onToggleComplete?.(it.id, dayStr)}
+        onStartPomodoro={onStartPomodoro}
+        onOpenPomodoro={onOpenPomodoro}
+        people={rosterFor(task)}
+        onPeoplePress={onPeoplePress}
+        pomodoro={pomodoroFor?.(task.id)}
+        onTimePress={onTimePress}
+        testID={`schedule-card-${task.id}`}
+      />
+    );
+  };
+
+  const renderCompactRows = (rows, from = 0) => {
+    const out = [];
+    for (let i = from; i < rows.length; i++) {
+      const row = rows[i];
+      // A gap is ONE row saying how long it is, until it is opened into the
+      // hours it stands for. That is the only difference between the two modes:
+      // "Timeline" opens every one of them at once, which is what makes the
+      // exploded view this same list rather than a second one.
+      if (row.kind === 'gap') {
+        const key = gapKey(row);
+        const open = gapIsOpen(key);
+        // The tail of the list goes INSIDE the gap, so the walk ends here.
+        out.push(
+          <CompactGap
+            key={key}
+            row={row}
+            open={open}
+            onToggle={() => toggleGap(key, open)}
+            onPickHour={(minute) => onOpenAddTaskAt?.(minutesToTimeString(minute))}
+            styles={styles}
+            theme={theme}
+            use24h={use24h}
+            nowMinutes={nowMinutes}
+            showNow={isViewingToday}
+          >
+            {renderCompactRows(rows, i + 1)}
+          </CompactGap>
+        );
+        return out;
+      }
+      out.push(renderCompactRow(row));
+    }
+    return out;
   };
 
   return (
@@ -958,159 +1428,12 @@ const DayPane = React.memo(function DayPane({
           />
         }
       >
-        {/* Add Task — active pane shows the live input; others a placeholder. */}
-        {isActive && isAddingTask ? (
-          <View style={styles.addTaskContainer}>
-            <Icon name="magnify" size={18} color={theme.colors.textTertiary} style={{ marginRight: 8 }} />
-            <TextInput
-              style={styles.addTaskInput}
-              placeholder={pendingTime ? `New task at ${formatTimeLabel(pendingTime, use24h)}` : 'Search or add a task…'}
-              placeholderTextColor={theme.colors.textPlaceholder}
-              value={newTaskTitle}
-              onChangeText={onChangeNewTaskTitle}
-              onSubmitEditing={onSubmitAddTask}
-              autoFocus
-              blurOnSubmit={false}
-              returnKeyType="done"
-              accessibilityLabel="Search or add a task"
-              testID="day-finder-input"
-            />
-            {/* Time slot. With a pending time the pill shows it and TAPS open
-                the wheel picker to fine-tune it (× clears). With no time yet, a
-                subtle clock button opens the picker to add one. */}
-            {pendingTime ? (
-              <View style={styles.addTaskTimeChip}>
-                <TouchableOpacity
-                  style={styles.addTaskTimeChipMain}
-                  onPress={onEditPendingTime}
-                  hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Edit time, currently ${formatTimeLabel(pendingTime, use24h)}`}
-                >
-                  <Icon name="clock-outline" size={12} color={theme.colors.background} />
-                  <Text style={styles.addTaskTimeChipText}>{formatTimeLabel(pendingTime, use24h)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={onClearPendingTime}
-                  hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Clear time"
-                >
-                  <Icon name="close-circle" size={14} color={theme.colors.background} />
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <TouchableOpacity
-                style={styles.addTaskTimeAdd}
-                onPress={onEditPendingTime}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityRole="button"
-                accessibilityLabel="Add a time"
-              >
-                <Icon name="clock-plus-outline" size={18} color={theme.colors.textTertiary} />
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={styles.addTaskClose}
-              onPress={onCancelAdd}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Icon name="close" size={18} color={theme.colors.textTertiary} />
-            </TouchableOpacity>
-          </View>
-        ) : null}
-
-        {/* The finder's results: what you typed either MATCHES existing tasks
-            (tap opens one; the + re-adds a copy on this day) or CREATES a new
-            task on this day (the dashed row on top, also Return). */}
-        {isActive && isAddingTask && newTaskTitle.trim().length > 0 && (
-          <View style={styles.finderResults}>
-            {!searchResults.some((r) => (r.title || '').trim().toLowerCase() === newTaskTitle.trim().toLowerCase()) && (
-              <View style={styles.finderCreate}>
-                <Text style={styles.finderCreateTime} numberOfLines={1}>
-                  {pendingTime ? formatTimeLabel(pendingTime, use24h) : 'new'}
-                </Text>
-                <TouchableOpacity
-                  style={styles.finderCreateCard}
-                  onPressIn={() => tapHaptic()}
-                  onPress={onSubmitAddTask}
-                  activeOpacity={0.6}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Create task ${newTaskTitle.trim()}`}
-                  testID="day-finder-create"
-                >
-                  <View style={styles.finderCreateTop}>
-                    <Text style={styles.finderCreateTitle} numberOfLines={2}>{newTaskTitle.trim()}</Text>
-                    <View style={styles.finderCreateRing}>
-                      <Icon name="plus" size={14} color={theme.colors.textPrimary} />
-                    </View>
-                  </View>
-                  <Text style={styles.finderCreateCaption} numberOfLines={1}>
-                    Create · {isViewingToday ? 'today' : formatDueDate(dayStr)}{pendingTime ? ` · ${formatTimeLabel(pendingTime, use24h)}` : ''}
-                  </Text>
-                  <View style={styles.finderCreateBottom}>
-                    <Text style={styles.finderCreateHint} numberOfLines={1}>Return creates</Text>
-                    <TouchableOpacity
-                      onPressIn={() => tapHaptic()}
-                      onPress={onOpenFullCreate}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Open the full form for this day"
-                      testID="day-finder-full-form"
-                      style={styles.finderFullKey}
-                    >
-                      <Icon name="tune-variant" size={13} color={theme.colors.textSecondary} />
-                      <Text style={styles.finderFullKeyText}>Full form</Text>
-                    </TouchableOpacity>
-                  </View>
-                </TouchableOpacity>
-              </View>
-            )}
-            {searchResults.length > 0 && (
-              <Text style={styles.searchResultsTitle}>
-                {searchResults.length} matching · tap to open · + re-adds here
-              </Text>
-            )}
-            {searchResults.map(task => {
-              const overdue = !task.completed && isOverdue(task.dueDate);
-              return (
-                <View key={task.id} style={styles.searchResultItem}>
-                  <TouchableOpacity
-                    style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
-                    onPress={() => onOpenSearchResult(task)}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open ${task.title}`}
-                  >
-                    <Icon
-                      name={task.completed ? 'check-circle' : (task.dueDate ? 'calendar' : 'calendar-blank-outline')}
-                      size={16}
-                      color={task.completed ? theme.colors.accentSuccess : (overdue ? theme.colors.accentError : theme.colors.textTertiary)}
-                      style={styles.resultIcon}
-                    />
-                    <View style={styles.resultContent}>
-                      <Text style={[styles.resultTitle, task.completed && styles.taskTitleCompleted]} numberOfLines={1}>{task.title}</Text>
-                      <Text style={[styles.resultMeta, overdue && { color: theme.colors.accentError }]} numberOfLines={1}>
-                        {[task.project ? boardLabel(task.project) : null, task.dueDate ? `Due ${formatDueDate(task.dueDate)}${task.time ? ` · ${formatTimeLabel(task.time, use24h)}` : ''}` : 'No due date'].filter(Boolean).join(' · ')}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPressIn={() => tapHaptic()}
-                    onPress={() => onPickSuggestion?.(task)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Re-add ${task.title} on this day`}
-                    style={styles.finderReadd}
-                  >
-                    <Icon name="plus" size={18} color={theme.colors.textSecondary} />
-                  </TouchableOpacity>
-                </View>
-              );
-            })}
-          </View>
-        )}
-
+        {/* The finder is NOT here any more. It was a field at the top of this
+            scroll view with its results underneath, which meant the answer list
+            competed for room with the day's own schedule, the week strip and
+            the sheet header — a handful of rows once the keyboard was up. It is
+            a full-screen panel now (TaskFinderOverlay), mounted at the
+            calendar's root so it gets the whole screen. */}
 
         {/* Events & Birthdays for this day — always-visible strip with the
             occasion colour + icon. Tap to open/edit, just like a task. */}
@@ -1156,8 +1479,9 @@ const DayPane = React.memo(function DayPane({
           </View>
         )}
 
-        {/* Schedule toolbar — count + total tracked time on the left, a toggle
-            between the COMPACT stack (default) and the full hour GRID. */}
+        {/* Schedule toolbar — count + total tracked time on the left, and the
+            control that explodes the timeline: it opens every gap at once, or
+            shuts them all again. */}
         <View style={styles.scheduleToolbar}>
           <Text style={styles.scheduleToolbarTitle}>
             {timedTasks.length} timed{totalTimedMin > 0 ? ` · ${fmtDur(totalTimedMin)}` : ''}
@@ -1168,7 +1492,7 @@ const DayPane = React.memo(function DayPane({
             activeOpacity={0.7}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             accessibilityRole="button"
-            accessibilityLabel={scheduleCollapsed ? 'Expand to hourly timeline' : 'Collapse to compact list'}
+            accessibilityLabel={scheduleCollapsed ? 'Open every gap, hour by hour' : 'Close every gap back to a compact list'}
           >
             <Icon
               name={scheduleCollapsed ? 'arrow-expand-vertical' : 'arrow-collapse-vertical'}
@@ -1179,170 +1503,50 @@ const DayPane = React.memo(function DayPane({
           </TouchableOpacity>
         </View>
 
-        {/* Smooth reveal between compact ⇄ timeline: the wrapper height-animates
-            (LinearTransition) while the outgoing view fades out and the incoming
-            one fades in — clipped by overflow:hidden so it reads as a wipe. */}
-        <Reanimated.View layout={LinearTransition.duration(340)} style={styles.scheduleSwap}>
-        {scheduleCollapsed ? (
-          /* Compact view — only the timed tasks, stacked, with the empty time
-             between consecutive tasks shown as a thin labelled gap line. */
-          <Reanimated.View
-            key="compact"
-            entering={FadeIn.duration(240)}
-            exiting={FadeOut.duration(160)}
-            style={styles.collapsedSchedule}
-          >
-            {/* No empty-state copy here. The compact view's whole job is to take
-                up as little of the day panel as it can, and a day with nothing
-                timed already says so — "0 timed" is in the toolbar directly
-                above, and the day's untimed tasks start immediately below. A
-                three-line paragraph explaining the timeline pushed them down
-                the screen to make a point nobody was asking about. The hint
-                lives on the timeline itself now, where the slot it tells you to
-                long-press is actually on screen. */}
-            {segments.length === 0 ? null : buildCondensedRows(segments).map((row) => {
-              // The condensed hour timeline: every hour from the first task
-              // to the last task's end gets a row — a card on the hour a task
-              // starts (it stands for the hours it covers), a dashed line for
-              // a free hour, one "free" row for a long empty stretch.
-              if (row.kind === 'empty') {
-                return (
-                  <View key={`h-${row.minute}`} style={styles.condRow}>
-                    <Text style={styles.condLabel} numberOfLines={1}>{clockLabel(row.minute, use24h)}</Text>
-                    <View style={styles.condDash} />
-                  </View>
-                );
-              }
-              if (row.kind === 'free') {
-                return (
-                  <View key={`free-${row.minute}`} style={styles.condRow}>
-                    <Text style={styles.condLabel} numberOfLines={1}>{clockLabel(row.minute, use24h)}</Text>
-                    <View style={styles.condDash} />
-                    <Text style={styles.condFree} numberOfLines={1}>{fmtDur(row.minutes)} free</Text>
-                    <View style={styles.condDash} />
-                  </View>
-                );
-              }
-              const { seg } = row;
-              const done = seg.task.completed || isOccurrenceCompleted(seg.task, dayStr);
-              return (
-                <ScheduleCard
-                  key={seg.task.id}
-                  task={seg.task}
-                  theme={theme}
-                  timeLabel={clockLabel(seg.start, use24h)}
-                  range={`${clockLabel(seg.start, use24h)} – ${clockLabel(seg.end, use24h)}`}
-                  color={seg.task.project ? getProjectColor(seg.task.project) : null}
-                  done={done}
-                  onPress={onTaskInspect || onTaskPress}
-                  onLongPress={onTaskLongPress}
-                  onToggle={(it) => onToggleComplete?.(it.id, dayStr)}
-                  owner={multiUser && seg.task.userId ? { name: seg.task.ownerName || 'Unknown', color: ownerColor(seg.task.userId) } : null}
-                  onOwnerPress={onOwnerPress}
-                  onTimePress={onTimePress}
-                  testID={`schedule-card-${seg.task.id}`}
-                />
-              );
-            })}
-          </Reanimated.View>
-        ) : (
-        /* Expanded view — full 24-row hour grid; timed blocks absolutely placed. */
-        <Reanimated.View key="grid" entering={FadeIn.duration(240)} exiting={FadeOut.duration(160)}>
-        {/* The "how do I put something here" hint, on the view where the answer
-            is visible. Only when the day has nothing timed on it — once there
-            is a block on the grid the affordance has explained itself. */}
-        {timedTasks.length === 0 && (
-          <Text style={styles.timelineEmpty}>
-            No timed tasks yet. Tap + above, or long-press an hour below.
-          </Text>
-        )}
-        <Pressable
-          style={styles.hourGrid}
-          onLongPress={handleLongPress}
-          delayLongPress={350}
-        >
-          {HOURS.map((h) => (
-            <View key={`hour-${h}`} style={[styles.hourRow, { top: h * HOUR_HEIGHT }]}>
-              <Text style={styles.hourLabel}>{formatHourLabel(h, use24h)}</Text>
-              <View style={styles.hourDivider} />
-            </View>
-          ))}
+        {/* ── ONE timeline, in two states ──────────────────────────────────
+            There is no compact view and no grid view any more; there is the
+            schedule, and how far open it is. A gap between two tasks is a line
+            saying "6h30m" until you open it into six and a half hours of
+            slots — and "Timeline" is that same gesture applied to every gap at
+            once. So the exploded view IS the collapsed one, exploded.
 
-          {isViewingToday && (
-            <View
-              pointerEvents="none"
-              style={[styles.nowLine, { top: (nowMinutes / 60) * HOUR_HEIGHT - 1 }]}
-            >
-              <View style={styles.nowDot} />
-              <View style={styles.nowBar} />
-            </View>
+            Everything follows from that. The animation is not a cross-fade
+            between two layouts (which is what it used to be, and why the cards
+            appeared to be replaced rather than moved) — it is the per-gap
+            transform the tap on a single "6h30m" already ran, all of them
+            firing together: the hours slide down out from under the task above
+            while everything below rides the same translate. Nothing is
+            measured, no card is unmounted, and a task card is the SAME card at
+            the same width in both states, because there is only one of it.
+
+            The hour grid this replaced could not do that. It drew a task as a
+            block whose HEIGHT was its duration, so a 20-minute task was a 16 pt
+            sliver with a clipped title, and the switch had to swap one kind of
+            card for another. Here duration is what the card SAYS, not how tall
+            it is — which is also what makes the now-line's treatment on a card
+            a proportion rather than a y. */}
+        <View style={styles.scheduleBody}>
+          {/* The "how do I put something here" answer, while the day has
+              nothing timed on it. Once there is a card the affordance has
+              explained itself. It reads the same in both states now: an empty
+              day is a single 24 h gap, so the hour you tap is either on screen
+              already or one tap away. */}
+          {timedTasks.length === 0 && (
+            <Text style={styles.timelineEmpty}>
+              No timed tasks yet. Tap + above, or open the day below and tap an hour.
+            </Text>
           )}
+          <View style={styles.compactList}>
+            {/* The gutter rule — one continuous hairline behind the whole
+                schedule, with every time in the day right-aligned into it:
+                the cards' own time column and the hour labels inside an open
+                gap are the same column, so opening one adds lines to a gutter
+                that never moves. */}
+            <View pointerEvents="none" style={styles.hourRule} />
 
-          {timedTasks.map(task => {
-            const [h, m] = task.time.split(':').map(Number);
-            const top = ((h * 60 + m) / 60) * HOUR_HEIGHT;
-            const duration = Number(task.duration) > 0 ? Number(task.duration) : DEFAULT_TASK_DURATION_MIN;
-            const height = Math.max((duration / 60) * HOUR_HEIGHT, MIN_TASK_BLOCK_HEIGHT);
-            const projectColor = getProjectColor(task.project);
-            // Day context: this block dims when THIS day's occurrence is ticked.
-            const blockDone = task.completed || isOccurrenceCompleted(task, dayStr);
-            return (
-              <TouchableOpacity
-                key={task.id}
-                style={[
-                  styles.taskBlock,
-                  { top, height, borderLeftColor: projectColor, backgroundColor: theme.colors.surfaceElevated },
-                  // Board tasks: hairline border in the board colour on the
-                  // other three sides (left keeps its 3px project edge).
-                  task.project && { borderWidth: StyleSheet.hairlineWidth, borderColor: projectColor, borderLeftWidth: 3 },
-                  blockDone && styles.taskItemCompleted,
-                ]}
-                // Tap a timeline block → minimal quick inspector (rename +
-                // time/date). Long-press still jumps straight to the full form.
-                onPress={() => (onTaskInspect || onTaskPress)?.(task)}
-                onLongPress={() => onTaskLongPress?.(task)}
-              >
-                {/* Board-colour diagonal hatch wash behind the block (board
-                    tasks only). Right corners match the block's rounding; left
-                    stays square under the 3px project edge. */}
-                <HatchBackdrop
-                  color={task.project ? projectColor : null}
-                  style={{ borderTopRightRadius: 6, borderBottomRightRadius: 6 }}
-                />
-                <View style={styles.taskBlockHeader}>
-                  <Text
-                    style={[styles.taskBlockTitle, blockDone && styles.taskTitleCompleted]}
-                    numberOfLines={height < 40 ? 1 : 2}
-                  >
-                    {task.title}
-                  </Text>
-                  {multiUser && task.userId && (
-                    <TouchableOpacity
-                      style={[styles.ownerBadge, { backgroundColor: ownerColor(task.userId) }]}
-                      onPress={() => onOwnerPress?.(task)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Owner: ${task.ownerName || 'Unknown'}. Open profile`}
-                    >
-                      <Text style={styles.ownerBadgeText}>{ownerInitial(task.ownerName)}</Text>
-                    </TouchableOpacity>
-                  )}
-                  {task.priority && (
-                    <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(task.priority, theme) }]} />
-                  )}
-                </View>
-                {height >= 40 && (
-                  <Text style={styles.taskBlockTime} numberOfLines={1}>
-                    {formatTimeLabel(task.time, use24h)}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </Pressable>
-        </Reanimated.View>
-        )}
-        </Reanimated.View>
+            {renderCompactRows(scheduleRows)}
+          </View>
+        </View>
 
         {/* To Do — this day's tasks with no time set yet. Dated for this day but
             unscheduled, shown BELOW the schedule; tap to inspect / add a time. */}
@@ -1377,8 +1581,10 @@ const DayPane = React.memo(function DayPane({
                     onPress={onTaskInspect || onTaskPress}
                     onLongPress={onTaskLongPress}
                     onToggle={(it) => onToggleComplete?.(it.id, dayStr)}
-                    owner={multiUser && task.userId ? { name: task.ownerName || 'Unknown', color: ownerColor(task.userId) } : null}
-                    onOwnerPress={onOwnerPress}
+                    people={rosterFor(task)}
+                    onPeoplePress={onPeoplePress}
+                    pomodoro={pomodoroFor?.(task.id)}
+                    onOpenPomodoro={onOpenPomodoro}
                     onTimePress={onTimePress}
                     testID={`todo-card-${task.id}`}
                   />
@@ -1436,8 +1642,10 @@ const DayPane = React.memo(function DayPane({
                       onPress={onTaskInspect || onTaskPress}
                       onLongPress={onTaskLongPress}
                       onToggle={(it) => onToggleComplete?.(it.id, dayStr)}
-                      owner={multiUser && task.userId ? { name: task.ownerName || 'Unknown', color: ownerColor(task.userId) } : null}
-                      onOwnerPress={onOwnerPress}
+                      people={rosterFor(task)}
+                      onPeoplePress={onPeoplePress}
+                      pomodoro={pomodoroFor?.(task.id)}
+                      onOpenPomodoro={onOpenPomodoro}
                       trailing={!done ? (
                         <TouchableOpacity
                           onPressIn={() => tapHaptic()}
@@ -1767,6 +1975,17 @@ export const CalendarView = ({
   onTaskPress,
   onTaskLongPress,
   onToggleComplete,
+  // (task) — the circle key beside a schedule row starts a focus timer for it.
+  onStartPomodoro,
+  // (task) — a LIVE key was pressed: open the running timer rather
+  // than starting a second block on the same task.
+  onOpenPomodoro,
+  // (userId, fallbackName) => a person record, for the badges on a card.
+  memberOf,
+  // (people, task, anchor) — a card's avatar stack was tapped.
+  onPeoplePress,
+  // (taskId) => focus spent on a task, and any block running on it.
+  pomodoroFor,
   // A task block was tapped: (task, dateStr). The inspector itself is mounted
   // by the SCREEN, over everything — inside the calendar it drew beneath the
   // header chrome, the tab bar and this host's own clipping.
@@ -1971,7 +2190,7 @@ export const CalendarView = ({
   // `containerH - headerH - dockH` (see sheetStyle), so the reserve has to be
   // the header's MEASURED height — a flat SHEET_PEEK_RESERVE left the last week
   // of the month sitting behind a header that measures taller than 80 once the
-  // "Task Schedule" title and its date subtitle are in it. The constant stays
+  // "TO-DO List" title and its date subtitle are in it. The constant stays
   // as the floor, for the frames before the header has been measured.
   const peekReserve = Math.max(SHEET_PEEK_RESERVE, sheetHeaderH) + dockH;
 
@@ -2057,6 +2276,13 @@ export const CalendarView = ({
     if (!laid) return { monthH: MONTH_HEIGHT, cellH: CELL_HEIGHT, monthTopInset: 0 };
     return { monthH: laid.monthH, cellH: laid.cellH, monthTopInset: laid.topInset };
   }, [calAreaH, peekReserve]);
+
+  // The top fade's stops depend on the measured margin, so they are derived
+  // here rather than written into the gradient by hand. See topFadeStops.
+  const topFade = useMemo(
+    () => topFadeStops(monthTopInset, TOP_FADE_FEATHER),
+    [monthTopInset],
+  );
 
 
   // Faint swipe-hint carets (up = previous month, down = next month).
@@ -2457,6 +2683,16 @@ export const CalendarView = ({
   // Tasks for the selected date — same cache the day panes read.
   const selectedDateTasks = getDayTasks(toDateString(selectedDate));
 
+  // What the finder shows before anything is typed: this day's still-OPEN
+  // tasks. `isOccurrenceCompleted` as well as `completed` — a repeating task
+  // ticked for THIS day is done here even though the task itself is not.
+  // (toDateString here rather than `selectedStr`, which is declared further
+  // down — a const read above its declaration is a TDZ crash, not a warning.)
+  const dayOpenTasks = useMemo(() => {
+    const dstr = toDateString(selectedDate);
+    return selectedDateTasks.filter((t) => !t.completed && !isOccurrenceCompleted(t, dstr));
+  }, [selectedDateTasks, selectedDate]);
+
   // PENDING tasks — everything still OPEN that today's plan hasn't accounted
   // for. Two buckets:
   //   • the undated backlog (no due date, no time) — never had a day;
@@ -2568,36 +2804,9 @@ export const CalendarView = ({
     }
   }, [currentMonthIndex, monthH]);
 
-  // ── The moving-list top fade (iOS Calendar) ──────────────────
-  // Deep enough to dissolve scrolling weeks under the top edge, and only up
-  // while the list is actually moving. Driven by the discrete drag/momentum
-  // events rather than onScroll: a per-frame JS scroll handler on this list is
-  // exactly the kind of thing the rest of this file goes out of its way to
-  // avoid, and the fade only needs to know "moving or not".
-  const scrollFade = useSharedValue(0);
-  const scrollFadeStyle = useAnimatedStyle(() => ({ opacity: scrollFade.value }));
-  const fadeOutTimer = useRef(null);
-  const showScrollFade = useCallback(() => {
-    if (fadeOutTimer.current) { clearTimeout(fadeOutTimer.current); fadeOutTimer.current = null; }
-    scrollFade.value = withTiming(1, { duration: 140 });
-  }, [scrollFade]);
-  const hideScrollFade = useCallback(() => {
-    if (fadeOutTimer.current) clearTimeout(fadeOutTimer.current);
-    // A drag release is followed by onMomentumScrollBegin a frame or two later
-    // when the flick had any speed in it. Waiting that out means the fade
-    // doesn't blink off and straight back on between the two events — and a
-    // release with NO momentum (where onMomentumScrollEnd never fires at all)
-    // still settles, which is what this timer is really here for.
-    fadeOutTimer.current = setTimeout(() => {
-      scrollFade.value = withTiming(0, { duration: 260 });
-      fadeOutTimer.current = null;
-    }, 120);
-  }, [scrollFade]);
-  useEffect(() => () => { if (fadeOutTimer.current) clearTimeout(fadeOutTimer.current); }, []);
-  const handleMonthMomentumEnd = useCallback((e) => {
-    onMomentumScrollEnd(e);
-    hideScrollFade();
-  }, [onMomentumScrollEnd, hideScrollFade]);
+  // (The moving-list top fade that used to live here — a shared value driven by
+  // the list's drag/momentum events — went with the gradient it animated. The
+  // month list's own onMomentumScrollEnd is passed straight through now.)
 
   // Scroll to a given month index. Used by the chevrons + Today
   // button. We set currentMonthIndex up front so the visible state
@@ -2753,7 +2962,7 @@ export const CalendarView = ({
   }, [buildCalendarDataFor, handleDatePress, theme, styles, monthH, cellH, showCalendarDayTasks, selectedStr, todayStr]);
 
   // Sheet-header title + subtitle for the selected date.
-  const { title: taskTitle, subtitle: taskSubtitle } = useMemo(() => {
+  const { subtitle: taskSubtitle } = useMemo(() => {
     const today = new Date();
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -2770,10 +2979,51 @@ export const CalendarView = ({
 
     // One title, always: the date beside it says which day (with a quiet
     // "Today" / "Tomorrow" prefix when it applies).
-    if (isToday) return { title: 'Task Schedule', subtitle: `Today · ${dateStr}` };
-    if (isTomorrow) return { title: 'Task Schedule', subtitle: `Tomorrow · ${dateStr}` };
-    return { title: 'Task Schedule', subtitle: dateStr };
+    if (isToday) return { title: 'TO-DO List', subtitle: `Today · ${dateStr}` };
+    if (isTomorrow) return { title: 'TO-DO List', subtitle: `Tomorrow · ${dateStr}` };
+    return { title: 'TO-DO List', subtitle: dateStr };
   }, [selectedDate]);
+
+  // The header at rest: the SAME line the finder shows, with the day spelled
+  // the long way. The two used to be different shapes in the same place — a
+  // 26 pt title over a subtitle, swapping for a small-caps destination line —
+  // so opening the finder re-set the header in another typeface. One
+  // composition means the swap only changes the words.
+  const headerWhere = useMemo(() => finderDestination({
+    dateLabel: taskSubtitle,
+    board: selectedProject,
+  }), [taskSubtitle, selectedProject]);
+
+  // The board is ALWAYS on its own line now, under the header — quieter and
+  // thinner than the line above it, because which list this is and which day
+  // it shows is the header; the board is the scope it was filtered to.
+  //
+  // This used to be measured: the board sat inline and dropped below only when
+  // it truncated ("AMB Archi…"), which took a text-layout callback and a
+  // once-per-line latch to keep from oscillating. A header bigger than the 15
+  // it was cannot hold three facts on one line anyway, so the decision is no
+  // longer a decision and the measuring is gone.
+  //
+  // What shares that line with the board is the SHAPE OF THE DAY: how many
+  // tasks it holds and how much of it is done. Deliberately NOT the timed
+  // count or the hours (the strip under the week row says "3 timed · 3h") or
+  // the backlog (the Pending section carries its own count) — a subtitle that
+  // repeats what is already two rows below it is noise dressed as detail. This
+  // pair is the one thing the panel does not say anywhere else: the day's
+  // total includes its UNTIMED tasks, which the timed count by definition does
+  // not.
+  const headerFacts = useMemo(
+    () => dayFacts(selectedDateTasks.length, dayOpenTasks.length),
+    [selectedDateTasks, dayOpenTasks],
+  );
+
+  // Where a new task would land right now — the line that replaces the header
+  // while the finder is open. Bare date, no "Today ·" prefix: the header can
+  // afford that, one line carrying three facts over a keyboard cannot.
+  const finderWhere = useMemo(() => finderDestination({
+    dateLabel: selectedDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+    board: selectedProject,
+  }), [selectedDate, selectedProject]);
 
   // The finder's "Full form": hand the day to the create form (events,
   // birthdays, every field) and close the finder.
@@ -2786,14 +3036,40 @@ export const CalendarView = ({
    * typed a title and then wanted a board or a note retyped it.) The finder is
    * cleared after the values are read, not before.
    */
-  const openFullCreate = useCallback(() => {
-    const title = newTaskTitle.trim();
-    const time = pendingTime;
+  /**
+   * Close the finder, THEN hand off to whatever it was a doorway to.
+   *
+   * The finder is a native Modal, and so is everything it opens (the full
+   * form, a task's card). Closing one and opening the other in the same commit
+   * asks the platform to dismiss and present in a single pass — the nested-
+   * sibling-Modal case this codebase routes around everywhere else. What it
+   * leaves behind is the symptom rather than a crash: the finder is gone from
+   * the screen, the destination never arrives, and the schedule underneath is
+   * fully drawn and entirely untappable.
+   *
+   * One frame is all it takes to make them two separate transitions.
+   */
+  const handoffRef = useRef(null);
+  useEffect(() => () => {
+    if (handoffRef.current) cancelAnimationFrame(handoffRef.current);
+  }, []);
+  const closeFinderThen = useCallback((next) => {
     setIsAddingTask(false);
     setNewTaskTitle('');
     setPendingTime(null);
-    onCreateForDate?.(toDateString(selectedDateRef.current), { title, time });
-  }, [onCreateForDate, newTaskTitle, pendingTime]);
+    if (handoffRef.current) cancelAnimationFrame(handoffRef.current);
+    handoffRef.current = requestAnimationFrame(() => {
+      handoffRef.current = null;
+      next();
+    });
+  }, []);
+
+  const openFullCreate = useCallback(() => {
+    const title = newTaskTitle.trim();
+    const time = pendingTime;
+    const dateStr = toDateString(selectedDateRef.current);
+    closeFinderThen(() => onCreateForDate?.(dateStr, { title, time }));
+  }, [closeFinderThen, onCreateForDate, newTaskTitle, pendingTime]);
 
   const handleCancelAdd = useCallback(() => {
     // Swallow the single blur-cancel caused by opening the wheel time picker —
@@ -2837,11 +3113,10 @@ export const CalendarView = ({
   // also be changed). Replaces the old tap-to-reassign behaviour so the
   // search reads as a lookup, not a scheduling shortcut.
   const handleOpenSearchResult = useCallback((task) => {
-    onTaskPress?.(task);
-    setIsAddingTask(false);
-    setNewTaskTitle('');
-    setPendingTime(null);
-  }, [onTaskPress]);
+    // Same handoff rule as "Full form": the card is a sibling Modal, so the
+    // finder has to be gone before it is asked to present. See closeFinderThen.
+    closeFinderThen(() => onTaskPress?.(task));
+  }, [closeFinderThen, onTaskPress]);
 
   // Render one day page of the horizontal pager. The active page (its date
   // === selectedDate) wires up the live add-task / search inputs; neighbours
@@ -2892,13 +3167,18 @@ export const CalendarView = ({
       refreshing={refreshing}
       onRefresh={onRefresh}
       keyboardHeight={keyboardHeight}
+      onStartPomodoro={onStartPomodoro}
+      onOpenPomodoro={onOpenPomodoro}
+      memberOf={memberOf}
+      onPeoplePress={onPeoplePress}
+      pomodoroFor={pomodoroFor}
     />
   ), [
     selectedStr, tasks, getDayTasks, todayStr,
     multiUser, sheetTheme, sheetStyles, use24h, nowMinutes, pendingTasks, untimedCollapsed,
     toggleUntimedCollapsed, scheduleCollapsed, toggleScheduleCollapsed,
-    onTaskPress, openInspector, onTaskLongPress, onToggleComplete, onUpdateTask, openTaskTimeEditor,
-    onOwnerPress, openAddTaskAt,
+    onTaskPress, openInspector, onTaskLongPress, onToggleComplete, onStartPomodoro, onOpenPomodoro, onUpdateTask, openTaskTimeEditor,
+    onOwnerPress, memberOf, onPeoplePress, pomodoroFor, openAddTaskAt,
     isAddingTask, newTaskTitle, handleAddTask, handleCancelAdd, pendingTime, clearPendingTime,
     openTimeEditor,
     openAddTask, handlePickSuggestion, openFullCreate, isSearching, searchQuery, openSearch, closeSearch, searchResults,
@@ -2949,11 +3229,7 @@ export const CalendarView = ({
             getItemLayout={getItemLayout}
             initialScrollIndex={currentMonthIndex}
             onScrollToIndexFailed={onScrollToIndexFailed}
-            // Discrete move/settle events drive the top fade (see scrollFade).
-            onScrollBeginDrag={showScrollFade}
-            onMomentumScrollBegin={showScrollFade}
-            onScrollEndDrag={hideScrollFade}
-            onMomentumScrollEnd={handleMonthMomentumEnd}
+            onMomentumScrollEnd={onMomentumScrollEnd}
             // Signals FlatList that visible cells should re-render when
             // selectedDate changes — otherwise the "selected" highlight can
             // lag behind taps until the user scrolls. (No longer keyed on the
@@ -2985,54 +3261,42 @@ export const CalendarView = ({
             style={{ height: monthH, marginTop: monthTopInset, marginBottom: peekReserve }}
           />
 
-          {/* Top-edge fade. The margin above the month is TRANSPARENT — the
-              page's backdrop washes through it — with the page colour held
-              solid only at the very top edge and dissolved out before the
-              month title. White on the light page, near-black on the dark one:
-              it's theme.colors.background either way, so the one gradient
-              covers both modes. It feathers a few points past the list's top
-              edge as well, so a month scrolled up dissolves there rather than
-              being hard-cut by calendarContent's overflow clip. */}
+          {/* Top-edge fade over the empty margin above the month.
+              White on the light page, near-black on the dark one: it's
+              theme.colors.background either way, so the one gradient covers
+              both modes.
+
+              The shape is doing two things that pull against each other, and
+              topFadeStops is where the arithmetic lives (with its own tests).
+
+              CLEAR at the top: it used to open at full page colour flush under
+              the header, which put a solid block across the strip — the page's
+              backdrop died at the header instead of reaching it.
+
+              FULL page colour ON the month list's top edge: that edge is a hard
+              overflow clip, and a wash that has not reached full strength by
+              the time it gets there does not hide a clip, it just tints one.
+              That is what left "September 2026" sliced through the middle of
+              its glyphs when the list was scrolled. Then it lets go again over
+              TOP_FADE_FEATHER, which is what makes the cut read as a dissolve.
+
+              So: clear, ramp, opaque exactly on the cut, gone a few points
+              later — above the title's text, never across it. */}
           {monthTopInset > 0 && (
             <LinearGradient
               pointerEvents="none"
-              colors={[
-                hexToRgba(theme.colors.background, 1),
-                hexToRgba(theme.colors.background, 0.35),
-                hexToRgba(theme.colors.background, 0),
-              ]}
-              locations={[0, 0.55, 1]}
+              colors={topFade.alphas.map((a) => hexToRgba(theme.colors.background, a))}
+              locations={topFade.locations}
               style={[styles.topFade, { height: monthTopInset + TOP_FADE_FEATHER }]}
             />
           )}
 
-          {/* The moving-list fade — the iOS Calendar behaviour: weeks dissolve
-              at the top edge as they scroll past instead of being cut off by
-              the overflow clip.
-
-              Solid from the very top down to where the month list begins, then
-              dissolving over TOP_FADE_SCROLL_DEPTH into the grid. The solid run
-              is invisible (page colour over page colour) and is there to put
-              the gradient's fully-opaque point exactly on the list's top edge:
-              a week arriving there is hidden, and is revealed over the next
-              34pt. That second part is the gradient you actually see, which is
-              why the band has to reach past the margin to exist at all.
-
-              It rides an opacity so the resting month is never touched. */}
-          <Reanimated.View
-            pointerEvents="none"
-            style={[
-              styles.topFade,
-              { height: monthTopInset + TOP_FADE_SCROLL_DEPTH },
-              scrollFadeStyle,
-            ]}
-          >
-            <LinearGradient
-              colors={SOFT_FADE_STOPS.map((s) => hexToRgba(theme.colors.background, s.alpha))}
-              locations={softFadeLocations(monthTopInset, TOP_FADE_SCROLL_DEPTH)}
-              style={StyleSheet.absoluteFill}
-            />
-          </Reanimated.View>
+          {/* There used to be a SECOND, deeper gradient here that faded in
+              while the month list was moving (the iOS Calendar "weeks dissolve
+              at the top edge" behaviour). It reached 34pt further down than the
+              resting one, so every swipe washed the whole top of the grid out
+              and then took it away again — a band appearing and disappearing on
+              each move. The resting fade above is the only one now. */}
 
           {/* Faint animated swipe-hint carets — up = previous month, down = next
               month. pointerEvents none so they never intercept a tap/scroll; they
@@ -3086,8 +3350,16 @@ export const CalendarView = ({
             Nothing opaque is painted over it. The sheet used to cross-fade to a
             solid fill as it parked, which meant the frost was only ever visible
             in transit; it is glass the whole way up now. */}
-        <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(sheetTheme)} />
+        <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(sheetTheme)} intensity={SHEET_BLUR} />
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: sheetFrost(sheetTheme) }]} />
+        {/* The sheen, over the tint and under everything else — see sheetSheen. */}
+        <LinearGradient
+          pointerEvents="none"
+          style={StyleSheet.absoluteFill}
+          {...sheetSheen(sheetTheme)}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+        />
         {/* Only the header is the docked "peek" (its measured height drives the
             sheet travel). The week strip lives BELOW it, so it's off-screen
             when docked and slides into view only as the sheet is brought up. */}
@@ -3118,10 +3390,66 @@ export const CalendarView = ({
             <View style={sheetStyles.grabHandle} />
           </View>
           <View style={sheetStyles.taskListHeaderContent}>
-            {/* "Task Schedule" at the month header's size, both words heavy;
-                the day beneath it as a clear subtitle — nothing else here. */}
-            <Text style={sheetStyles.taskListTitle} accessibilityRole="header" numberOfLines={1}>{taskTitle}</Text>
-            <Text style={sheetStyles.dateSubtitle} numberOfLines={1}>{taskSubtitle}</Text>
+            {isAddingTask ? (
+              /* Searching: the title block stands down and this one line takes
+                 its place, which is what lifts the field up the panel — the
+                 same move the media vault's board search makes. It is also the
+                 only thing on screen saying where Return will put the task:
+                 the day and the board are both decided elsewhere and both
+                 scroll away once the results are up. */
+              <Text
+                style={[sheetStyles.finderDestination, sheetStyles.finderDestinationCompact]}
+                numberOfLines={1}
+                accessibilityLabel={`New task destination: ${finderWhere.speech}`}
+                testID="day-finder-destination"
+              >
+                <Text style={sheetStyles.finderDestinationKind}>{finderWhere.kind}</Text>
+                <Text style={sheetStyles.finderDestinationSep}>{KIND_SEP}</Text>
+                {finderWhere.day}
+                <Text style={sheetStyles.finderDestinationSep}>{FIELD_SEP}</Text>
+                <Text style={finderWhere.filed ? sheetStyles.finderDestinationBoard : null}>
+                  {finderWhere.board}
+                </Text>
+              </Text>
+            ) : (
+              /* Same line, same style as the finder's — see headerWhere, with
+                 the board and the day's figures on a second line under it. ONE
+                 accessibility label for the whole block, facts included: two
+                 lines of header are one thing to a screen reader, not three. */
+              <View
+                accessibilityRole="header"
+                accessibilityLabel={[headerWhere.speech, ...headerFacts].join(', ')}
+              >
+                <Text
+                  style={sheetStyles.finderDestination}
+                  numberOfLines={1}
+                  accessible={false}
+                  testID="day-header-destination"
+                >
+                  <Text style={sheetStyles.finderDestinationKind}>{headerWhere.kind}</Text>
+                  <Text style={sheetStyles.finderDestinationSep}>{KIND_SEP}</Text>
+                  {headerWhere.day}
+                </Text>
+                <Text
+                  style={sheetStyles.headerBoardSubtitle}
+                  numberOfLines={1}
+                  accessible={false}
+                  testID="day-header-board"
+                >
+                  {/* A REAL board is a fact worth reading; "All" is the
+                      absence of one, so it stays a shade quieter. */}
+                  <Text style={headerWhere.filed ? null : sheetStyles.headerBoardSubtitleAll}>
+                    {headerWhere.board}
+                  </Text>
+                  {headerFacts.map((fact) => (
+                    <Text key={fact}>
+                      <Text style={sheetStyles.headerFactSep}>{FIELD_SEP}</Text>
+                      <Text style={sheetStyles.headerFact}>{fact}</Text>
+                    </Text>
+                  ))}
+                </Text>
+              </View>
+            )}
           </View>
           <View style={sheetStyles.taskListHeaderRight}>
             {/* ONE key: opens the finder — a single field that searches every
@@ -3240,16 +3568,11 @@ export const CalendarView = ({
         </VirtualizedListContextResetter>
       </Reanimated.View>
 
-      {/* Wheel time picker — opened by tapping the time pill on the add-task
-          row (the drop-to-create flow). Sets / clears the pending time slot. */}
-      <WheelTimePicker
-        visible={editingTime}
-        initialTime={pendingTime}
-        onSelect={setPendingTime}
-        onClose={() => setEditingTime(false)}
-      />
+      {/* The finder's own wheel is NOT here — it is handed to the panel and
+          mounted inside its Modal (see the `overlays` prop below). Left as a
+          sibling it drew underneath the panel, so the clock key looked dead.
 
-      {/* The same wheel for an EXISTING row — opened by tapping its time
+          The same wheel for an EXISTING row — opened by tapping its time
           column. "Clear time" hands back null, which drops the task into the
           day's To-Do list rather than off the day. */}
       <WheelTimePicker
@@ -3257,6 +3580,92 @@ export const CalendarView = ({
         initialTime={timeEditTarget?.task?.time || null}
         onSelect={commitTaskTime}
         onClose={closeTaskTimeEditor}
+      />
+
+      {/* The finder, as a full panel. Mounted HERE — at the calendar's root,
+          not inside a day pane — for two reasons: a pane is one page of a
+          horizontal pager (three of them mounted at once), and the panel needs
+          the whole screen rather than the room left inside a sheet. */}
+      <TaskFinderOverlay
+        visible={isAddingTask}
+        theme={theme}
+        topInset={insets.top}
+        keyboardHeight={keyboardHeight}
+        destination={finderWhere}
+        value={newTaskTitle}
+        onChangeText={setNewTaskTitle}
+        onSubmit={handleAddTask}
+        onCancel={handleCancelAdd}
+        placeholder={pendingTime ? `New task at ${formatTimeLabel(pendingTime, use24h)}` : 'Search or add a task…'}
+        timeLabel={pendingTime ? formatTimeLabel(pendingTime, use24h) : null}
+        onEditTime={() => setEditingTime(true)}
+        onClearTime={clearPendingTime}
+        // Inside the panel's Modal, so it draws OVER it.
+        overlays={(
+          <WheelTimePicker
+            visible={editingTime}
+            initialTime={pendingTime}
+            onSelect={setPendingTime}
+            onClose={() => setEditingTime(false)}
+          />
+        )}
+        showCreate={
+          newTaskTitle.trim().length > 0
+          && !searchResults.some((r) => (r.title || '').trim().toLowerCase() === newTaskTitle.trim().toLowerCase())
+        }
+        createCaption={`Create · ${finderWhere.day}${finderWhere.filed ? ` · ${finderWhere.board}` : ''}${pendingTime ? ` · ${formatTimeLabel(pendingTime, use24h)}` : ''}`}
+        onOpenFullForm={openFullCreate}
+        results={searchResults}
+        resultsCaption={`${searchResults.length} matching · tap to open · + re-adds here`}
+        // Before a single character is typed the panel is not blank: it opens
+        // ON the day it would create into. Half of what the finder gets used
+        // for is "is this already on today?", and that used to need the panel
+        // closed again to answer. Open only — a day's DONE tasks are not what
+        // you are checking against before adding another.
+        idleResults={dayOpenTasks}
+        idleCaption={
+          dayOpenTasks.length
+            ? `${dayOpenTasks.length} open · ${finderWhere.day} · tap to open · + re-adds here`
+            : ''
+        }
+        idleEmptyHint={`Nothing open on ${finderWhere.day}. Type to search every task — or to name a new one.`}
+        renderResult={(task) => {
+          const overdue = !task.completed && isOverdue(task.dueDate);
+          return (
+            <View key={task.id} style={styles.searchResultItem}>
+              <TouchableOpacity
+                style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                onPress={() => handleOpenSearchResult(task)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${task.title}`}
+              >
+                <Icon
+                  name={task.completed ? 'check-circle' : (task.dueDate ? 'calendar' : 'calendar-blank-outline')}
+                  size={16}
+                  color={task.completed ? theme.colors.accentSuccess : (overdue ? theme.colors.accentError : theme.colors.textTertiary)}
+                  style={styles.resultIcon}
+                />
+                <View style={styles.resultContent}>
+                  <Text style={[styles.resultTitle, task.completed && styles.taskTitleCompleted]} numberOfLines={1}>{task.title}</Text>
+                  <Text style={[styles.resultMeta, overdue && { color: theme.colors.accentError }]} numberOfLines={1}>
+                    {[task.project ? boardLabel(task.project) : null, task.dueDate ? `Due ${formatDueDate(task.dueDate)}${task.time ? ` · ${formatTimeLabel(task.time, use24h)}` : ''}` : 'No due date'].filter(Boolean).join(' · ')}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPressIn={() => tapHaptic()}
+                onPress={() => handlePickSuggestion(task)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Re-add ${task.title} on this day`}
+                style={styles.finderReadd}
+              >
+                <Icon name="plus" size={18} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          );
+        }}
       />
     </View>
   );
@@ -3744,21 +4153,76 @@ const createStyles = (theme) => StyleSheet.create({
   calendarHintBlue: {
     color: '#64B5F6', // Light blue
   },
-  // Deliberately the same 26 / 700 as `monthText` — the sheet header and the
-  // month header are the same voice at the same size, one above the other.
-  // Both words carry it: no thin half.
-  taskListTitle: {
-    fontSize: 26,
-    fontWeight: '700',
+  // The panel's header, in BOTH states: at rest it says which day the list is
+  // showing, and while the finder is open it says where a new task will land.
+  // (The 26 / 700 title and its subtitle it replaced are gone — two shapes in
+  // one place meant opening the finder re-set the header in another typeface.)
+  // Quiet by design: the list under it is what the eye should land on.
+  finderDestination: {
+    // The panel's header, so it carries the size a header wants. 13 was right
+    // while this was only the caption the finder put over a title; 15 was
+    // right while it was still sharing the line with a board name. At rest it
+    // is the biggest type on the panel — still a clear step up from the 15,
+    // and the room it took from that line is what let the board drop below it.
+    // (22 first, which was a header loud enough to compete with the day it was
+    // naming; 18 is 0.8 of it.)
+    fontSize: 18,
+    fontWeight: '600',
     letterSpacing: 0.2,
-    color: theme.colors.textPrimary,
-  },
-  // The day, on its own line under the title — clear, not faint.
-  dateSubtitle: {
-    fontSize: 15,
-    fontWeight: '500',
     color: theme.colors.textSecondary,
-    marginTop: 2,
+    paddingVertical: 4,
+  },
+  // The FINDER's copy of that line stays at the old 15. It keeps all three
+  // facts — kind, day, board — on ONE line, because it sits over a keyboard
+  // with a field under it and has no second line to give: the header can
+  // afford to be 22 and drop the board below, this cannot.
+  finderDestinationCompact: {
+    fontSize: 15,
+  },
+  // The kind, in the ink of a label rather than of content.
+  finderDestinationKind: {
+    color: theme.colors.textTertiary,
+    letterSpacing: 0.8,
+  },
+  // The separators recede: they are punctuation between three facts, and at
+  // full strength the pipe and the bullet read as loudly as the words.
+  finderDestinationSep: {
+    color: theme.colors.textTertiary,
+    fontWeight: '400',
+  },
+  // The board and the day's figures, on their own line under the header. THIN
+  // against the 18 pt line above it — the scope the list was filtered to and
+  // the shape of the day, not a second header competing with the first — but
+  // 15 rather than the 13 it started at: three facts at 13 under an 18 pt line
+  // read as fine print. ('200' is the weight that renders reliably thin on
+  // both iOS and Android — '100' falls back to regular on Android, see
+  // `taskCount`.) Pulled up under the header's own bottom padding, so the two
+  // lines read as one block rather than two rows.
+  headerBoardSubtitle: {
+    fontSize: 15,
+    fontWeight: '200',
+    letterSpacing: 0.3,
+    color: theme.colors.textSecondary,
+    marginTop: -4,
+  },
+  // A REAL board gets the ink of a fact; "All" stays quiet, because "all" is
+  // the absence of a destination rather than one worth pointing at.
+  headerBoardSubtitleAll: {
+    color: theme.colors.textTertiary,
+  },
+  // The day's figures sit BEHIND the board they follow: the board is the scope
+  // you chose, the counts are what that scope happens to hold today.
+  headerFact: {
+    color: theme.colors.textTertiary,
+  },
+  // Punctuation between facts, quieter still — at full strength a row of
+  // bullets reads as loudly as the words between them.
+  headerFactSep: {
+    color: theme.colors.textTertiary,
+    opacity: 0.55,
+  },
+  finderDestinationBoard: {
+    color: theme.colors.textPrimary,
   },
   // "{N} Tasks" — hairline-thin weight ('200' renders reliably thin on both
   // iOS + Android, unlike '100' which falls back to regular on Android).
@@ -3930,6 +4394,7 @@ const createStyles = (theme) => StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 10,
     marginBottom: 6,
+    ...depth(theme, 'card'),
   },
   occasionIcon: {
     marginRight: 10,
@@ -3983,6 +4448,7 @@ const createStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   // Smaller priority chip used inside compact rows / blocks where the
   // larger priorityIndicator would crowd the title.
@@ -4031,29 +4497,27 @@ const createStyles = (theme) => StyleSheet.create({
     paddingHorizontal: 8,
     borderRadius: 8,
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   scheduleToggleLabel: {
     fontSize: 12,
     fontWeight: '600',
     color: theme.colors.textSecondary,
   },
-  // Wrapper around the compact ⇄ timeline swap. overflow:hidden clips the
-  // outgoing/incoming view to the height-animating wrapper so the toggle reads
-  // as a smooth wipe rather than a hard pop.
-  scheduleSwap: {
-    overflow: 'hidden',
+  // The schedule's own box. NO left padding and 8 on the right, because the
+  // gutter's x is measured from this edge (hourLabel starts at 0, the cards
+  // stop 8 short of the other side) — a pad here would step the rule sideways.
+  // No overflow:hidden: the box no longer clips anything (each gap clips its
+  // own hours), and clipping here took the cards' shadows with it.
+  scheduleBody: {
     backgroundColor: 'transparent',
-  },
-  collapsedSchedule: {
-    backgroundColor: 'transparent',
-    paddingLeft: 8,
-    paddingRight: 16,
+    paddingLeft: 0,
+    paddingRight: 8,
     paddingTop: 4,
     paddingBottom: 24,
   },
-  // The empty-day hint, now shown only above the expanded timeline (it used to
-  // sit in the compact view, where it was the tallest thing on an empty day).
-  // One line, tight padding: it sits between the toolbar and the hour grid.
+  // The empty-day hint, above the schedule. One line, tight padding: it sits
+  // between the toolbar and the day's first row.
   timelineEmpty: {
     fontSize: 13,
     color: theme.colors.textTertiary,
@@ -4063,106 +4527,164 @@ const createStyles = (theme) => StyleSheet.create({
     paddingHorizontal: 24,
     lineHeight: 19,
   },
-  // The empty time between two tasks: a thin line with the duration centred.
-  // (The old per-segment rail/card styles were removed when the compact day
-  // schedule switched to reusing TimelineTaskRow; only the gap divider remains.)
-  segGap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    gap: 8,
-  },
-  // One free hour on the condensed timeline: the hour in the time column,
-  // a dashed rule across the card column.
-  condRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 28,
-    marginBottom: 4,
-    gap: 8,
-  },
-  // Same ink and size as the card rows' time so the column reads as one.
-  condLabel: {
-    width: 74,
-    paddingRight: 6,
-    fontSize: 14,
-    fontWeight: '500',
-    color: theme.colors.textSecondary,
-    fontVariant: ['tabular-nums'],
-    letterSpacing: 0.1,
-  },
-  condDash: {
-    flex: 1,
-    height: 0,
-    borderTopWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: theme.colors.borderStrong || theme.colors.border,
-  },
-  condFree: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: theme.colors.textTertiary,
-  },
-  segGapLine: {
-    flex: 1,
-    height: 0,
-    borderTopWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: theme.colors.borderStrong || theme.colors.border,
-  },
-  // Keeps the gap rule inside the card column (past the time labels).
-  segGapSpacer: {
-    width: 74 - 8,
-  },
-  segGapText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: theme.colors.textTertiary,
-  },
-  // The 24-row hour grid. Positioned-children layout — labels and
-  // task blocks both place themselves with absolute `top` offsets.
-  hourGrid: {
+  // ── The schedule ───────────────────────────────────────────────────────
+  // A gutter of right-aligned times against one continuous rule, cards to the
+  // right of it, and a labelled line for each stretch of empty time — which
+  // opens into that stretch's hours, drawn in the same gutter at the same x.
+  //
+  // `position: relative` anchors hourRule, which runs behind the whole thing.
+  //
+  // (The `compactCard*` set that used to live here — a card this list drew
+  // itself — is gone: the rows are ScheduleCards, the same object the To-Do and
+  // Pending lists below use, so there is one card in the day panel and not
+  // three.)
+  compactList: {
     position: 'relative',
-    height: HOUR_GRID_HEIGHT,
-    backgroundColor: 'transparent',
+    paddingBottom: 4,
   },
-  // One hour row: label on the left, hairline divider across the rest.
-  // Height matches HOUR_HEIGHT exactly so absolute task blocks land in
-  // line with their declared start hour.
-  hourRow: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: HOUR_HEIGHT,
+  // A skipped stretch: hairlines either side of the duration, starting at the
+  // gutter rule so it reads as belonging to the timeline and not to a card.
+  compactGapRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 8,
+  },
+  compactGapSpacer: {
+    width: HOUR_LABEL_WIDTH,
+  },
+  compactGapLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: theme.colors.border,
+  },
+  compactGapText: {
+    fontSize: 11,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+    color: theme.colors.textTertiary,
+    fontVariant: ['tabular-nums'],
+  },
+  // The duration and its chevron are one target. Padded so the 11pt label is
+  // not an 11pt tap; hitSlop takes it the rest of the way to 44.
+  compactGapLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingVertical: 6,
+    paddingHorizontal: 2,
+  },
+  // An expanded gap: the hours, then the same duration line underneath, now
+  // reading as "collapse". Keeping the control in the same place means the tap
+  // that opened it is the tap that closes it, just further down the list.
+  // No margin of its own — the duration line it ends with carries the same
+  // bottom gap a collapsed gap row does, so opening one doesn't add a second.
+  compactGapWrap: {},
+  // The clipping box. Its height is set in one step per toggle (see CompactGap)
+  // and the rows inside it are transformed through it; overflow:hidden is what
+  // makes them appear to be uncovered by the box rather than to slide out of an
+  // already-full-size container.
+  compactGapBody: {
+    overflow: 'hidden',
+  },
+  // One hour: its rule along the top, and the empty band under it down to the
+  // next rule. Must match GAP_HOUR_H — the open height is computed from it, so
+  // a change here without one there animates to the wrong size.
+  compactGapHour: {
+    height: GAP_HOUR_H,
+    justifyContent: 'flex-start',
+  },
+  // A FIXED height, so the band below it knows exactly where the line ends.
+  compactGapRule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: GAP_RULE_H,
+  },
+  // The pressable band is the WHOLE slot: this hour's line down to the next,
+  // top to bottom, so the lit area is the hour itself and not a strip inside
+  // it. Inset past the time gutter, so the times keep a clean edge the way a
+  // calendar's do.
+  compactGapBand: {
+    position: 'absolute',
+    left: TIME_COL_W,
+    right: 0,
+    // From THIS hour's line to the next one: down by the line's offset inside
+    // the rule row, then a full slot tall. `bottom: 0` measured the slot's box
+    // instead, which sat the whole band 9 pt high.
+    top: GAP_LINE_Y,
+    height: GAP_HOUR_H,
+    borderRadius: 10,
+  },
+  compactGapBandOn: {
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  // Right-aligned, and centred on the slot's own height rather than on the
+  // rule at its top.
+  compactGapHourPlus: {
+    position: 'absolute',
+    right: 12,
+    // The same box as the band, so the hint stays centred in the lit area
+    // rather than in the slot's layout box.
+    top: GAP_LINE_Y,
+    height: GAP_HOUR_H,
+    justifyContent: 'center',
+    opacity: 0.6,
+  },
+  compactGapHourLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: theme.colors.border,
+  },
+  // The vertical rule every time in the day is set against, and where the
+  // schedule proper begins. Spans the whole list; the hour lines inside an open
+  // gap start at the same x, so every horizontal line meets it.
+  hourRule: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: HOUR_LABEL_WIDTH,
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: theme.colors.border,
   },
   hourLabel: {
     width: HOUR_LABEL_WIDTH,
-    paddingRight: 6,
+    // Right-aligned INTO the rule, a fixed gap short of it, so the times form
+    // an edge instead of a ragged column.
+    paddingRight: 10,
     paddingTop: 2,
     textAlign: 'right',
-    fontSize: 10,
-    fontWeight: '600',
-    color: theme.colors.textTertiary,
-    fontVariantNumeric: 'tabular-nums',
+    // Bigger and LIGHTER than it was (10/600). At 10pt the semibold was doing
+    // the legibility work and the gutter read as heavy chrome competing with
+    // the cards. 11pt at 500 is quieter — but weight is what was holding it up,
+    // so the ink steps up to textSecondary to pay for it: net MORE readable
+    // than before, not less. Same size/weight/ink as a card's own time column,
+    // because inside an open gap the two sit in the same column.
+    fontSize: 11,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+    color: theme.colors.textSecondary,
+    // `fontVariant`, not `fontVariantNumeric` — RN only honours the array form,
+    // so the old spelling was silently doing nothing and "11 AM"/"12 PM" were
+    // free to sit at different widths.
+    fontVariant: ['tabular-nums'],
   },
-  hourDivider: {
-    flex: 1,
-    height: 0.5,
-    backgroundColor: theme.colors.border,
-    marginTop: 4,
-  },
-  // Now-line — red bar + dot at the live current-minute Y position.
-  // pointerEvents:none on the wrapper so tap targets on tasks under
-  // the line aren't blocked.
-  nowLine: {
+  // NOW, across the open hours of a gap — a red bar with a dot on the gutter.
+  // Only inside a gap that has been opened: those are the only points on the
+  // page where a minute has a y (see CompactGap's `nowY`). `top` is set per
+  // render from the clock; pointerEvents:none on the wrapper so the hour slots
+  // under the line stay tappable.
+  //
+  // Starts ON the gutter rule (the dot's -4 margin straddles it) rather than
+  // 4 pt shy of it, so the marker reads as hanging off the same line the times
+  // are set against.
+  gapNowLine: {
     position: 'absolute',
-    left: HOUR_LABEL_WIDTH - 4,
+    left: HOUR_LABEL_WIDTH,
     right: 0,
     flexDirection: 'row',
     alignItems: 'center',
     height: 2,
+    zIndex: 2,
   },
   nowDot: {
     width: 8,
@@ -4176,46 +4698,6 @@ const createStyles = (theme) => StyleSheet.create({
     height: 2,
     backgroundColor: theme.colors.accentError || '#FF4444',
   },
-  // Task block — positioned absolutely on the hour grid. Left border
-  // gets the project colour so events from a given project read at
-  // a glance.
-  taskBlock: {
-    position: 'absolute',
-    left: HOUR_LABEL_WIDTH,
-    right: 8,
-    // Right corners rounded, LEFT corners square so the coloured project edge
-    // runs straight down the left side instead of curving around the radius.
-    borderTopRightRadius: 6,
-    borderBottomRightRadius: 6,
-    borderTopLeftRadius: 0,
-    borderBottomLeftRadius: 0,
-    borderLeftWidth: 3,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  taskBlockHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  taskBlockTitle: {
-    flex: 1,
-    fontSize: 13,
-    color: theme.colors.textPrimary,
-    fontWeight: '600',
-  },
-  taskBlockTime: {
-    fontSize: 10,
-    color: theme.colors.textTertiary,
-    fontWeight: '500',
-    marginTop: 1,
-  },
-
   // Add Task
   addTaskContainer: {
     flexDirection: 'row',
@@ -4297,6 +4779,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     overflow: 'hidden',
+    ...depth(theme, 'raised'),
   },
   suggestionRow: {
     flexDirection: 'row',
@@ -4365,27 +4848,30 @@ const createStyles = (theme) => StyleSheet.create({
   // The finder's result list (below the one field).
   // Lines up with the schedule below it (same side paddings → same time
   // column x).
+  // The results, as a DROPDOWN hanging off the field rather than as rows loose
+  // in the page — the same read as the media vault's board search: one surface,
+  // its own edge, everything in it a candidate for the thing you are typing.
+  // The edge matters more than it looks: without it the create card and the
+  // matches were floating in the same space as the day's real schedule below,
+  // and "a task you might make" and "a task you have" looked alike.
   finderResults: {
-    marginTop: 8,
-    paddingLeft: 8,
-    paddingRight: 16,
+    marginTop: 10,
+    marginHorizontal: 8,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceElevated,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    paddingBottom: 4,
+    overflow: 'hidden',
+    ...depth(theme, 'card'),
   },
-  // The create row = a ScheduleCard row in dashed outline: same time column
-  // (74pt, 14/500), same card metrics (radius 18, 16/14/12 padding, 72 min).
+  // The ghost card, first in the dropdown: dashed, so it reads as a task-shaped
+  // hole rather than as a task. Same card metrics as a real one (radius 18,
+  // 16/14/12 padding, 72 min) so it sits in the list as a peer.
   finderCreate: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  finderCreateTime: {
-    width: 74,
-    paddingTop: 15,
-    paddingRight: 6,
-    fontSize: 14,
-    fontWeight: '500',
-    color: theme.colors.textSecondary,
-    fontVariant: ['tabular-nums'],
-    letterSpacing: 0.1,
+    marginBottom: 10,
   },
   finderCreateCard: {
     flex: 1,
@@ -4466,20 +4952,25 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 12,
   },
   searchResultsTitle: {
-    fontSize: 12,
-    color: theme.colors.textSecondary,
-    marginBottom: 8,
-    fontStyle: 'italic',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+    color: theme.colors.textTertiary,
+    marginBottom: 6,
+    // Not italic any more: it is a section label inside the dropdown now, and
+    // italics on a 11pt caption reads as an aside rather than as a heading.
+    fontStyle: 'normal',
   },
+  // A row IN the dropdown, not a card ON the page. The surface, radius and
+  // border went with the panel that now holds them — a card inside a card is
+  // two edges saying the same thing. Rows are told apart by a hairline, which
+  // is what the media vault's result rows do.
   searchResultItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.surfaceElevated,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 6,
-    borderWidth: 0.5,
-    borderColor: theme.colors.border,
+    paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
   },
   resultIcon: {
     marginRight: 10,

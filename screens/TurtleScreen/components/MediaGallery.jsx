@@ -17,7 +17,6 @@ import {
   Easing,
   InteractionManager,
   PanResponder,
-  TextInput,
   Keyboard,
   InputAccessoryView,
   StatusBar,
@@ -26,6 +25,8 @@ import {
   // link is meant to avoid.
   Share as RNShareSheet,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import AppTextInput from '../../../components/AppTextInput';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 // The full-screen viewer: one gesture tree, flat chrome, the tags and details
 // sheets. Owns nothing about the data — see PhotoViewer/PhotoViewer.jsx.
@@ -103,6 +104,7 @@ import Reanimated, {
 import TimelineScrubber from './TimelineScrubber';
 import { dockOccupied } from '../../../components/tabBarLayout';
 import MusicVault from './MusicVault';
+import { chromeOffsetNode, backToTopIntent, newFlingAnchor } from '../../../utils/scrollChrome';
 import EdgeSwipePage from './EdgeSwipePage';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
 import { useMediaVersion } from '../../../context/DownloadsContext';
@@ -565,6 +567,55 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       useNativeDriver: true,
     }).start();
   }, [boardHeaderCollapsed, boardSearchAnim]);
+
+  // ── Chrome that goes up with the page ──────────────────────────────────
+  // The title, the tabs, the search field and the sort chips sit at the top of
+  // the page and behave like it: scroll down and they go up with everything
+  // else, one point for one point, until they are gone; they are back when the
+  // top of the page is. Position is a pure function of the scroll offset
+  // (utils/scrollChrome), so there is no state to strand, no path dependence,
+  // and the chrome is always exactly where the page says it is. Coming home
+  // from a long way down is the back-to-top button's job, below.
+  //
+  // It is a NODE fed by a native-driver Animated.event, not arithmetic in the
+  // scroll callback. Same maths; the difference is the thread. Computed in JS
+  // it reached the screen two bridge hops late and stalled outright whenever
+  // the JS thread was busy with a board cover or a page landing — the chrome
+  // sitting still while the list moved, then jumping to catch up. That was the
+  // jitter.
+  //
+  // RN Animated, not Reanimated: it shares the header node with
+  // boardSearchAnim, and the two libraries cannot drive one node.
+  const albumsScrollAnim = useRef(new Animated.Value(0)).current;
+  // Declared here rather than beside the pager below, next to the other native
+  // scroll capture it is combined with: the chrome stands down as the pager
+  // leaves Boards (see chromeOnBoards).
+  const pageScrollX = useRef(new Animated.Value(0)).current;
+  // How far the dock below the header can travel, reported up by the boards
+  // page once it has measured itself. The budget is the LARGER of the two
+  // travels, not their sum: they move together, and each clamps to its own.
+  const [boardsDockH, setBoardsDockH] = useState(0);
+  const chromeTravel = Math.max(
+    Math.max(0, (vaultHeaderH || insets.top + 90) - insets.top),
+    boardsDockH,
+  );
+
+  const vaultChromePx = useMemo(() => {
+    const hidden = chromeOffsetNode(albumsScrollAnim, chromeTravel);
+    // The Music page reserves the FULL header height, so a header parked off
+    // screen by the boards scroll would leave it wearing a gap. Weighted by the
+    // swipe itself rather than reset when it lands, so the header grows back as
+    // PART of the swipe — nothing snaps into place at the end of it.
+    const onBoards = pageScrollX.interpolate({
+      inputRange: [0, width],
+      outputRange: [1, 0],
+      extrapolate: 'clamp',
+    });
+    return Animated.multiply(hidden, onBoards);
+  }, [albumsScrollAnim, pageScrollX, chromeTravel]);
+
+  // The back-to-top button that comes with this model is declared beside the
+  // boards list refs it drives — see `showBoardsTop`.
   const searchInputRef = useRef(null);
   // === BROWSE MODEL ===
   // Every knob the "Filter & arrange" sheet offers — date basis, direction,
@@ -1112,6 +1163,71 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const albumsLayoutH = useRef(0);
   const albumsScrollYSv = useSharedValue(0);
   const albumsMaxScrollSv = useSharedValue(1);
+
+  // ── Back to top ─────────────────────────────────────────────────────────
+  // The chrome only comes back at the top of the page, so from a long way down
+  // the way home is a lot of flicking. A fast flick up is the user already
+  // trying to get there; this is the shortcut, offered exactly then rather than
+  // sitting on screen as permanent furniture. Same read as the photos grid's
+  // "Latest" pill, and the same fade-on-idle so a button you decided against
+  // doesn't wait to be dismissed.
+  const [showBoardsTop, setShowBoardsTop] = useState(false);
+  const boardsTopAnim = useRef(new Animated.Value(0)).current;
+  const boardsFlingAnchor = useRef(newFlingAnchor());
+  const boardsTopIdleTimer = useRef(null);
+  useEffect(() => {
+    Animated.timing(boardsTopAnim, {
+      toValue: showBoardsTop ? 1 : 0,
+      duration: showBoardsTop ? 180 : 140,
+      useNativeDriver: true,
+    }).start();
+  }, [showBoardsTop, boardsTopAnim]);
+  useEffect(() => () => { if (boardsTopIdleTimer.current) clearTimeout(boardsTopIdleTimer.current); }, []);
+
+  // Press feedback, since a gesture handler has no activeOpacity of its own.
+  const boardsTopPressAnim = useRef(new Animated.Value(1)).current;
+  const pressBoardsTop = useCallback((down) => {
+    Animated.timing(boardsTopPressAnim, {
+      toValue: down ? 0.85 : 1,
+      duration: 90,
+      useNativeDriver: true,
+    }).start();
+  }, [boardsTopPressAnim]);
+
+  const jumpBoardsToTop = useCallback(() => {
+    if (boardsTopIdleTimer.current) { clearTimeout(boardsTopIdleTimer.current); boardsTopIdleTimer.current = null; }
+    setShowBoardsTop(false);
+    // The anchor holds the offset we are leaving; a smooth scroll home would
+    // otherwise read as one long fast flick up and re-offer the button.
+    boardsFlingAnchor.current = newFlingAnchor();
+    // Animated.FlatList: modern RN puts the list node on ref.current directly;
+    // older RN nests it behind getNode(). Resolve the real node, then scroll.
+    try {
+      const node = albumsRef.current;
+      const inner = (node && typeof node.getNode === 'function') ? node.getNode() : node;
+      if (inner && inner.scrollToOffset) inner.scrollToOffset({ offset: 0, animated: true });
+    } catch (err) { /* mid-layout — the button is still there to tap again */ }
+  }, []);
+
+  // runOnJS(true): recognition still happens natively — which is what makes the
+  // press land mid-fling — and only the callback hops to the JS thread, where a
+  // busy frame delays it by a few milliseconds instead of dropping it.
+  const boardsTopTap = useMemo(() => Gesture.Tap()
+    .runOnJS(true)
+    // Belt and braces with the view's pointerEvents: a hidden pill must not
+    // swallow a tap meant for the board underneath it.
+    .enabled(showBoardsTop)
+    .maxDuration(600)
+    .onBegin(() => pressBoardsTop(true))
+    .onFinalize(() => pressBoardsTop(false))
+    .onEnd(jumpBoardsToTop), [showBoardsTop, jumpBoardsToTop, pressBoardsTop]);
+
+  // Memoized: a fresh node every render would re-attach the opacity each time.
+  const boardsTopOpacity = useMemo(
+    () => Animated.multiply(boardsTopAnim, boardsTopPressAnim),
+    [boardsTopAnim, boardsTopPressAnim],
+  );
+
   // Full month/year timeline from /media/buckets (sortBy=original), newest-first
   // with cumulative start indices — drives the scrubber's labels + year ticks
   // across the WHOLE library and sizes the virtual grid. { months:[{monthKey,
@@ -2051,9 +2167,33 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     if (!ne) return;
     if (ne.contentSize?.height) albumsContentH.current = ne.contentSize.height;
     if (ne.layoutMeasurement?.height) albumsLayoutH.current = ne.layoutMeasurement.height;
-    albumsScrollYSv.value = (ne.contentOffset && ne.contentOffset.y) || 0;
+    const y = (ne.contentOffset && ne.contentOffset.y) || 0;
+    albumsScrollYSv.value = y;
     albumsMaxScrollSv.value = Math.max(1, albumsContentH.current - albumsLayoutH.current);
+
+    // The chrome is NOT driven from here any more — see vaultChromePx. What is
+    // left is the A–Z rail and the back-to-top offer, both of which are free to
+    // run a frame late without anything looking wrong.
+    const intent = backToTopIntent(y, Date.now(), boardsFlingAnchor.current, albumsLayoutH.current);
+    // Functional updater → React bails out when the flag is unchanged, so this
+    // only re-renders on a crossing rather than every scroll frame.
+    if (intent === 'show') setShowBoardsTop((prev) => (prev ? prev : true));
+    else if (intent === 'hide') setShowBoardsTop((prev) => (prev ? false : prev));
+    // Re-armed every frame, so it only fires once the list has gone still.
+    if (boardsTopIdleTimer.current) clearTimeout(boardsTopIdleTimer.current);
+    boardsTopIdleTimer.current = setTimeout(() => {
+      setShowBoardsTop((prev) => (prev ? false : prev));
+    }, GRID_JUMP_IDLE_MS);
   }, [albumsScrollYSv, albumsMaxScrollSv]);
+
+  // What the boards list actually receives. The native-driver capture is what
+  // moves the chrome; the rail's bookkeeping rides along as a plain listener.
+  // Memoized because Animated.event builds a native event mapping, and
+  // rebuilding it every render would re-attach it mid-gesture.
+  const handleAlbumsScrollEvent = useMemo(() => Animated.event(
+    [{ nativeEvent: { contentOffset: { y: albumsScrollAnim } } }],
+    { useNativeDriver: true, listener: handleAlbumsScroll },
+  ), [albumsScrollAnim, handleAlbumsScroll]);
 
   // ── Tag×time "jump" ──────────────────────────────────────────────────
   // The tag SEARCH filters the grid in place (and turns OFF the virtual timeline +
@@ -2415,6 +2555,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const openViewer = useCallback((item, origin) => {
     // Dev probe: the tap-to-open path is the most latency-visible in the app.
     gestureProbe.respond('grid:openPhoto');
+    // Same reason the boards page drops it when a result is opened: the grid
+    // is `keyboardShouldPersistTaps="handled"`, so a tap from a search lands
+    // here with the keyboard still up — and what opens is FULL SCREEN, so it
+    // would come up over a keyboard with nothing left to type into. Before the
+    // large-file Alert too, which has the same problem.
+    Keyboard.dismiss();
     const executeOpen = () => {
       // Index into the SAME array the viewer walks (and the grid renders), so
       // the tapped photo is found and left/right swipe works across the whole
@@ -3590,9 +3736,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   );
 
   // === NATIVE 1:1 SWIPE PAGINATION & UNDERLINE INDICATOR ===
+  // pageScrollX itself is declared up with the chrome, which combines it with
+  // the boards scroll on one native node.
   const tabWidth = (width - 32) / 2;
   const pagesScrollRef = useRef(null);
-  const pageScrollX = useRef(new Animated.Value(0)).current;
   const TABS = useMemo(() => ['albums', 'music'], []);
 
   // Push / pop the photos page. Opening sets the board first so the grid's
@@ -4192,6 +4339,13 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           scrollEventThrottle={16}
           onScrollEndDrag={handlePageSwipeDragEnd}
           onMomentumScrollEnd={handlePageSwipeEnd}
+          // A ScrollView defaults to 'never', which spends the FIRST tap on any
+          // descendant dismissing the keyboard and delivers nothing. That is
+          // why leaving the board search took two presses — the back key inside
+          // is not reachable on one tap while the field is focused, however the
+          // page's own list is configured, because this pager swallows it
+          // before the list is ever asked.
+          keyboardShouldPersistTaps="handled"
           style={{ flex: 1, flexDirection: 'row' }}
         >
           
@@ -4246,6 +4400,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               theme={theme}
               topInset={vaultHeaderH || insets.top + 90}
               searchTopInset={insets.top}
+              chromePx={vaultChromePx}
+              onDockHeight={setBoardsDockH}
               resolveCoverUrl={getFullUrl}
               onQueryChange={setAlbumSearchQuery}
               onSortModeChange={setBoardSortMode}
@@ -4255,7 +4411,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               onLongPressBoard={showAlbumOptions}
               onOpenShareInsights={setInsightsAlbumName}
               onSearchActiveChange={setBoardSearchActive}
-              onScroll={handleAlbumsScroll}
+              onScroll={handleAlbumsScrollEvent}
               onContentSizeChange={(w, h) => {
                 albumsContentH.current = h;
                 albumsMaxScrollSv.value = Math.max(1, h - (albumsLayoutH.current || 1));
@@ -4268,6 +4424,54 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 );
               }}
             />
+
+            {/* Back to top. Inside the Boards page rather than over the pager,
+                so it travels off with the page on a swipe to Music instead of
+                hovering above a list it does not belong to.
+
+                RIGHT-aligned, under the thumb. It sits BELOW the A–Z rail's
+                grab area (the rail stops at tabBarH + 24, this sits at
+                tabBarH + 12), so sharing the right edge with it costs nothing.
+
+                GestureDetector, not TouchableOpacity, and that is the whole
+                point of it: a Touchable needs the JS thread to grant it the
+                responder, and mid-fling the JS thread is busy virtualizing rows
+                — so the tap was simply dropped and the button only worked once
+                the list had stopped. A gesture handler recognizes the tap
+                NATIVELY and merely queues the callback, so a press lands while
+                the page is still moving. */}
+            <GestureDetector gesture={boardsTopTap}>
+              <Animated.View
+                pointerEvents={showBoardsTop ? 'auto' : 'none'}
+                accessibilityRole="button"
+                accessibilityLabel="Back to the top of your boards"
+                style={{
+                  position: 'absolute',
+                  // Clears the floating dock — a control pinned under it can
+                  // neither be tapped nor scrolled away from.
+                  bottom: Math.max(insets.bottom + 24, tabBarH + 12),
+                  right: 16,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 6,
+                  paddingVertical: 9,
+                  paddingHorizontal: 16,
+                  borderRadius: 22,
+                  backgroundColor: theme.colors.primary,
+                  shadowColor: '#000',
+                  shadowOpacity: 0.3,
+                  shadowRadius: 8,
+                  shadowOffset: { width: 0, height: 3 },
+                  elevation: 6,
+                  opacity: boardsTopOpacity,
+                  transform: [{ scale: boardsTopAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] }) }],
+                  zIndex: 60,
+                }}
+              >
+                <Icon name="chevron-double-up" size={18} color={theme.colors.background} />
+                <Text style={{ color: theme.colors.background, fontSize: 13, fontWeight: '700' }}>Top</Text>
+              </Animated.View>
+            </GestureDetector>
           </View>
 
           {/* PAGE 2: MUSIC — the audio slice of the same vault. It used to be a
@@ -4501,7 +4705,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, flexDirection: 'row', alignItems: 'center' 
             }]}>
               <Icon name="magnify" size={18} color={theme.colors.textMuted} />
-              <TextInput
+              <AppTextInput
                 ref={searchInputRef}
                 style={{ flex: 1, marginLeft: 6, color: theme.colors.textPrimary, fontSize: 15, padding: 0 }}
                 value={uploadsSearchQuery}
@@ -4823,10 +5027,26 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           {
             paddingTop: insets.top,
             transform: [{
-              translateY: boardSearchAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0, -(vaultHeaderH || insets.top + 90)],
-              }),
+              // Two reasons the header leaves, on one node: a search taking
+              // over (boardSearchAnim), and scrolling down the boards
+              // (vaultChromePx). They ADD rather than fight — whichever
+              // happens first moves it, and the second finds it already gone.
+              // The chrome slide stops at the safe area so the notch strip
+              // never shows bare page behind the clock.
+              translateY: Animated.add(
+                boardSearchAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, -(vaultHeaderH || insets.top + 90)],
+                }),
+                // Pixels in, pixels out — negated and clamped to this
+                // element's own travel, so the header stops when IT is hidden
+                // even if the dock below it has further to go.
+                vaultChromePx.interpolate({
+                  inputRange: [0, Math.max(1, Math.max(0, (vaultHeaderH || insets.top + 90) - insets.top))],
+                  outputRange: [0, -Math.max(0, (vaultHeaderH || insets.top + 90) - insets.top)],
+                  extrapolate: 'clamp',
+                }),
+              ),
             }],
             // Gone before it has finished travelling: a header reading
             // "Media Vault" sliding up behind the notch shield is motion you
@@ -5091,6 +5311,7 @@ const createStyles = (theme) =>
       borderRadius: 18,
       padding: 10,
       paddingTop: 14,
+      ...depth(theme, 'overlay'),
     },
     shareSheetTitle: {
       fontSize: 13,
@@ -5124,6 +5345,7 @@ const createStyles = (theme) =>
       borderRadius: 12,
       alignItems: 'center',
       backgroundColor: theme.colors.surface,
+      ...depth(theme, 'control'),
     },
     shareSheetCancelText: {
       fontSize: 15,
@@ -5143,6 +5365,7 @@ const createStyles = (theme) =>
       paddingHorizontal: 32,
       alignItems: 'center',
       gap: 14,
+      ...depth(theme, 'card'),
     },
     sharePreparingText: {
       fontSize: 14,
@@ -5229,8 +5452,13 @@ const createStyles = (theme) =>
     // chapter heading rather than UI chrome. Per-word weights are applied
     // inline (Photos = 100, Vault = 400).
     headerTitleLarge: {
-      fontSize: 26,
-      letterSpacing: -0.5,
+      // 26 → 22. At 26 the hairline "Media" and the regular "Vault" were doing
+      // display-type work at the top of a screen that is otherwise all content;
+      // smaller lets the contrast between the two weights read as the detail it
+      // is rather than as a banner. Tighter tracking with it — the negative
+      // letterspacing was tuned for the larger size and goes slack below it.
+      fontSize: 22,
+      letterSpacing: -0.3,
     },
     headerTitleContainer: {
       flexDirection: 'row',
@@ -5273,6 +5501,7 @@ const createStyles = (theme) =>
       overflow: 'hidden',
       backgroundColor: theme.colors.surfaceElevated,
       borderWidth: 0,
+      ...depth(theme, 'control'),
     },
     thumbnail: {
       width: '100%',
@@ -5413,38 +5642,11 @@ const createStyles = (theme) =>
       flexGrow: 0,
       marginBottom: 16,
     },
-    tagAutocompleteContainer: {
-      marginBottom: 16,
-      paddingVertical: 8,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderColor: theme.colors.border,
-    },
-    tagAutocompleteLabel: {
-      fontSize: 11,
-      fontWeight: '500',
-      textTransform: 'uppercase',
-      letterSpacing: 0.5,
-      marginBottom: 8,
-    },
-    tagAutocompleteScroll: {
-      flexGrow: 0,
-      maxHeight: 44,
-    },
-    tagAutocompleteChip: {
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      borderRadius: 16,
-      backgroundColor: theme.colors.surfaceElevated,
-      marginRight: 8,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-    },
-    tagAutocompleteChipText: {
-      fontSize: 13,
-      fontWeight: '600',
-      color: theme.colors.textPrimary,
-    },
+    // NOTE: the five `tagAutocomplete*` keys used to be defined HERE as well as
+    // further down this same object. A later duplicate key simply overwrites an
+    // earlier one, so this copy never rendered — editing it (a bordered strip
+    // with 16pt spacing) changed nothing on screen. Only the definitions below
+    // are live; keep it that way.
     quickSelectChip: {
       paddingHorizontal: 12,
       paddingVertical: 6,
@@ -5540,6 +5742,7 @@ const createStyles = (theme) =>
       marginRight: 8,
       borderWidth: 1,
       borderColor: theme.colors.border,
+      ...depth(theme, 'raised'),
     },
     tagAutocompleteChipText: {
       fontSize: 13,

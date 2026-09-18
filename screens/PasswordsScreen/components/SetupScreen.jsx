@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import AppTextInput from '../../../components/AppTextInput';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic } from '../../../utils/haptics';
@@ -41,7 +42,7 @@ export const SetupScreen = ({ onSetup, isProcessing }) => {
 
         <View style={styles.inputContainer}>
           <Icon name="lock" size={20} color={theme.colors.textTertiary} />
-          <TextInput
+          <AppTextInput
             style={styles.input}
             placeholder="Master Password"
             placeholderTextColor={theme.colors.textPlaceholder}
@@ -61,7 +62,7 @@ export const SetupScreen = ({ onSetup, isProcessing }) => {
 
         <View style={styles.inputContainer}>
           <Icon name="lock-check" size={20} color={theme.colors.textTertiary} />
-          <TextInput
+          <AppTextInput
             style={styles.input}
             placeholder="Confirm Password"
             placeholderTextColor={theme.colors.textPlaceholder}
@@ -145,6 +146,7 @@ const createStyles = (theme) =>
       marginTop: 8,
       borderWidth: 1,
       borderColor: theme.colors.border,
+      ...depth(theme, 'control'),
     },
     buttonDisabled: {
       opacity: 0.6,

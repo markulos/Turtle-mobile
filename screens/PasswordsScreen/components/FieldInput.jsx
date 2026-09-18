@@ -1,12 +1,12 @@
 import React, { useState, useMemo, useRef } from 'react';
 import {
   View,
-  TextInput,
   TouchableOpacity,
   Text,
   StyleSheet,
   FlatList,
 } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -119,7 +119,7 @@ export const FieldInput = ({
 
   return (
     <View style={styles.container}>
-      <TextInput
+      <AppTextInput
         ref={inputRef}
         style={styles.input}
         placeholder={placeholder}

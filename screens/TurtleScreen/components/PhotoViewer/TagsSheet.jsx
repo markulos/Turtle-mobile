@@ -19,7 +19,8 @@
  * whole selection). Same sheet, same chips, same immediate commits.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import AppTextInput from '../../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { FAVOURITES_TAG, parseTags } from '../../../../utils/viewerFormat';
@@ -121,7 +122,7 @@ export default function TagsSheet({
       {/* Fixed-height pill CENTRING an auto-height input: the placeholder and
           caret sit on the pill's centre line on both platforms. */}
       <View style={[styles.inputWrap, { backgroundColor: colors.surface }]}>
-        <TextInput
+        <AppTextInput
           style={[styles.inputInner, { color: colors.textPrimary }]}
           value={draft}
           onChangeText={handleChange}

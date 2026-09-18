@@ -34,6 +34,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, TouchableOpacity, ActivityIndicator, StyleSheet,
 } from 'react-native';
+import { depth } from '../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
@@ -495,6 +496,7 @@ const makeStyles = (theme) => {
     retry: {
       paddingHorizontal: 16, paddingVertical: 7, borderRadius: 9,
       backgroundColor: c.surfaceElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+      ...depth(theme, 'card'),
     },
     retryText: { color: c.textPrimary, fontWeight: '600', fontSize: 13 },
 
@@ -511,6 +513,7 @@ const makeStyles = (theme) => {
       borderRadius: 12,
       backgroundColor: c.surfaceElevated,
       borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+      ...depth(theme, 'card'),
     },
     statValue: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
     statLabel: { fontSize: 10.5, color: c.textTertiary, marginTop: 2 },
@@ -562,6 +565,7 @@ const makeStyles = (theme) => {
       backgroundColor: c.surfaceElevated,
       borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
       minWidth: 92, flexGrow: 1,
+      ...depth(theme, 'control'),
     },
     chipValue: { fontSize: 14, fontWeight: '700', color: c.textPrimary },
     chipLabel: { fontSize: 10.5, color: c.textTertiary, marginTop: 1 },

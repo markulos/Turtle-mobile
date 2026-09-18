@@ -8,11 +8,16 @@
  * text used (font size / line height / colour) and the renderer derives the
  * rest — code on a translucent field, links in the accent, quotes with a bar.
  */
-import React, { memo, useMemo } from 'react';
-import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { parseMarkdown } from '../utils/markdownLite';
+import { copyText } from '../utils/copyText';
+import { tapHaptic } from '../utils/haptics';
 
 const MONO = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
+// The copy key's visible box is ~16pt tall; this is what gets it to 44.
+const HIT_SLOP_10 = { top: 14, bottom: 14, left: 10, right: 10 };
 
 // Parse once per distinct text, app-wide: a recycled list cell mounts a new
 // component instance for the same message, and useMemo would parse again.
@@ -54,6 +59,77 @@ function Spans({ spans, colors }) {
   });
 }
 
+/**
+ * A fenced block, with the one control it has ever needed.
+ *
+ * The copy key is the whole reason this is a component rather than three lines
+ * in the switch below: a fence is the shape a reply uses for the things you are
+ * meant to TAKE — a prompt to paste somewhere else, a command to run, a snippet.
+ * Selecting that by hand on a phone means a long-press and two drag handles
+ * over monospaced text in a scrolling transcript, which is the worst selection
+ * surface the app has.
+ *
+ * It is deliberately not on every block. A paragraph is to read; a fence is to
+ * use. Putting a key on both would make neither mean anything — so the control
+ * appears exactly where the reply's own formatting says "this is an artefact",
+ * and a reply with no fences shows no keys at all.
+ */
+function CodeBlock({ block, base, colors, gap, style: blockStyle }) {
+  // null → idle; otherwise the word to show back ('Copied' / 'Shared').
+  const [done, setDone] = useState(null);
+  const timer = useRef(null);
+  const alive = useRef(true);
+  useEffect(() => () => {
+    alive.current = false;
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+
+  const onCopy = useCallback(async () => {
+    tapHaptic();
+    const result = await copyText(block.text);
+    // 'none' means the clipboard was unavailable AND the share sheet was
+    // dismissed — claiming "Copied" there would be a lie.
+    if (result === 'none' || !alive.current) return;
+    setDone(result === 'shared' ? 'Shared' : 'Copied');
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => { if (alive.current) setDone(null); }, 1600);
+  }, [block.text]);
+
+  return (
+    <View style={[styles.codeBlock, { backgroundColor: colors.codeBg }, gap]}>
+      {/* Language on the left when the fence declared one, key on the right.
+          A row above the code rather than a floating overlay: code wraps, and
+          an absolutely-positioned key would sit on top of the first line of
+          exactly the text it is offering to copy. */}
+      <View style={styles.codeBar}>
+        <Text style={[styles.codeLang, { color: colors.muted }]} numberOfLines={1}>
+          {block.lang || ''}
+        </Text>
+        <Pressable
+          onPress={onCopy}
+          hitSlop={HIT_SLOP_10}
+          accessibilityRole="button"
+          accessibilityLabel={block.lang ? `Copy this ${block.lang} block` : 'Copy this block'}
+          testID="markdown-copy-code"
+          style={({ pressed }) => [styles.copyKey, pressed && { opacity: 0.6 }]}
+        >
+          <Icon
+            name={done ? 'check' : 'content-copy'}
+            size={13}
+            color={done ? (colors.copyDone || colors.muted) : colors.muted}
+          />
+          <Text style={[styles.copyKeyText, { color: done ? (colors.copyDone || colors.muted) : colors.muted }]}>
+            {done || 'Copy'}
+          </Text>
+        </Pressable>
+      </View>
+      <Text style={[base, styles.codeBlockText, { color: colors.codeText }, blockStyle]} selectable>
+        {block.text}
+      </Text>
+    </View>
+  );
+}
+
 function MarkdownText({ text, style, theme, testID }) {
   const blocks = useMemo(() => parseCached(text), [text]);
   const flat = StyleSheet.flatten(style) || {};
@@ -67,6 +143,7 @@ function MarkdownText({ text, style, theme, testID }) {
     quoteBar: 'rgba(127,127,127,0.5)',
     rule: 'rgba(127,127,127,0.35)',
     muted: theme?.colors?.textSecondary || textColor,
+    copyDone: theme?.colors?.accentSuccess || theme?.colors?.primary || textColor,
   }), [textColor, theme]);
   const base = [style, { color: textColor, fontSize, lineHeight }];
 
@@ -97,11 +174,7 @@ function MarkdownText({ text, style, theme, testID }) {
               </View>
             );
           case 'code':
-            return (
-              <View key={i} style={[styles.codeBlock, { backgroundColor: colors.codeBg }, gap]}>
-                <Text style={[base, styles.codeBlockText, { color: colors.codeText }]} selectable>{b.text}</Text>
-              </View>
-            );
+            return <CodeBlock key={i} block={b} base={base} colors={colors} gap={gap} />;
           case 'quote':
             return (
               <View key={i} style={[styles.quote, { borderLeftColor: colors.quoteBar }, gap]}>
@@ -153,6 +226,33 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingVertical: 8,
     paddingHorizontal: 10,
+  },
+  // The fence's own header strip. `minHeight` rather than a fixed height so the
+  // row keeps its 20pt even when there is no language to print.
+  codeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 20,
+    marginBottom: 4,
+  },
+  codeLang: {
+    flexShrink: 1,
+    fontFamily: MONO,
+    fontSize: 10,
+    letterSpacing: 0.4,
+    textTransform: 'lowercase',
+    opacity: 0.8,
+  },
+  copyKey: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingLeft: 8,
+  },
+  copyKeyText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   codeBlockText: {
     fontFamily: MONO,

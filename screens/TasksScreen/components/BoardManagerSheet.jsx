@@ -15,6 +15,7 @@
  */
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ViewerSheet, { sheetColors } from '../../TurtleScreen/components/PhotoViewer/ViewerSheet';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
@@ -168,7 +169,7 @@ function BoardManagerSheet({
           pill's centre line on both platforms (a fixed-height TextInput
           parks its glyphs low on iOS). */}
       <View style={[styles.inputWrap, { backgroundColor: colors.surface }]}>
-        <TextInput
+        <AppTextInput
           style={[styles.inputInner, { color: colors.textPrimary }]}
           value={draft}
           onChangeText={setDraft}

@@ -32,13 +32,18 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Switch, Alert,
 } from 'react-native';
+import { depth } from '../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
 import { tapHaptic } from '../utils/haptics';
-import { describeBuild, describeUpdateError, formatWhen, shortId } from '../utils/updatesSummary';
+import { describeBuild, describeUpdateError, formatWhen, messageFor, shortId, updateLog } from '../utils/updatesSummary';
+
+/** How many log rows show before "More info" — enough to see the last few
+ *  publishes without the history swamping the answer above it. */
+const LOG_COLLAPSED = 3;
 
 /** What the native module says about THIS launch, gathered once. */
 function readBuild() {
@@ -109,6 +114,10 @@ export default function UpdatesPanel() {
   const [releasesState, setReleasesState] = useState(null); // 'forbidden' | 'absent' | 'error' | null
   const [following, setFollowing] = useState(null);         // channel THIS phone asks for
   const [releaseBusy, setReleaseBusy] = useState(false);
+  // The log is COLLAPSED by default: the panel's job is "what am I running and
+  // is there anything newer", and a scrolling history under that answer buries
+  // it. More info opens the rest.
+  const [logOpen, setLogOpen] = useState(false);
 
   const loadReleases = useCallback(async () => {
     if (!isConnected || !canUpdate) return;
@@ -180,6 +189,14 @@ export default function UpdatesPanel() {
   const canPromote = !!previewHead && previewHead !== '__embedded__' && previewHead !== prodHead;
   const canRollback = (releases?.channels?.production?.history?.length || 0) > 1;
   const showReleases = canUpdate && !!releases && releasesState === null;
+  // Newest first, each row carrying its publish message as its description and
+  // the labels that say where it sits (running / preview / production).
+  const log = updateLog(releases?.updates, {
+    runningId: Updates.updateId,
+    previewId: previewHead,
+    productionId: prodHead,
+  });
+  const shownLog = logOpen ? log : log.slice(0, LOG_COLLAPSED);
 
   const pill = (() => {
     if (!canUpdate) return { text: 'DEV BUILD', color: c.textSecondary };
@@ -218,10 +235,19 @@ export default function UpdatesPanel() {
       </View>
 
       {phase === 'available' && available ? (
-        <Text style={styles.availableLine}>
-          New: update {shortId(available.id) || '—'}
-          {available.createdAt ? `, published ${formatWhen(available.createdAt)}` : ''}
-        </Text>
+        <>
+          <Text style={styles.availableLine}>
+            New: update {shortId(available.id) || '—'}
+            {available.createdAt ? `, published ${formatWhen(available.createdAt)}` : ''}
+          </Text>
+          {/* WHAT it changes, not just which one it is — the publish message,
+              which only the pond knows (the Expo manifest never carries it).
+              This is the line the download decision is actually made on, so it
+              belongs here and not only in the releases list below. */}
+          {messageFor(releases?.updates, available.id) ? (
+            <Text style={styles.availableNote}>{messageFor(releases?.updates, available.id)}</Text>
+          ) : null}
+        </>
       ) : null}
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -312,6 +338,50 @@ export default function UpdatesPanel() {
           ) : null}
         </View>
       ) : null}
+
+      {/* ── The log ────────────────────────────────────────────────────────
+          Every update the pond has built, newest first, each with the publish
+          message under it as the description of WHAT was updated. That message
+          only exists on the pond (the Expo manifest never carries it), which is
+          why this needs /mobile-updates/status and not the native module.
+
+          Three rows, then More info — the history matters when you are deciding
+          whether to update or what broke, not every time the panel opens. */}
+      {log.length > 0 ? (
+        <View style={styles.log} testID="updates-log">
+          <Text style={styles.colLabelStrong}>UPDATE LOG</Text>
+          {shownLog.map((u) => (
+            <View key={u.id} style={styles.logRow} testID={`updates-log-${u.short}`}>
+              <View style={styles.logHead}>
+                <Text style={styles.logId} numberOfLines={1}>{u.short}</Text>
+                <Text style={styles.logWhen} numberOfLines={1}>{u.when}</Text>
+                <View style={{ flex: 1 }} />
+                {u.tags.map((t) => (
+                  <View key={t} style={[styles.logTag, t === 'running' && { borderColor: c.accentSuccess }]}>
+                    <Text style={[styles.logTagText, t === 'running' && { color: c.accentSuccess }]}>{t}</Text>
+                  </View>
+                ))}
+              </View>
+              <Text style={styles.logNote}>{u.note}</Text>
+            </View>
+          ))}
+          {log.length > LOG_COLLAPSED ? (
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={() => { tapHaptic(); setLogOpen((v) => !v); }}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: logOpen }}
+              accessibilityLabel={logOpen ? 'Show fewer updates' : `More info: show all ${log.length} updates`}
+              testID="updates-log-more"
+            >
+              <Icon name={logOpen ? 'chevron-up' : 'information-outline'} size={14} color={c.textSecondary} />
+              <Text style={styles.secondaryBtnText} numberOfLines={1}>
+                {logOpen ? 'Show less' : `More info · ${log.length - LOG_COLLAPSED} more`}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -327,6 +397,7 @@ const makeStyles = (theme) => {
       padding: 14,
       marginBottom: 12,
       gap: 6,
+      ...depth(theme, 'card'),
     },
     // The header WRAPS and its title SHRINKS: title + spacer + the state pill on
     // one rigid line pushed "UPDATE AVAILABLE" past the card on a 375pt screen.
@@ -342,6 +413,24 @@ const makeStyles = (theme) => {
     facts: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 4 },
     fact: { fontSize: 12, color: c.textTertiary || c.textSecondary, fontVariant: ['tabular-nums'] },
     availableLine: { fontSize: 12, color: c.accentInfo, marginTop: 4 },
+    // The publish message: the primary ink, because it is the sentence you
+    // read, while the id/date line above it is the reference.
+    availableNote: { fontSize: 13, color: c.textPrimary, marginTop: 2, lineHeight: 18 },
+    // The log. A hairline rule above it, then one block per update: the id and
+    // date on a meta line, the publish message under it in reading ink.
+    log: { marginTop: 12, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border, gap: 2 },
+    logRow: { paddingVertical: 7, gap: 2 },
+    logHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    logId: { fontSize: 11, fontWeight: '700', color: c.textSecondary, letterSpacing: 0.4 },
+    logWhen: { fontSize: 11, color: c.textTertiary, flexShrink: 1 },
+    logTag: {
+      paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8,
+      borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+    },
+    logTagText: { fontSize: 9.5, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', color: c.textTertiary },
+    // The description of what was updated — the reason the row is here, so it
+    // gets the primary ink and room to be two lines.
+    logNote: { fontSize: 13, lineHeight: 18, color: c.textPrimary },
     error: { fontSize: 12, color: c.accentWarning, marginTop: 4, lineHeight: 17 },
     // Wraps, and each button can shrink: a row of fixed-height buttons with a
     // long label ran past the card on a 375pt screen ("Promote preview →

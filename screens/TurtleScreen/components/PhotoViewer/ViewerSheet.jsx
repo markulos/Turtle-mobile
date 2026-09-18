@@ -21,6 +21,13 @@
  * search field); `footer` a fixed row at the bottom. `dark` renders the
  * frosted translucent-black variant with white text, for a sheet that should
  * read as part of the viewer, not the app.
+ *
+ * The footer is PINNED, so the shell — not the caller — owns the space under
+ * it: `bottomInset` (or the safe-area inset, whichever is larger) plus 12 pt
+ * of air. The body's bottom padding sits inside the ScrollView and never
+ * reaches a footer, which is how every sheet with one ended up resting its
+ * buttons flush on the home indicator. A footer declares no bottom padding of
+ * its own.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -39,6 +46,7 @@ import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useSheetDetents } from '../../../../utils/useSheetDetents';
+import { depth } from '../../../../utils/surfaceDepth';
 
 const SCREEN_H = Dimensions.get('window').height || 900;
 const ENTER_MS = 240;
@@ -47,6 +55,13 @@ export const COLLAPSED_RATIO = 0.6;
 /** Expanded = the whole screen: the corners square off and content clears the status bar. */
 export const EXPANDED_RATIO = 1;
 const CORNER_RADIUS = 24;
+/**
+ * Air under a pinned footer bar, on top of whatever is below the sheet (the
+ * home indicator, or a floating tab bar the caller names through
+ * `bottomInset`). §4's "a pinned bar keeps 12 pt of air" — without it the
+ * buttons sit flush on the bottom of the screen.
+ */
+const FOOTER_GAP = 12;
 
 /**
  * The dark variant is a white-on-black surface (docs/STYLE-RULES.md): a
@@ -211,6 +226,11 @@ export default function ViewerSheet({
   // With the keyboard up the card is expanded and lifted; cap it so its top
   // still clears the status bar.
   const cardHeight = (kb > 0 && lifted) ? Math.min(expandedH, SCREEN_H - kb - insets.top - 8) : expandedH;
+  // The footer is a PINNED BAR, not the tail of the scroll: the body's own
+  // bottom padding never reaches it, so the shell gives it the clearance.
+  // Lifted onto the keyboard there is no home indicator under it any more —
+  // only the air.
+  const footerPad = (kb > 0 && lifted) ? FOOTER_GAP : Math.max(insets.bottom, bottomInset) + FOOTER_GAP;
 
   return (
     <View style={[StyleSheet.absoluteFill, styles.root]} testID={testID}>
@@ -222,6 +242,9 @@ export default function ViewerSheet({
         style={[
           styles.card,
           { height: cardHeight, backgroundColor: dark ? 'transparent' : colors.card },
+          // Light sheets lift off the page; the dark one is frosted glass over
+          // a photo and casts nothing (depth() returns {} in dark mode anyway).
+          dark ? null : depth(theme, 'overlay'),
           { transform: [{ translateY: Animated.add(enter, lift) }] },
         ]}
         {...panHandlers}
@@ -281,7 +304,11 @@ export default function ViewerSheet({
             >
               {children}
             </ScrollView>
-            {footer}
+            {!!footer && (
+              <View style={{ paddingBottom: footerPad }} testID={testID ? `${testID}-footer` : undefined}>
+                {footer}
+              </View>
+            )}
           </View>
         </Animated.View>
       </Animated.View>

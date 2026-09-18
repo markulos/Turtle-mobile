@@ -16,10 +16,11 @@
  * the Tasks header gave its filter key to this page.
  */
 import React, { memo, useMemo, useState, useEffect } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
+import AppTextInput from '../../../components/AppTextInput';
 import { tapHaptic } from '../../../utils/haptics';
 import { insetCardPalette } from '../utils/cardPalette';
 import { boardLabel, isTaskDoneNow, itemTypeOf, localTodayStr } from '../utils/taskHelpers';
@@ -27,6 +28,9 @@ import { overviewStats, NO_BOARD } from '../utils/overviewStats';
 import StatsPanel from './StatsPanel';
 
 const pct = (done, total) => (total > 0 ? Math.round((done / total) * 100) : 0);
+
+/** The board finder's pill — the placeholder centres itself against it. */
+const FINDER_HEIGHT = 46;
 
 /**
  * A stat tile. Given an `onPress` it becomes the way into the list behind the
@@ -198,41 +202,28 @@ function TaskRow({ t, done, todayStr, pal, onPress, board }) {
  * that exact title, a create row appears under the field and makes the task
  * ON THIS BOARD, which is the whole reason to add it from here.
  *
- * The placeholder is our own <Text>, not the TextInput's `placeholder` prop:
- * iOS builds that one as its own attributed string and renders it with wide
- * tracking under the app's Figtree face (the same artefact fixed on the vault's
- * board search).
+ * The placeholder is our own <Text>, not the TextInput's `placeholder` prop —
+ * see components/AppTextInput, which owns that rule for every field in the app.
  */
 function BoardFinder({ query, onChangeQuery, onCreate, boardName, pal, canCreate }) {
   return (
     <View style={[styles.finder, { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop }]}>
       <View style={styles.finderField}>
         <Icon name="magnify" size={18} color={pal.muted} />
-        <View style={styles.finderInputWrap}>
-          <TextInput
-            value={query}
-            onChangeText={onChangeQuery}
-            accessibilityLabel={`Search or add a task in ${boardLabel(boardName)}`}
-            testID="overview-board-finder"
-            autoCorrect={false}
-            autoCapitalize="sentences"
-            returnKeyType="done"
-            style={[styles.finderInput, { color: pal.text }]}
-            onSubmitEditing={canCreate ? onCreate : undefined}
-          />
-          {!query ? (
-            <Text
-              testID="overview-finder-placeholder"
-              pointerEvents="none"
-              accessible={false}
-              importantForAccessibility="no"
-              numberOfLines={1}
-              style={[styles.finderPlaceholder, { color: pal.muted }]}
-            >
-              Search or add a task…
-            </Text>
-          ) : null}
-        </View>
+        <AppTextInput
+          style={[styles.finderInput, { color: pal.text }]}
+          value={query}
+          onChangeText={onChangeQuery}
+          placeholder="Search or add a task…"
+          placeholderTextColor={pal.muted}
+          placeholderTestID="overview-finder-placeholder"
+          accessibilityLabel={`Search or add a task in ${boardLabel(boardName)}`}
+          testID="overview-board-finder"
+          autoCorrect={false}
+          autoCapitalize="sentences"
+          returnKeyType="done"
+          onSubmitEditing={canCreate ? onCreate : undefined}
+        />
         {query ? (
           <Pressable
             onPress={() => onChangeQuery('')}
@@ -679,12 +670,8 @@ const styles = StyleSheet.create({
     marginTop: 18,
     overflow: 'hidden',
   },
-  finderField: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, height: 46 },
-  finderInputWrap: { flex: 1, height: '100%' },
-  finderInput: { flex: 1, fontSize: 15, height: '100%', padding: 0 },
-  // Centred by lineHeight against the field's height — an absolutely
-  // positioned child ignores the parent's justifyContent.
-  finderPlaceholder: { position: 'absolute', left: 0, right: 0, top: 0, fontSize: 15, lineHeight: 46 },
+  finderField: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, height: FINDER_HEIGHT },
+  finderInput: { flex: 1, height: '100%', fontSize: 15, padding: 0 },
   finderCreate: {
     flexDirection: 'row',
     alignItems: 'center',

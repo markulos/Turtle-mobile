@@ -12,11 +12,12 @@ import {
   Alert,
   Keyboard,
   Platform,
-  TextInput,
   ScrollView,
   useWindowDimensions,
   PixelRatio,
 } from 'react-native';
+import { depth } from '../../utils/surfaceDepth';
+import AppTextInput from '../../components/AppTextInput';
 import Reanimated, {
   useSharedValue,
   useAnimatedStyle,
@@ -35,6 +36,7 @@ import { useCollapsibleTasks } from './hooks/useCollapsibleTasks';
 import { advanceDueDate, minDate, maxDate, localTodayStr, lastCompletedDate, isTaskDoneNow, matchesRecurrence, nextOccurrenceAfter, itemTypeOf, taskPassesFilters, boardLabel } from './utils/taskHelpers';
 import { completionChange } from './utils/completionChange';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
+import { resolveAvatarUrl } from '../../utils/avatarUrl';
 
 // An event is "over" once its end is in the past — start time + duration (a
 // default hour when unset), or the end of its day for an all-day event. Used to
@@ -124,6 +126,7 @@ import {
   CalendarView,
 } from './components';
 import FriendCard from '../TurtleScreen/components/FriendCard';
+import PeoplePopover from './components/PeoplePopover';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useCommandBus } from '../../context/CommandBusContext';
@@ -482,7 +485,7 @@ export default function TasksScreen() {
   const insets = useSafeAreaInsets();
   // The tab bar floats over the page now, so lists clear it themselves.
   const tabBarHeight = useBottomTabBarHeight();
-  const { isConnected, api } = useServer();
+  const { isConnected, api, getBaseUrl } = useServer();
   const { celebrate } = useCelebration();
   const navigation = useNavigation();
   const route = useRoute();
@@ -746,6 +749,185 @@ export default function TasksScreen() {
     return Array.from(seen.values()).sort((a, b) => a.ownerName.localeCompare(b.ownerName));
   }, [tasks]);
   const multiUser = owners.length > 1;
+
+  // The pond's MEMBER RECORDS, keyed by user id.
+  //
+  // The task DTOs carry userId + ownerName and nothing else — no picture, no
+  // phone, no role, no sign-in state, no stats. Everything else about a person
+  // lives on /api/friends, which already returns the lot
+  // ({ id, phone, displayName, avatarUrl, role, joined, stats }). So this is
+  // one call rather than a change to the task payload, and it feeds BOTH the
+  // owner badge on a card and the profile card behind it — which used to be
+  // built from the task DTO alone and therefore showed a blank avatar, "Member"
+  // with no detail, "Hasn't signed in yet" for someone who had, and dashes
+  // where the stats are.
+  //
+  // Only on a SHARED pond: a solo pond draws no owner badges at all, so
+  // fetching a member list to decorate them would be a request for nothing.
+  // Refetched when the set of owners changes (someone new shows up), which is
+  // also when a newly-uploaded picture gets picked up.
+  const [ownerMembers, setOwnerMembers] = useState({});
+  const ownerKey = owners.map((o) => o.userId).join(',');
+  useEffect(() => {
+    if (!multiUser) { setOwnerMembers({}); return undefined; }
+    let alive = true;
+    (async () => {
+      // /friends and /me, because /friends is "everyone EXCEPT me" — tapping
+      // your OWN badge would otherwise find no record and get the same blank
+      // card this is fixing. Settled together so the map is never half-built.
+      const [friendsRes, meRes] = await Promise.allSettled([api.get('/friends'), api.get('/me')]);
+      const next = {};
+      if (friendsRes.status === 'fulfilled') {
+        const r = friendsRes.value;
+        const list = Array.isArray(r?.friends) ? r.friends : (Array.isArray(r) ? r : []);
+        for (const m of list) if (m?.id) next[m.id] = m;
+      }
+      if (meRes.status === 'fulfilled' && meRes.value?.user?.id) {
+        // `joined` is absent from /me (the server derives it from last_login_at
+        // for OTHER people). You are reading this, so you have signed in.
+        next[meRes.value.user.id] = { ...meRes.value.user, joined: true };
+      }
+      if (alive && Object.keys(next).length) setOwnerMembers(next);
+    })();
+    return () => { alive = false; };
+    // getBaseUrl deliberately NOT a dep: ServerContext rebuilds it on every
+    // provider render, which would refetch the member list for nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, multiUser, ownerKey]);
+
+  const serverBase = getBaseUrl().replace(/\/api$/, '');
+
+  // Everything a BADGE needs about a person, from one id. Used for the task
+  // owner and for each of a task's involvedUsers, so both come out of the same
+  // place and a person looks the same whichever role they are in on a card.
+  // The name falls back through the member record, the task's own ownerName
+  // (passed by the caller when it has one) and finally the id, so a badge is
+  // never blank while the member list is still loading.
+  const memberOf = useCallback((userId, fallbackName) => {
+    if (!userId) return null;
+    const m = ownerMembers[userId];
+    return {
+      id: userId,
+      name: m?.displayName || fallbackName || m?.phone || 'Member',
+      color: ownerColor(userId),
+      avatarUrl: resolveAvatarUrl(m?.avatarUrl, serverBase),
+      // The basic facts the popover lists under a name. Undefined while the
+      // member list is loading, which the popover reads as "nothing to say"
+      // rather than printing blanks.
+      role: m?.role,
+      phone: m?.phone,
+      joined: m?.joined,
+    };
+  }, [ownerMembers, serverBase]);
+
+  // ── Focus blocks, per task ─────────────────────────────────────────────
+  //
+  // Two facts a card shows: how many pomodoros a task has already had, and —
+  // if one is running on it right now — how long is left. Both come from the
+  // pond, which is the source of truth for a timer that has to survive the app
+  // being backgrounded, killed, or opened on another device.
+  //
+  // GET /pomodoros is the whole list (server-capped at 200) so the counts are
+  // ONE call rather than one per task; /pomodoros/active is the single running
+  // block. Refetched when the screen regains focus and when a timer is started
+  // from here, which is when either can have changed.
+  const [pomoByTask, setPomoByTask] = useState({});   // taskId -> completed count
+  // { taskId, endsAt, startedAt, durationMinutes } — the length comes along so
+  // the live key can draw how much of the block is LEFT, not just when it ends.
+  const [activePomo, setActivePomo] = useState(null);
+  const loadPomodoros = useCallback(async () => {
+    try {
+      const [listRes, activeRes] = await Promise.allSettled([
+        api.get('/pomodoros'),
+        api.get('/pomodoros/active'),
+      ]);
+      if (listRes.status === 'fulfilled') {
+        const list = Array.isArray(listRes.value?.pomodoros) ? listRes.value.pomodoros : [];
+        const counts = {};
+        for (const p of list) {
+          // Only blocks actually SEEN THROUGH count. A cancelled or abandoned
+          // one is not focus the task received.
+          if (p?.taskId && p.status === 'completed' && p.completedAt) {
+            counts[p.taskId] = (counts[p.taskId] || 0) + 1;
+          }
+        }
+        setPomoByTask(counts);
+      }
+      if (activeRes.status === 'fulfilled') {
+        const a = activeRes.value?.pomodoro;
+        const mins = Number(a?.durationMinutes) || 25;
+        const startedAt = Number(a?.startedAt);
+        const endsAt = a ? startedAt + mins * 60000 : null;
+        setActivePomo(a?.taskId && endsAt > Date.now()
+          ? { taskId: a.taskId, endsAt, startedAt, durationMinutes: mins }
+          : null);
+      }
+    } catch { /* offline — the cards simply show no tally and no countdown */ }
+  }, [api]);
+  useEffect(() => { loadPomodoros(); }, [loadPomodoros]);
+
+  // Re-read once the running block has RUN OUT. The card retires its own live
+  // key off its countdown, so this is not what clears the circle — it is what
+  // moves the finished block into the task's tally without waiting for the
+  // screen to be left and come back to.
+  useEffect(() => {
+    const endsAt = activePomo?.endsAt;
+    if (!endsAt) return undefined;
+    const ms = endsAt - Date.now();
+    if (ms <= 0) return undefined;
+    // A second past the end: the server settles elapsed blocks on read, and
+    // asking at the exact millisecond can land on the wrong side of that.
+    const id = setTimeout(() => { loadPomodoros(); }, ms + 1000);
+    return () => clearTimeout(id);
+  }, [activePomo, loadPomodoros]);
+
+  const pomodoroFor = useCallback((taskId) => {
+    if (!taskId) return null;
+    const count = pomoByTask[taskId] || 0;
+    const live = activePomo?.taskId === taskId ? activePomo : null;
+    // Nothing to say about this task — let the card skip the whole thing
+    // rather than render a zero and an absent timer.
+    if (!count && !live) return null;
+    return {
+      count,
+      endsAt: live?.endsAt || null,
+      startedAt: live?.startedAt || null,
+      durationMinutes: live?.durationMinutes || null,
+    };
+  }, [pomoByTask, activePomo]);
+
+  /**
+   * Where a LIVE key goes. The running block's card lives on the Turtle tab —
+   * the same place `startPomodoroFor` jumps to — so a tap on a counting-down
+   * circle opens the timer it belongs to instead of starting a second block on
+   * a task that is already being worked on.
+   */
+  const openPomodoro = useCallback(() => {
+    navigation.navigate('Turtle');
+  }, [navigation]);
+
+  // The list a card's avatar stack opens. Held HERE, not in the calendar: a
+  // popover mounted inside the day pane would be clipped by the pane, the
+  // pager and the sheet in turn (docs/STYLE-RULES.md §4).
+  const [peopleList, setPeopleList] = useState(null); // { people, anchor }
+  const openPeopleList = useCallback((people, _task, anchor) => {
+    if (!people?.length) return;
+    tapHaptic();
+    setPeopleList({ people, anchor });
+  }, []);
+
+  // The member behind the open profile card. The task DTO is the FALLBACK, not
+  // the source: it knows the id and the name, so the card still opens with
+  // something real on a pond that could not be reached.
+  const profileFriend = useMemo(() => {
+    if (!profileOwner) return null;
+    const member = ownerMembers[profileOwner.userId];
+    return {
+      ...(member || {}),
+      id: profileOwner.userId,
+      displayName: member?.displayName || profileOwner.ownerName || null,
+    };
+  }, [profileOwner, ownerMembers]);
 
   // Keep the owner filter honest if the underlying set shrinks (e.g. a member's
   // tasks disappear): drop any selected id that no longer exists.
@@ -1480,6 +1662,60 @@ export default function TasksScreen() {
   // completedTime so callers know when the last occurrence was checked off,
   // even though `completed` stays false. Non-recurring tasks (and
   // un-completing anything) fall through to the plain boolean toggle.
+  /**
+   * Start a focus timer for a task. Routes through the Turtle chat's
+   * /pomodoro pipeline (CommandBus delivers it exactly as if typed) with the
+   * task title as the session label, then jumps to the Turtle tab where the
+   * timer card lives.
+   *
+   * One definition, two callers: the task card's action key and the circle key
+   * beside every schedule row.
+   *
+   * TWO STORES, and starting one is not starting the other. The pond keeps the
+   * chat timer in memory (`pomodoroService`, the socket's `pomodoro-state`,
+   * which is what the Turtle tab's card draws) and TASK-linked blocks in the
+   * `task_pomodoros` table (which is what `/pomodoros/active` and `/pomodoros`
+   * answer from, and the only one of the two that knows which task a timer
+   * belongs to — `pomodoro-start` takes a mode and a duration, no task).
+   *
+   * The chat command starts only the first. So the timer ran, the Turtle tab
+   * showed it, and every card on this screen kept showing a plain start key:
+   * the store they read had no row. The tally was stuck at the same zero for
+   * the same reason, since a task's count is its COMPLETED rows.
+   *
+   * So we write the row too. Its length is read back off the live timer rather
+   * than assumed, because the chat timer runs at whatever focus duration the
+   * user has saved — hardcoding 25 here would have the card counting down to a
+   * different zero than the timer it is reporting.
+   */
+  const startPomodoroFor = useCallback(async (task) => {
+    const label = (task?.title || '').trim();
+    dispatchCommand(label ? `/pomodoro focus ${label}` : '/pomodoro focus');
+    navigation.navigate('Turtle');
+    if (!task?.id) return;
+    try {
+      // The command travels through the bus and the socket before the pond has
+      // a timer to report; ask after it lands.
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      let durationMinutes = 25;
+      try {
+        // `source: 'server'` is the chat timer — the one just started. A
+        // 'task' answer would be some OTHER block's row still in flight, whose
+        // length says nothing about this one.
+        const live = await api.get('/pomodoro/widget');
+        if (live?.active && live.source === 'server' && live.endsAt > live.startedAt) {
+          // Measured from the timer's own ends, so this does not care whether
+          // `totalSec` is seconds or something else.
+          durationMinutes = Math.max(1, Math.round((live.endsAt - live.startedAt) / 60000));
+        }
+      } catch { /* unreachable — 25 is the pond's own default too */ }
+      // Cancels any in-flight row for us: one live block at a time, the same
+      // precedence the timer bar and the tray widget already use.
+      await api.post('/pomodoro/start-task', { taskId: task.id, durationMinutes });
+    } catch { /* offline — the Turtle tab still has the timer, the card won't */ }
+    loadPomodoros();
+  }, [api, dispatchCommand, navigation, loadPomodoros]);
+
   const handleToggleComplete = async (id, occurrenceDate) => {
     const task = tasksRef.current.find(t => t.id === id);
     if (!task) return;
@@ -2010,22 +2246,32 @@ export default function TasksScreen() {
           });
           setShowDetail(false);
         }}
-        onStartPomodoro={() => {
-          // Route through the Turtle chat's /pomodoro pipeline (CommandBus
-          // delivers it exactly as if typed); the task title rides along as the
-          // session label. Then jump to the Turtle tab where the timer lives.
-          const label = (selectedTask?.title || '').trim();
-          dispatchCommand(label ? `/pomodoro focus ${label}` : '/pomodoro focus');
-          setShowDetail(false);
-          navigation.navigate('Turtle');
-        }}
+        onStartPomodoro={() => { startPomodoroFor(selectedTask); setShowDetail(false); }}
       />
 
       {/* Owner profile — opened by tapping a task's owner badge on the shared
           calendar. Built from what the task list carries (name + that person's
           tasks); phone/role/avatar light up once a members feed is wired in. */}
+      {/* The avatar stack's list. Rendered at the screen root so it covers the
+          tab bar and cannot be clipped; picking someone hands off to the full
+          profile card below. */}
+      <PeoplePopover
+        visible={!!peopleList}
+        people={peopleList?.people || []}
+        anchor={peopleList?.anchor}
+        theme={theme}
+        onClose={() => setPeopleList(null)}
+        onPick={(person) => {
+          setPeopleList(null);
+          setProfileOwner({ userId: person.id, ownerName: person.name });
+        }}
+      />
+
       <FriendCard
-        friend={profileOwner ? { id: profileOwner.userId, displayName: profileOwner.ownerName } : null}
+        friend={profileFriend}
+        // Resolves this member's server-relative avatarUrl. Without it the card
+        // had no way to turn "/api/avatars/x.jpg" into something loadable.
+        serverBase={serverBase}
         tasks={profileOwner ? tasks.filter((t) => t.userId === profileOwner.userId) : []}
         onClose={() => setProfileOwner(null)}
       />
@@ -2083,10 +2329,15 @@ export default function TasksScreen() {
           // task tree), not just render struck-through.
           showIncompleteOnly={showIncompleteOnly}
           multiUser={multiUser}
+          memberOf={memberOf}
+          onPeoplePress={openPeopleList}
+          pomodoroFor={pomodoroFor}
+          onOpenPomodoro={openPomodoro}
           onTaskPress={openDetail}
           onTaskLongPress={openEditForm}
           onInspectTask={(task, dateStr) => setInspector({ id: task.id, date: dateStr || null })}
           onToggleComplete={handleToggleComplete}
+          onStartPomodoro={startPomodoroFor}
           onUpdateTask={handleUpdateTask}
           onDeleteTask={deleteTask}
           projects={projects}
@@ -2544,7 +2795,7 @@ export default function TasksScreen() {
                       inlineAddingProject === section.project ? (
                         // Inline input mode
                         <View style={styles.projectAddTaskContainer}>
-                          <TextInput
+                          <AppTextInput
                             ref={inlineInputRef}
                             style={styles.projectAddTaskInputField}
                             placeholder="Add a new task"
@@ -2883,6 +3134,7 @@ const createStyles = (theme) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 0,
+    ...depth(theme, 'control'),
   },
   headerFilterBtnActive: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -2912,7 +3164,8 @@ const createStyles = (theme) => StyleSheet.create({
     marginRight: 0,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
-    position: 'relative', // anchors the absolute sliding pill
+    position: 'relative', // anchors the absolute sliding pill,
+    ...depth(theme, 'control'),
   },
   // The sliding active pill — its translateX is bound to the pager scroll so it
   // glides between the two segments 1:1 with the swipe (Photos-tab style).
@@ -2970,6 +3223,7 @@ const createStyles = (theme) => StyleSheet.create({
     padding: 2,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   modeBtn: {
     flexDirection: 'row',
@@ -3154,6 +3408,7 @@ const createStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   allBoardsButtonText: {
     flex: 1,
@@ -3343,6 +3598,7 @@ const createStyles = (theme) => StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 12,
     marginRight: 8,
+    ...depth(theme, 'control'),
   },
   warningChip: { 
     backgroundColor: 'rgba(255, 193, 7, 0.15)' 

@@ -122,9 +122,14 @@ describe('the board finder', () => {
   });
 
   test('the placeholder is our own Text, not the native prop', async () => {
-    // iOS renders a TextInput placeholder with wide tracking under Figtree.
+    // iOS draws a TextInput's placeholder outside the app's text pipeline, so
+    // under Figtree it lands in the system face. components/AppTextInput keeps
+    // the prop — transparent, for VoiceOver and getByPlaceholderText — and
+    // draws a real <Text> instead.
     await openBoard();
-    expect(screen.getByTestId('overview-board-finder').props.placeholder).toBeUndefined();
+    const field = screen.getByTestId('overview-board-finder');
+    expect(field.props.placeholder).toBe('Search or add a task…');
+    expect(field.props.placeholderTextColor).toBe('transparent');
     expect(screen.getByTestId('overview-finder-placeholder').props.children).toBe('Search or add a task…');
   });
 
@@ -143,10 +148,20 @@ describe('the board finder', () => {
 });
 
 describe('the stat tiles open what is behind the number', () => {
+  // "Late" and "Today" are answered against the REAL clock (OverviewPage reads
+  // localTodayStr), so these dates have to be relative to it. They were fixed
+  // strings pinned to the day the test was written, which meant the suite
+  // passed until midnight and then called the "due today" task late — a
+  // failure that looks like a bucketing bug and is a calendar page turning.
+  const dayOffset = (days) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
   const mixed = [
-    task({ id: 'a', title: 'Late one', dueDate: '2026-09-01' }),
-    task({ id: 'b', title: 'Due today', dueDate: '2026-09-15' }),
-    task({ id: 'c', title: 'Later', dueDate: '2026-12-01' }),
+    task({ id: 'a', title: 'Late one', dueDate: dayOffset(-14) }),
+    task({ id: 'b', title: 'Due today', dueDate: dayOffset(0) }),
+    task({ id: 'c', title: 'Later', dueDate: dayOffset(76) }),
     task({ id: 'd', title: 'Finished', completed: true, completedAt: 1 }),
   ];
 

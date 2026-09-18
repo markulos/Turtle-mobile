@@ -27,6 +27,7 @@ import {
   ActivityIndicator,
   AppState,
 } from 'react-native';
+import { depth } from '../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
@@ -372,6 +373,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 16,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'card'),
   },
   headerRow: {
     flexDirection: 'row',
@@ -385,6 +387,7 @@ const createStyles = (theme) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    ...depth(theme, 'control'),
   },
   headerText: {
     flex: 1,
@@ -408,6 +411,7 @@ const createStyles = (theme) => StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 999,
     marginLeft: 8,
+    ...depth(theme, 'control'),
   },
   dot: {
     width: 7,
@@ -445,6 +449,7 @@ const createStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.surfaceElevated,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'card'),
   },
   blockHeaderRow: {
     flexDirection: 'row',

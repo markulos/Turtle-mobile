@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   ScrollView,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -83,9 +85,7 @@ export default function FriendCard({
   const canManageDev = isOwner && !friendIsOwner && !!friend?.phone;
   // A server-relative avatar ('/api/avatars/…') needs the origin prepended;
   // an absolute URL is used as-is. Null → fall back to the role glyph.
-  const avatarUri = friend?.avatarUrl
-    ? (friend.avatarUrl.startsWith('/') ? `${serverBase}${friend.avatarUrl}` : friend.avatarUrl)
-    : null;
+  const avatarUri = resolveAvatarUrl(friend?.avatarUrl, serverBase);
 
   // Future-ready stats. When the server starts attaching `friend.stats`
   // (e.g. { points, tasksCompleted, pomodoros }) these light up automatically;
@@ -327,6 +327,7 @@ const makeStyles = (theme) =>
       overflow: 'hidden',
       marginTop: 8,
       marginBottom: 14,
+      ...depth(theme, 'control'),
     },
     avatarImg: {
       width: '100%',
@@ -348,6 +349,7 @@ const makeStyles = (theme) =>
       paddingVertical: 4,
       borderRadius: 12,
       backgroundColor: theme.colors.surfaceElevated,
+      ...depth(theme, 'control'),
     },
     roleText: {
       fontSize: 12,
@@ -362,6 +364,7 @@ const makeStyles = (theme) =>
       borderWidth: 0.5,
       borderColor: theme.colors.border,
       paddingHorizontal: 14,
+      ...depth(theme, 'card'),
     },
     detailRow: {
       flexDirection: 'row',
@@ -402,6 +405,7 @@ const makeStyles = (theme) =>
       backgroundColor: theme.colors.surface,
       borderWidth: 0.5,
       borderColor: theme.colors.border,
+      ...depth(theme, 'card'),
     },
     statValue: {
       fontSize: 20,
@@ -427,6 +431,7 @@ const makeStyles = (theme) =>
       borderWidth: 0.5,
       borderColor: theme.colors.border,
       paddingHorizontal: 14,
+      ...depth(theme, 'card'),
     },
     taskRow: {
       flexDirection: 'row',
@@ -507,6 +512,7 @@ const makeStyles = (theme) =>
       backgroundColor: theme.colors.surface,
       borderWidth: 0.5,
       borderColor: theme.colors.border,
+      ...depth(theme, 'control'),
     },
     devRevokeText: {
       fontSize: 15,

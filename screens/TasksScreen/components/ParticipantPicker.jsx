@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, ScrollView, StyleSheet } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
@@ -113,6 +114,7 @@ const makeStyles = (theme, accent) =>
     sheet: {
       backgroundColor: theme.colors.surface, borderRadius: 16, padding: 16,
       borderWidth: 0.5, borderColor: theme.colors.border,
+      ...depth(theme, 'overlay'),
     },
     sheetTitle: { fontSize: 16, fontWeight: '700', color: theme.colors.textPrimary, marginBottom: 12 },
     empty: { fontSize: 14, color: theme.colors.textTertiary, fontStyle: 'italic', paddingVertical: 12 },

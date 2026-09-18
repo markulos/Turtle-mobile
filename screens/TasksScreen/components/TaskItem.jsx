@@ -8,6 +8,7 @@ import {
   Animated,
   Easing
 } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { getPriorityColor, areAllSubtasksCompleted, formatDueDate, isOverdue, formatTime12h, isTaskDoneNow, lastCompletedDate } from '../utils/taskHelpers';
@@ -337,7 +338,7 @@ const TaskItemImpl = ({
 
           {/* Add subtask input - always visible */}
           <View style={styles.addSubtaskRow}>
-            <TextInput
+            <AppTextInput
               style={styles.addSubtaskInput}
               placeholder="Add subtask..."
               placeholderTextColor={inv.muted}

@@ -2,7 +2,6 @@ import React, { useRef, useEffect, useState } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   ScrollView,
   StyleSheet,
@@ -12,6 +11,8 @@ import {
   Dimensions,
   Keyboard,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import AppTextInput from '../../../components/AppTextInput';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -100,7 +101,7 @@ function PermissionCard({ perm, onRespond, theme, styles }) {
           {detail}
         </Text>
       )}
-      <TextInput
+      <AppTextInput
         style={styles.permInput}
         placeholder="Optional feedback (sent to Claude)…"
         placeholderTextColor={theme.colors.textTertiary}
@@ -195,7 +196,7 @@ function QuestionCard({ q, onRespond, theme, styles }) {
                 );
               })}
             </View>
-            <TextInput
+            <AppTextInput
               style={styles.permInput}
               placeholder="Other / custom answer…"
               placeholderTextColor={theme.colors.textTertiary}
@@ -572,6 +573,7 @@ const createStyles = (theme) => StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 999,
     backgroundColor: theme.colors.surface,
+    ...depth(theme, 'control'),
   },
   dot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 11, fontWeight: '600', color: theme.colors.textSecondary },
@@ -655,6 +657,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.accentWarning,
     padding: 10,
+    ...depth(theme, 'card'),
   },
   permHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
   permTitle: { flex: 1, fontSize: 13, fontWeight: '700', color: theme.colors.textPrimary },
@@ -678,6 +681,7 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textPrimary,
     marginBottom: 8,
     textAlignVertical: 'top',
+    ...depth(theme, 'control'),
   },
   permActions: { flexDirection: 'row', gap: 8 },
   permBtn: {
@@ -699,6 +703,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.accentInfo,
     padding: 10,
+    ...depth(theme, 'card'),
   },
   qBlock: { marginBottom: 10 },
   qPrompt: { fontSize: 13, fontWeight: '600', color: theme.colors.textPrimary, marginBottom: 2 },
@@ -712,6 +717,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     maxWidth: '100%',
+    ...depth(theme, 'control'),
   },
   qChipOn: {
     borderColor: theme.colors.accentInfo,

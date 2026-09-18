@@ -16,7 +16,8 @@
  * "unlimited" onto a capped box would otherwise look like it hadn't worked.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import AppTextInput from './AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { useServer } from '../context/ServerContext';
@@ -155,7 +156,7 @@ export default function ShareUploadLimitCard({ styles: parentStyles }) {
       </View>
 
       <View style={s.customRow}>
-        <TextInput
+        <AppTextInput
           testID="share-upload-custom"
           value={custom}
           onChangeText={setCustom}

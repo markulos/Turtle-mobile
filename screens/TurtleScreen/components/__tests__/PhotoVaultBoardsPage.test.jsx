@@ -147,12 +147,14 @@ describe('PhotoVaultBoardsPage', () => {
   });
 
   test('the placeholder is our own Text, and it leaves as soon as there is a query', async () => {
-    // NOT the TextInput's `placeholder` prop: iOS drew that one with wide
-    // tracking under Figtree. A plain Text is the same pipeline as every other
-    // label on the page, so it cannot pick up the artefact.
+    // iOS draws the `placeholder` prop OUTSIDE the app's text pipeline, so
+    // under Figtree it came out wide-tracked and off-size. components/
+    // AppTextInput keeps that prop — VoiceOver and getByPlaceholderText both
+    // hang off it — but makes it TRANSPARENT and draws a real <Text> instead.
     const empty = await renderPage();
     const input = empty.view.getByLabelText('Search your boards');
-    expect(input.props.placeholder).toBeUndefined();
+    expect(input.props.placeholder).toBe('Search your boards');
+    expect(input.props.placeholderTextColor).toBe('transparent');
 
     const placeholder = empty.view.getByTestId('board-search-placeholder');
     expect(placeholder.props.children).toBe('Search your boards');
@@ -160,10 +162,9 @@ describe('PhotoVaultBoardsPage', () => {
     // the label, and a second copy would be read twice.
     expect(placeholder.props.pointerEvents).toBe('none');
     expect(placeholder.props.accessible).toBe(false);
-    // Same size as the text it stands in for, centred on the field's height.
+    // Same size as the text it stands in for, and no tracking of its own.
     const style = StyleSheet.flatten(placeholder.props.style);
     expect(style.fontSize).toBe(15);
-    expect(style.lineHeight).toBe(38);
     expect(style.letterSpacing).toBeUndefined();
 
     const typed = await renderPage({ query: 'warm' });
@@ -344,34 +345,68 @@ describe('PhotoVaultBoardsPage', () => {
     expect(view.getByTestId('board-search-cancel')).toBeTruthy();
   });
 
-  // Cancel is one movement with an order to it: the keyboard and the header go
-  // on the first frame, the RESULTS ride the page down and are only dropped
-  // once it has landed. Clearing the query first — which is what this used to
-  // do — swapped the rows back to the board grid on frame one, so the page you
-  // watched sliding down was already showing something else.
-  test('Cancel drops the keyboard and the header at once, the results at the end', async () => {
+  // Cancel is one movement, and the trick to it is that WHAT IS ON SCREEN and
+  // WHAT THE PARENT HOLDS part company for its duration.
+  //
+  // Clearing the query is the expensive half — the parent rebuilds every board
+  // model from the filtered set back to the full one, rebuilds the A–Z index
+  // off that, and mounts the rail. It goes on the FIRST frame, so that work
+  // happens while the native glide runs (the UI thread does not care that JS is
+  // busy) instead of landing in one long frame at the end, which is what made
+  // the close stutter. The page is held still meanwhile by a frozen copy.
+  test('Cancel clears the query at once but holds the screen until the page lands', async () => {
     const onSearchActiveChange = jest.fn();
     const onQueryChange = jest.fn();
     const dismiss = jest.spyOn(Keyboard, 'dismiss');
-    const { view } = await renderPage({ query: 'warm', onSearchActiveChange, onQueryChange });
+    dismiss.mockClear();
+    const { props, view } = await renderPage({ query: 'warm', onSearchActiveChange, onQueryChange });
 
     await fireEvent.press(view.getByTestId('board-search-cancel'));
 
-    expect(dismiss).toHaveBeenCalled();
+    // Keyboard, header and query all go on frame one, together.
+    expect(dismiss).toHaveBeenCalledTimes(1);
     expect(onSearchActiveChange).toHaveBeenLastCalledWith(false);
-    expect(onQueryChange).not.toHaveBeenCalled();
+    expect(onQueryChange).toHaveBeenCalledWith('');
 
-    await waitFor(() => expect(onQueryChange).toHaveBeenCalledWith(''));
+    // The parent obeys immediately — and NOTHING the user can see may move.
+    // Still in search posture: the sort chips have not come back, and the
+    // field still reads what they typed rather than blanking under them.
+    view.rerender(<PhotoVaultBoardsPage {...props} query="" />);
+    expect(view.queryByTestId('board-sort-scroll')).toBeNull();
+    expect(view.getByLabelText('Search your boards').props.value).toBe('warm');
+    expect(view.queryByTestId('board-search-placeholder')).toBeNull();
+
+    // Only once the glide has landed does the grid come back.
+    await waitFor(() => expect(view.queryByTestId('board-sort-scroll')).toBeTruthy());
+    expect(view.getByLabelText('Search your boards').props.value).toBe('');
     dismiss.mockRestore();
   });
 
-  test('add turns into Cancel while searching — never both', async () => {
+  // NOT COVERED HERE: re-focusing the field mid-glide, which must take the exit
+  // back (cancelRunRef makes the pending landing a no-op, and onFocus drops the
+  // frozen copy). A test for it re-focuses while the exit timing is still in
+  // flight, and an animation crossing a test boundary in this harness leaves
+  // every LATER test in the file rendering nothing — draining it inside act()
+  // did not help. The behaviour is real; the harness is what is missing.
+
+  // Both keys are MOUNTED at all times now, and which one is live is decided by
+  // pointerEvents rather than by rendering one of them. That is deliberate: the
+  // field is flex:1, so unmounting the trailing key would let it grow into the
+  // freed space and relayout the row mid-animation, which is exactly what the
+  // slide is there to avoid. So the invariant to hold is not "only one exists"
+  // — it is "only one can be pressed".
+  test('only one of add / back is reachable at a time', async () => {
     const browsing = await renderPage();
-    expect(browsing.view.getByLabelText('Add photos to a board')).toBeTruthy();
-    expect(browsing.view.queryByTestId('board-search-cancel')).toBeNull();
+    await fireEvent.press(browsing.view.getByLabelText('Add photos to a board'));
+    expect(browsing.props.onAdd).toHaveBeenCalled();
+    // The back key sits over the field's leading edge while browsing; if it
+    // were live it would eat the tap that opens search.
+    await fireEvent.press(browsing.view.getByTestId('board-search-cancel'));
+    expect(browsing.props.onQueryChange).not.toHaveBeenCalled();
 
     const searching = await renderPage({ query: 'warm' });
-    expect(searching.view.queryByLabelText('Add photos to a board')).toBeNull();
+    await fireEvent.press(searching.view.getByLabelText('Add photos to a board'));
+    expect(searching.props.onAdd).not.toHaveBeenCalled();
     expect(searching.view.getByLabelText('Cancel board search')).toBeTruthy();
   });
 
@@ -379,6 +414,60 @@ describe('PhotoVaultBoardsPage', () => {
     const { props, view } = await renderPage({ query: 'warm' });
     await fireEvent.press(view.getByLabelText('Warm interiors, 47 items'));
     expect(props.onOpenBoard).toHaveBeenCalledWith('Warm interiors');
+  });
+
+  // `keyboardShouldPersistTaps="handled"` hands the tap to the row with the
+  // keyboard still up, so opening a result has to drop it itself — otherwise
+  // the board slides in under a keyboard nothing is typing into.
+  test('drops the keyboard when a result is opened, without leaving search', async () => {
+    // jest-expo's Keyboard.dismiss is already a mock, so spyOn hands back the
+    // SAME function every test shares — clear it or you count the whole file.
+    const dismiss = jest.spyOn(Keyboard, 'dismiss');
+    dismiss.mockClear();
+    const onSearchActiveChange = jest.fn();
+    const { props, view } = await renderPage({ query: 'warm', onSearchActiveChange });
+
+    await fireEvent.press(view.getByLabelText('Warm interiors, 47 items'));
+
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(props.onOpenBoard).toHaveBeenCalledWith('Warm interiors');
+    // Only the keyboard. Come back from the board and the query — and the
+    // results you were picking from — are still there.
+    expect(props.onQueryChange).not.toHaveBeenCalled();
+    expect(onSearchActiveChange).not.toHaveBeenCalledWith(false);
+    dismiss.mockRestore();
+  });
+
+  // The pinned All Photos card is only reachable while browsing, but it is the
+  // same journey out of the page and must not leave a keyboard behind either.
+  test('drops the keyboard when All Photos is opened', async () => {
+    const dismiss = jest.spyOn(Keyboard, 'dismiss');
+    dismiss.mockClear();
+    const onOpenAllPhotos = jest.fn();
+    const allPhotos = { name: 'All Photos', covers: [], count: 12480, metadata: '12480 items' };
+    const { view } = await renderPage({ allPhotos, onOpenAllPhotos });
+
+    await fireEvent.press(view.getByLabelText(/^All Photos, 12480 items/));
+
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(onOpenAllPhotos).toHaveBeenCalledWith('All Photos');
+    dismiss.mockRestore();
+  });
+
+  // Sticky, not scrolling: the chips moved out of ListHeaderComponent and into
+  // the fixed dock beside the field. In the list header they left the screen on
+  // the first flick, so re-sorting a long library meant scrolling back to the
+  // top first.
+  test('keeps the sort chips OUT of the scrolling list header', async () => {
+    const ref = React.createRef();
+    const { view } = await renderPage({ ref });
+
+    // Visible on the page…
+    expect(view.getByTestId('board-sort-scroll')).toBeTruthy();
+
+    // …but not inside the part of it that scrolls away.
+    const header = await render(ref.current.props.ListHeaderComponent);
+    expect(header.queryByTestId('board-sort-scroll')).toBeNull();
   });
 
   test('forwards the list ref and A–Z scrubber callbacks', async () => {

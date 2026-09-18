@@ -25,12 +25,13 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
   Share,
 } from 'react-native';
+import { depth } from '../utils/surfaceDepth';
+import AppTextInput from './AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
@@ -233,7 +234,7 @@ export default function PondInvitesSection({ active = true }) {
       <View style={styles.inviteRow}>
         <View style={styles.inputWrap}>
           <Icon name="phone-outline" size={17} color={theme.colors.textTertiary} />
-          <TextInput
+          <AppTextInput
             style={styles.input}
             placeholder="+1 555 123 4567"
             placeholderTextColor={theme.colors.textPlaceholder}
@@ -388,6 +389,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderWidth: 0.5,
     borderColor: theme.colors.border,
     overflow: 'hidden',
+    ...depth(theme, 'card'),
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -402,6 +404,7 @@ const createStyles = (theme) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   sectionTitle: {
     color: theme.colors.textPrimary,
@@ -470,6 +473,7 @@ const createStyles = (theme) => StyleSheet.create({
     height: 40,
     borderRadius: 10,
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   secondaryButtonText: {
     color: theme.colors.textPrimary,
@@ -497,6 +501,7 @@ const createStyles = (theme) => StyleSheet.create({
     padding: 12,
     borderRadius: 10,
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'card'),
   },
   linkLabel: {
     color: theme.colors.textTertiary,

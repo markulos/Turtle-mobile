@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import AppTextInput from '../../../components/AppTextInput';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { FieldInput } from './FieldInput';
@@ -46,7 +47,7 @@ const PasswordItemImpl = ({ item, onSave, onDelete, allEntries }) => {
   if (isEditing) {
     return (
       <View style={styles.container}>
-        <TextInput
+        <AppTextInput
           style={styles.titleInput}
           placeholder="Subject..."
           placeholderTextColor={theme.colors.textPlaceholder}
@@ -182,7 +183,7 @@ export const NewEntryForm = ({ onSave, onCancel, allEntries }) => {
 
   return (
     <View style={styles.container}>
-      <TextInput
+      <AppTextInput
         style={styles.titleInput}
         placeholder="Subject..."
         placeholderTextColor={theme.colors.textPlaceholder}
@@ -241,6 +242,7 @@ const createStyles = (theme) =>
       marginBottom: 12,
       borderWidth: 1,
       borderColor: theme.colors.border,
+      ...depth(theme, 'card'),
     },
     header: {
       flexDirection: 'row',
@@ -295,6 +297,7 @@ const createStyles = (theme) =>
       borderRadius: 8,
       borderWidth: 1,
       borderColor: theme.colors.border,
+      ...depth(theme, 'control'),
     },
     actions: {
       flexDirection: 'row',
@@ -309,6 +312,7 @@ const createStyles = (theme) =>
       borderRadius: 8,
       borderWidth: 1,
       borderColor: theme.colors.border,
+      ...depth(theme, 'control'),
     },
     saveText: {
       color: theme.colors.textPrimary,

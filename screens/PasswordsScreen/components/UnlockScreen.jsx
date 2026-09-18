@@ -2,7 +2,6 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
@@ -11,6 +10,8 @@ import {
   ScrollView,
   Alert,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import AppTextInput from '../../../components/AppTextInput';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -154,7 +155,7 @@ export const UnlockScreen = ({
 
               <View style={styles.inputContainer}>
                 <Icon name="lock" size={20} color={theme.colors.textTertiary} />
-                <TextInput
+                <AppTextInput
                   style={styles.input}
                   placeholder="Master Password"
                   placeholderTextColor={theme.colors.textPlaceholder}
@@ -190,7 +191,7 @@ export const UnlockScreen = ({
 
               <View style={styles.inputContainer}>
                 <Icon name="message-text" size={20} color={theme.colors.textTertiary} />
-                <TextInput
+                <AppTextInput
                   style={styles.input}
                   placeholder="6-digit code"
                   placeholderTextColor={theme.colors.textPlaceholder}
@@ -245,6 +246,7 @@ const createStyles = (theme, insets, isDark) =>
       borderColor: theme.colors.border,
       backgroundColor: theme.colors.surfaceElevated,
       marginBottom: 16,
+      ...depth(theme, 'control'),
     },
     bioButtonText: { color: theme.colors.textPrimary, fontSize: 15, fontWeight: '600' },
     inputContainer: {
@@ -265,6 +267,7 @@ const createStyles = (theme, insets, isDark) =>
       marginTop: 8,
       borderWidth: 1,
       borderColor: theme.colors.border,
+      ...depth(theme, 'control'),
     },
     buttonDisabled: { opacity: 0.6 },
     buttonText: { color: theme.colors.textPrimary, fontSize: 16, fontWeight: '600' },

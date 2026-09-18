@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, FlatList, ActivityIndicator,
+  View, Text, TouchableOpacity, FlatList, ActivityIndicator,
   Alert, StyleSheet, Keyboard,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
 import Animated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -320,6 +321,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
     bubbleAI: {
       maxWidth: '82%', borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9,
       backgroundColor: c.surfaceElevated, borderBottomRightRadius: 18, borderBottomLeftRadius: 5,
+      ...depth(theme, 'card'),
     },
     bubbleSending: { opacity: 0.65 },
     fromUser: { fontSize: 11, fontWeight: '700', color: '#ffffffB0', marginBottom: 2 },

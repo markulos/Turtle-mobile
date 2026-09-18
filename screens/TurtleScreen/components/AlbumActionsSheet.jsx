@@ -24,10 +24,10 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
@@ -357,7 +357,7 @@ export default function AlbumActionsSheet({
 
               <View style={[styles.newRow, rowBorder]}>
                 <Icon name="pencil-outline" size={20} color={c.textSecondary} />
-                <TextInput
+                <AppTextInput
                   style={[styles.newInput, { color: c.textPrimary }]}
                   placeholder="Board name"
                   placeholderTextColor={c.textMuted}

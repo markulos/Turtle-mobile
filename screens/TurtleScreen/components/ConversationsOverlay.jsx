@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl, StyleSheet } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import useKeyboardHeight from '../../../utils/useKeyboardHeight';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -326,7 +327,7 @@ export default function ConversationsOverlay({ visible, onClose, onOpenClaude, i
             borderWidth: 1.5, borderColor: c.accentInfo + '55',
           }}>
             <Icon name="magnify" size={20} color={c.accentInfo} />
-            <TextInput
+            <AppTextInput
               style={{ flex: 1, fontSize: 16, color: c.textPrimary, paddingVertical: 0 }}
               placeholder="Search boards"
               placeholderTextColor={c.textTertiary}

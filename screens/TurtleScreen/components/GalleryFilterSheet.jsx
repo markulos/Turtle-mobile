@@ -18,10 +18,10 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { impactHaptic, tapHaptic } from '../../../utils/haptics';
@@ -408,7 +408,7 @@ export default function GalleryFilterSheet({
               backgroundColor: c.surfaceHighlight,
             }}>
               <Icon name="magnify" size={18} color={c.textMuted} />
-              <TextInput
+              <AppTextInput
                 ref={searchRef}
                 value={filters.q}
                 onChangeText={(t) => onChange({ q: t })}

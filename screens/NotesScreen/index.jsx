@@ -31,7 +31,6 @@ import {
   View,
   Text,
   Image,
-  TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
   FlatList,
@@ -46,6 +45,8 @@ import {
   Linking,
   Modal,
 } from 'react-native';
+import { depth } from '../../utils/surfaceDepth';
+import AppTextInput from '../../components/AppTextInput';
 // expo-image for the link card's remote thumbnail (disk+memory cache + a soft
 // fade-in), aliased so it doesn't clash with the RN <Image> used by NoteRow.
 import { Image as ExpoImage } from 'expo-image';
@@ -81,6 +82,7 @@ import { useOpenTarget } from '../../context/OpenTargetContext';
 import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
 import { TAP_ONLY } from '../../utils/pressBehavior';
+import { resolveAvatarUrl } from '../../utils/avatarUrl';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
 // Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
 import { fuzzyRank } from '../../utils/trigram';
@@ -255,13 +257,8 @@ function SharedByLine({ note, style }) {
   const { getBaseUrl } = useServer();
   const sharer = note && note.sharedBy;
   if (!sharer || (!sharer.name && !sharer.avatarUrl)) return null;
-  // avatar_url is a relative server path (/api/avatars/<id>.jpg?v=…) — resolve
-  // it to an absolute URI the same way the link thumbnails do.
-  const avatarUri = sharer.avatarUrl
-    ? (/^https?:\/\//i.test(sharer.avatarUrl)
-        ? sharer.avatarUrl
-        : `${getBaseUrl().replace('/api', '')}${sharer.avatarUrl}`)
-    : null;
+  // avatar_url is a relative server path (/api/avatars/<id>.jpg?v=…).
+  const avatarUri = resolveAvatarUrl(sharer.avatarUrl, getBaseUrl());
   return (
     <View style={[{ flexDirection: 'row', alignItems: 'center', gap: 6 }, style]}>
       {avatarUri ? (
@@ -1051,7 +1048,7 @@ export default function NotesScreen() {
       {searchOpen && (
         <View style={[styles.searchBar, { borderColor: theme.colors.border, backgroundColor: theme.colors.surface }]}>
           <Icon name="magnify" size={18} color={theme.colors.textMuted} />
-          <TextInput
+          <AppTextInput
             ref={searchInputRef}
             style={[styles.searchInput, { color: theme.colors.textPrimary }]}
             value={search}
@@ -1216,6 +1213,7 @@ const topicChipStyles = (theme, isDark) => StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   chipActive: {
     backgroundColor: theme.colors.accentInfo + (isDark ? '2E' : '1F'),
@@ -1296,7 +1294,7 @@ function TopicSearchSheet({ visible, entries, totalNotes, untagged, selectedTopi
         <View style={[s.searchRow, { paddingTop: Platform.OS === 'android' ? insets.top + 14 : 14 }]}>
           <View style={s.searchBox}>
             <Icon name="magnify" size={20} color={theme.colors.accentInfo} />
-            <TextInput
+            <AppTextInput
               style={s.searchInput}
               placeholder="Search boards & topics"
               placeholderTextColor={theme.colors.textMuted}
@@ -1389,6 +1387,7 @@ const topicSearchStyles = (theme, isDark) => StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderWidth: 1.5,
     borderColor: theme.colors.accentInfo + '55',
+    ...depth(theme, 'control'),
   },
   searchInput: {
     flex: 1,
@@ -1418,6 +1417,7 @@ const topicSearchStyles = (theme, isDark) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.surface,
+    ...depth(theme, 'control'),
   },
   rowIconActive: {
     backgroundColor: theme.colors.accentInfo + '22',
@@ -1565,6 +1565,7 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     marginBottom: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
+    ...depth(theme, 'card'),
   },
   checkbox: {
     width: 22,
@@ -1588,6 +1589,7 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
+    ...depth(theme, 'control'),
   },
   sendBtn: {
     alignSelf: 'flex-start',
@@ -1619,6 +1621,7 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     height: 110,
     borderRadius: 8,
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   tagRow: {
     flexDirection: 'row',
@@ -1842,6 +1845,7 @@ const linkCardStyles = (theme, isDark) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     overflow: 'hidden',
+    ...depth(theme, 'card'),
   },
   mediaWrap: {
     width: '100%',
@@ -2307,7 +2311,7 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
               {tags.length > 0 && <Text style={styles.kindChipText}>· {tags.length} tag{tags.length === 1 ? '' : 's'}</Text>}
             </TouchableOpacity>
 
-            <TextInput
+            <AppTextInput
               ref={contentRef}
               placeholder={mode === 'note' ? 'Title' : mode === 'feedback' ? 'Feedback for Claude' : 'Buy milk'}
               placeholderTextColor={theme.colors.textPlaceholder}
@@ -2318,7 +2322,7 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
               scrollEnabled={false}
             />
 
-            <TextInput
+            <AppTextInput
               placeholder="Start writing…"
               placeholderTextColor={theme.colors.textPlaceholder}
               value={description}
@@ -2478,7 +2482,7 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
                   <Icon name="close" size={12} color={isDark ? '#93c5fd' : '#1d4ed8'} />
                 </TouchableOpacity>
               ))}
-              <TextInput
+              <AppTextInput
                 placeholder={tags.length ? 'Add tag' : 'Tags'}
                 placeholderTextColor={theme.colors.textPlaceholder}
                 value={tagDraft}
@@ -2583,6 +2587,7 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999,
     backgroundColor: theme.colors.surfaceElevated,
     marginBottom: 10,
+    ...depth(theme, 'control'),
   },
   kindChipText: { fontSize: 11, fontWeight: '600', color: theme.colors.textSecondary },
   titleInput: {
@@ -2660,6 +2665,7 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   typeOptActive: {
     backgroundColor: theme.colors.accentSuccess,
@@ -2684,6 +2690,7 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     borderColor: theme.colors.border,
     marginBottom: 10,
     minHeight: 44,
+    ...depth(theme, 'control'),
   },
   inputDescription: { minHeight: 60 },
   // Scrollable body content — a hair of bottom padding so the Save row doesn't
@@ -2699,6 +2706,7 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     marginBottom: 10,
+    ...depth(theme, 'card'),
   },
   tagChipsWrap: {
     flexDirection: 'row',
@@ -2756,6 +2764,7 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     maxWidth: 160,
+    ...depth(theme, 'raised'),
   },
   suggestChipText: {
     fontSize: 12,

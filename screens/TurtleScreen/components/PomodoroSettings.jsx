@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   Pressable,
   StyleSheet,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import AppTextInput from '../../../components/AppTextInput';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { tapHaptic, impactHaptic } from '../../../utils/haptics';
@@ -74,7 +75,7 @@ export default function PomodoroSettings({
             <Text style={styles.label}>Focus Duration</Text>
           </View>
           <View style={styles.inputRow}>
-            <TextInput
+            <AppTextInput
               style={styles.input}
               value={focusMinutes}
               onChangeText={setFocusMinutes}
@@ -94,7 +95,7 @@ export default function PomodoroSettings({
             <Text style={styles.label}>Break Duration</Text>
           </View>
           <View style={styles.inputRow}>
-            <TextInput
+            <AppTextInput
               style={styles.input}
               value={breakMinutes}
               onChangeText={setBreakMinutes}
@@ -171,6 +172,7 @@ const createStyles = (theme) =>
       maxWidth: 400,
       borderWidth: 1,
       borderColor: theme.colors.border,
+      ...depth(theme, 'card'),
     },
     header: {
       flexDirection: 'row',
@@ -216,6 +218,7 @@ const createStyles = (theme) =>
       textAlign: 'center',
       borderWidth: 1,
       borderColor: theme.colors.border,
+      ...depth(theme, 'control'),
     },
     unit: {
       fontSize: 15,
@@ -244,6 +247,7 @@ const createStyles = (theme) =>
       borderWidth: 1,
       borderColor: theme.colors.border,
       alignItems: 'center',
+      ...depth(theme, 'control'),
     },
     presetText: {
       fontSize: 12,
@@ -256,6 +260,7 @@ const createStyles = (theme) =>
       alignItems: 'center',
       borderWidth: 1,
       borderColor: theme.colors.border,
+      ...depth(theme, 'control'),
     },
     saveButtonText: {
       fontSize: 16,

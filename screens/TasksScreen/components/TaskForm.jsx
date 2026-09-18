@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   Platform,
   StyleSheet,
@@ -14,6 +13,8 @@ import {
   Easing,
   LayoutAnimation,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import AppTextInput from '../../../components/AppTextInput';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -871,7 +872,7 @@ export const TaskForm = ({
                 reads as the headline of the sheet (iOS Reminders / Things
                 pattern) and every secondary field below stays quiet by
                 contrast. */}
-            <TextInput
+            <AppTextInput
               ref={titleInputRef}
               style={styles.titleInput}
               placeholder={copy.titlePlaceholder}
@@ -889,7 +890,7 @@ export const TaskForm = ({
                 read as one surface, and it grows with what you type rather than
                 scrolling a fixed window. */}
             {!isBirthday && (
-              <TextInput
+              <AppTextInput
                 ref={descInputRef}
                 style={styles.bodyInput}
                 placeholder={isEvent ? 'Event details, location, notes…' : 'Notes, links, anything…'}
@@ -1003,7 +1004,7 @@ export const TaskForm = ({
             )}
             {isTask && newBoardOpen && (
               <View style={[styles.projectRow, { marginTop: 8 }]}>
-                <TextInput
+                <AppTextInput
                   style={[styles.input, styles.projectInput]}
                   placeholder="New board name..."
                   placeholderTextColor={theme.colors.textPlaceholder}
@@ -1149,7 +1150,7 @@ export const TaskForm = ({
                 ) : (
                   <View>
                     <View style={styles.tagRow}>
-                      <TextInput
+                      <AppTextInput
                         style={[styles.input, styles.tagInput]}
                         placeholder="Search notes..."
                         placeholderTextColor={theme.colors.textPlaceholder}
@@ -1203,7 +1204,7 @@ export const TaskForm = ({
             {isTask && shows('tags') && (
               <FormField label="Tags">
                 <View style={styles.tagRow}>
-                  <TextInput
+                  <AppTextInput
                     style={[styles.input, styles.tagInput]}
                     placeholder="Type to see suggestions..."
                     placeholderTextColor={theme.colors.textPlaceholder}
@@ -1427,7 +1428,7 @@ export const TaskForm = ({
                 {/* Custom entry row: number + unit selector + Add. */}
                 {customReminderOpen && (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
-                    <TextInput
+                    <AppTextInput
                       value={customReminderValue}
                       onChangeText={(t) => setCustomReminderValue(t.replace(/[^0-9]/g, ''))}
                       keyboardType="number-pad"
@@ -1601,7 +1602,7 @@ export const TaskForm = ({
             {isEvent && shows('guests') && (
               <FormField label="Guests">
                 <View style={styles.tagRow}>
-                  <TextInput
+                  <AppTextInput
                     style={[styles.input, styles.tagInput]}
                     placeholder="Add a guest by name..."
                     placeholderTextColor={theme.colors.textPlaceholder}
@@ -2021,6 +2022,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderRadius: 10,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   hint: {
     fontSize: theme.typography.body,
@@ -2042,7 +2044,8 @@ const createStyles = (theme, insets) => StyleSheet.create({
     height: 40,
     borderRadius: 10,
     justifyContent: 'center',
-    alignItems: 'center'
+    alignItems: 'center',
+    ...depth(theme, 'control'),
   },
   suggestionsContainer: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -2052,6 +2055,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: 0.5,
     borderColor: theme.colors.border,
     maxHeight: 150,
+    ...depth(theme, 'raised'),
   },
   suggestionsLabel: {
     fontSize: theme.typography.body,
@@ -2086,6 +2090,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 15,
     marginRight: 8,
+    ...depth(theme, 'control'),
   },
   allTagText: {
     fontSize: theme.typography.body,
@@ -2105,6 +2110,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderRadius: 20,
     marginRight: 8,
     marginBottom: 8,
+    ...depth(theme, 'control'),
   },
   selectedTagText: {
     color: theme.colors.textPrimary,
@@ -2131,6 +2137,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderColor: theme.colors.border,
     borderStyle: 'dashed',
     backgroundColor: theme.colors.surface,
+    ...depth(theme, 'control'),
   },
   linkNoteBtnText: {
     fontSize: theme.typography.body,
@@ -2148,6 +2155,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   linkedNoteText: {
     flex: 1,
@@ -2194,6 +2202,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: 0.5,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
+    ...depth(theme, 'control'),
   },
   reminderChipActive: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -2221,6 +2230,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     marginHorizontal: 5,
     alignItems: 'center',
     backgroundColor: theme.colors.surface,
+    ...depth(theme, 'control'),
   },
   priorityText: {
     color: theme.colors.textTertiary,
@@ -2247,6 +2257,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     gap: 6,
+    ...depth(theme, 'control'),
   },
   recurringBtnActive: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -2302,6 +2313,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   remPillActive: {
     borderColor: theme.colors.accentInfo,
@@ -2356,6 +2368,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   boardChipActive: {
     borderColor: theme.colors.accentInfo,
@@ -2415,6 +2428,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
+    ...depth(theme, 'control'),
   },
   chipText: {
     fontSize: 14,
@@ -2444,6 +2458,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     padding: 3,
     backgroundColor: theme.colors.surfaceElevated,
     justifyContent: 'center',
+    ...depth(theme, 'control'),
   },
   switchOn: {
     backgroundColor: theme.colors.accentInfo || '#4ADE80',
@@ -2523,6 +2538,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderRadius: 10,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   datePickerText: {
     flex: 1,
