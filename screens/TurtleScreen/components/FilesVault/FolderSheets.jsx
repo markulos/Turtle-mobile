@@ -73,7 +73,7 @@ export function FolderPickerSheet({ title = 'Move to', exclude = [], allowUnfile
       theme={theme}
       bottomInset={bottomInset}
       topBar={here ? (
-        <Pressable onPress={() => { tapHaptic(); setParent(crumbs.length > 1 ? crumbs[crumbs.length - 2].id : 'root'); }} accessibilityRole="button" accessibilityLabel={`Back to ${upLabel}`} style={styles.backRow} hitSlop={8}>
+        <Pressable onPressIn={() => tapHaptic()} onPress={() => setParent(crumbs.length > 1 ? crumbs[crumbs.length - 2].id : 'root')} accessibilityRole="button" accessibilityLabel={`Back to ${upLabel}`} style={({ pressed }) => [styles.backRow, { opacity: pressed ? 0.6 : 1 }]} hitSlop={8}>
           <Icon name="chevron-left" size={22} color={c.primary} />
           <Text style={[styles.backText, { color: c.primary }]} numberOfLines={1}>{upLabel}</Text>
         </Pressable>
@@ -82,7 +82,7 @@ export function FolderPickerSheet({ title = 'Move to', exclude = [], allowUnfile
     >
       <View style={styles.grid}>
         {!here && allowUnfiled && (
-          <Pressable onPress={() => { tapHaptic(); onPick({ id: 'unfiled', name: 'Unfiled' }); }} accessibilityRole="button" accessibilityLabel="Choose Unfiled" style={({ pressed }) => [styles.unfiled, { opacity: pressed ? 0.6 : 1 }]}>
+          <Pressable onPressIn={() => tapHaptic()} onPress={() => onPick({ id: 'unfiled', name: 'Unfiled' })} accessibilityRole="button" accessibilityLabel="Choose Unfiled" style={({ pressed }) => [styles.unfiled, { opacity: pressed ? 0.6 : 1 }]}>
             <View style={[styles.unfiledDisc, { backgroundColor: c.surface, borderColor: c.border }]}><Icon name="file-outline" size={26} color={c.textSecondary} /></View>
             <Text style={[styles.discName, { color: c.textPrimary }]} numberOfLines={1}>Unfiled</Text>
             <Text style={[styles.discCount, { color: c.textMuted }]} numberOfLines={1}>{data?.unfiled?.count ?? ''}</Text>
@@ -92,7 +92,7 @@ export function FolderPickerSheet({ title = 'Move to', exclude = [], allowUnfile
           <FolderDisc key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={excluded.has(f.id) || !!f.pending} onPress={() => setParent(f.id)} testID={`pick-${f.id}`} />
         ))}
       </View>
-      {data && data.folders.length === 0 && here && <Text style={[styles.hint, { color: c.textMuted }]}>No folders inside. Move here files the selection in {here.name}.</Text>}
+      {data && data.folders.length === 0 && here && <Text style={[styles.hint, { color: c.textMuted }]}>No folders inside. "Move here" files the selection in {here.name}.</Text>}
     </ViewerSheet>
   );
 }
@@ -118,15 +118,15 @@ export function FilesSortSheet({ sort, order, query, onChange, onClose, theme, b
       <Text style={[styles.label, { color: c.textMuted }]}>SORT BY</Text>
       <View style={styles.chips}>
         {SORTS.map(([k, label]) => (
-          <Pressable key={k} onPress={() => { tapHaptic(); emit({ sort: k }); }} accessibilityRole="button" accessibilityLabel={`Sort by ${label.toLowerCase()}`} accessibilityState={{ selected: sort === k }} style={chip(sort === k)} hitSlop={4}>
+          <Pressable key={k} onPressIn={() => tapHaptic()} onPress={() => emit({ sort: k })} accessibilityRole="button" accessibilityLabel={`Sort by ${label.toLowerCase()}`} accessibilityState={{ selected: sort === k }} style={({ pressed }) => [...chip(sort === k), { opacity: pressed ? 0.6 : 1 }]} hitSlop={4}>
             <Text style={chipText(sort === k)} numberOfLines={1}>{label}</Text>
           </Pressable>
         ))}
       </View>
       <Text style={[styles.label, { color: c.textMuted }]}>ORDER</Text>
       <View style={styles.chips}>
-        <Pressable onPress={() => { tapHaptic(); emit({ order: 'desc' }); }} accessibilityRole="button" accessibilityLabel="Newest first" accessibilityState={{ selected: order === 'desc' }} style={chip(order === 'desc')} hitSlop={4}><Text style={chipText(order === 'desc')} numberOfLines={1}>{descLabel}</Text></Pressable>
-        <Pressable onPress={() => { tapHaptic(); emit({ order: 'asc' }); }} accessibilityRole="button" accessibilityLabel="Oldest first" accessibilityState={{ selected: order === 'asc' }} style={chip(order === 'asc')} hitSlop={4}><Text style={chipText(order === 'asc')} numberOfLines={1}>{ascLabel}</Text></Pressable>
+        <Pressable onPressIn={() => tapHaptic()} onPress={() => emit({ order: 'desc' })} accessibilityRole="button" accessibilityLabel="Newest first" accessibilityState={{ selected: order === 'desc' }} style={({ pressed }) => [...chip(order === 'desc'), { opacity: pressed ? 0.6 : 1 }]} hitSlop={4}><Text style={chipText(order === 'desc')} numberOfLines={1}>{descLabel}</Text></Pressable>
+        <Pressable onPressIn={() => tapHaptic()} onPress={() => emit({ order: 'asc' })} accessibilityRole="button" accessibilityLabel="Oldest first" accessibilityState={{ selected: order === 'asc' }} style={({ pressed }) => [...chip(order === 'asc'), { opacity: pressed ? 0.6 : 1 }]} hitSlop={4}><Text style={chipText(order === 'asc')} numberOfLines={1}>{ascLabel}</Text></Pressable>
       </View>
     </ViewerSheet>
   );
@@ -136,9 +136,9 @@ export function FolderActionsSheet({ folder, onRename, onMove, onDelete, onClose
   const c = theme.colors;
   const danger = c.accentError || '#e5484d';
   const row = (icon, label, onPress, isDanger) => (
-    <Pressable onPress={() => { impactHaptic('light'); onPress(); }} accessibilityRole="button" accessibilityLabel={label} style={({ pressed }) => [styles.action, { borderBottomColor: c.border, opacity: pressed ? 0.6 : 1 }]}>
+    <Pressable onPressIn={() => impactHaptic('light')} onPress={onPress} accessibilityRole="button" accessibilityLabel={label} style={({ pressed }) => [styles.action, { borderBottomColor: c.border, opacity: pressed ? 0.6 : 1 }]}>
       <Icon name={icon} size={22} color={isDanger ? danger : c.textPrimary} />
-      <Text style={[styles.actionText, { color: isDanger ? danger : c.textPrimary }]}>{label}</Text>
+      <Text style={[styles.actionText, { color: isDanger ? danger : c.textPrimary }]} numberOfLines={1}>{label}</Text>
     </Pressable>
   );
   return (
