@@ -104,6 +104,7 @@ import Reanimated, {
 import TimelineScrubber from './TimelineScrubber';
 import { dockOccupied } from '../../../components/tabBarLayout';
 import MusicVault from './MusicVault';
+import FilesVault from './FilesVault/FilesVault';
 import EdgeSwipePage from './EdgeSwipePage';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
 import { useMediaVersion } from '../../../context/DownloadsContext';
@@ -142,6 +143,9 @@ const HIT_SLOP_10 = { top: 10, bottom: 10, left: 10, right: 10 };
 // content of whichever page is showing. Both pager pages use it so they start on
 // the same line; PhotoVaultBoardsPage applies the same value internally.
 const VAULT_PICKER_GAP = 14;
+// The vault pager's pages, left → right. Photos is a pushed page, not a tab.
+const VAULT_TABS = ['albums', 'music', 'files'];
+const VAULT_TAB_LABELS = { albums: 'Boards', music: 'Music', files: 'Files' };
 const HIT_SLOP_15 = { top: 15, bottom: 15, left: 15, right: 15 };
 const HIT_SLOP_20 = { top: 20, bottom: 20, left: 20, right: 20 };
 // Biggest video we'll speculatively pull to disk so its share sheet is instant.
@@ -1480,6 +1484,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // `viewerSourceItems` (defined below) now matching the grid's rendered set,
   // this should essentially never trigger for a normal tap — it's a safety net.
   const [viewerSoloItem, setViewerSoloItem] = useState(null);
+  // Files tab: when set, the viewer walks THIS list instead of the grid's
+  // (a folder's media, opened from FilesVault) — takes precedence below.
+  const [viewerListOverride, setViewerListOverride] = useState(null);
   // Where the viewer pops from (the tapped cell's point, window coords) and
   // which index of the viewer list it opens on. Written together with
   // selectedMedia in openViewer; PhotoViewer reads them when `visible` flips.
@@ -1622,8 +1629,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const viewerSourceItemsRef = useRef(viewerSourceItems);
   viewerSourceItemsRef.current = viewerSourceItems;
   const viewerItems = useMemo(
-    () => (viewerSoloItem ? [viewerSoloItem] : viewerSourceItems),
-    [viewerSourceItems, viewerSoloItem],
+    () => (viewerListOverride ? viewerListOverride : viewerSoloItem ? [viewerSoloItem] : viewerSourceItems),
+    [viewerSourceItems, viewerSoloItem, viewerListOverride],
   );
 
   // ── Timeline scrubber wiring ─────────────────────────────────────────────
@@ -2364,6 +2371,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
   }, []);
 
+  // Files tab: open the viewer over a FOLDER's media (not the grid's list).
+  const openViewerFromList = useCallback((items, item) => {
+    const list = (items || []).filter((it) => it && it.type !== 'document');
+    const index = Math.max(0, list.findIndex((it) => it.id === item.id));
+    setViewerListOverride(list.length ? list : [item]);
+    setViewerSoloItem(null);
+    setViewerInitialIndex(index);
+    setViewerOrigin(null);
+    setSelectedMedia(item);
+  }, []);
+
   // Mounted grid cells register their native view here (GridItem effect), so
   // the viewer can measure where the photo it is closing on sits in the grid
   // and fly back into it — iOS Photos' shared-element close. A cell recycled
@@ -2392,16 +2410,28 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // it. openViewer indexes into the loaded set and falls back to a solo page
   // when the photo is not loaded here, so any hit opens.
   const { pending: pendingTarget, clear: clearTarget } = useOpenTarget();
+  const [filesTarget, setFilesTarget] = useState(null);
   useEffect(() => {
-    if (!pendingTarget || pendingTarget.kind !== 'media' || !pendingTarget.item) return;
-    const item = pendingTarget.item;
-    clearTarget();
-    openViewer(item, null);
+    if (!pendingTarget) return;
+    if (pendingTarget.kind === 'media' && pendingTarget.item) {
+      const item = pendingTarget.item;
+      clearTarget();
+      openViewer(item, null);
+      return;
+    }
+    if (pendingTarget.kind === 'folder' || pendingTarget.kind === 'document') {
+      const t = pendingTarget;
+      clearTarget();
+      setPhotosOpen(false);
+      handleTabPress('files');
+      setFilesTarget(t);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingTarget]);
 
   const handleViewerClosed = useCallback(() => {
     gestureProbe.respond('viewer:close');
+    setViewerListOverride(null);
     setSelectedMedia(null);
     setViewerSoloItem(null);
     setViewerOrigin(null);
@@ -2561,6 +2591,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
   }, [selectedAlbum]);
 
+  // Files tab: "Upload here" — the normal picker, the batch filed into a folder.
+  const pickForFolder = useCallback((folderId) => {
+    uploadFolderIdRef.current = folderId || null;
+    handleUpload();
+  }, [handleUpload]);
+
   // === SMART SYNC FUNCTIONS ===
   const fetchLocalMedia = useCallback(async (loadMore = false) => {
     if (isLoadingLocal || (!localHasNextPage && loadMore)) return;
@@ -2653,6 +2689,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // the next launch), duplicates are fingerprint-checked and skipped before
   // any bytes move, and the finish stats + delete-originals offer (uploaded +
   // duplicates) surface in the pill.
+  const uploadFolderIdRef = useRef(null);
   const executeUpload = useCallback(() => {
     if (pendingAssets.length === 0) return;
 
@@ -2669,7 +2706,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         height: asset.height || null,
       })),
       tags,
+      folderId: uploadFolderIdRef.current,
     });
+    uploadFolderIdRef.current = null;
     if (!started) {
       Alert.alert('Upload in progress', 'Another vault upload is still running — let it finish (or dismiss it from the pill) first.');
       return;
@@ -2872,6 +2911,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   bulkCommonTagsRef.current = bulkCommonTags;
   const bulkIdsRef = useRef([]);
   const bulkDirtyRef = useRef(false);
+  // Files tab: items handed in from outside the grid (a folder's selection),
+  // keyed by id so changeBulkTags can read/patch them without the grid's map.
+  const externalBulkItemsRef = useRef(new Map());
 
   const openBulkTags = useCallback(() => {
     const ids = Array.from(selectedGridItemsRef.current || []);
@@ -2890,6 +2932,22 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     setBulkTagsOpen(true);
   }, [displayById]);
 
+  // Files tab: the same sheet for a selection that lives outside the grid.
+  const openBulkTagsFor = useCallback((items) => {
+    const list = (items || []).filter(Boolean);
+    if (list.length === 0) return;
+    let common = null;
+    for (const it of list) {
+      const t = tagsOf(it);
+      common = common === null ? [...t] : common.filter((x) => t.includes(x));
+    }
+    externalBulkItemsRef.current = new Map(list.map((it) => [it.id, it]));
+    bulkIdsRef.current = list.map((it) => it.id);
+    bulkDirtyRef.current = false;
+    setBulkCommonTags(common || []);
+    setBulkTagsOpen(true);
+  }, []);
+
   const changeBulkTags = useCallback((next) => {
     const prev = bulkCommonTagsRef.current;
     const add = next.filter((t) => !prev.includes(t));
@@ -2898,7 +2956,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     setBulkCommonTags(next);
     bulkDirtyRef.current = true;
     const ids = bulkIdsRef.current;
-    const byId = displayById();
+    const grid = displayById();
+    const byId = externalBulkItemsRef.current.size
+      ? { get: (id) => externalBulkItemsRef.current.get(id) || grid.get(id) }
+      : grid;
     const tagsById = {};
     const snapshot = {};
     for (const id of ids) {
@@ -2935,6 +2996,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
 
   const closeBulkTags = useCallback(() => {
     setBulkTagsOpen(false);
+    externalBulkItemsRef.current = new Map();
     // Tags were changed → the job is done, leave select mode (as Save did).
     // Nothing changed → the selection stays for the next action.
     if (bulkDirtyRef.current) {
@@ -3508,10 +3570,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   );
 
   // === NATIVE 1:1 SWIPE PAGINATION & UNDERLINE INDICATOR ===
-  const tabWidth = (width - 32) / 2;
+  const tabWidth = (width - 32) / VAULT_TABS.length;
   const pagesScrollRef = useRef(null);
   const pageScrollX = useRef(new Animated.Value(0)).current;
-  const TABS = useMemo(() => ['albums', 'music'], []);
+  const TABS = VAULT_TABS;
 
   // Push / pop the photos page. Opening sets the board first so the grid's
   // fetches start against the right filter on its first render.
@@ -3557,11 +3619,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // widest label, moved by translateX, keeps both the native driver and the caps.
   const tabUnderlineWidth = Math.max(...TABS.map(labelWidthFor));
   const tabUnderlineX = pageScrollX.interpolate({
-    inputRange: [0, width],
-    outputRange: [
-      tabWidth * 0.5 - tabUnderlineWidth / 2,          // centred under tab 0
-      tabWidth * 1.5 - tabUnderlineWidth / 2,          // centred under tab 1
-    ],
+    inputRange: TABS.map((_, i) => i * width),
+    outputRange: TABS.map((_, i) => tabWidth * (i + 0.5) - tabUnderlineWidth / 2), // centred under each tab
     extrapolate: 'clamp',
   });
 
@@ -4199,6 +4258,22 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             />
           </View>
 
+          {/* PAGE 3: FILES — the folder tree with documents (and any media).
+              Same contract as MusicVault: clears the measured vault header. */}
+          <View style={{ width, height: '100%' }}>
+            <FilesVault
+              topInset={(vaultHeaderH || insets.top + 90) + VAULT_PICKER_GAP}
+              bottomInset={tabBarH}
+              onOpenMedia={openViewerFromList}
+              onBulkTag={openBulkTagsFor}
+              onUploadHere={pickForFolder}
+              getFullUrl={getFullUrl}
+              base={(getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '')}
+              target={filesTarget}
+              onTargetConsumed={() => setFilesTarget(null)}
+            />
+          </View>
+
         </Animated.ScrollView>
 
         {/* Boards A-Z rail. The photo timeline's rail lives on the photos page
@@ -4793,7 +4868,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             const activeOp = pageScrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
             const inactiveOp = pageScrollX.interpolate({ inputRange, outputRange: [1, 0, 1], extrapolate: 'clamp' });
             
-            const label = tab === 'albums' ? 'Boards' : 'Music';
+            const label = VAULT_TAB_LABELS[tab] || tab;
 
             return (
               <TouchableOpacity
