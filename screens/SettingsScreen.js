@@ -4,7 +4,6 @@ import CalendarPartners from './TasksScreen/components/CalendarPartners';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   Alert,
@@ -16,6 +15,8 @@ import {
   Animated,
   useWindowDimensions,
 } from 'react-native';
+import { depth } from '../utils/surfaceDepth';
+import AppTextInput from '../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -23,9 +24,11 @@ import { KeyboardSafeScreen } from '../components/KeyboardSafeView';
 import SidecarStatusCard from '../components/SidecarStatusCard';
 import ServerStatsPanel from '../components/ServerStatsPanel';
 import UpdatesPanel from '../components/UpdatesPanel';
+import { resolveAvatarUrl } from '../utils/avatarUrl';
 import SmsDebugPanel from '../components/SmsDebugPanel';
 import ErrorBoundary from '../components/ErrorBoundary';
 import PerfFindingsPanel from '../components/PerfFindingsPanel';
+import ShareUploadLimitCard from '../components/ShareUploadLimitCard';
 import TranscriptionPanel from '../components/TranscriptionPanel';
 import { useServer } from '../context/ServerContext';
 import { useTheme, ACCENTS } from '../context/ThemeContext';
@@ -36,6 +39,7 @@ import { tapHaptic, impactHaptic, notifyHaptic } from '../utils/haptics';
 import { isGestureProbeEnabled, setGestureProbeEnabled, subscribeDebugSettings } from '../utils/debugSettings';
 import { matchesQuery } from '../utils/settingsSearch';
 import { useVaultUploadActions } from '../context/VaultUploadContext';
+import { useOfflineMedia } from '../context/OfflineMediaContext';
 import { getAutoUploadSettings, setAutoUploadEnabled, runAutoUpload } from '../services/cameraRollAutoUpload';
 import PondInvitesSection from '../components/PondInvitesSection';
 
@@ -66,6 +70,8 @@ const SETTING_TERMS = {
   hideVault: 'hide vault button navbar tab bar navigation photos',
   autoUpload: 'auto upload camera roll new photos videos background sync vault automatic icloud',
   cache: 'cache size storage space photos clear free disk measure',
+  offline: 'offline saved photos kept downloaded plane no signal remove free space',
+  shareUploads: 'share link upload limit size drive host visitors drop box unlimited megabytes guests',
   notifications: 'notifications push alerts reminders test sms text badge sound',
   gestureProbe: 'gesture probe debug developer performance lag jank stalls diagnostics',
   timeFormat: '24 hour time format clock twelve twenty four am pm military',
@@ -208,6 +214,9 @@ export default function SettingsScreen({ active = true }) {
   // null = not yet measured / measuring; number = bytes currently cached.
   const [cacheBytes, setCacheBytes] = useState(null);
   const [measuringCache, setMeasuringCache] = useState(false);
+  // Saved-offline pictures: already measured by the provider (it holds the
+  // index), so unlike the cache there's nothing to walk here.
+  const { bytes: offlineBytes, count: offlineCount, clearAll: clearOffline } = useOfflineMedia();
   const [activeTab, setActiveTab] = useState('general');
   // ── Settings search ─────────────────────────────────────────
   // Filters in place rather than offering a jump list: the point is to see the
@@ -290,9 +299,7 @@ export default function SettingsScreen({ active = true }) {
   const serverBase = getBaseUrl().replace(/\/api$/, '');
   // A server-relative avatar ('/api/avatars/…') needs the origin prepended; an
   // optimistic local pick ('file://', 'ph://', http(s)) is already absolute.
-  const avatarFullUrl = profile?.avatarUrl
-    ? (profile.avatarUrl.startsWith('/') ? `${serverBase}${profile.avatarUrl}` : profile.avatarUrl)
-    : null;
+  const avatarFullUrl = resolveAvatarUrl(profile?.avatarUrl, serverBase);
 
   const loadProfile = useCallback(async () => {
     try {
@@ -628,6 +635,20 @@ export default function SettingsScreen({ active = true }) {
     }
   }, [activeTab, cacheBytes, measuringCache, measureCache]);
 
+  // Saved-offline pictures. Confirmed, because unlike the cache these cannot
+  // come back on their own — the phone may well be the only place they are
+  // reachable from right now.
+  const handleClearOffline = useCallback(() => {
+    Alert.alert(
+      'Remove offline pictures',
+      `${offlineCount === 1 ? 'This picture' : `All ${offlineCount} pictures`} will be removed from this phone. They stay in your pond and can be saved again.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: () => { clearOffline(); } },
+      ],
+    );
+  }, [offlineCount, clearOffline]);
+
   const handleClearCache = useCallback(async () => {
     if (isClearingCache) return;
     setIsClearingCache(true);
@@ -738,7 +759,7 @@ export default function SettingsScreen({ active = true }) {
           the segmented control hides, since tabs mean nothing in a result set. */}
       <View style={styles.searchWrap}>
         <Icon name="magnify" size={18} color={theme.colors.textTertiary} style={styles.searchIcon} />
-        <TextInput
+        <AppTextInput
           style={styles.searchInput}
           placeholder="Search settings"
           placeholderTextColor={theme.colors.textPlaceholder}
@@ -862,7 +883,7 @@ export default function SettingsScreen({ active = true }) {
                   <Text style={styles.label}>Display Name</Text>
                   <View style={styles.inputContainer}>
                     <Icon name="account-outline" size={18} color={theme.colors.textTertiary} style={styles.inputIcon} />
-                    <TextInput
+                    <AppTextInput
                       style={styles.input}
                       placeholder="Your name or alias"
                       placeholderTextColor={theme.colors.textPlaceholder}
@@ -1069,6 +1090,50 @@ export default function SettingsScreen({ active = true }) {
                 </Text>
               </TouchableOpacity>
               </SettingsItem>
+
+              {/* Saved-offline pictures are the deliberate opposite of the
+                  cache above: nothing trims them, so this is the only place
+                  their weight is visible and the only way to get it back. */}
+              <SettingsItem terms={SETTING_TERMS.offline}>
+              <Text style={styles.hint}>
+                Pictures you saved for offline stay on this phone until you remove them — the cache
+                sweep above never touches them. Save one from the photo viewer's cloud button.
+              </Text>
+
+              <View style={styles.cacheSizeRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Saved for offline</Text>
+                  <Text style={styles.settingDescription}>
+                    {offlineCount === 1 ? '1 picture' : `${offlineCount} pictures`}
+                  </Text>
+                </View>
+                <Text style={styles.cacheSizeValue}>{formatBytes(offlineBytes)}</Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.secondaryButton, { marginBottom: 0 }, !offlineCount && styles.buttonDisabled]}
+                onPressIn={() => notifyHaptic('warning')}
+                onPress={handleClearOffline}
+                disabled={!offlineCount}
+                activeOpacity={0.7}
+              >
+                <Icon name="cloud-off-outline" size={16} color={theme.colors.textPrimary} style={styles.buttonIcon} />
+                <Text style={styles.secondaryButtonText}>Remove offline pictures</Text>
+              </TouchableOpacity>
+              </SettingsItem>
+            </SettingsSection>
+            )}
+
+            {/* Shared links — the pond acting as a drive for people with no
+                account here. The one thing an owner actually wants to change
+                about that is how much a stranger may push into it. */}
+            {(searching || tabKey === 'general') && (
+            <SettingsSection title="Shared links" icon="link-variant" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.shareUploads}>
+                <ErrorBoundary label="Share uploads">
+                  <ShareUploadLimitCard styles={styles} />
+                </ErrorBoundary>
+              </SettingsItem>
             </SettingsSection>
             )}
 
@@ -1228,7 +1293,7 @@ export default function SettingsScreen({ active = true }) {
               <Text style={styles.label}>Computer IP Address</Text>
               <View style={styles.inputContainer}>
                 <Icon name="ip-network" size={18} color={theme.colors.textTertiary} style={styles.inputIcon} />
-                <TextInput
+                <AppTextInput
                   style={styles.input}
                   placeholder="192.168.1.100"
                   placeholderTextColor={theme.colors.textPlaceholder}
@@ -1400,7 +1465,7 @@ export default function SettingsScreen({ active = true }) {
 
                 {false && (
                   <View style={styles.changePasswordForm}>
-                    <TextInput
+                    <AppTextInput
                       style={styles.passwordInput}
                       placeholder="Current Master Password"
                       placeholderTextColor={theme.colors.textPlaceholder}
@@ -1410,7 +1475,7 @@ export default function SettingsScreen({ active = true }) {
                       returnKeyType="next"
                       blurOnSubmit={false}
                     />
-                    <TextInput
+                    <AppTextInput
                       style={styles.passwordInput}
                       placeholder="New Master Password (min 8 chars)"
                       placeholderTextColor={theme.colors.textPlaceholder}
@@ -1420,7 +1485,7 @@ export default function SettingsScreen({ active = true }) {
                       returnKeyType="next"
                       blurOnSubmit={false}
                     />
-                    <TextInput
+                    <AppTextInput
                       style={styles.passwordInput}
                       placeholder="Confirm New Password"
                       placeholderTextColor={theme.colors.textPlaceholder}
@@ -1664,6 +1729,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 16,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'card'),
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -1822,6 +1888,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 10,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   primaryButtonText: {
     color: theme.colors.textPrimary,
@@ -1890,6 +1957,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginVertical: 12,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    ...depth(theme, 'card'),
   },
   passwordInput: {
     backgroundColor: theme.colors.inputBackground,
@@ -1909,6 +1977,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginTop: 8,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    ...depth(theme, 'card'),
   },
   infoIcon: {
     marginRight: 12,
@@ -1988,6 +2057,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     gap: 2,
+    ...depth(theme, 'card'),
   },
   profileStatValue: {
     fontSize: 16,

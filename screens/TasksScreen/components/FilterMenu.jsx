@@ -8,6 +8,7 @@ import {
   StyleSheet,
   ScrollView,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { useSheetDismiss } from '../../../utils/useSheetDismiss';
@@ -296,6 +297,7 @@ const createStyles = (theme) => StyleSheet.create({
     margin: 4,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   tagChipActive: { 
     backgroundColor: theme.colors.surfaceHighlight, 
@@ -329,6 +331,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginTop: 10,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'card'),
   },
   clearAllText: { 
     color: theme.colors.accentError, 

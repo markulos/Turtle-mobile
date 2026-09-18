@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   Platform,
   StyleSheet,
@@ -14,6 +13,8 @@ import {
   Easing,
   LayoutAnimation,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import AppTextInput from '../../../components/AppTextInput';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -34,6 +35,45 @@ import {
   OCCASION_COLORS,
   REMINDER_OPTIONS,
 } from '../utils/constants';
+
+// ── What an item can be given, beyond the writing surface ───────────────────
+// The catalogue behind the + key. One row per optional field: what to call it,
+// which item types can take it, and — the important one — how to tell whether
+// it is already carrying something.
+//
+// `hasValue` is what lets an existing item open showing everything it has
+// without any hydration step seeding state: a field with something in it is on
+// the page by definition. Get one of these wrong and the symptom is a saved
+// value that doesn't appear when you re-open the item, so they are deliberately
+// dull and direct rather than clever.
+const OPTIONS = [
+  { key: 'linkedNote', label: 'Linked note', icon: 'link-variant', types: ['task'] },
+  { key: 'tags', label: 'Tags', icon: 'tag-outline', types: ['task', 'event', 'birthday'] },
+  { key: 'colour', label: 'Colour', icon: 'palette-outline', types: ['event', 'birthday'] },
+  { key: 'endTime', label: 'End time', icon: 'clock-end', types: ['task', 'event'] },
+  { key: 'repeat', label: 'Repeat', icon: 'repeat', types: ['task', 'event', 'birthday'] },
+  { key: 'reminders', label: 'Reminders', icon: 'bell-outline', types: ['task', 'event', 'birthday'] },
+  { key: 'scheduling', label: 'Scheduling', icon: 'calendar-clock', types: ['task'] },
+  { key: 'people', label: 'People', icon: 'account-multiple-outline', types: ['task', 'event'] },
+  { key: 'guests', label: 'Guests', icon: 'account-plus-outline', types: ['event'] },
+];
+
+const OPTION_HAS_VALUE = {
+  linkedNote: (f) => !!f.linkedNote,
+  tags: (f) => (Array.isArray(f.tags) ? f.tags.length > 0 : !!f.tags),
+  colour: (f) => !!f.color,
+  endTime: (f) => !!f.duration,
+  // Two shapes behind one option: tasks/events repeat via `recurring`,
+  // birthdays via the `yearly` flag.
+  repeat: (f) => (!!f.recurring && f.recurring !== 'none') || !!f.yearly,
+  // Likewise two reminder models — lead times before a due date, and the
+  // birthday block's all-day presets.
+  reminders: (f) => ((f.taskReminders && f.taskReminders.leads) || []).length > 0
+    || (f.reminders || []).length > 0,
+  scheduling: (f) => !!f.isAppointment,
+  people: (f) => (f.involvedUsers || []).length > 0,
+  guests: (f) => (f.guests || []).length > 0,
+};
 
 // Per-type wording so the same modal reads naturally whether you're creating a
 // task, an event, or a birthday.
@@ -147,6 +187,13 @@ export const TaskForm = ({
   // Ignored when editing or for non-task types (events/birthdays have no board).
   // Still shown/editable via the Board chip — this only seeds the initial value.
   initialProject = null,
+  // Work already done elsewhere, continued here. The calendar day panel's
+  // finder hands over the title typed into it and the time chip when the user
+  // presses "Full form" — the full form is the SAME task with more fields, so
+  // retyping the title would be the one thing it must not ask for. Both are
+  // ignored when editing (the item's own values win).
+  initialTitle = '',
+  initialTime = '',
   // True when this form is mounted somewhere that can only persist a plain
   // task (e.g. a board conversation composer, which saves via a task-only
   // endpoint that doesn't store item_type/meta — see BoardTimeline). Hides
@@ -212,10 +259,16 @@ export const TaskForm = ({
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showEndTimePicker, setShowEndTimePicker] = useState(false);
-  // Progressive disclosure: a NEW item shows only the essentials (title,
-  // board, date, time) until "More options" is tapped; EDITING opens expanded
-  // so no existing value ever looks lost.
-  const [showMore, setShowMore] = useState(false);
+  // Which optional fields are on the page. The form used to be one long scroll
+  // of every field an item COULD have, behind a "More options" fold — sixteen
+  // empty inputs staring at you to fill a task called "buy milk".
+  //
+  // Now an option is something you ADD. Nothing optional is on screen until you
+  // either add it from the + sheet or it already carries a value, so editing an
+  // existing item still shows everything it has (see `shows`) and creating one
+  // shows only what you asked for. This set is just the manual additions.
+  const [revealed, setRevealed] = useState(() => new Set());
+  const [addSheetOpen, setAddSheetOpen] = useState(false);
 
   // Keyboard: the fields ScrollView keeps its size and iOS adjusts its inset
   // natively (automaticallyAdjustKeyboardInsets — the OS scrolls the focused
@@ -287,9 +340,18 @@ export const TaskForm = ({
     return () => { cancelled = true; };
   }, [api]);
 
-  const toggleShowMore = () => {
+  // An option is on the page if it was added OR it already has something in it.
+  // Deriving the second half rather than seeding `revealed` on open means an
+  // item edited, cleared and re-opened doesn't keep showing a field it no
+  // longer has — and nothing has to stay in sync with hydration.
+  const shows = useCallback(
+    (key) => revealed.has(key) || OPTION_HAS_VALUE[key]?.(formData) === true,
+    [revealed, formData],
+  );
+  const addOption = (key) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setShowMore(prev => !prev);
+    setRevealed(prev => new Set(prev).add(key));
+    setAddSheetOpen(false);
   };
 
   const titleInputRef = useRef(null);
@@ -307,6 +369,12 @@ export const TaskForm = ({
   const isEvent = itemType === 'event';
   const isBirthday = itemType === 'birthday';
   const copy = TYPE_COPY[itemType] || TYPE_COPY.task;
+  // Options this item type can take that aren't already on the page — what the
+  // + sheet offers. Empty means everything is showing, and the + key hides.
+  const addableOptions = useMemo(
+    () => OPTIONS.filter(o => o.types.includes(itemType) && !shows(o.key)),
+    [itemType, shows],
+  );
   // "At time" reminder (lead 0) — read by both the essentials' collapsed
   // quick toggle and to keep it visually in sync with the expanded preset.
   const remindAtTime = ((formData.taskReminders && formData.taskReminders.leads) || []).includes(0);
@@ -361,6 +429,8 @@ export const TaskForm = ({
         const newType = initialType || 'task';
         setFormData({
           ...blankForm(newType),
+          title: initialTitle || '',
+          time: initialTime || '',
           dueDate: initialDate || '',
           project: newType === 'task' ? (initialProject || '') : '',
           involvedUsers: newType === 'task' ? partnerIdsRef.current : [],
@@ -371,12 +441,16 @@ export const TaskForm = ({
       setShowSuggestions(false);
       setNoteSearchOpen(false);
       setNoteQuery('');
-      setShowMore(!!initialData);
+      // Manual additions don't survive a re-open; anything the item actually
+      // carries comes back on its own through `shows`, so editing still lands
+      // on a page showing everything that's set.
+      setRevealed(new Set());
+      setAddSheetOpen(false);
       setBoardListOpen(false);
       setNewBoardOpen(false);
       savingRef.current = false;
     }
-  }, [visible, initialData, initialType, initialDate, initialProject]);
+  }, [visible, initialData, initialType, initialDate, initialProject, initialTitle, initialTime]);
 
   // Cold-start seed: if the partner list resolves AFTER a fresh new-task form
   // is already open, fill the still-empty, untouched involved set with the
@@ -798,7 +872,7 @@ export const TaskForm = ({
                 reads as the headline of the sheet (iOS Reminders / Things
                 pattern) and every secondary field below stays quiet by
                 contrast. */}
-            <TextInput
+            <AppTextInput
               ref={titleInputRef}
               style={styles.titleInput}
               placeholder={copy.titlePlaceholder}
@@ -807,6 +881,28 @@ export const TaskForm = ({
               onChangeText={text => updateField('title', text)}
               returnKeyType="done"
             />
+
+            {/* The body, right under the headline — paper, the way the note
+                composer treats it. It used to sit inside the "More options"
+                fold as a boxed three-line FormField, which meant the one part
+                of a task you actually WRITE was the one part you had to go
+                looking for. Borderless and unlabelled so the title and the body
+                read as one surface, and it grows with what you type rather than
+                scrolling a fixed window. */}
+            {!isBirthday && (
+              <AppTextInput
+                ref={descInputRef}
+                style={styles.bodyInput}
+                placeholder={isEvent ? 'Event details, location, notes…' : 'Notes, links, anything…'}
+                placeholderTextColor={theme.colors.textPlaceholder}
+                value={formData.description}
+                onChangeText={text => updateField('description', text)}
+                multiline
+                scrollEnabled={false}
+                textAlignVertical="top"
+                accessibilityLabel="Description"
+              />
+            )}
 
             {/* Essentials — one-tap chips for the most common fields. Date +
                 Time always show (Time hidden for birthdays, which are
@@ -908,7 +1004,7 @@ export const TaskForm = ({
             )}
             {isTask && newBoardOpen && (
               <View style={[styles.projectRow, { marginTop: 8 }]}>
-                <TextInput
+                <AppTextInput
                   style={[styles.input, styles.projectInput]}
                   placeholder="New board name..."
                   placeholderTextColor={theme.colors.textPlaceholder}
@@ -992,56 +1088,40 @@ export const TaskForm = ({
                 copy inside the fold takes over (this hides to avoid a dupe).
                 Solo ponds (no partners → empty set) never see it here, so the
                 quick-add card stays minimal. */}
-            {isTask && !showMore && (formData.involvedUsers?.length > 0) && (
-              <FormField label="People involved">
-                <ParticipantPicker
-                  selected={formData.involvedUsers || []}
-                  onChange={(ids) => { involvedTouched.current = true; updateField('involvedUsers', ids); }}
-                />
-              </FormField>
+            {/* ── Add an option ────────────────────────────────────────────
+                What replaced "More options". That fold was all-or-nothing: one
+                tap put every field an item could ever have on screen at once,
+                which is the overwhelming part. This adds them one at a time,
+                and only offers what this item type can actually take and isn't
+                already showing. When there's nothing left to add it disappears
+                rather than opening an empty sheet. */}
+            {addableOptions.length > 0 && (
+              <TouchableOpacity
+                style={styles.addOptionKey}
+                onPressIn={() => tapHaptic()}
+                onPress={() => setAddSheetOpen(true)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Add an option to this item"
+                testID="task-form-add-option"
+              >
+                <Icon name="plus" size={16} color={theme.colors.accentInfo} />
+                <Text style={styles.addOptionText}>Add</Text>
+              </TouchableOpacity>
             )}
 
-            {/* ── More options — everything beyond the fast path, folded away
-                so a quick add is three taps. Expanded by default when EDITING
-                (nothing should look lost). */}
-            <TouchableOpacity
-              style={styles.moreToggle}
-              onPress={toggleShowMore}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityLabel={showMore ? 'Hide extra options' : 'Show more options'}
-            >
-              <Text style={styles.moreToggleText}>{showMore ? 'Fewer options' : 'More options'}</Text>
-              <Icon name={showMore ? 'chevron-up' : 'chevron-down'} size={18} color={theme.colors.accentInfo} />
-            </TouchableOpacity>
-
-            {showMore && (<>
+            {(<>
 
             {/* ── DETAILS — what the item is: description, linked note, tags,
                 and (for events/birthdays) its calendar colour. */}
             <GroupHeader theme={theme} label="Details" />
 
-            {/* Description — moved from the essentials fast path into the
-                expanded block (a pure relocation; same field + handler). */}
-            {!isBirthday && (
-              <FormField label="Description">
-                <TextInput
-                  ref={descInputRef}
-                  style={[styles.input, styles.descInput]}
-                  placeholder={isEvent ? 'Event details, location, notes...' : 'Add details...'}
-                  placeholderTextColor={theme.colors.textPlaceholder}
-                  value={formData.description}
-                  onChangeText={text => updateField('description', text)}
-                  multiline
-                  textAlignVertical="top"
-                />
-              </FormField>
-            )}
+            {/* (Description now lives with the title, above — see bodyInput.) */}
 
             {/* Linked note — search an existing note and attach it to the task.
                 Shows a "Linked to note" chip once one is picked. Moved from
                 the essentials fast path into the expanded block. */}
-            {isTask && (
+            {isTask && shows('linkedNote') && (
               <FormField label="Linked note">
                 {formData.linkedNote ? (
                   <View style={styles.linkedNoteChip}>
@@ -1070,7 +1150,7 @@ export const TaskForm = ({
                 ) : (
                   <View>
                     <View style={styles.tagRow}>
-                      <TextInput
+                      <AppTextInput
                         style={[styles.input, styles.tagInput]}
                         placeholder="Search notes..."
                         placeholderTextColor={theme.colors.textPlaceholder}
@@ -1121,10 +1201,10 @@ export const TaskForm = ({
             )}
 
             {/* Tags — tasks only. */}
-            {isTask && (
+            {isTask && shows('tags') && (
               <FormField label="Tags">
                 <View style={styles.tagRow}>
-                  <TextInput
+                  <AppTextInput
                     style={[styles.input, styles.tagInput]}
                     placeholder="Type to see suggestions..."
                     placeholderTextColor={theme.colors.textPlaceholder}
@@ -1208,7 +1288,7 @@ export const TaskForm = ({
 
             {/* Colour — events + birthdays. Sits with the DETAILS group as an
                 appearance choice. */}
-            {!isTask && (
+            {!isTask && shows('colour') && (
               <FormField label="Colour">
                 <View style={styles.colorRow}>
                   {OCCASION_COLORS.map(c => (
@@ -1238,7 +1318,7 @@ export const TaskForm = ({
             {/* End time — appears only once a start time exists (an end is
                 meaningless without one). Stored as `duration` (end − start in
                 minutes); the calendar reads that to size the block. */}
-            {!isBirthday && formData.time && (
+            {!isBirthday && formData.time && shows('endTime') && (
               <FormField label="End time (optional)">
                 <TouchableOpacity
                   style={styles.datePickerButton}
@@ -1268,7 +1348,7 @@ export const TaskForm = ({
             )}
 
             {/* Repeat — tasks only (birthdays use the yearly toggle below). */}
-            {isTask && (
+            {isTask && shows('repeat') && (
               <FormField label="Repeat">
                 <View style={styles.recurringRow}>
                   {RECURRING_OPTIONS.map(option => (
@@ -1300,7 +1380,7 @@ export const TaskForm = ({
             {/* Reminders — tasks + events. Lead times before due; push always,
                 SMS opt-in, to the owner and (optionally) involved parties.
                 Birthdays use their own all-day reminder block below. */}
-            {(isTask || isEvent) && (
+            {(isTask || isEvent) && shows('reminders') && (
               <FormField label="Reminders">
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                   {REMINDER_PRESETS.map((p) => {
@@ -1348,7 +1428,7 @@ export const TaskForm = ({
                 {/* Custom entry row: number + unit selector + Add. */}
                 {customReminderOpen && (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
-                    <TextInput
+                    <AppTextInput
                       value={customReminderValue}
                       onChangeText={(t) => setCustomReminderValue(t.replace(/[^0-9]/g, ''))}
                       keyboardType="number-pad"
@@ -1427,6 +1507,7 @@ export const TaskForm = ({
             {/* Yearly toggle + reminders — birthdays only. */}
             {isBirthday && (
               <>
+                {shows('repeat') && (
                 <FormField label="Repeat">
                   <TouchableOpacity
                     style={styles.appointmentToggle}
@@ -1445,7 +1526,9 @@ export const TaskForm = ({
                     />
                   </TouchableOpacity>
                 </FormField>
+                )}
 
+                {shows('reminders') && (
                 <FormField label="Reminders">
                   <View style={styles.reminderRow}>
                     {REMINDER_OPTIONS.map(opt => {
@@ -1470,11 +1553,12 @@ export const TaskForm = ({
                     })}
                   </View>
                 </FormField>
+                )}
               </>
             )}
 
             {/* Appointment option — tasks only, when a due date is set. */}
-            {formData.dueDate && isTask && (
+            {formData.dueDate && isTask && shows('scheduling') && (
               <FormField label="Scheduling">
                 <TouchableOpacity
                   style={styles.appointmentToggle}
@@ -1505,7 +1589,7 @@ export const TaskForm = ({
 
             {/* People involved — Tasks only. They see the task (view-only) and
                 get an assignment notification when newly added. */}
-            {isTask && (
+            {isTask && shows('people') && (
               <FormField label="People involved">
                 <ParticipantPicker
                   selected={formData.involvedUsers || []}
@@ -1515,10 +1599,10 @@ export const TaskForm = ({
             )}
 
             {/* Guests — events only. */}
-            {isEvent && (
+            {isEvent && shows('guests') && (
               <FormField label="Guests">
                 <View style={styles.tagRow}>
-                  <TextInput
+                  <AppTextInput
                     style={[styles.input, styles.tagInput]}
                     placeholder="Add a guest by name..."
                     placeholderTextColor={theme.colors.textPlaceholder}
@@ -1592,6 +1676,39 @@ export const TaskForm = ({
               selectedDate={formData.dueDate}
               theme={theme}
             />
+
+            {/* The + sheet. Deliberately a plain list of names, not a grid of
+                controls: the choice here is "what does this item need", and
+                the field itself does the asking once it's on the page. */}
+            {addSheetOpen && (
+              <View style={styles.addSheetScrim}>
+                <TouchableOpacity
+                  style={StyleSheet.absoluteFill}
+                  activeOpacity={1}
+                  onPress={() => setAddSheetOpen(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close"
+                />
+                <View style={styles.addSheet}>
+                  <Text style={styles.addSheetTitle}>Add to this {copy.label.toLowerCase()}</Text>
+                  {addableOptions.map((o) => (
+                    <TouchableOpacity
+                      key={o.key}
+                      style={styles.addSheetRow}
+                      onPressIn={() => tapHaptic()}
+                      onPress={() => addOption(o.key)}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Add ${o.label}`}
+                      testID={`task-form-add-${o.key}`}
+                    >
+                      <Icon name={o.icon} size={18} color={theme.colors.textSecondary} />
+                      <Text style={styles.addSheetRowText}>{o.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
 
             {/* Secondary actions at the END of the scroll. The primary Save is
                 now a pinned footer (below), always reachable — so only the quiet
@@ -1804,15 +1921,84 @@ const createStyles = (theme, insets) => StyleSheet.create({
   // than anything else so the task name is unmistakably the primary input, with
   // a hairline rule underneath so new users clearly read it as "type here".
   // Every secondary field sits quiet beneath it.
+  // The body, directly under the title and reading as the same sheet of paper:
+  // no border, no box, no label. The hairline that used to sit under the title
+  // is gone with it — a rule between a headline and its own body is a seam
+  // where there shouldn't be one.
+  bodyInput: {
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+    paddingHorizontal: 2,
+    paddingTop: 0,
+    paddingBottom: 4,
+    marginBottom: 14,
+    minHeight: 88,
+    fontSize: 16,
+    lineHeight: 23,
+    color: theme.colors.textPrimary,
+  },
+  // "Add" — a quiet ghost key, not a button. It offers; it doesn't ask.
+  addOptionKey: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 34,
+    paddingHorizontal: 12,
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  addOptionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: theme.colors.accentInfo,
+  },
+  addSheetScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+    zIndex: 40,
+  },
+  addSheet: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 8,
+    paddingTop: 14,
+    paddingBottom: 28,
+  },
+  addSheetTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
+    color: theme.colors.textSecondary,
+    paddingHorizontal: 14,
+    paddingBottom: 8,
+  },
+  addSheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+  },
+  addSheetRowText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: theme.colors.textPrimary,
+  },
   titleInput: {
     borderWidth: 0,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.colors.border,
     backgroundColor: 'transparent',
     paddingHorizontal: 2,
     paddingTop: 8,
-    paddingBottom: 12,
-    marginBottom: 14,
+    paddingBottom: 4,
+    marginBottom: 2,
     fontSize: 28,
     lineHeight: 34,
     fontWeight: '700',
@@ -1836,6 +2022,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderRadius: 10,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   hint: {
     fontSize: theme.typography.body,
@@ -1857,7 +2044,8 @@ const createStyles = (theme, insets) => StyleSheet.create({
     height: 40,
     borderRadius: 10,
     justifyContent: 'center',
-    alignItems: 'center'
+    alignItems: 'center',
+    ...depth(theme, 'control'),
   },
   suggestionsContainer: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -1867,6 +2055,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: 0.5,
     borderColor: theme.colors.border,
     maxHeight: 150,
+    ...depth(theme, 'raised'),
   },
   suggestionsLabel: {
     fontSize: theme.typography.body,
@@ -1901,6 +2090,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 15,
     marginRight: 8,
+    ...depth(theme, 'control'),
   },
   allTagText: {
     fontSize: theme.typography.body,
@@ -1920,6 +2110,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderRadius: 20,
     marginRight: 8,
     marginBottom: 8,
+    ...depth(theme, 'control'),
   },
   selectedTagText: {
     color: theme.colors.textPrimary,
@@ -1946,6 +2137,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderColor: theme.colors.border,
     borderStyle: 'dashed',
     backgroundColor: theme.colors.surface,
+    ...depth(theme, 'control'),
   },
   linkNoteBtnText: {
     fontSize: theme.typography.body,
@@ -1963,6 +2155,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   linkedNoteText: {
     flex: 1,
@@ -2009,6 +2202,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: 0.5,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
+    ...depth(theme, 'control'),
   },
   reminderChipActive: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -2036,6 +2230,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     marginHorizontal: 5,
     alignItems: 'center',
     backgroundColor: theme.colors.surface,
+    ...depth(theme, 'control'),
   },
   priorityText: {
     color: theme.colors.textTertiary,
@@ -2062,6 +2257,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     gap: 6,
+    ...depth(theme, 'control'),
   },
   recurringBtnActive: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -2117,6 +2313,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   remPillActive: {
     borderColor: theme.colors.accentInfo,
@@ -2171,6 +2368,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   boardChipActive: {
     borderColor: theme.colors.accentInfo,
@@ -2230,6 +2428,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
+    ...depth(theme, 'control'),
   },
   chipText: {
     fontSize: 14,
@@ -2259,6 +2458,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     padding: 3,
     backgroundColor: theme.colors.surfaceElevated,
     justifyContent: 'center',
+    ...depth(theme, 'control'),
   },
   switchOn: {
     backgroundColor: theme.colors.accentInfo || '#4ADE80',
@@ -2338,6 +2538,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderRadius: 10,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   datePickerText: {
     flex: 1,

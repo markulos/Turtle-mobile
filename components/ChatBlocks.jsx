@@ -35,10 +35,11 @@ import {
   ActivityIndicator,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { depth } from '../utils/surfaceDepth';
+import AppTextInput from './AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import {
@@ -376,7 +377,7 @@ export default function ChatBlocks({ blocks, theme, api, onAsk, onNavigate }) {
                       })}
                     </View>
                   ) : (
-                    <TextInput
+                    <AppTextInput
                       value={values[key] ?? ''}
                       onChangeText={(text) => setValues((prev) => ({ ...prev, [key]: text }))}
                       placeholder={field.placeholder || ''}
@@ -426,6 +427,7 @@ const makeStyles = (theme) => {
       borderColor: c.border,
       padding: 12,
       gap: 8,
+      ...depth(theme, 'card'),
     },
     cardTitle: {
       fontSize: 10.5,
@@ -451,6 +453,7 @@ const makeStyles = (theme) => {
       paddingVertical: 1,
       borderRadius: 4,
       backgroundColor: c.surfaceElevated,
+      ...depth(theme, 'control'),
     },
     badgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.3, color: c.textTertiary, textTransform: 'uppercase' },
 
@@ -467,6 +470,7 @@ const makeStyles = (theme) => {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: c.border,
       backgroundColor: c.surfaceElevated,
+      ...depth(theme, 'control'),
     },
     buttonMuted: { opacity: 0.55 },
     buttonText: { fontSize: 12.5, fontWeight: '700', color: c.textPrimary },
@@ -502,6 +506,7 @@ const makeStyles = (theme) => {
       fontSize: 13.5,
       color: c.textPrimary,
       backgroundColor: c.surfaceElevated,
+      ...depth(theme, 'control'),
     },
     inputMulti: { minHeight: 66, textAlignVertical: 'top' },
     options: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
@@ -512,6 +517,7 @@ const makeStyles = (theme) => {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: c.border,
       backgroundColor: c.surfaceElevated,
+      ...depth(theme, 'control'),
     },
     optionText: { fontSize: 12, fontWeight: '600', color: c.textSecondary },
   });

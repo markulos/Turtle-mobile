@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { notifyHaptic } from '../../../utils/haptics';
 
@@ -179,6 +180,7 @@ const createStyles = (theme, accentColor) =>
       padding: 14,
       minWidth: 200,
       maxWidth: 280,
+      ...depth(theme, 'card'),
     },
     header: {
       flexDirection: 'row',
@@ -209,6 +211,7 @@ const createStyles = (theme, accentColor) =>
       borderLeftWidth: 3,
       borderLeftColor: accentColor,
       gap: 8,
+      ...depth(theme, 'control'),
     },
     miniLabel: {
       fontSize: 11,

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl,
 } from 'react-native';
+import { depth } from '../../utils/surfaceDepth';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../context/ThemeContext';
@@ -634,6 +635,7 @@ const makeStyles = (theme) => {
       marginTop: 12,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: c.border,
+      ...depth(theme, 'card'),
     },
     cardHead: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
     cardIcon: {
@@ -648,6 +650,7 @@ const makeStyles = (theme) => {
       flex: 1, alignItems: 'center', gap: 4, paddingVertical: 12, borderRadius: 14,
       backgroundColor: c.surfaceElevated,
       borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+      ...depth(theme, 'card'),
     },
     tileValue: { fontSize: 17, fontWeight: '800', color: c.textPrimary },
     tileLabel: { fontSize: 10.5, color: c.textTertiary },

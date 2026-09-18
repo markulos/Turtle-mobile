@@ -37,6 +37,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ActivityIndicator, StyleSheet,
 } from 'react-native';
+import { depth } from '../utils/surfaceDepth';
+import AppTextInput from './AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
@@ -179,7 +181,7 @@ export default function SmsDebugPanel() {
           {/* A real send to a real handset — the only end-to-end proof. */}
           <View style={styles.sendBlock}>
             <Text style={styles.colLabel}>SEND A REAL TEST TO</Text>
-            <TextInput
+            <AppTextInput
               style={styles.input}
               value={to}
               onChangeText={setTo}
@@ -269,6 +271,7 @@ const makeStyles = (theme) => {
       borderColor: c.border,
       marginBottom: 12,
       overflow: 'hidden',
+      ...depth(theme, 'card'),
     },
     header: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14 },
     title: { fontSize: 15, fontWeight: '600', color: c.textPrimary },

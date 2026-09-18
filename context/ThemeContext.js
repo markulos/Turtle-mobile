@@ -88,7 +88,12 @@ const generateTypography = () => {
 const TYPOGRAPHY = generateTypography();
 
 // Pure Black Theme - White text on black background
-const DARK_THEME = {
+//
+// Exported because a few surfaces are their OWN dark room whatever the app
+// theme is (the calendar's Task Schedule sheet: a frosted grey pane the
+// calendar reads through). They build a palette from this one rather than
+// hand-rolling a second set of dark tokens that would drift from it.
+export const DARK_THEME = {
   mode: 'dark',
   colors: {
     // Backgrounds - Pure black with subtle gradients

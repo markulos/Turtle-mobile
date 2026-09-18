@@ -1,6 +1,6 @@
 /**
  * BoardRail — the Tasks header's board selector: one inset card per board in
- * a horizontal rail, "All" first, a bare + key last. Tap a card to scope the
+ * a horizontal rail, an add/edit key first, then "All". Tap a card to scope the
  * list and the calendar to that board; long-press to manage boards. Each
  * card carries the board's progress (done / total, a hairline track, the
  * overdue count) so the rail IS the status view — no dropdown, no separate
@@ -83,17 +83,25 @@ function BoardRail({ boards, selected, stats, colorOf, onSelect, onManage, onAdd
       keyboardShouldPersistTaps="handled"
       testID="board-rail"
     >
-      {/* Add / edit boards — FIRST on the rail, where the thumb lands. */}
+      {/* Add / edit boards — FIRST on the rail, where the thumb lands.
+          It takes the same charcoal fill as an unselected board card. The
+          palette is drawn for ink ON that fill — its rim and icon colours are
+          near-white — so an unfilled key was white-on-white and invisible on
+          the light page. Filled, it reads as the rail's first key. */}
       <Pressable
         onPressIn={() => tapHaptic()}
         onPress={onAddBoard}
         accessibilityRole="button"
         accessibilityLabel="Add or edit boards"
         testID="board-card-add"
-        style={({ pressed }) => [styles.addKey, { borderColor: pal.edge }, pressed && styles.pressed]}
+        style={({ pressed }) => [
+          styles.addKey,
+          { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop },
+          pressed && styles.pressed,
+        ]}
       >
-        <Icon name="plus" size={20} color={pal.muted} />
-        <Icon name="pencil-outline" size={13} color={pal.muted} style={styles.addKeySub} />
+        <Icon name="plus" size={20} color={pal.text} />
+        <Icon name="pencil-outline" size={13} color={pal.sub} style={styles.addKeySub} />
       </Pressable>
       <BoardCard
         label="All"
@@ -201,18 +209,20 @@ const styles = StyleSheet.create({
   fill: {
     height: 3,
   },
+  // Solid rim, not dashed: RN renders a dashed border with a borderRadius
+  // inconsistently (iOS quietly falls back to solid, Android clips the
+  // corners), and the charcoal fill is what carries the key now anyway.
   addKey: {
     width: 44,
     height: CARD_H,
     borderRadius: 14,
     borderWidth: 1,
-    borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 2,
   },
   addKeySub: {
-    opacity: 0.7,
+    opacity: 0.9,
   },
   pressed: {
     opacity: 0.6,

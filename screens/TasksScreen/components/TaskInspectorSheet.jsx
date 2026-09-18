@@ -17,7 +17,8 @@
  *   • Full editor · Delete.
  */
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ViewerSheet, { sheetColors } from '../../TurtleScreen/components/PhotoViewer/ViewerSheet';
 import { DatePickerModal } from './DatePickerModal';
@@ -154,7 +155,7 @@ function TaskInspectorSheet({
       >
         {done && <Icon name="check" size={16} color={colors.background} />}
       </Pressable>
-      <TextInput
+      <AppTextInput
         style={[styles.titleInput, { color: colors.textPrimary }, done && styles.struck]}
         value={title}
         onChangeText={setTitle}
@@ -245,7 +246,7 @@ function TaskInspectorSheet({
         </Section>
 
         <Section label="Notes" colors={colors}>
-          <TextInput
+          <AppTextInput
             style={[styles.notes, { color: colors.textPrimary, backgroundColor: colors.surface }]}
             value={notes}
             onChangeText={setNotes}
@@ -281,7 +282,7 @@ function TaskInspectorSheet({
           ))}
           <View style={styles.subAdd}>
             <View style={[styles.subAddWrap, { backgroundColor: colors.surface }]}>
-              <TextInput
+              <AppTextInput
                 style={[styles.subAddInput, { color: colors.textPrimary }]}
                 value={subDraft}
                 onChangeText={setSubDraft}
@@ -356,7 +357,10 @@ const styles = StyleSheet.create({
   subAddKey: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   tag: { height: 30, paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   tagText: { fontSize: 13, fontWeight: '600' },
-  footer: { flexDirection: 'row', gap: 10, paddingTop: 8, paddingBottom: 8 },
+  // No paddingBottom: ViewerSheet pins the footer and owns the space under it
+  // (safe-area / bottomInset + 12 pt), so the keys never sit flush on the
+  // home indicator.
+  footer: { flexDirection: 'row', gap: 10, paddingTop: 8 },
   primary: { flex: 1, height: 46, borderRadius: 23, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   primaryText: { fontSize: 15, fontWeight: '700' },
   secondary: { height: 46, paddingHorizontal: 18, borderRadius: 23, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },

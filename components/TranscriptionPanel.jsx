@@ -41,8 +41,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator, Alert, AppState, Share, StyleSheet, Switch, Text,
-  TextInput, TouchableOpacity, View,
+  TouchableOpacity, View,
 } from 'react-native';
+import { depth } from '../utils/surfaceDepth';
+import AppTextInput from './AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -735,7 +737,7 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
                   </View>
 
                   <Text style={styles.sectionLabel}>Main speaker’s name</Text>
-                  <TextInput
+                  <AppTextInput
                     style={styles.input}
                     value={choices.primaryName}
                     onChangeText={(value) => setChoices((v) => ({ ...v, primaryName: value }))}
@@ -752,7 +754,7 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
               )}
 
               <Text style={styles.sectionLabel}>Language</Text>
-              <TextInput
+              <AppTextInput
                 style={styles.input}
                 value={choices.language}
                 onChangeText={(value) => setChoices((v) => ({ ...v, language: value }))}
@@ -873,12 +875,14 @@ const makeStyles = (theme) => {
       marginBottom: 16,
       borderWidth: 0.5,
       borderColor: c.border,
+      ...depth(theme, 'card'),
     },
     headerRow: { flexDirection: 'row', alignItems: 'center' },
     iconContainer: {
       width: 36, height: 36, borderRadius: 8,
       backgroundColor: c.surfaceElevated,
       justifyContent: 'center', alignItems: 'center', marginRight: 12,
+      ...depth(theme, 'control'),
     },
     title: { fontSize: 17, fontWeight: '700', color: c.textPrimary },
     subtitle: { fontSize: 12.5, color: c.textTertiary, marginTop: 2 },
@@ -919,6 +923,7 @@ const makeStyles = (theme) => {
     stepper: {
       flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10,
       backgroundColor: c.surfaceElevated,
+      ...depth(theme, 'control'),
     },
     stepperControls: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -934,6 +939,7 @@ const makeStyles = (theme) => {
       paddingHorizontal: 12, paddingVertical: 10,
       color: c.textPrimary, fontSize: 14,
       borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+      ...depth(theme, 'control'),
     },
 
     recording: {
@@ -959,6 +965,7 @@ const makeStyles = (theme) => {
       paddingHorizontal: 12, paddingVertical: 7, borderRadius: 9,
       backgroundColor: c.surfaceElevated,
       borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+      ...depth(theme, 'control'),
     },
     smallButtonText: { fontSize: 12, fontWeight: '600', color: c.textSecondary },
 

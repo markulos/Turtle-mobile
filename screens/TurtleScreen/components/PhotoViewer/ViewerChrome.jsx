@@ -3,9 +3,9 @@
  *
  * Top: a gradient wash with Back on the left and Edit (images only) + Tags on
  * the right. Bottom: the timestamp and resolution on the left, a pill with
- * Share and Favourite on the right (plus play/pause and mute for a video),
- * and — for a video — a scrubber above them: elapsed / duration and a track
- * you can drag to seek.
+ * Save-offline (images only), Share and Favourite on the right (plus
+ * play/pause, mute and fullscreen for a video), and — for a video — a
+ * scrubber above them: elapsed / duration and a track you can drag to seek.
  *
  * Deliberately flat. Both bands are `box-none` while shown, so only the
  * buttons (and the scrubber track) are touch targets and every other touch
@@ -17,7 +17,7 @@
  * state; that complexity sat on the exact path a swipe had to cross.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { Easing, cancelAnimation, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -40,6 +40,35 @@ function ChromeButton({ icon, label, onPress, color = '#fff', size = 26, testID 
     >
       <Icon name={icon} size={size} color={color} style={SHADOW} />
     </Pressable>
+  );
+}
+
+/** Saved pictures are marked in the pond's green, the way a favourite is red. */
+const OFFLINE_ON = '#34d399';
+
+/**
+ * Keep-offline: one button, three states. While the bytes are coming down it
+ * is a spinner in the icon's place — same 44 pt target, so the pill never
+ * reflows mid-download and the next tap can't land on a moved neighbour.
+ */
+function OfflineButton({ state, onPress }) {
+  if (state === 'saving') {
+    return (
+      <View style={styles.button} testID="viewer-offline-busy" accessibilityLabel="Saving for offline">
+        <ActivityIndicator size="small" color="#fff" />
+      </View>
+    );
+  }
+  const saved = state === 'saved';
+  return (
+    <ChromeButton
+      icon={saved ? 'cloud-check' : 'cloud-download-outline'}
+      label={saved ? 'Remove offline copy' : 'Save for offline'}
+      onPress={onPress}
+      color={saved ? OFFLINE_ON : '#fff'}
+      size={28}
+      testID="viewer-offline"
+    />
   );
 }
 
@@ -232,9 +261,13 @@ function ViewerChrome({
   onTags,
   onShare,
   onToggleFavourite,
+  /** 'none' | 'saving' | 'saved' — images only; videos never show the button. */
+  offlineState = 'none',
+  onToggleOffline,
   video,
   onTogglePlay,
   onToggleMute,
+  onFullscreen,
   onSeek,
   onScrubStart,
   onScrubEnd,
@@ -306,7 +339,20 @@ function ViewerChrome({
                   onPress={onToggleMute}
                   testID="viewer-mute"
                 />
+                {!!onFullscreen && (
+                  <ChromeButton
+                    icon="fullscreen"
+                    label="Play fullscreen"
+                    onPress={onFullscreen}
+                    testID="viewer-fullscreen"
+                  />
+                )}
               </>
+            )}
+            {/* Images only: a video's original is tens to hundreds of MB and
+                keeping one is a different decision from keeping a photo. */}
+            {!isVideo && !!onToggleOffline && (
+              <OfflineButton state={offlineState} onPress={onToggleOffline} />
             )}
             <ChromeButton icon="share-variant" label="Share" onPress={onShare} size={28} testID="viewer-share" />
             <ChromeButton

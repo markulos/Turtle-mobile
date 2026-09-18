@@ -4,19 +4,21 @@
  * commit). Fields sit in the top bar so the keyboard never covers them.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ViewerSheet from '../PhotoViewer/ViewerSheet';
+import AppTextInput from '../../../../components/AppTextInput';
 import { tapHaptic, impactHaptic } from '../../../../utils/haptics';
 import useFolderData from './useFolderData';
 import FolderDisc from './FolderDisc';
 
-/** The sheet pill field: fixed-height View, auto-height input (STYLE-RULES). */
+/** The sheet pill field: fixed-height View, auto-height input (STYLE-RULES).
+ *  AppTextInput draws the placeholder in the app face (STYLE-RULES §5). */
 function PillField({ value, onChangeText, placeholder, label, autoFocus, theme, onSubmitEditing }) {
   const c = theme.colors;
   return (
     <View style={[styles.pill, { backgroundColor: c.surface, borderColor: c.border }]}>
-      <TextInput
+      <AppTextInput
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}

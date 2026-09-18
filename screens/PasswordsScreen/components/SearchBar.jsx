@@ -1,10 +1,10 @@
 import React from 'react';
 import {
   View,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
 } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { tapHaptic } from '../../../utils/haptics';
@@ -17,7 +17,7 @@ export const SearchBar = ({ value, onChangeText, onClear, onLock }) => {
     <View style={styles.container}>
       <View style={styles.searchContainer}>
         <Icon name="magnify" size={20} color={theme.colors.textTertiary} />
-        <TextInput
+        <AppTextInput
           style={styles.input}
           placeholder="Search passwords..."
           placeholderTextColor={theme.colors.textPlaceholder}

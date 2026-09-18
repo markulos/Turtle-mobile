@@ -66,8 +66,8 @@ import {
   ActivityIndicator,
   StyleSheet,
   Image,
-  TextInput,
 } from 'react-native';
+import AppTextInput from '../components/AppTextInput';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -494,7 +494,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
             </Text>
           <View style={[styles.searchBox, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
             <Icon name="magnify" size={18} color={theme.colors.textMuted} />
-            <TextInput
+            <AppTextInput
               value={query}
               onChangeText={setQuery}
               placeholder="Search boards, or type a new name"

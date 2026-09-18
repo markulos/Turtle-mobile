@@ -17,9 +17,11 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Animated, Pressable, ScrollView, Share, StyleSheet,
-  Switch, Text, TextInput, View,
+  ActivityIndicator, Alert, Animated, Platform, Pressable, ScrollView, Share, StyleSheet,
+  Switch, Text, View,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import AppTextInput from '../../../components/AppTextInput';
 import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -237,7 +239,12 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
   const shareLink = useCallback(async (share) => {
     tapHaptic();
     try {
-      await Share.share({ message: share.url, url: share.url });
+      // ONE link, not two. iOS reads `url` as a first-class URL item and
+      // `message` as text — sending both puts the same link in the bubble
+      // twice, once as a rich preview and once as bare text. Android's sheet
+      // only reads `message`. (MediaGallery's single-item link share already
+      // splits it this way; this sheet was the one that didn't.)
+      await Share.share(Platform.OS === 'ios' ? { url: share.url } : { message: share.url });
     } catch { /* user dismissed the sheet */ }
   }, []);
 
@@ -413,7 +420,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
               />
             </View>
             {usePassword && (
-              <TextInput
+              <AppTextInput
                 value={password}
                 onChangeText={setPassword}
                 placeholder="Password for viewers (min 4 characters)"
@@ -495,6 +502,7 @@ const makeStyles = (theme) => StyleSheet.create({
   linkCard: {
     borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
     borderRadius: 12, padding: 12, marginBottom: 8, backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'card'),
   },
   linkCardDead: { opacity: 0.5 },
   linkTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 7 },
@@ -559,6 +567,7 @@ const makeStyles = (theme) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border, borderRadius: 10,
     paddingHorizontal: 12, height: 42, paddingVertical: 0, textAlignVertical: 'center',
     color: theme.colors.textPrimary, fontSize: 14, backgroundColor: theme.colors.surfaceElevated,
+    ...depth(theme, 'control'),
   },
   createBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,

@@ -70,6 +70,11 @@ export default function EdgeSwipePage({ visible, onClose, children, overlay = fa
   const lastChildren = useRef(null);
   if (visible) lastChildren.current = children;
 
+  // The live `visible`, for the exit callback below — which fires after the
+  // fact and must not act on the prop it closed over.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+
   useEffect(() => {
     if (visible) {
       setMounted(true);
@@ -78,8 +83,19 @@ export default function EdgeSwipePage({ visible, onClose, children, overlay = fa
     } else {
       // Animate out from wherever the page currently is (mid-drag or fully open)
       // then unmount. Harmless no-op on the very first (never-shown) render.
-      Animated.timing(tx, { toValue: SCREEN_W, duration: 220, useNativeDriver: true }).start(({ finished }) => {
-        if (finished) setMounted(false);
+      Animated.timing(tx, { toValue: SCREEN_W, duration: 220, useNativeDriver: true }).start(() => {
+        // Unmount whether or not the exit RAN to completion. This used to be
+        // gated on `finished`, and `finished` is false for every interruption:
+        // a swipe-back that starts its own exit timing, a touch landing during
+        // the 220ms, a re-open. Any one of those left `mounted` stuck true —
+        // and a mounted-but-closed page is a full-screen layer (a transparent
+        // Modal, or the absolute-fill overlay below) parked off-screen with
+        // pointer events still on. Nothing shows, and nothing underneath can
+        // be tapped again for the life of the screen.
+        //
+        // The one case that must NOT unmount is a page re-opened since the
+        // exit began — which is the ref, not `finished`.
+        if (!visibleRef.current) setMounted(false);
       });
     }
     // Intentionally only react to `visible`.

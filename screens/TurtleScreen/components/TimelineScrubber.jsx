@@ -33,6 +33,9 @@
  *   accent — thumb color;  dark — theme mode for contrast chrome
  */
 import React, { memo, useState } from 'react';
+// TextInput is not a field here: the month label is an Animated TextInput
+// driven by the ReText pattern, so the worklet can write it without a React
+// render. It never carries a placeholder.
 import { Platform, StyleSheet, Text, TextInput, Vibration, View } from 'react-native';
 import Reanimated, {
   useSharedValue,

@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useServer } from '../../../context/ServerContext';
 import { useTheme } from '../../../context/ThemeContext';
@@ -251,6 +252,7 @@ const createStyles = (theme) =>
       alignItems: 'center',
       borderRadius: 20,
       backgroundColor: theme.colors.surfaceElevated,
+      ...depth(theme, 'control'),
     },
     overlayTitle: {
       fontSize: 18,

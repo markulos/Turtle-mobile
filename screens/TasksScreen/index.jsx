@@ -12,11 +12,12 @@ import {
   Alert,
   Keyboard,
   Platform,
-  TextInput,
   ScrollView,
   useWindowDimensions,
   PixelRatio,
 } from 'react-native';
+import { depth } from '../../utils/surfaceDepth';
+import AppTextInput from '../../components/AppTextInput';
 import Reanimated, {
   useSharedValue,
   useAnimatedStyle,
@@ -35,6 +36,7 @@ import { useCollapsibleTasks } from './hooks/useCollapsibleTasks';
 import { advanceDueDate, minDate, maxDate, localTodayStr, lastCompletedDate, isTaskDoneNow, matchesRecurrence, nextOccurrenceAfter, itemTypeOf, taskPassesFilters, boardLabel } from './utils/taskHelpers';
 import { completionChange } from './utils/completionChange';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
+import { resolveAvatarUrl } from '../../utils/avatarUrl';
 
 // An event is "over" once its end is in the past — start time + duration (a
 // default hour when unset), or the end of its day for an all-day event. Used to
@@ -124,13 +126,14 @@ import {
   CalendarView,
 } from './components';
 import FriendCard from '../TurtleScreen/components/FriendCard';
+import PeoplePopover from './components/PeoplePopover';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useCommandBus } from '../../context/CommandBusContext';
 import { useOpenTarget } from '../../context/OpenTargetContext';
 import { useCelebration } from '../../context/CelebrationContext';
 import BoardRail from './components/BoardRail';
-import StatusSegment from './components/StatusSegment';
+import StatusSegment, { STATUS_OPTIONS } from './components/StatusSegment';
 import BoardManagerSheet from './components/BoardManagerSheet';
 import TaskInspectorSheet from './components/TaskInspectorSheet';
 import OverviewPage from './components/OverviewPage';
@@ -141,7 +144,11 @@ import OverviewPage from './components/OverviewPage';
 // The board rail's reveal: the rail sits ABSOLUTE at the top of the content
 // host and the whole page below slides down by its height on a compositor
 // transform (the old board-dropdown mechanism — the calendar never relayouts).
-const RAIL_H = 80; // BoardRail: 66pt card + 6 + 8 padding
+// The filter panel's height: the status keys' row (32pt box + 6 + 4 padding)
+// on top of the BoardRail (66pt card + 6 + 8 padding). One constant, because it
+// is BOTH the layer's height and how far the page is pushed down to reveal it —
+// if they disagree the page shows a band of nothing, or clips the rail.
+const RAIL_H = 42 + 80;
 const RAIL_OPEN_MS = 280;
 const RAIL_CLOSE_MS = 240;
 const RAIL_EASE = ReEasing.bezier(0.4, 0, 0.2, 1);
@@ -478,7 +485,7 @@ export default function TasksScreen() {
   const insets = useSafeAreaInsets();
   // The tab bar floats over the page now, so lists clear it themselves.
   const tabBarHeight = useBottomTabBarHeight();
-  const { isConnected, api } = useServer();
+  const { isConnected, api, getBaseUrl } = useServer();
   const { celebrate } = useCelebration();
   const navigation = useNavigation();
   const route = useRoute();
@@ -507,30 +514,6 @@ export default function TasksScreen() {
     [inspector, tasks],
   );
   const closeInspector = useCallback(() => setInspector(null), []);
-  // Pinterest-style chrome: the two header rows are an overlay that hides at
-  // the scroll's own rate while content moves up and returns at the same
-  // rate on the way down (a diff-clamp of the offset, not the offset itself).
-  // Fed by whichever list is moving — the agenda, or the day panel inside
-  // the calendar — each with its own last-offset so switching sources never
-  // reads as a jump.
-  const [chromeH, setChromeH] = useState(0);
-  const chromeHRef = useRef(0);
-  const chromeHidden = useSharedValue(0);
-  const chromeLastY = useRef({});
-  const reportScroll = useCallback((source, y) => {
-    const H = chromeHRef.current;
-    if (!H) return;
-    const prev = chromeLastY.current[source];
-    chromeLastY.current[source] = y;
-    if (y <= 0) { chromeHidden.value = withTiming(0, { duration: 160 }); return; }
-    if (prev == null) return;
-    const dy = y - prev;
-    if (Math.abs(dy) > 120) return; // a remount / programmatic jump, not a drag
-    chromeHidden.value = Math.min(H, Math.max(0, chromeHidden.value + dy));
-  }, [chromeHidden]);
-  const reportAgendaScroll = useCallback((y) => reportScroll('agenda', y), [reportScroll]);
-  const reportDayScroll = useCallback((y) => reportScroll('day', y), [reportScroll]);
-  const chromeStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -chromeHidden.value }] }));
   const railProgress = useSharedValue(0);
   useEffect(() => {
     railProgress.value = withTiming(railOpen ? 1 : 0, {
@@ -564,6 +547,10 @@ export default function TasksScreen() {
   // The board a new task is born into (the rail's selection at the moment the
   // + key was pressed; null = the form's own default).
   const [newItemProject, setNewItemProject] = useState(null);
+  // Title + time already entered in the day panel's finder before "Full form"
+  // was pressed. Empty for every other entry point into the form.
+  const [newItemTitle, setNewItemTitle] = useState('');
+  const [newItemTime, setNewItemTime] = useState('');
   const [showDetail, setShowDetail] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   // True when the edit form was reached by continuing the calendar quick
@@ -585,6 +572,16 @@ export default function TasksScreen() {
   const doneOnly = statusFilter === 'done';
   const setShowIncompleteOnly = useCallback((v) => setStatusFilter(v ? 'todo' : 'all'), []);
   const [selectedProject, setSelectedProject] = useState('All');
+  // What the one header key says, and whether it lights. The board wins the
+  // label when one is picked — it is the narrower scope, and the status still
+  // reads from the keys inside the panel. Default state ('All' + 'to do') says
+  // plain "Boards" and stays unlit, so a lit key always means the list you are
+  // looking at is not the whole list. The key is named for what it OPENS (the
+  // boards), not for the abstract act of filtering.
+  const filterScoped = selectedProject !== 'All' || statusFilter !== 'todo';
+  const filterKeyLabel = selectedProject !== 'All'
+    ? boardLabel(selectedProject)
+    : (statusFilter === 'todo' ? 'Boards' : STATUS_OPTIONS.find((o) => o.value === statusFilter)?.label || 'Boards');
   const [selectedTags, setSelectedTags] = useState([]);
   const [tagFilterMode, setTagFilterMode] = useState('any');
   // Shared-calendar "whose tasks" filter. Empty = show everyone's; otherwise a
@@ -603,8 +600,18 @@ export default function TasksScreen() {
   const [boardsPageOpen, setBoardsPageOpen] = useState(false);
   // True while the calendar's day-schedule planner (bottom sheet) is raised.
   // When open, the calendar⇄list pager is locked so horizontal swipes page
-  // between DAYS inside the planner instead of switching to the list view.
+  // between DAYS inside the planner instead of switching to the list view —
+  // and the header below stands down, so the planner opens ALL THE WAY to the
+  // top of the screen instead of stopping under two rows of keys it can't use
+  // anyway (the pager is locked; the planner has its own + key).
   const [dayPlannerOpen, setDayPlannerOpen] = useState(false);
+  // The header does NOT stand down when the planner opens — it used to
+  // unmount, then (briefly) fold away on a timing curve, and both were wrong
+  // for the same reason: the view pill and the Boards key are how you get OUT
+  // of the day you are planning, and taking them away to win a header's worth
+  // of height traded navigation for space. `dayPlannerOpen` now does one job,
+  // locking the pager so a horizontal swipe pages between DAYS. The planner
+  // stops below the header instead — see SHEET_RAISED_GAP in CalendarView.
 
   // ── List ⇄ Calendar horizontal pager ─────────────────────────────────
   // The two views sit side by side in a paging ScrollView so the user can
@@ -742,6 +749,185 @@ export default function TasksScreen() {
     return Array.from(seen.values()).sort((a, b) => a.ownerName.localeCompare(b.ownerName));
   }, [tasks]);
   const multiUser = owners.length > 1;
+
+  // The pond's MEMBER RECORDS, keyed by user id.
+  //
+  // The task DTOs carry userId + ownerName and nothing else — no picture, no
+  // phone, no role, no sign-in state, no stats. Everything else about a person
+  // lives on /api/friends, which already returns the lot
+  // ({ id, phone, displayName, avatarUrl, role, joined, stats }). So this is
+  // one call rather than a change to the task payload, and it feeds BOTH the
+  // owner badge on a card and the profile card behind it — which used to be
+  // built from the task DTO alone and therefore showed a blank avatar, "Member"
+  // with no detail, "Hasn't signed in yet" for someone who had, and dashes
+  // where the stats are.
+  //
+  // Only on a SHARED pond: a solo pond draws no owner badges at all, so
+  // fetching a member list to decorate them would be a request for nothing.
+  // Refetched when the set of owners changes (someone new shows up), which is
+  // also when a newly-uploaded picture gets picked up.
+  const [ownerMembers, setOwnerMembers] = useState({});
+  const ownerKey = owners.map((o) => o.userId).join(',');
+  useEffect(() => {
+    if (!multiUser) { setOwnerMembers({}); return undefined; }
+    let alive = true;
+    (async () => {
+      // /friends and /me, because /friends is "everyone EXCEPT me" — tapping
+      // your OWN badge would otherwise find no record and get the same blank
+      // card this is fixing. Settled together so the map is never half-built.
+      const [friendsRes, meRes] = await Promise.allSettled([api.get('/friends'), api.get('/me')]);
+      const next = {};
+      if (friendsRes.status === 'fulfilled') {
+        const r = friendsRes.value;
+        const list = Array.isArray(r?.friends) ? r.friends : (Array.isArray(r) ? r : []);
+        for (const m of list) if (m?.id) next[m.id] = m;
+      }
+      if (meRes.status === 'fulfilled' && meRes.value?.user?.id) {
+        // `joined` is absent from /me (the server derives it from last_login_at
+        // for OTHER people). You are reading this, so you have signed in.
+        next[meRes.value.user.id] = { ...meRes.value.user, joined: true };
+      }
+      if (alive && Object.keys(next).length) setOwnerMembers(next);
+    })();
+    return () => { alive = false; };
+    // getBaseUrl deliberately NOT a dep: ServerContext rebuilds it on every
+    // provider render, which would refetch the member list for nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, multiUser, ownerKey]);
+
+  const serverBase = getBaseUrl().replace(/\/api$/, '');
+
+  // Everything a BADGE needs about a person, from one id. Used for the task
+  // owner and for each of a task's involvedUsers, so both come out of the same
+  // place and a person looks the same whichever role they are in on a card.
+  // The name falls back through the member record, the task's own ownerName
+  // (passed by the caller when it has one) and finally the id, so a badge is
+  // never blank while the member list is still loading.
+  const memberOf = useCallback((userId, fallbackName) => {
+    if (!userId) return null;
+    const m = ownerMembers[userId];
+    return {
+      id: userId,
+      name: m?.displayName || fallbackName || m?.phone || 'Member',
+      color: ownerColor(userId),
+      avatarUrl: resolveAvatarUrl(m?.avatarUrl, serverBase),
+      // The basic facts the popover lists under a name. Undefined while the
+      // member list is loading, which the popover reads as "nothing to say"
+      // rather than printing blanks.
+      role: m?.role,
+      phone: m?.phone,
+      joined: m?.joined,
+    };
+  }, [ownerMembers, serverBase]);
+
+  // ── Focus blocks, per task ─────────────────────────────────────────────
+  //
+  // Two facts a card shows: how many pomodoros a task has already had, and —
+  // if one is running on it right now — how long is left. Both come from the
+  // pond, which is the source of truth for a timer that has to survive the app
+  // being backgrounded, killed, or opened on another device.
+  //
+  // GET /pomodoros is the whole list (server-capped at 200) so the counts are
+  // ONE call rather than one per task; /pomodoros/active is the single running
+  // block. Refetched when the screen regains focus and when a timer is started
+  // from here, which is when either can have changed.
+  const [pomoByTask, setPomoByTask] = useState({});   // taskId -> completed count
+  // { taskId, endsAt, startedAt, durationMinutes } — the length comes along so
+  // the live key can draw how much of the block is LEFT, not just when it ends.
+  const [activePomo, setActivePomo] = useState(null);
+  const loadPomodoros = useCallback(async () => {
+    try {
+      const [listRes, activeRes] = await Promise.allSettled([
+        api.get('/pomodoros'),
+        api.get('/pomodoros/active'),
+      ]);
+      if (listRes.status === 'fulfilled') {
+        const list = Array.isArray(listRes.value?.pomodoros) ? listRes.value.pomodoros : [];
+        const counts = {};
+        for (const p of list) {
+          // Only blocks actually SEEN THROUGH count. A cancelled or abandoned
+          // one is not focus the task received.
+          if (p?.taskId && p.status === 'completed' && p.completedAt) {
+            counts[p.taskId] = (counts[p.taskId] || 0) + 1;
+          }
+        }
+        setPomoByTask(counts);
+      }
+      if (activeRes.status === 'fulfilled') {
+        const a = activeRes.value?.pomodoro;
+        const mins = Number(a?.durationMinutes) || 25;
+        const startedAt = Number(a?.startedAt);
+        const endsAt = a ? startedAt + mins * 60000 : null;
+        setActivePomo(a?.taskId && endsAt > Date.now()
+          ? { taskId: a.taskId, endsAt, startedAt, durationMinutes: mins }
+          : null);
+      }
+    } catch { /* offline — the cards simply show no tally and no countdown */ }
+  }, [api]);
+  useEffect(() => { loadPomodoros(); }, [loadPomodoros]);
+
+  // Re-read once the running block has RUN OUT. The card retires its own live
+  // key off its countdown, so this is not what clears the circle — it is what
+  // moves the finished block into the task's tally without waiting for the
+  // screen to be left and come back to.
+  useEffect(() => {
+    const endsAt = activePomo?.endsAt;
+    if (!endsAt) return undefined;
+    const ms = endsAt - Date.now();
+    if (ms <= 0) return undefined;
+    // A second past the end: the server settles elapsed blocks on read, and
+    // asking at the exact millisecond can land on the wrong side of that.
+    const id = setTimeout(() => { loadPomodoros(); }, ms + 1000);
+    return () => clearTimeout(id);
+  }, [activePomo, loadPomodoros]);
+
+  const pomodoroFor = useCallback((taskId) => {
+    if (!taskId) return null;
+    const count = pomoByTask[taskId] || 0;
+    const live = activePomo?.taskId === taskId ? activePomo : null;
+    // Nothing to say about this task — let the card skip the whole thing
+    // rather than render a zero and an absent timer.
+    if (!count && !live) return null;
+    return {
+      count,
+      endsAt: live?.endsAt || null,
+      startedAt: live?.startedAt || null,
+      durationMinutes: live?.durationMinutes || null,
+    };
+  }, [pomoByTask, activePomo]);
+
+  /**
+   * Where a LIVE key goes. The running block's card lives on the Turtle tab —
+   * the same place `startPomodoroFor` jumps to — so a tap on a counting-down
+   * circle opens the timer it belongs to instead of starting a second block on
+   * a task that is already being worked on.
+   */
+  const openPomodoro = useCallback(() => {
+    navigation.navigate('Turtle');
+  }, [navigation]);
+
+  // The list a card's avatar stack opens. Held HERE, not in the calendar: a
+  // popover mounted inside the day pane would be clipped by the pane, the
+  // pager and the sheet in turn (docs/STYLE-RULES.md §4).
+  const [peopleList, setPeopleList] = useState(null); // { people, anchor }
+  const openPeopleList = useCallback((people, _task, anchor) => {
+    if (!people?.length) return;
+    tapHaptic();
+    setPeopleList({ people, anchor });
+  }, []);
+
+  // The member behind the open profile card. The task DTO is the FALLBACK, not
+  // the source: it knows the id and the name, so the card still opens with
+  // something real on a pond that could not be reached.
+  const profileFriend = useMemo(() => {
+    if (!profileOwner) return null;
+    const member = ownerMembers[profileOwner.userId];
+    return {
+      ...(member || {}),
+      id: profileOwner.userId,
+      displayName: member?.displayName || profileOwner.ownerName || null,
+    };
+  }, [profileOwner, ownerMembers]);
 
   // Keep the owner filter honest if the underlying set shrinks (e.g. a member's
   // tasks disappear): drop any selected id that no longer exists.
@@ -1476,6 +1662,60 @@ export default function TasksScreen() {
   // completedTime so callers know when the last occurrence was checked off,
   // even though `completed` stays false. Non-recurring tasks (and
   // un-completing anything) fall through to the plain boolean toggle.
+  /**
+   * Start a focus timer for a task. Routes through the Turtle chat's
+   * /pomodoro pipeline (CommandBus delivers it exactly as if typed) with the
+   * task title as the session label, then jumps to the Turtle tab where the
+   * timer card lives.
+   *
+   * One definition, two callers: the task card's action key and the circle key
+   * beside every schedule row.
+   *
+   * TWO STORES, and starting one is not starting the other. The pond keeps the
+   * chat timer in memory (`pomodoroService`, the socket's `pomodoro-state`,
+   * which is what the Turtle tab's card draws) and TASK-linked blocks in the
+   * `task_pomodoros` table (which is what `/pomodoros/active` and `/pomodoros`
+   * answer from, and the only one of the two that knows which task a timer
+   * belongs to — `pomodoro-start` takes a mode and a duration, no task).
+   *
+   * The chat command starts only the first. So the timer ran, the Turtle tab
+   * showed it, and every card on this screen kept showing a plain start key:
+   * the store they read had no row. The tally was stuck at the same zero for
+   * the same reason, since a task's count is its COMPLETED rows.
+   *
+   * So we write the row too. Its length is read back off the live timer rather
+   * than assumed, because the chat timer runs at whatever focus duration the
+   * user has saved — hardcoding 25 here would have the card counting down to a
+   * different zero than the timer it is reporting.
+   */
+  const startPomodoroFor = useCallback(async (task) => {
+    const label = (task?.title || '').trim();
+    dispatchCommand(label ? `/pomodoro focus ${label}` : '/pomodoro focus');
+    navigation.navigate('Turtle');
+    if (!task?.id) return;
+    try {
+      // The command travels through the bus and the socket before the pond has
+      // a timer to report; ask after it lands.
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      let durationMinutes = 25;
+      try {
+        // `source: 'server'` is the chat timer — the one just started. A
+        // 'task' answer would be some OTHER block's row still in flight, whose
+        // length says nothing about this one.
+        const live = await api.get('/pomodoro/widget');
+        if (live?.active && live.source === 'server' && live.endsAt > live.startedAt) {
+          // Measured from the timer's own ends, so this does not care whether
+          // `totalSec` is seconds or something else.
+          durationMinutes = Math.max(1, Math.round((live.endsAt - live.startedAt) / 60000));
+        }
+      } catch { /* unreachable — 25 is the pond's own default too */ }
+      // Cancels any in-flight row for us: one live block at a time, the same
+      // precedence the timer bar and the tray widget already use.
+      await api.post('/pomodoro/start-task', { taskId: task.id, durationMinutes });
+    } catch { /* offline — the Turtle tab still has the timer, the card won't */ }
+    loadPomodoros();
+  }, [api, dispatchCommand, navigation, loadPomodoros]);
+
   const handleToggleComplete = async (id, occurrenceDate) => {
     const task = tasksRef.current.find(t => t.id === id);
     if (!task) return;
@@ -1630,11 +1870,16 @@ export default function TasksScreen() {
   // point (the FAB-equivalent "Add new task" button and the calendar day "+"
   // both route through it with type 'task') — TaskForm itself opens COLLAPSED
   // for new items (no initialData), so the fast path is preserved.
-  const openCreateForm = useCallback((type, date, project) => {
+  // `seed` carries whatever the caller has already collected — the day
+  // panel's finder hands over the title typed into it and the time chip, so
+  // "Full form" continues that task instead of starting a blank one.
+  const openCreateForm = useCallback((type, date, project, seed = null) => {
     setEditingTask(null);
     setNewItemType(type || 'task');
     setNewItemDate(date || null);
     setNewItemProject(project || null);
+    setNewItemTitle(seed?.title || '');
+    setNewItemTime(seed?.time || '');
     setShowTaskForm(true);
   }, []);
 
@@ -1718,6 +1963,12 @@ export default function TasksScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* No notch strip and no screen-level StatusBar here any more. Both
+          existed for one case — the planner covering the whole screen, safe
+          area included, so the band at the top had to follow the sheet's colour
+          and the clock had to go light with it. The header stays up now and the
+          planner stops below it, so the safe area is only ever the page's own
+          colour and App.js's StatusBar is already right. */}
       {/* Whisper-faint gradient wash — barely-there white with a
           breath of cool blue at the top, fading to nothing. Reads as
           a soft halo / atmospheric depth cue rather than a visible
@@ -1737,17 +1988,15 @@ export default function TasksScreen() {
         pointerEvents="none"
       />
 
-      {/* Header — one row of keys (view pill · status keys · filter · +),
-          then the board rail. Nothing collapses, nothing shifts the page:
-          the board picker IS the rail, the day count lives on its cards. */}
-      <Reanimated.View
-        style={[styles.chrome, { top: insets.top }, chromeStyle]}
-        onLayout={(e) => {
-          const h = Math.round(e.nativeEvent.layout.height);
-          chromeHRef.current = h;
-          setChromeH((v) => (v === h ? v : h));
-        }}
-      >
+      {/* Header — ONE row, and now ONE key: the view pill and Boards. Status
+          (to do / done / all), the board picker and Overview all live behind
+          that key; they used to hold a second row open permanently, and that
+          row was the difference between the day planner opening most of the way
+          and opening all the way.
+
+          The header stays up through everything, the day planner included: it
+          is the only way back to the list view and to the boards, and the
+          planner is a sheet over the page, not a replacement for it. */}
       <View style={styles.header}>
         <View style={styles.viewToggle}>
           {/* Sliding active pill (bound to the pager scroll). */}
@@ -1793,51 +2042,45 @@ export default function TasksScreen() {
           </TouchableOpacity>
         </View>
 
-        <StatusSegment value={statusFilter} onChange={setStatusFilter} theme={theme} />
-      </View>
-
-      {/* Row 2: what the list is scoped to (Boards) and where the numbers live
-          (Overview). The tag / owner filters moved into the Overview page. */}
-      <View style={styles.headerRow2}>
         <View style={styles.headerKeys}>
-          {/* The Boards key: opens / closes the rail; reads the selected board. */}
+          {/* The Boards key — the header's ONLY key now. It opens / closes the
+              panel holding the status keys, the board rail and the Overview
+              key, and reads what you are scoped to so the rows it replaced are
+              still answerable at a glance: the board name when one is picked,
+              otherwise the status when it isn't the default "to do".
+
+              Overview used to sit beside it. It went INTO the panel: two keys
+              competing for the header's right-hand side is what forced this one
+              to ellipsise a board name down to a single letter. */}
           <TouchableOpacity
-            style={[styles.headerBoardKey, (railOpen || selectedProject !== 'All') && styles.headerBoardKeyLit]}
+            style={[styles.headerBoardKey, (railOpen || filterScoped) && styles.headerBoardKeyLit]}
             onPressIn={() => tapHaptic()}
             onPress={() => setRailOpen((v) => !v)}
             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             accessibilityRole="button"
             accessibilityState={{ expanded: railOpen }}
-            accessibilityLabel={`Boards, ${selectedProject === 'All' ? 'all' : boardLabel(selectedProject)}${railOpen ? ', open' : ''}`}
-            testID="header-boards-key"
+            accessibilityLabel={`Boards, ${filterKeyLabel}${railOpen ? ', open' : ''}`}
+            testID="header-filter-key"
           >
-            {selectedProject !== 'All' && (
+            {selectedProject !== 'All' ? (
               <View style={[styles.headerBoardDot, { backgroundColor: getProjectColor(selectedProject) }]} />
+            ) : (
+              /* The four-circle glyph — the same one the All Boards page wears,
+                 so the key and the page it stands for carry one mark. It keeps
+                 its colours when the key lights: they are the point of it. */
+              <FourColorBoardsIcon size={15} gap={2} />
             )}
             <Text
-              style={[styles.headerBoardText, (railOpen || selectedProject !== 'All') && styles.headerBoardTextLit]}
-              numberOfLines={2}
+              style={[styles.headerBoardText, (railOpen || filterScoped) && styles.headerBoardTextLit]}
+              numberOfLines={1}
             >
-              {selectedProject === 'All' ? 'Boards' : boardLabel(selectedProject)}
+              {filterKeyLabel}
             </Text>
             <Icon
               name={railOpen ? 'chevron-up' : 'chevron-down'}
               size={16}
-              color={(railOpen || selectedProject !== 'All') ? theme.colors.background : theme.colors.textTertiary}
+              color={(railOpen || filterScoped) ? theme.colors.background : theme.colors.textTertiary}
             />
-          </TouchableOpacity>
-          {/* The Overview key: every board's numbers on a page over the calendar. */}
-          <TouchableOpacity
-            style={[styles.headerBoardKey, styles.headerOverviewKey, showOverview && styles.headerBoardKeyLit]}
-            onPressIn={() => tapHaptic()}
-            onPress={() => setShowOverview(true)}
-            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            accessibilityRole="button"
-            accessibilityLabel={hasActiveFilters ? `Overview, ${selectedTags.length + selectedOwners.length} filters active` : 'Overview'}
-            testID="header-overview-key"
-          >
-            <Icon name="chart-box-outline" size={15} color={showOverview ? theme.colors.background : theme.colors.textTertiary} />
-            <Text style={[styles.headerBoardText, showOverview && styles.headerBoardTextLit]} numberOfLines={1}>Overview</Text>
             {hasActiveFilters && (
               <View style={styles.headerFilterBadge}>
                 <Text style={styles.headerFilterBadgeText}>{selectedTags.length + selectedOwners.length}</Text>
@@ -1846,7 +2089,6 @@ export default function TasksScreen() {
           </TouchableOpacity>
         </View>
       </View>
-      </Reanimated.View>
 
       {/* Project-picker overlay host. The picker (rendered at the bottom of
           this host) is an absolute overlay pinned just below the header.
@@ -1857,7 +2099,7 @@ export default function TasksScreen() {
           can't spill over the tab bar / FAB. Modals inside render via RN
           portals, so the transform doesn't touch them. */}
       <View style={styles.dropdownHost}>
-      <Reanimated.View style={[styles.dropdownShiftLayer, hasActiveFilters && { paddingTop: chromeH }, contentShiftStyle]}>
+      <Reanimated.View style={[styles.dropdownShiftLayer, contentShiftStyle]}>
 
       {/* Active Filters */}
       {hasActiveFilters && (
@@ -1944,6 +2186,8 @@ export default function TasksScreen() {
         initialType={newItemType}
         initialDate={newItemDate}
         initialProject={newItemProject}
+        initialTitle={newItemTitle}
+        initialTime={newItemTime}
         projects={projects}
         allTags={allTags}
         onAddProject={addProject}
@@ -2002,22 +2246,32 @@ export default function TasksScreen() {
           });
           setShowDetail(false);
         }}
-        onStartPomodoro={() => {
-          // Route through the Turtle chat's /pomodoro pipeline (CommandBus
-          // delivers it exactly as if typed); the task title rides along as the
-          // session label. Then jump to the Turtle tab where the timer lives.
-          const label = (selectedTask?.title || '').trim();
-          dispatchCommand(label ? `/pomodoro focus ${label}` : '/pomodoro focus');
-          setShowDetail(false);
-          navigation.navigate('Turtle');
-        }}
+        onStartPomodoro={() => { startPomodoroFor(selectedTask); setShowDetail(false); }}
       />
 
       {/* Owner profile — opened by tapping a task's owner badge on the shared
           calendar. Built from what the task list carries (name + that person's
           tasks); phone/role/avatar light up once a members feed is wired in. */}
+      {/* The avatar stack's list. Rendered at the screen root so it covers the
+          tab bar and cannot be clipped; picking someone hands off to the full
+          profile card below. */}
+      <PeoplePopover
+        visible={!!peopleList}
+        people={peopleList?.people || []}
+        anchor={peopleList?.anchor}
+        theme={theme}
+        onClose={() => setPeopleList(null)}
+        onPick={(person) => {
+          setPeopleList(null);
+          setProfileOwner({ userId: person.id, ownerName: person.name });
+        }}
+      />
+
       <FriendCard
-        friend={profileOwner ? { id: profileOwner.userId, displayName: profileOwner.ownerName } : null}
+        friend={profileFriend}
+        // Resolves this member's server-relative avatarUrl. Without it the card
+        // had no way to turn "/api/avatars/x.jpg" into something loadable.
+        serverBase={serverBase}
         tasks={profileOwner ? tasks.filter((t) => t.userId === profileOwner.userId) : []}
         onClose={() => setProfileOwner(null)}
       />
@@ -2075,19 +2329,18 @@ export default function TasksScreen() {
           // task tree), not just render struck-through.
           showIncompleteOnly={showIncompleteOnly}
           multiUser={multiUser}
+          memberOf={memberOf}
+          onPeoplePress={openPeopleList}
+          pomodoroFor={pomodoroFor}
+          onOpenPomodoro={openPomodoro}
           onTaskPress={openDetail}
           onTaskLongPress={openEditForm}
           onInspectTask={(task, dateStr) => setInspector({ id: task.id, date: dateStr || null })}
           onToggleComplete={handleToggleComplete}
+          onStartPomodoro={startPomodoroFor}
           onUpdateTask={handleUpdateTask}
           onDeleteTask={deleteTask}
           projects={projects}
-          // The chrome overlay above: the calendar keeps that much headroom
-          // and gives it back as the chrome slides away; the day panel's
-          // scroll drives the slide.
-          topInset={hasActiveFilters ? 0 : chromeH}
-          chromeHidden={chromeHidden}
-          onScrollMotion={reportDayScroll}
           onAddTask={(title, project, dueDate, time, extras) => {
             // `time` is the fourth argument — set when the user
             // long-pressed a slot on the day calendar grid. Null for
@@ -2125,7 +2378,7 @@ export default function TasksScreen() {
           onPlannerOpenChange={setDayPlannerOpen}
           // The day-planner's "+" creates a task pre-dated to the tapped day;
           // the type is still switchable inside the form.
-          onCreateForDate={(dateStr) => openCreateForm('task', dateStr)}
+          onCreateForDate={(dateStr, seed) => openCreateForm('task', dateStr, null, seed)}
           // Tap a task's owner badge → open that person's profile card.
           onOwnerPress={(t) => { if (t?.userId) setProfileOwner({ userId: t.userId, ownerName: t.ownerName }); }}
         />
@@ -2176,7 +2429,6 @@ export default function TasksScreen() {
             // only tracks the offset for the keyboard-scroll helpers.
             onScroll={(e) => {
               scrollY.current = e.nativeEvent.contentOffset.y;
-              reportAgendaScroll(scrollY.current);
             }}
             scrollEventThrottle={16}
             renderItem={({ item, index }) => {
@@ -2302,10 +2554,6 @@ export default function TasksScreen() {
               // Clears the floating tab bar (which no longer reserves space)
               // or the keyboard, whichever is taller.
               paddingBottom: Math.max(tabBarHeight + 24, keyboardHeight + 20),
-              // Rows start below the chrome overlay and scroll under it as
-              // it slides away (with the filters bar in flow the shift layer
-              // carries the inset instead).
-              paddingTop: hasActiveFilters ? 0 : chromeH + 4,
             }}
             // NO RefreshControl — the pull/scroll up is plain native motion
             // into the preloaded skeleton zone; data still refreshes on focus,
@@ -2369,15 +2617,41 @@ export default function TasksScreen() {
       </Animated.ScrollView>
       </Reanimated.View>
 
-      {/* The board rail: absolute at the host's top, revealed by the same
+      {/* The filter panel: absolute at the host's top, revealed by the same
           progress that shifts the page — the page stays glued to its bottom
-          edge through the open / close. Untouchable while closed. */}
+          edge through the open / close. Untouchable while closed.
+
+          Status keys first, board rail under them. Both used to sit in the
+          header permanently; behind one key they cost the page nothing until
+          they're asked for. Picking a STATUS leaves the panel open (you are
+          often flipping to do / done on the same board), picking a BOARD
+          closes it, which is the choice that ends the errand. */}
       <Reanimated.View
-        style={[styles.railLayer, { top: chromeH }, railRevealStyle]}
+        style={[styles.railLayer, railRevealStyle]}
         pointerEvents={railOpen ? 'box-none' : 'none'}
         accessibilityElementsHidden={!railOpen}
         importantForAccessibility={railOpen ? 'auto' : 'no-hide-descendants'}
       >
+        <View style={styles.railStatusRow}>
+          <StatusSegment value={statusFilter} onChange={setStatusFilter} theme={theme} />
+          {/* The Overview key: every board's numbers on a page over the
+              calendar. It lives here rather than in the header, directly under
+              the key that opens this panel and on the same right edge it used
+              to sit on — so it drops out of the header rather than moving
+              somewhere new. Opening it closes the panel; you are leaving. */}
+          <TouchableOpacity
+            style={[styles.headerBoardKey, styles.headerOverviewKey, showOverview && styles.headerBoardKeyLit]}
+            onPressIn={() => tapHaptic()}
+            onPress={() => { setRailOpen(false); setShowOverview(true); }}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            accessibilityRole="button"
+            accessibilityLabel={hasActiveFilters ? `Overview, ${selectedTags.length + selectedOwners.length} filters active` : 'Overview'}
+            testID="header-overview-key"
+          >
+            <Icon name="chart-box-outline" size={15} color={showOverview ? theme.colors.background : theme.colors.textTertiary} />
+            <Text style={[styles.headerBoardText, showOverview && styles.headerBoardTextLit]} numberOfLines={1}>Overview</Text>
+          </TouchableOpacity>
+        </View>
         <BoardRail
           boards={projects}
           selected={selectedProject}
@@ -2521,7 +2795,7 @@ export default function TasksScreen() {
                       inlineAddingProject === section.project ? (
                         // Inline input mode
                         <View style={styles.projectAddTaskContainer}>
-                          <TextInput
+                          <AppTextInput
                             ref={inlineInputRef}
                             style={styles.projectAddTaskInputField}
                             placeholder="Add a new task"
@@ -2616,6 +2890,27 @@ export default function TasksScreen() {
         filterCount={selectedTags.length + selectedOwners.length}
         bottomInset={tabBarHeight}
         theme={theme}
+        // The overview stays up: TaskDetail is a sibling Modal and presents
+        // OVER this in-tree overlay, so closing it would only lose the place
+        // the user was reading.
+        onOpenTask={openDetail}
+        // Born on the board being looked at, with no due date — the finder is
+        // a capture field, not the full form (which is one tap further in,
+        // from the task itself).
+        onAddTask={(title, project) => {
+          handleSaveTask({
+            title,
+            description: '',
+            priority: 'medium',
+            completed: false,
+            project,
+            dueDate: '',
+            tags: [],
+            subtasks: [],
+            id: Date.now().toString(),
+            createdAt: Date.now(),
+          });
+        }}
       />
 
       {/* Board manager: the app's sheet shell, mounted LAST so it draws over
@@ -2751,35 +3046,19 @@ const createStyles = (theme) => StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 2,
   },
-  // The chrome overlay (both header rows) over the content host. Above the
-  // rail (2) and the page; below every in-tree page / sheet (150+).
-  chrome: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    zIndex: 20,
-    elevation: 20,
-    backgroundColor: theme.colors.background,
-  },
-  // Row 2 under the status keys: Boards + Overview, left-aligned.
-  headerRow2: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 6,
-  },
-  // The row's keys share the width: the Boards key takes what its title
-  // needs and SHRINKS (its text wrapping to a second line) before it would
-  // push the Overview key past the edge; Overview never shrinks.
+  // The one Boards key takes what the view pill leaves, hugging the right edge
+  // where the status keys used to sit. It still SHRINKS (ellipsising a long
+  // board name) rather than pushing past the edge — but with Overview moved
+  // into the panel it now has the whole right-hand side to spend first.
   headerKeys: {
     flex: 1,
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: 8,
   },
-  // The rail's layer inside the content host: pinned to the top, exactly
-  // RAIL_H tall, over the (shifted-down) page.
+  // The filter panel's layer inside the content host: pinned to the top,
+  // exactly RAIL_H tall, over the (shifted-down) page.
   railLayer: {
     position: 'absolute',
     top: 0,
@@ -2787,6 +3066,18 @@ const createStyles = (theme) => StyleSheet.create({
     right: 0,
     height: RAIL_H,
     zIndex: 2,
+  },
+  // Status keys above the rail, with the Overview key on the far right — which
+  // is exactly where it sat while it was in the header, one row higher. Both
+  // on the rail's own horizontal padding, so the panel's contents line up.
+  railStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 4,
   },
   // The Boards key: a hairline pill that LIGHTS (text colour as fill, page
   // colour as glyph) while the rail is open or a board is selected.
@@ -2843,6 +3134,7 @@ const createStyles = (theme) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 0,
+    ...depth(theme, 'control'),
   },
   headerFilterBtnActive: {
     backgroundColor: theme.colors.surfaceElevated,
@@ -2872,7 +3164,8 @@ const createStyles = (theme) => StyleSheet.create({
     marginRight: 0,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
-    position: 'relative', // anchors the absolute sliding pill
+    position: 'relative', // anchors the absolute sliding pill,
+    ...depth(theme, 'control'),
   },
   // The sliding active pill — its translateX is bound to the pager scroll so it
   // glides between the two segments 1:1 with the swipe (Photos-tab style).
@@ -2930,6 +3223,7 @@ const createStyles = (theme) => StyleSheet.create({
     padding: 2,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   modeBtn: {
     flexDirection: 'row',
@@ -3114,6 +3408,7 @@ const createStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   allBoardsButtonText: {
     flex: 1,
@@ -3303,6 +3598,7 @@ const createStyles = (theme) => StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 12,
     marginRight: 8,
+    ...depth(theme, 'control'),
   },
   warningChip: { 
     backgroundColor: 'rgba(255, 193, 7, 0.15)' 

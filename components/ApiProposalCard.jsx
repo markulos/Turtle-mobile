@@ -21,6 +21,7 @@
  */
 import React, { useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { depth } from '../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { fieldsOf, hiddenFieldCount, summarise } from '../utils/apiProposal';
@@ -163,6 +164,7 @@ const makeStyles = (theme, tint) => {
       width: '92%',
       alignSelf: 'flex-start',
       gap: 8,
+      ...depth(theme, 'card'),
     },
     headRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     title: { flex: 1, minWidth: 0, fontSize: 15, fontWeight: '700', color: c.textPrimary },
@@ -180,6 +182,7 @@ const makeStyles = (theme, tint) => {
       borderRadius: 9,
       padding: 9,
       gap: 3,
+      ...depth(theme, 'card'),
     },
     field: { fontSize: 12, color: c.textSecondary },
     fieldKey: { fontWeight: '700', color: c.textPrimary },

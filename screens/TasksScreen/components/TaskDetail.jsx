@@ -1,30 +1,56 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+/**
+ * TaskDetail — the task card that pops up from the list, on the app's sheet
+ * shell (PhotoViewer/ViewerSheet: in-tree overlay, frosted dark, two detents,
+ * grab-bar header, keyboard measure-then-lift).
+ *
+ * It used to be a bespoke Modal: an 80 %-tall ScrollView over a flat
+ * `theme.colors.background` card, chips the same colour as the card, one
+ * full-width accent-outlined button per action and a left-bezel swipe-back of
+ * its own. docs/STYLE-RULES.md §4 has since made the sheet shell the app-wide
+ * contract for anything that pops up from below, and TaskInspectorSheet — the
+ * day panel's task card — already moved. This is the same move for the list's
+ * card, so the two read as one surface:
+ *   • the SHELL supplies the handle, the grab-bar header (drag from any scroll
+ *     position, tap to flip detents), the scrim, the enter/exit curves and the
+ *     drag-down-to-close that replaces the bespoke edge-swipe;
+ *   • the SURFACE is the dark frost (§1), so every chip inverts instead of
+ *     being a slightly-different-dark-on-dark;
+ *   • sections are small-caps 10.5/700 labels and chips are 34 pt keys, the
+ *     same type scale the inspector and the Overview page use;
+ *   • the three task actions become a wrapping row of keys rather than three
+ *     stacked full-width buttons, and Edit / Delete become the shell's footer.
+ *
+ * Everything it showed before it still shows, and every prop it took it still
+ * takes.
+ */
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Modal,
   View,
   Text,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
+  Pressable,
   StyleSheet,
-  Animated,
-  PanResponder,
 } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ViewerSheet, { sheetColors } from '../../TurtleScreen/components/PhotoViewer/ViewerSheet';
 import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
-import { normalizeTags, getPriorityColor, areAllSubtasksCompleted, itemTypeOf, itemColorOf, isTaskDoneNow, lastCompletedDate } from '../utils/taskHelpers';
+import {
+  normalizeTags,
+  getPriorityColor,
+  areAllSubtasksCompleted,
+  itemTypeOf,
+  itemColorOf,
+  isTaskDoneNow,
+  lastCompletedDate,
+  boardLabel,
+  formatDueDate,
+} from '../utils/taskHelpers';
 import { REMINDER_OPTIONS } from '../utils/constants';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import { sendOrQueue } from '../../../services/offlineQueue';
-
-// iPhone-style edge-swipe-to-back. Touch must start within the first
-// ~24px of the screen's left edge and drag rightward fast enough or
-// far enough to commit. Matches the system gesture every other iOS app
-// responds to when you swipe in from the bezel.
-const EDGE_BACK_ZONE_PX = 24;
-const EDGE_BACK_COMMIT_DX = 80;
-const EDGE_BACK_COMMIT_VX = 0.5;
 
 const commentInitials = (name) => (String(name || '').match(/\b\w/g) || ['?']).slice(0, 2).join('').toUpperCase();
 const fmtCommentTime = (ms) => {
@@ -37,12 +63,78 @@ const fmtCommentTime = (ms) => {
   } catch { return ''; }
 };
 
-export const TaskDetail = ({ 
-  task, 
-  visible, 
-  onClose, 
-  onEdit, 
-  onToggleComplete, 
+const titleCase = (s) => String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
+
+/**
+ * A ghost KEY — the app's chip: 34 pt tall, hairline rim, label 12/700. On the
+ * dark frost the rim and the ink are white, so it always separates from the
+ * card (§1: never a slightly-different-dark-on-dark chip). `tint` colours the
+ * icon only — one accent per chip, the way the Overview tiles carry theirs.
+ */
+function Key({ label, icon, tint, colors, onPress, testID }) {
+  const body = (
+    <>
+      {!!icon && <Icon name={icon} size={14} color={tint || colors.textSecondary} />}
+      <Text style={[styles.keyText, { color: colors.textPrimary }]} numberOfLines={1}>{label}</Text>
+    </>
+  );
+  if (!onPress) {
+    return <View style={[styles.key, { borderColor: colors.chipGhostBorder }]} testID={testID}>{body}</View>;
+  }
+  return (
+    <Pressable
+      onPressIn={() => tapHaptic()}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      testID={testID}
+      style={({ pressed }) => [styles.key, { borderColor: colors.chipGhostBorder }, pressed && styles.pressed]}
+    >
+      {body}
+    </Pressable>
+  );
+}
+
+/**
+ * An ACTION key — the same chip one rung taller (40 pt), for the things this
+ * card can DO. Three of them wrap instead of stacking three full-width
+ * buttons; §2 gives each one `flexShrink` and a single-line label so the row
+ * can never overset the card.
+ */
+function ActionKey({ label, icon, tint, colors, onPress, onPressIn, testID }) {
+  return (
+    <Pressable
+      onPressIn={onPressIn}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      testID={testID}
+      style={({ pressed }) => [styles.actionKey, { borderColor: colors.chipGhostBorder }, pressed && styles.pressed]}
+    >
+      <Icon name={icon} size={16} color={tint || colors.textPrimary} />
+      <Text style={[styles.actionKeyText, { color: colors.textPrimary }]} numberOfLines={1}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function Section({ label, colors, children, right }) {
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHead}>
+        <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>{label}</Text>
+        {right}
+      </View>
+      {children}
+    </View>
+  );
+}
+
+export const TaskDetail = ({
+  task,
+  visible,
+  onClose,
+  onEdit,
+  onToggleComplete,
   onDelete,
   onTagPress,
   onToggleSubtask,
@@ -52,8 +144,7 @@ export const TaskDetail = ({
 }) => {
   const { theme } = useTheme();
   const { api } = useServer();
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const [isClosing, setIsClosing] = useState(false);
+  const insets = useSafeAreaInsets();
   const [pomoCount, setPomoCount] = useState(0);
   const [comments, setComments] = useState([]);
   const [commentDraft, setCommentDraft] = useState('');
@@ -116,76 +207,24 @@ export const TaskDetail = ({
     } catch { /* keep draft */ } finally { setPostingComment(false); }
   }, [api, task?.id, commentDraft, postingComment, loadComments]);
 
-  useEffect(() => {
-    if (visible) {
-      setIsClosing(false);
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: true,
-      }).start();
-    } else if (isClosing) {
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }).start(() => {
-        setIsClosing(false);
-      });
-    }
-  }, [visible, isClosing, fadeAnim]);
-  
-  const handleClose = () => {
-    setIsClosing(true);
-    Animated.timing(fadeAnim, {
-      toValue: 0,
-      duration: 200,
-      useNativeDriver: true,
-    }).start(() => {
-      onClose();
-    });
-  };
+  // The sheet is a white-on-black surface whatever the app theme is (§1), the
+  // same frost the day panel's inspector wears.
+  const colors = useMemo(() => sheetColors(theme, true), [theme]);
 
-  // Ref-mirror of handleClose. The PanResponder below is created ONCE
-  // (useMemo with empty deps), so it would otherwise close over the
-  // first-render handleClose forever. We point this ref at the latest
-  // handleClose every render — the responder dereferences it on
-  // release, so a stale `onClose` prop can never leak through.
-  const handleCloseRef = useRef(handleClose);
-  handleCloseRef.current = handleClose;
+  // The shell owns the exit animation and calls onClose at the end of it, so
+  // dismissal is just the prop — no local fade/isClosing state, and no
+  // bespoke edge-swipe: a drag down past the collapsed detent closes.
+  const handleTagPress = useCallback((tag) => { onClose?.(); onTagPress?.(tag); }, [onClose, onTagPress]);
 
-  // Edge-swipe-back gesture. Only claims gestures that BEGAN within
-  // the left bezel and drag dominantly right; everything else passes
-  // through to the ScrollView so taps and vertical scrolls keep
-  // working. PanResponder identity is stable for the component's
-  // lifetime — see the ref above for why.
-  const edgeBackResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponder: (evt, g) => {
-          const startX = evt.nativeEvent.pageX - g.dx;
-          return (
-            startX < EDGE_BACK_ZONE_PX &&
-            g.dx > 8 &&
-            Math.abs(g.dx) > Math.abs(g.dy) * 1.5
-          );
-        },
-        onPanResponderRelease: (_, g) => {
-          if (g.dx > EDGE_BACK_COMMIT_DX || g.vx > EDGE_BACK_COMMIT_VX) {
-            handleCloseRef.current?.();
-          }
-        },
-      }),
-    [],
-  );
+  // Mounted only while open: a closed card costs the gesture path nothing, and
+  // ViewerSheet plays its entrance on mount.
+  if (!task || !visible) return null;
 
-  if (!task) return null;
-
-  // Ensure subtasks exists
   const subtasks = task.subtasks || [];
   const tags = normalizeTags(task.tags);
   const allSubtasksDone = areAllSubtasksCompleted(subtasks);
   const completedSubtasks = subtasks.filter(st => st.completed).length;
+  const done = isTaskDoneNow(task);
 
   // Occasion (event / birthday) extras.
   const kind = itemTypeOf(task);
@@ -203,643 +242,374 @@ export const TaskDetail = ({
     return f ? (f.displayName || f.phone || 'Member') : id;
   };
 
-  const styles = createStyles(theme);
+  // The one filled pill on the card: priority for a task, the kind for an
+  // occasion. Black ink on the accent — the inversion rule, and the only
+  // colour-as-fill on the surface.
+  const stampColor = isOccasion ? (occasionColor || theme.colors.accentInfo) : getPriorityColor(task.priority, theme);
+  const stampLabel = isOccasion ? kind : (task.priority || 'medium');
+
+  // While a recurring task is checked (done-now), show the TICKED date — not
+  // the already-advanced next dueDate, which read as "completed it, now it
+  // says due tomorrow?!".
+  const shownDate = (done && !task.completed && lastCompletedDate(task)) || task.dueDate;
+  const dateLabel = isOccasion ? 'Date' : (done && !task.completed ? 'Done' : 'Due');
+
+  const titleField = (
+    <View style={styles.titleRow}>
+      {/* done-now, not the raw bool: a recurring task's `completed` never flips
+          (the series stays live), so keying off it left the ring unchecked
+          right after ticking — and a confused second tap silently unticked it. */}
+      <Pressable
+        onPressIn={() => tapHaptic()}
+        onPress={onToggleComplete}
+        hitSlop={12}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: done }}
+        accessibilityLabel={done ? 'Mark incomplete' : 'Mark complete'}
+        testID="detail-done"
+        style={[styles.ring, { borderColor: colors.textPrimary }, done && { backgroundColor: colors.textPrimary }]}
+      >
+        {done && <Icon name="check" size={16} color={colors.background} />}
+      </Pressable>
+      <Pressable
+        onPressIn={() => tapHaptic()}
+        onPress={onEdit}
+        accessibilityRole="button"
+        accessibilityLabel={`Edit ${task.title}`}
+        testID="detail-title"
+        style={({ pressed }) => [styles.titleTextWrap, pressed && styles.pressed]}
+      >
+        <Text style={[styles.title, { color: colors.textPrimary }, done && styles.struck]}>
+          {task.title}
+        </Text>
+        <View style={styles.editHintRow}>
+          <Icon name="pencil-outline" size={12} color={colors.textMuted} />
+          <Text style={[styles.editHint, { color: colors.textMuted }]}>Tap to edit</Text>
+        </View>
+      </Pressable>
+    </View>
+  );
+
+  const footer = (
+    /* No bottom padding: the shell pins this bar and owns the space under it. */
+    <View style={styles.footer}>
+      <Pressable
+        onPressIn={() => tapHaptic()}
+        onPress={onEdit}
+        accessibilityRole="button"
+        accessibilityLabel="Edit task"
+        testID="detail-edit"
+        style={({ pressed }) => [styles.primary, { backgroundColor: colors.chip }, pressed && styles.pressed]}
+      >
+        <Icon name="square-edit-outline" size={16} color={colors.chipText} />
+        <Text style={[styles.primaryText, { color: colors.chipText }]}>Edit</Text>
+      </Pressable>
+      <Pressable
+        onPressIn={() => notifyHaptic('warning')}
+        onPress={onDelete}
+        accessibilityRole="button"
+        accessibilityLabel="Delete task"
+        testID="detail-delete"
+        style={({ pressed }) => [styles.secondary, { borderColor: 'rgba(248,113,113,0.6)' }, pressed && styles.pressed]}
+      >
+        <Icon name="trash-can-outline" size={16} color="#F87171" />
+        <Text style={[styles.secondaryText, { color: '#F87171' }]}>Delete</Text>
+      </Pressable>
+    </View>
+  );
+
+  const hasActions = (onContinue && !isOccasion) || onStartPomodoro || onQueueForClaude;
 
   return (
-    <Modal animationType="none" transparent visible={visible} onRequestClose={handleClose}>
-      <Animated.View
-        style={[styles.overlay, { opacity: fadeAnim }]}
-        {...edgeBackResponder.panHandlers}
+    /* Transparent Modal so the card covers the floating tab bar too — the same
+       mounting the day panel's inspector uses. The shell's own footer only has
+       to clear the home indicator, so bottomInset is the safe-area inset. */
+    <Modal
+      visible
+      transparent
+      animationType="none"
+      statusBarTranslucent
+      onRequestClose={onClose}
+      supportedOrientations={['portrait', 'landscape']}
+    >
+      <ViewerSheet
+        title={isOccasion ? titleCase(kind) : (task.project ? boardLabel(task.project) : 'Task')}
+        subtitle={done && !task.completed
+          ? 'Done'
+          : (task.dueDate ? `${formatDueDate(task.dueDate)}${task.time ? ` · ${task.time}` : ''}` : 'No date')}
+        bottomInset={insets.bottom}
+        onClose={onClose}
+        theme={theme}
+        dark
+        keyboard
+        topBar={titleField}
+        footer={footer}
+        testID="task-detail-sheet"
       >
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-          <View style={styles.content}>
-            <View style={styles.header}>
-              {isOccasion ? (
-                <View style={[styles.badge, { backgroundColor: occasionColor || theme.colors.accentInfo }]}>
-                  <Text style={styles.badgeText}>{kind}</Text>
-                </View>
-              ) : (
-                <View style={[styles.badge, { backgroundColor: getPriorityColor(task.priority, theme) }]}>
-                  <Text style={styles.badgeText}>{task.priority}</Text>
-                </View>
-              )}
-              <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
-                <Icon name="close" size={24} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Title row — web-style: a tappable complete circle on the left
-                (fills green w/ a check when done), and the title itself is
-                tappable to expand into the editor. */}
-            <View style={styles.titleRow}>
-              {/* done-now, not the raw bool: a recurring task's `completed`
-                  never flips (the series stays live), so keying off it left the
-                  circle unchecked right after ticking — and a confused second
-                  tap silently unticked it. */}
-              <TouchableOpacity
-                onPressIn={() => tapHaptic()}
-                onPress={onToggleComplete}
-                activeOpacity={0.7}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                style={[styles.completeCircle, isTaskDoneNow(task) && styles.completeCircleDone]}
-                accessibilityLabel={isTaskDoneNow(task) ? 'Mark incomplete' : 'Mark complete'}
-              >
-                {isTaskDoneNow(task) && (
-                  <Icon name="check" size={16} color={theme.colors.background} />
-                )}
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.titleTextWrap}
-                onPressIn={() => tapHaptic()}
-                onPress={onEdit}
-                activeOpacity={0.6}
-              >
-                <Text style={[styles.title, isTaskDoneNow(task) && styles.titleCompleted]}>
-                  {task.title}
-                </Text>
-                <View style={styles.editHintRow}>
-                  <Icon name="pencil-outline" size={12} color={theme.colors.textTertiary} />
-                  <Text style={styles.editHint}>Tap to edit</Text>
-                </View>
-              </TouchableOpacity>
-            </View>
-
-            {/* Subtasks progress */}
-            {subtasks.length > 0 && (
-              <View style={styles.subtaskSection}>
-                <View style={styles.subtaskHeader}>
-                  <Text style={styles.subtaskTitle}>Subtasks</Text>
-                  <Text style={styles.subtaskCount}>
-                    {completedSubtasks}/{subtasks.length}
-                  </Text>
-                </View>
-                <View style={styles.progressBar}>
-                  <View 
-                    style={[
-                      styles.progressFill, 
-                      { width: `${(completedSubtasks / subtasks.length) * 100}%` }
-                    ]} 
-                  />
-                </View>
-                {allSubtasksDone && (
-                  <Text style={styles.allDoneText}>All subtasks completed!</Text>
-                )}
-              </View>
-            )}
-
-            <View style={styles.meta}>
-              {task.project && (
-                <View style={styles.metaItem}>
-                  <Icon name="folder" size={16} color={theme.colors.textPrimary} />
-                  <Text style={styles.metaText}>{task.project}</Text>
-                </View>
-              )}
-
-              {tags.length > 0 && (
-                <View style={styles.tagsRow}>
-                  {tags.map((tag, idx) => (
-                    <TouchableOpacity 
-                      key={idx} 
-                      style={styles.tagChip}
-                      onPress={() => { onClose(); onTagPress(tag); }}
-                    >
-                      <Icon name="tag" size={12} color={theme.colors.textPrimary} />
-                      <Text style={styles.tagText}>{tag}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-
-              {task.dueDate && (
-                <View style={styles.metaItem}>
-                  <Icon name="calendar" size={16} color={theme.colors.textSecondary} />
-                  {/* While a recurring task is checked (done-now), show the
-                      TICKED date — not the already-advanced next dueDate, which
-                      read as "completed it, now it says due tomorrow?!". */}
-                  <Text style={styles.metaText}>
-                    {isOccasion ? 'Date' : (isTaskDoneNow(task) && !task.completed ? 'Done' : 'Due')}: {(isTaskDoneNow(task) && !task.completed && lastCompletedDate(task)) || task.dueDate}
-                  </Text>
-                </View>
-              )}
-
-              {task.time && isOccasion && (
-                <View style={styles.metaItem}>
-                  <Icon name="clock-outline" size={16} color={theme.colors.textSecondary} />
-                  <Text style={styles.metaText}>{task.time}</Text>
-                </View>
-              )}
-
-              {yearly && (
-                <View style={styles.metaItem}>
-                  <Icon name="calendar-refresh" size={16} color={theme.colors.accentSuccess} />
-                  <Text style={styles.metaText}>Every year</Text>
-                </View>
-              )}
-
-              <View style={styles.metaItem}>
-                <Icon name="clock-outline" size={16} color={theme.colors.textSecondary} />
-                <Text style={styles.metaText}>
-                  Created: {new Date(task.createdAt).toLocaleDateString()}
-                </Text>
-              </View>
-
-              {task.completed && task.completedTime && (
-                <View style={[styles.metaItem, styles.completedItem]}>
-                  <Icon name="check-circle" size={16} color={theme.colors.accentSuccess} />
-                  <Text style={[styles.metaText, styles.completedText]}>
-                    Done: {new Date(task.completedTime).toLocaleString()}
-                  </Text>
-                </View>
-              )}
-
-              {pomoCount > 0 && (
-                <View style={styles.metaItem}>
-                  <Icon name="timer-outline" size={16} color={theme.colors.accentInfo} />
-                  <Text style={styles.metaText}>
-                    {pomoCount} {pomoCount === 1 ? 'pomodoro' : 'pomodoros'} spent
-                  </Text>
-                </View>
-              )}
-            </View>
-
-            {task.description && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Description</Text>
-                <Text style={styles.description}>{task.description}</Text>
-              </View>
-            )}
-
-            {/* Guests — events. */}
-            {guests.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Guests ({guests.length})</Text>
-                <View style={styles.tagsRow}>
-                  {guests.map((g, idx) => (
-                    <View key={idx} style={styles.tagChip}>
-                      <Icon name="account" size={12} color={theme.colors.textPrimary} />
-                      <Text style={styles.tagText}>{g}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )}
-
-            {/* People involved — tasks. They can see the task (view-only) and
-                were notified when added. Edit the set via the task editor. */}
-            {!isOccasion && involvedUsers.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>People involved ({involvedUsers.length})</Text>
-                <View style={styles.tagsRow}>
-                  {involvedUsers.map((id) => (
-                    <View key={id} style={styles.tagChip}>
-                      <Icon name="account" size={12} color={theme.colors.accentInfo} />
-                      <Text style={styles.tagText}>{nameOfUser(id)}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )}
-
-            {/* Reminders — birthdays. */}
-            {reminderLabels.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Reminders</Text>
-                <View style={styles.tagsRow}>
-                  {reminderLabels.map((label, idx) => (
-                    <View key={idx} style={styles.tagChip}>
-                      <Icon name="bell-ring" size={12} color={theme.colors.textPrimary} />
-                      <Text style={styles.tagText}>{label}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )}
-
-            {/* Subtasks list in detail */}
-            {subtasks.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Subtasks</Text>
-                {subtasks.map((subtask, idx) => (
-                  <TouchableOpacity 
-                    key={subtask.id} 
-                    style={styles.subtaskRow}
-                    onPress={() => onToggleSubtask?.(task.id, subtask.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Icon 
-                      name={subtask.completed ? "checkbox-marked" : "checkbox-blank-outline"} 
-                      size={18} 
-                      color={subtask.completed ? theme.colors.accentSuccess : theme.colors.textSecondary} 
-                    />
-                    <Text style={[
-                      styles.subtaskText,
-                      subtask.completed && styles.subtaskCompleted
-                    ]}>
-                      {subtask.title}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
-            {/* "Continue today" — re-add this task to today as a
-                progress-carrying copy. Subtasks and their done state ride
-                along (the "status it already had"); the copy itself is an
-                open continuation of this still-open task. Tasks only —
-                occasions (events/birthdays) aren't continued this way. */}
-            {onContinue && !isOccasion && (
-              <TouchableOpacity
-                style={styles.continueBtn}
-                onPressIn={() => notifyHaptic('success')}
-                onPress={onContinue}
-                activeOpacity={0.85}
-              >
-                <Icon name="calendar-plus" size={20} color={theme.colors.textPrimary} />
-                <Text style={styles.continueText}>Continue today</Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Start a focus timer for this task. Routes through the Turtle
-                chat's /pomodoro pipeline (the task title rides along as the
-                session label), then jumps to the Turtle tab where the timer
-                card lives. */}
-            {onStartPomodoro && (
-              <TouchableOpacity
-                style={styles.pomodoroBtn}
-                onPressIn={() => impactHaptic('medium')}
-                onPress={onStartPomodoro}
-                activeOpacity={0.85}
-              >
-                <Icon name="timer-outline" size={20} color={theme.colors.textPrimary} />
-                <Text style={styles.pomodoroText}>Start Pomodoro</Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Hand this task off to the Claude session (Turtle tab). It's
-                added to a queue that Claude works through one at a time. */}
-            {onQueueForClaude && (
-              <TouchableOpacity
-                style={styles.claudeQueueBtn}
-                onPress={onQueueForClaude}
-                activeOpacity={0.85}
-              >
-                <Icon name="robot-outline" size={20} color={theme.colors.textPrimary} />
-                <Text style={styles.claudeQueueText}>Send to Claude</Text>
-              </TouchableOpacity>
-            )}
-
-            <View style={styles.actions}>
-              <TouchableOpacity style={[styles.actionBtn, styles.editBtn]} onPress={onEdit}>
-                <Icon name="pencil" size={20} color={theme.colors.textPrimary} />
-                <Text style={styles.actionText}>Edit</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPressIn={() => notifyHaptic('warning')} onPress={onDelete}>
-                <Icon name="delete" size={20} color={theme.colors.textPrimary} />
-                <Text style={styles.actionText}>Delete</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Comments — read + reply. Gated server-side by taskVisibility, so
-                the owner, shared-board members, and involved parties can all
-                participate. */}
-            <View style={styles.section}>
-              <Text style={{ fontSize: 12, fontWeight: '700', color: theme.colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
-                {comments.length ? `Comments · ${comments.length}` : 'Comments'}
-              </Text>
-              {comments.length === 0 ? (
-                <Text style={{ fontSize: 13, color: theme.colors.textTertiary, fontStyle: 'italic', paddingVertical: 6 }}>
-                  No comments yet. Start the conversation.
-                </Text>
-              ) : (
-                comments.map((c) => (
-                  <View key={c.id} style={{ flexDirection: 'row', gap: 10, paddingVertical: 8 }}>
-                    <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: (theme.colors.accentInfo || '#0a84ff') + '33', alignItems: 'center', justifyContent: 'center' }}>
-                      <Text style={{ fontSize: 11, fontWeight: '700', color: theme.colors.accentInfo || '#0a84ff' }}>
-                        {commentInitials(c.authorName)}
-                      </Text>
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={{ fontSize: 13 }}>
-                        <Text style={{ fontWeight: '700', color: theme.colors.textPrimary }}>{c.authorName}</Text>
-                        <Text style={{ color: theme.colors.textTertiary }}>{`  ${fmtCommentTime(c.createdAt)}`}</Text>
-                      </Text>
-                      <Text style={{ fontSize: 14, color: theme.colors.textPrimary, marginTop: 2 }}>{c.content}</Text>
-                    </View>
-                  </View>
-                ))
-              )}
-              <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 10 }}>
-                <TextInput
-                  style={{ flex: 1, minHeight: 40, maxHeight: 120, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, color: theme.colors.textPrimary, backgroundColor: theme.colors.surfaceElevated }}
-                  placeholder="Add a comment…"
-                  placeholderTextColor={theme.colors.textTertiary}
-                  value={commentDraft}
-                  onChangeText={setCommentDraft}
-                  multiline
-                />
-                <TouchableOpacity
-                  onPressIn={() => impactHaptic('medium')}
-                  onPress={postComment}
-                  disabled={!commentDraft.trim() || postingComment}
-                  style={{ width: 44, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.accentInfo || '#0a84ff', opacity: commentDraft.trim() && !postingComment ? 1 : 0.5 }}
-                >
-                  <Icon name="send" size={18} color="#fff" />
-                </TouchableOpacity>
-              </View>
+        <Section label={isOccasion ? 'Type' : 'Priority'} colors={colors}>
+          <View style={styles.wrap}>
+            <View style={[styles.stamp, { backgroundColor: stampColor }]}>
+              <Text style={styles.stampText} numberOfLines={1}>{stampLabel}</Text>
             </View>
           </View>
-        </ScrollView>
-      </Animated.View>
+        </Section>
+
+        <Section label="Details" colors={colors}>
+          <View style={styles.wrap}>
+            {!!task.project && <Key icon="folder-outline" label={boardLabel(task.project)} colors={colors} />}
+            {!!shownDate && <Key icon="calendar-blank-outline" label={`${dateLabel}: ${shownDate}`} colors={colors} />}
+            {!!task.time && isOccasion && <Key icon="clock-outline" label={task.time} colors={colors} />}
+            {yearly && <Key icon="calendar-refresh" label="Every year" tint={theme.colors.accentSuccess} colors={colors} />}
+            <Key icon="clock-outline" label={`Created: ${new Date(task.createdAt).toLocaleDateString()}`} colors={colors} />
+            {task.completed && task.completedTime && (
+              <Key icon="check-circle" label={`Done: ${new Date(task.completedTime).toLocaleString()}`} tint={theme.colors.accentSuccess} colors={colors} />
+            )}
+            {pomoCount > 0 && (
+              <Key icon="timer-outline" label={`${pomoCount} ${pomoCount === 1 ? 'pomodoro' : 'pomodoros'} spent`} tint={theme.colors.accentInfo} colors={colors} />
+            )}
+          </View>
+        </Section>
+
+        {tags.length > 0 && (
+          <Section label="Tags" colors={colors}>
+            <View style={styles.wrap}>
+              {tags.map((tag, idx) => (
+                <Key key={idx} icon="tag-outline" label={tag} colors={colors} onPress={() => handleTagPress(tag)} />
+              ))}
+            </View>
+          </Section>
+        )}
+
+        {/* Guests — events. */}
+        {guests.length > 0 && (
+          <Section label={`Guests · ${guests.length}`} colors={colors}>
+            <View style={styles.wrap}>
+              {guests.map((g, idx) => <Key key={idx} icon="account-outline" label={g} colors={colors} />)}
+            </View>
+          </Section>
+        )}
+
+        {/* People involved — tasks. They can see the task (view-only) and were
+            notified when added. Edit the set via the task editor. */}
+        {!isOccasion && involvedUsers.length > 0 && (
+          <Section label={`People involved · ${involvedUsers.length}`} colors={colors} right={<Text style={[styles.hint, { color: colors.textMuted }]}>edit in the full editor</Text>}>
+            <View style={styles.wrap}>
+              {involvedUsers.map((id) => (
+                <Key key={id} icon="account-outline" label={nameOfUser(id)} tint={theme.colors.accentInfo} colors={colors} />
+              ))}
+            </View>
+          </Section>
+        )}
+
+        {/* Reminders — birthdays. */}
+        {reminderLabels.length > 0 && (
+          <Section label="Reminders" colors={colors}>
+            <View style={styles.wrap}>
+              {reminderLabels.map((label, idx) => <Key key={idx} icon="bell-ring-outline" label={label} colors={colors} />)}
+            </View>
+          </Section>
+        )}
+
+        {task.description ? (
+          <Section label="Notes" colors={colors}>
+            <View style={[styles.notes, { backgroundColor: colors.surface }]}>
+              <Text style={[styles.notesText, { color: colors.textPrimary }]}>{task.description}</Text>
+            </View>
+          </Section>
+        ) : null}
+
+        {subtasks.length > 0 && (
+          <Section
+            label={`Subtasks · ${completedSubtasks}/${subtasks.length}`}
+            colors={colors}
+            right={allSubtasksDone ? <Text style={[styles.hint, { color: theme.colors.accentSuccess }]}>all done</Text> : null}
+          >
+            <View style={[styles.track, { backgroundColor: colors.surface }]}>
+              <View style={[styles.trackFill, { width: `${(completedSubtasks / subtasks.length) * 100}%`, backgroundColor: colors.textPrimary }]} />
+            </View>
+            {subtasks.map((subtask) => (
+              <Pressable
+                key={subtask.id}
+                onPressIn={() => impactHaptic('light')}
+                onPress={() => onToggleSubtask?.(task.id, subtask.id)}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: !!subtask.completed }}
+                accessibilityLabel={subtask.completed ? `Mark ${subtask.title} not done` : `Mark ${subtask.title} done`}
+                style={({ pressed }) => [styles.subRow, { borderBottomColor: colors.border }, pressed && styles.pressed]}
+              >
+                <View style={[styles.subRing, { borderColor: colors.textPrimary }, subtask.completed && { backgroundColor: colors.textPrimary }]}>
+                  {subtask.completed && <Icon name="check" size={12} color={colors.background} />}
+                </View>
+                <Text
+                  style={[styles.subTitle, { color: subtask.completed ? colors.textMuted : colors.textPrimary }, subtask.completed && styles.struck]}
+                  numberOfLines={2}
+                >
+                  {subtask.title}
+                </Text>
+              </Pressable>
+            ))}
+          </Section>
+        )}
+
+        {hasActions && (
+          <Section label="Actions" colors={colors}>
+            <View style={styles.wrap}>
+              {/* "Continue today" — re-add this task to today as a
+                  progress-carrying copy. Subtasks and their done state ride
+                  along (the "status it already had"); the copy itself is an
+                  open continuation of this still-open task. Tasks only —
+                  occasions (events/birthdays) aren't continued this way. */}
+              {onContinue && !isOccasion && (
+                <ActionKey
+                  label="Continue today"
+                  icon="calendar-plus"
+                  tint={theme.colors.accentSuccess}
+                  colors={colors}
+                  onPressIn={() => notifyHaptic('success')}
+                  onPress={onContinue}
+                  testID="detail-continue"
+                />
+              )}
+              {/* Start a focus timer for this task. Routes through the Turtle
+                  chat's /pomodoro pipeline (the task title rides along as the
+                  session label), then jumps to the Turtle tab where the timer
+                  card lives. */}
+              {onStartPomodoro && (
+                <ActionKey
+                  label="Start Pomodoro"
+                  icon="timer-outline"
+                  tint={theme.colors.accentWarning}
+                  colors={colors}
+                  onPressIn={() => impactHaptic('medium')}
+                  onPress={onStartPomodoro}
+                  testID="detail-pomodoro"
+                />
+              )}
+              {/* Hand this task off to the Claude session (Turtle tab). It's
+                  added to a queue that Claude works through one at a time. */}
+              {onQueueForClaude && (
+                <ActionKey
+                  label="Send to Claude"
+                  icon="robot-outline"
+                  tint={theme.colors.accentInfo}
+                  colors={colors}
+                  onPressIn={() => tapHaptic()}
+                  onPress={onQueueForClaude}
+                  testID="detail-claude"
+                />
+              )}
+            </View>
+          </Section>
+        )}
+
+        {/* Comments — read + reply. Gated server-side by taskVisibility, so the
+            owner, shared-board members, and involved parties can all take part. */}
+        <Section label={comments.length ? `Comments · ${comments.length}` : 'Comments'} colors={colors}>
+          {comments.length === 0 ? (
+            <Text style={[styles.empty, { color: colors.textMuted }]}>No comments yet. Start the conversation.</Text>
+          ) : (
+            comments.map((c) => (
+              <View key={c.id} style={styles.commentRow}>
+                <View style={[styles.avatar, { backgroundColor: colors.surface }]}>
+                  <Text style={[styles.avatarText, { color: colors.textPrimary }]}>{commentInitials(c.authorName)}</Text>
+                </View>
+                <View style={styles.commentBody}>
+                  <Text style={styles.commentMeta} numberOfLines={1}>
+                    <Text style={[styles.commentAuthor, { color: colors.textPrimary }]}>{c.authorName}</Text>
+                    <Text style={{ color: colors.textMuted }}>{`  ${fmtCommentTime(c.createdAt)}`}</Text>
+                  </Text>
+                  <Text style={[styles.commentText, { color: colors.textPrimary }]}>{c.content}</Text>
+                </View>
+              </View>
+            ))
+          )}
+          <View style={styles.composer}>
+            <View style={[styles.composerField, { backgroundColor: colors.surface }]}>
+              <AppTextInput
+                style={[styles.composerInput, { color: colors.textPrimary }]}
+                placeholder="Add a comment…"
+                placeholderTextColor={colors.textMuted}
+                value={commentDraft}
+                onChangeText={setCommentDraft}
+                accessibilityLabel="Add a comment"
+                testID="detail-comment-input"
+                multiline
+              />
+            </View>
+            <Pressable
+              onPressIn={() => impactHaptic('medium')}
+              onPress={postComment}
+              disabled={!commentDraft.trim() || postingComment}
+              accessibilityRole="button"
+              accessibilityLabel="Post comment"
+              testID="detail-comment-send"
+              style={({ pressed }) => [
+                styles.send,
+                { backgroundColor: colors.chip, opacity: commentDraft.trim() && !postingComment ? 1 : 0.4 },
+                pressed && styles.pressed,
+              ]}
+            >
+              <Icon name="send" size={18} color={colors.chipText} />
+            </Pressable>
+          </View>
+        </Section>
+      </ViewerSheet>
     </Modal>
   );
 };
 
-const createStyles = (theme) => StyleSheet.create({
-  overlay: { 
-    flex: 1, 
-    backgroundColor: 'rgba(0, 0, 0, 0.5)', 
-    justifyContent: 'flex-end' 
-  },
-  scrollView: { 
-    maxHeight: '80%' 
-  },
-  scrollContent: { 
-    flexGrow: 1, 
-    justifyContent: 'flex-end' 
-  },
-  content: { 
-    backgroundColor: theme.colors.background, 
-    borderTopLeftRadius: 20, 
-    borderTopRightRadius: 20, 
-    padding: 20 
-  },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    marginBottom: 15 
-  },
-  closeBtn: { 
-    padding: 5 
-  },
-  // Title row — complete circle + tappable title (expands to editor)
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 15,
-  },
-  completeCircle: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: 1.5,
-    borderColor: theme.colors.borderStrong,
-    backgroundColor: 'transparent',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-    marginTop: 1,
-  },
-  completeCircleDone: {
-    borderColor: theme.colors.accentSuccess,
-    backgroundColor: theme.colors.accentSuccess,
-  },
-  titleTextWrap: {
-    flex: 1,
-    minWidth: 0,
-  },
-  title: {
-    fontSize: theme.typography.body,
-    fontWeight: 'bold',
-    color: theme.colors.textPrimary,
-  },
-  titleCompleted: {
-    textDecorationLine: 'line-through',
-    color: theme.colors.textMuted,
-  },
-  editHintRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-    gap: 4,
-  },
-  editHint: {
-    fontSize: 11,
-    color: theme.colors.textTertiary,
-  },
+const styles = StyleSheet.create({
+  // Top bar — the ring and the title, the shell's fixed row under the header.
+  titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingBottom: 12 },
+  ring: { width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  titleTextWrap: { flex: 1, minWidth: 0 },
+  title: { fontSize: 20, fontWeight: '600', lineHeight: 26 },
+  struck: { textDecorationLine: 'line-through', opacity: 0.6 },
+  editHintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  editHint: { fontSize: 11, fontWeight: '500' },
 
-  // Subtask section
-  subtaskSection: {
-    backgroundColor: theme.colors.surfaceElevated,
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 15,
-  },
-  subtaskHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  subtaskTitle: {
-    fontSize: theme.typography.body,
-    fontWeight: '600',
-    color: theme.colors.textPrimary,
-  },
-  subtaskCount: {
-    fontSize: theme.typography.body,
-    color: theme.colors.textSecondary,
-  },
-  progressBar: {
-    height: 4,
-    backgroundColor: theme.colors.surfaceHighlight,
-    borderRadius: 2,
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: theme.colors.textSecondary,
-    borderRadius: 2,
-  },
-  allDoneText: {
-    fontSize: theme.typography.body,
-    color: theme.colors.accentSuccess,
-    marginTop: 8,
-    fontStyle: 'italic',
-  },
-  
-  badge: { 
-    paddingHorizontal: 12, 
-    paddingVertical: 6, 
-    borderRadius: 15 
-  },
-  badgeText: { 
-    color: theme.colors.textPrimary, 
-    fontWeight: '600', 
-    textTransform: 'uppercase', 
-    fontSize: theme.typography.body 
-  },
-  
-  meta: { 
-    flexDirection: 'row', 
-    flexWrap: 'wrap', 
-    marginBottom: 20 
-  },
-  metaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.surfaceElevated,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 15,
-    marginRight: 10,
-    marginBottom: 5,
-  },
-  metaText: { 
-    fontSize: theme.typography.body, 
-    color: theme.colors.textSecondary, 
-    marginLeft: 6 
-  },
-  tagsRow: { 
-    flexDirection: 'row', 
-    flexWrap: 'wrap', 
-    marginRight: 10, 
-    marginBottom: 5 
-  },
-  tagChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.surfaceElevated,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginRight: 6,
-    marginBottom: 4,
-  },
-  tagText: { 
-    fontSize: theme.typography.body, 
-    color: theme.colors.textPrimary, 
-    marginLeft: 4 
-  },
-  completedItem: { 
-    backgroundColor: theme.colors.surfaceHighlight 
-  },
-  completedText: { 
-    color: theme.colors.accentSuccess 
-  },
-  
-  section: { 
-    marginBottom: 20 
-  },
-  sectionTitle: { 
-    fontSize: theme.typography.body, 
-    fontWeight: '600', 
-    color: theme.colors.textSecondary, 
-    marginBottom: 8, 
-    textTransform: 'uppercase' 
-  },
-  description: { 
-    fontSize: theme.typography.body, 
-    color: theme.colors.textPrimary, 
-    lineHeight: 22 
-  },
-  
-  // Subtasks in detail
-  subtaskRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-  },
-  subtaskText: {
-    fontSize: theme.typography.body,
-    color: theme.colors.textPrimary,
-    marginLeft: 8,
-  },
-  subtaskCompleted: {
-    textDecorationLine: 'line-through',
-    color: theme.colors.textMuted,
-  },
-  
-  continueBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 10,
-    marginTop: 20,
-    backgroundColor: theme.colors.surfaceElevated,
-    borderWidth: 1,
-    // accentSuccess reads as "carry this forward / add"; accentPrimary is a
-    // web-only token (undefined here) so we fall back through valid mobile tokens.
-    borderColor: theme.colors.accentSuccess || theme.colors.accentInfo || theme.colors.border,
-  },
-  continueText: {
-    color: theme.colors.textPrimary,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  pomodoroBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 10,
-    marginTop: 20,
-    backgroundColor: theme.colors.surfaceElevated,
-    borderWidth: 1,
-    // accentPrimary is a web-only token (undefined on mobile); accentInfo is the
-    // valid blue accent here.
-    borderColor: theme.colors.accentInfo || theme.colors.border,
-  },
-  pomodoroText: {
-    color: theme.colors.textPrimary,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  claudeQueueBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 10,
-    marginTop: 20,
-    backgroundColor: theme.colors.surfaceElevated,
-    borderWidth: 1,
-    borderColor: theme.colors.accentPrimary || theme.colors.border,
-  },
-  claudeQueueText: {
-    color: theme.colors.textPrimary,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  actions: {
-    flexDirection: 'row',
-    marginTop: 20,
-    paddingTop: 20,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border
-  },
-  actionBtn: { 
-    flex: 1, 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    padding: 12, 
-    borderRadius: 10, 
-    marginHorizontal: 5,
-    backgroundColor: theme.colors.surfaceElevated,
-    borderWidth: 0.5,
-    borderColor: theme.colors.border,
-  },
-  editBtn: { 
-    backgroundColor: theme.colors.surfaceElevated 
-  },
-  deleteBtn: { 
-    backgroundColor: theme.colors.surfaceElevated 
-  },
-  actionText: { 
-    color: theme.colors.textPrimary, 
-    fontWeight: '600', 
-    marginLeft: 8 
-  },
+  // Sections — the app's small-caps label, the Overview / inspector scale.
+  section: { marginTop: 4, marginBottom: 14 },
+  sectionHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 },
+  sectionLabel: { fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9, textTransform: 'uppercase' },
+  hint: { fontSize: 11, fontWeight: '500' },
+
+  // Chips. maxWidth + flexShrink + one line: nothing oversets the card (§2).
+  wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  key: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, maxWidth: '100%', flexShrink: 1 },
+  keyText: { fontSize: 12, fontWeight: '600', letterSpacing: 0.2, flexShrink: 1 },
+  stamp: { height: 30, paddingHorizontal: 14, borderRadius: 15, alignItems: 'center', justifyContent: 'center', maxWidth: '100%', flexShrink: 1 },
+  stampText: { fontSize: 12, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', color: '#000' },
+  actionKey: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 40, paddingHorizontal: 14, borderRadius: 12, borderWidth: 1, maxWidth: '100%', flexShrink: 1 },
+  actionKeyText: { fontSize: 13, fontWeight: '700', flexShrink: 1 },
+
+  notes: { borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12 },
+  notesText: { fontSize: 15, lineHeight: 21 },
+
+  track: { height: 4, borderRadius: 2, marginBottom: 6, overflow: 'hidden' },
+  trackFill: { height: '100%', borderRadius: 2 },
+  subRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth },
+  subRing: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  subTitle: { flex: 1, fontSize: 15 },
+
+  // Comments.
+  empty: { fontSize: 13, fontStyle: 'italic', paddingVertical: 6 },
+  commentRow: { flexDirection: 'row', gap: 10, paddingVertical: 8 },
+  avatar: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontSize: 11, fontWeight: '700' },
+  commentBody: { flex: 1, minWidth: 0 },
+  commentMeta: { fontSize: 13 },
+  commentAuthor: { fontWeight: '700' },
+  commentText: { fontSize: 14, marginTop: 2 },
+  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 10 },
+  composerField: { flex: 1, minHeight: 40, maxHeight: 120, borderRadius: 14, paddingHorizontal: 14, justifyContent: 'center' },
+  composerInput: { fontSize: 15, lineHeight: 20, paddingVertical: 10, textAlignVertical: 'top', includeFontPadding: false },
+  send: { width: 44, height: 40, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+
+  footer: { flexDirection: 'row', gap: 10, paddingTop: 8 },
+  primary: { flex: 1, height: 46, borderRadius: 23, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  primaryText: { fontSize: 15, fontWeight: '700' },
+  secondary: { height: 46, paddingHorizontal: 18, borderRadius: 23, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  secondaryText: { fontSize: 15, fontWeight: '700' },
+  pressed: { opacity: 0.6 },
 });

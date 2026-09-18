@@ -2,7 +2,6 @@ import React, { useRef, useEffect, useState } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   ScrollView,
   StyleSheet,
@@ -12,6 +11,7 @@ import {
   Keyboard,
   Easing,
 } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
 
@@ -192,7 +192,7 @@ export default function TerminalConsole({
             {Lines}
             <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
               <Text style={styles.inputPrompt}>{`${shortCwd(cwd)} >`}</Text>
-              <TextInput
+              <AppTextInput
                 style={styles.input}
                 value={cmd}
                 onChangeText={setCmd}

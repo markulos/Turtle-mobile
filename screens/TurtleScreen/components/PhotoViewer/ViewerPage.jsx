@@ -38,6 +38,7 @@ import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 
 import { useMusicPlayer } from '../../../../context/MusicPlayerContext';
+import { useOfflineMedia } from '../../../../context/OfflineMediaContext';
 import { dismissScale, pageTranslate } from '../../../../utils/viewerGestureMath';
 import { containSize } from '../../../../utils/zoomMath';
 import { useHdReady, useIsActive } from './stores';
@@ -51,6 +52,17 @@ import { useHdReady, useIsActive } from './stores';
 const ARRIVAL = 0.02;
 /** Seconds between the player's time reports while a video is active. */
 const TIME_UPDATE_INTERVAL = 0.25;
+/**
+ * Fullscreen = landscape, and turning the phone back upright leaves it.
+ *
+ * `autoExitOnRotate` waits until the phone has actually been ROTATED INTO
+ * landscape before it will act on a rotation out of it — otherwise entering
+ * fullscreen while holding the phone upright would exit immediately. So a
+ * video opened with the fullscreen key, then turned sideways, then turned
+ * back, ends where it started. (It also does nothing if rotation lock is on,
+ * which is the correct reading of that setting.)
+ */
+const FULLSCREEN_OPTIONS = { enable: true, orientation: 'landscape', autoExitOnRotate: true };
 
 function usePageStyle(index, sv) {
   return useAnimatedStyle(() => {
@@ -111,7 +123,12 @@ function useMediaStyle(sv) {
 // ── Photo ────────────────────────────────────────────────────────────────────
 const PhotoBody = React.memo(({ item, hdStore, getFullUrl, onAspect }) => {
   const hdReady = useHdReady(hdStore, item.id);
+  const { uriFor } = useOfflineMedia();
   const hasMetaAspect = item.width > 0 && item.height > 0;
+  // A picture the user kept: read the local file and nothing else. These are
+  // the display tier's own bytes, so this is the same picture the HD path
+  // would have fetched — it just doesn't need the pond to be reachable.
+  const offlineUri = uriFor(item.id);
 
   // Fast source: compressed > thumbnail > raw. Thumbnail before raw on purpose
   // — on tunnel mode or unmigrated rows the raw can be a 25MB HEIC, and
@@ -126,7 +143,7 @@ const PhotoBody = React.memo(({ item, hdStore, getFullUrl, onAspect }) => {
   // manager has already prefetched these exact bytes into the disk cache, so
   // this swap decodes from disk — never a cold network fetch on a view.
   const displayUri = getFullUrl(`/api/media/display/${item.id}`);
-  const uri = hdReady ? displayUri : fastUri;
+  const uri = offlineUri || (hdReady ? displayUri : fastUri);
 
   const handleLoad = useCallback((e) => {
     if (hasMetaAspect || !onAspect) return;
@@ -169,6 +186,11 @@ PhotoBody.displayName = 'PhotoBody';
 const VideoBody = React.memo(({ item, isActive, getFullUrl, onVideoControls, onVideoState }) => {
   const sourceUrl = getFullUrl(item.rawUrl || item.url || '');
   const { pause: pauseMusic } = useMusicPlayer();
+  // The native player view, for fullscreen. expo-video presents its own
+  // AVPlayerViewController, which overrides `supportedInterfaceOrientations`
+  // while fullscreen — that is what lets the video turn landscape inside an
+  // app whose every other screen is portrait.
+  const viewRef = useRef(null);
   const player = useVideoPlayer(sourceUrl, (p) => {
     // No loop: a video plays to its end and PAUSES there, like Photos; play
     // from the end starts it over (see togglePlay).
@@ -191,6 +213,9 @@ const VideoBody = React.memo(({ item, isActive, getFullUrl, onVideoControls, onV
   // While the scrubber's finger is down: playback paused, the player's own
   // time reports ignored (they would fight the finger), and whether to resume.
   const scrubRef = useRef({ active: false, resume: false });
+  // Native controls, on ONLY while fullscreen — see enterFullscreen below.
+  const [fullscreenControls, setFullscreenControls] = useState(false);
+  const pendingFullscreenRef = useRef(false);
 
   useEffect(() => {
     if (isActive) {
@@ -292,17 +317,67 @@ const VideoBody = React.memo(({ item, isActive, getFullUrl, onVideoControls, onV
         scrubRef.current = { active: false, resume: false };
         if (resume) player.play();
       },
+      // Hand the video to the native fullscreen player: landscape, the
+      // platform's own controls, and back out when the phone is turned upright
+      // again.
+      //
+      // The controls are the whole reason this is a two-step. The docs say
+      // fullscreen enables them "regardless", and it doesn't: presented from a
+      // view with `nativeControls={false}`, fullscreen is a bare landscape
+      // rectangle — no timeline, no pause, and NO WAY OUT short of guessing
+      // that turning the phone upright works. So the flag is flipped first and
+      // the presentation is opened on the next frame, once that prop has
+      // actually reached the native view; `onFullscreenExit` puts it back so
+      // the inline video returns to the viewer's own chrome.
+      enterFullscreen: () => { pendingFullscreenRef.current = true; setFullscreenControls(true); },
     };
     onVideoControls(item.id, controls);
     return () => onVideoControls(item.id, null);
   }, [isActive, player, item.id, onVideoControls, pauseMusic]);
 
+  // Second half of enterFullscreen: present once `nativeControls` has been
+  // committed to the native view. A frame, not a promise — there is no signal
+  // for "the prop landed", and opening in the same tick presents the player
+  // that was still built without controls.
+  useEffect(() => {
+    if (!fullscreenControls || !pendingFullscreenRef.current) return undefined;
+    const id = requestAnimationFrame(() => {
+      pendingFullscreenRef.current = false;
+      try {
+        const p = viewRef.current?.enterFullscreen?.();
+        // A rejected promise here is a redbox in dev and nothing useful in
+        // release — the video simply stays inline.
+        if (p && typeof p.catch === 'function') p.catch(() => { setFullscreenControls(false); });
+      } catch { setFullscreenControls(false); /* no native view yet */ }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [fullscreenControls]);
+
+  // A page that goes inactive (swiped past, viewer closed) can't be left
+  // holding the fullscreen flag — it would come back wearing platform controls
+  // over the viewer's own chrome.
+  useEffect(() => {
+    if (isActive) return undefined;
+    pendingFullscreenRef.current = false;
+    setFullscreenControls(false);
+    return undefined;
+  }, [isActive]);
+
   return (
     <VideoView
+      ref={viewRef}
       style={StyleSheet.absoluteFillObject}
       player={player}
       contentFit="contain"
-      nativeControls={false}
+      // Inline, the viewer's own chrome IS the controls. Fullscreen gets the
+      // platform's — timeline, pause, and the Done/back affordance that gets
+      // you out of landscape — which only happens if this is true before the
+      // presentation opens.
+      nativeControls={fullscreenControls}
+      fullscreenOptions={FULLSCREEN_OPTIONS}
+      // Covers every way out: Done, the back gesture, and the rotate-upright
+      // auto-exit. Whichever fired, the inline video goes back to bare.
+      onFullscreenExit={() => { pendingFullscreenRef.current = false; setFullscreenControls(false); }}
     />
   );
 });

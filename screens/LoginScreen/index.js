@@ -12,7 +12,6 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
@@ -21,6 +20,7 @@ import {
   SafeAreaView,
   Linking,
 } from 'react-native';
+import AppTextInput from '../../components/AppTextInput';
 import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../context/ThemeContext';
@@ -444,7 +444,7 @@ export default function LoginScreen() {
                   },
                 ]}>
                   <Icon name="lock" size={20} color={theme.colors.textMuted} style={styles.inputIcon} />
-                  <TextInput
+                  <AppTextInput
                     style={[styles.input, { color: theme.colors.inputText }]}
                     placeholder="Password"
                     placeholderTextColor={theme.colors.textPlaceholder}
@@ -522,7 +522,7 @@ export default function LoginScreen() {
                       },
                     ]}>
                       <Icon name="cellphone" size={20} color={theme.colors.textMuted} style={styles.inputIcon} />
-                      <TextInput
+                      <AppTextInput
                         style={[styles.input, { color: theme.colors.inputText }]}
                         placeholder="+1 647 254 9123"
                         placeholderTextColor={theme.colors.textPlaceholder}
@@ -548,7 +548,7 @@ export default function LoginScreen() {
                       { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.border },
                     ]}>
                       <Icon name="ticket-confirmation-outline" size={20} color={theme.colors.textMuted} style={styles.inputIcon} />
-                      <TextInput
+                      <AppTextInput
                         style={[styles.input, { color: theme.colors.inputText }]}
                         placeholder="Invite code, link, or pond name"
                         placeholderTextColor={theme.colors.textPlaceholder}
@@ -597,7 +597,7 @@ export default function LoginScreen() {
                     },
                   ]}>
                     <Icon name="shield-key" size={20} color={theme.colors.textMuted} style={styles.inputIcon} />
-                    <TextInput
+                    <AppTextInput
                       style={[styles.input, styles.codeInput, { color: theme.colors.inputText }]}
                       placeholder="123456"
                       placeholderTextColor={theme.colors.textPlaceholder}
@@ -642,7 +642,7 @@ export default function LoginScreen() {
                     <Text style={[styles.devHint, { color: theme.colors.textMuted, marginBottom: 8 }]}>
                       This number isn't on the pond's list yet — but you can ask to join.
                     </Text>
-                    <TextInput
+                    <AppTextInput
                       style={{
                         borderWidth: 1, borderColor: theme.colors.border, borderRadius: 10,
                         paddingHorizontal: 12, height: 44, color: theme.colors.textPrimary,
@@ -747,7 +747,7 @@ export default function LoginScreen() {
                     { flex: 1, height: 46, backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.border },
                   ]}>
                     <Icon name="magnify" size={18} color={theme.colors.textMuted} style={styles.inputIcon} />
-                    <TextInput
+                    <AppTextInput
                       style={[styles.input, { color: theme.colors.inputText, fontSize: 14 }]}
                       placeholder="Pond name, alias, or IP"
                       placeholderTextColor={theme.colors.textPlaceholder}

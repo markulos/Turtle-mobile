@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, TextInput, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
+import AppTextInput from './AppTextInput';
 import { BlurView } from 'expo-blur';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { blurProps, frostOverlayColor, frostBorderColor } from '../utils/frostedChat';
@@ -23,6 +24,25 @@ import { tapHaptic, impactHaptic } from '../utils/haptics';
  *
  * Presentational + fully controlled — the parent owns the text + send logic.
  */
+
+/**
+ * The composer's character ceiling.
+ *
+ * This was 500, and 500 is the reason a copied reply "had a character limit on
+ * the clipboard". It never did: iOS truncates a PASTE to fit `maxLength`
+ * silently, with no warning and no visible edge — so copying a 4,400-character
+ * prompt out of a reply and pasting it back to send on landed 500 characters of
+ * it and looked like the clipboard had eaten the rest.
+ *
+ * Nothing wanted that number. `POST /api/turtle/chat` only requires a non-empty
+ * string, `chat_logs.content` is TEXT, and the assistant's own replies routinely
+ * run past 5,000 characters — the app was refusing to accept what it had just
+ * produced. This is a guard against pasting an entire file into the chat, not a
+ * message-length policy, so it sits well clear of anything a person would type
+ * or quote.
+ */
+export const COMPOSER_MAX_LENGTH = 8000;
+
 export default function ChatComposer({
   theme,
   value,
@@ -39,7 +59,7 @@ export default function ChatComposer({
   canSend,               // optional override of the armed condition
   inputProps = null,     // extra props spread onto the TextInput
   multiline = true,
-  maxLength = 500,
+  maxLength = COMPOSER_MAX_LENGTH,
 }) {
   const c = theme.colors;
   const armed = canSend !== undefined
@@ -51,7 +71,7 @@ export default function ChatComposer({
     <>
       {topSlot ? <View style={styles.topZone}>{topSlot}</View> : null}
 
-      <TextInput
+      <AppTextInput
         ref={inputRef}
         style={styles.input}
         value={value}

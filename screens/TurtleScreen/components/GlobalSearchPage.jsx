@@ -16,9 +16,9 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -118,7 +118,7 @@ export default function GlobalSearchPage({ visible, initialQuery = '', onClose, 
         <View style={styles.topRow}>
           <View style={styles.field}>
             <Icon name="magnify" size={18} color={c.accentInfo} />
-            <TextInput
+            <AppTextInput
               ref={inputRef}
               style={styles.input}
               value={query}

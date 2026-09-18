@@ -4,7 +4,7 @@ export { TaskForm } from './TaskForm';
 export { TaskDetail } from './TaskDetail';
 export { TaskItem } from './TaskItem';
 export { SectionHeader } from './SectionHeader';
-export { CalendarView } from './CalendarView';
+export { CalendarView, SHEET_SOLID } from './CalendarView';
 export { DatePickerModal } from './DatePickerModal';
 export { WheelTimePicker } from './WheelTimePicker';
 export { TimelineTaskRow, UNIFORM_ROW_H, UNIFORM_CARD_H } from './TimelineTaskRow';

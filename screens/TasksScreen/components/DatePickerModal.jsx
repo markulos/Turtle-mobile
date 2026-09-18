@@ -8,6 +8,7 @@ import {
   Animated,
   Dimensions,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 
@@ -398,6 +399,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderRadius: 16,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   quickSelectText: {
     fontSize: 12,
@@ -411,6 +413,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderRadius: 8,
     borderWidth: 0.5,
     borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
   },
   closeButtonText: {
     fontSize: 14,

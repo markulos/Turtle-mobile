@@ -6,10 +6,10 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import Reanimated, {
   useAnimatedKeyboard,
   useAnimatedStyle,
@@ -289,7 +289,7 @@ export default function TrackActionsSheet({
 
             <View style={[styles.newRow, rowBorder]}>
               <Icon name="pencil-outline" size={20} color={c.textSecondary} />
-              <TextInput
+              <AppTextInput
                 testID="rename-track-input"
                 style={[styles.newInput, { color: c.textPrimary }]}
                 placeholder="Track name"
@@ -338,7 +338,7 @@ export default function TrackActionsSheet({
 
             <View style={[styles.newRow, rowBorder]}>
               <Icon name="plus" size={20} color={c.textSecondary} />
-              <TextInput
+              <AppTextInput
                 style={[styles.newInput, { color: c.textPrimary }]}
                 placeholder="New playlist…"
                 placeholderTextColor={c.textMuted}

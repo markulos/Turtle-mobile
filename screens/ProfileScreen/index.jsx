@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator,
+  View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator,
 } from 'react-native';
+import { depth } from '../../utils/surfaceDepth';
+import AppTextInput from '../../components/AppTextInput';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useKeyboardHeight from '../../utils/useKeyboardHeight';
 import { useNavigation } from '@react-navigation/native';
@@ -14,6 +16,10 @@ import AnimalAvatar from '../../components/AnimalAvatar';
 import { generatedName, avatarAnimal } from '../../utils/avatar';
 import { dockOccupied } from '../../components/tabBarLayout';
 import { tapHaptic } from '../../utils/haptics';
+import { resolveAvatarUrl } from '../../utils/avatarUrl';
+import useUpdateHeadline from '../../utils/useUpdateHeadline';
+import UpdatesPanel from '../../components/UpdatesPanel';
+import ErrorBoundary from '../../components/ErrorBoundary';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
@@ -68,6 +74,12 @@ export default function ProfileScreen() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [turtle3dOpen, setTurtle3dOpen] = useState(false);
+  const [updatesOpen, setUpdatesOpen] = useState(false);
+  // "Is there a new version, and what does it change?" — answered on the card
+  // itself, before it is tapped. Metadata only; nothing downloads until the
+  // panel's own button. Re-asked whenever the updates page is opened or closed
+  // so the line is true again after an update has been applied.
+  const { summary: updateSummary } = useUpdateHeadline({ active: !updatesOpen });
   // Server profile: the REAL display name, uploaded avatar and activity stats
   // (GET /me → { user: { displayName, avatarUrl, stats } }). The generated
   // animal name/disc are the FALLBACK for anyone who hasn't set either.
@@ -150,9 +162,7 @@ export default function ProfileScreen() {
   // Server origin (no /api) so a server-relative avatar path resolves — same
   // construction Settings uses for its avatar.
   const serverBase = getBaseUrl().replace(/\/api$/, '');
-  const avatarFullUrl = me?.avatarUrl
-    ? (me.avatarUrl.startsWith('/') ? `${serverBase}${me.avatarUrl}` : me.avatarUrl)
-    : null;
+  const avatarFullUrl = resolveAvatarUrl(me?.avatarUrl, serverBase);
 
   const stats = me?.stats || null;
   // Only stats the server actually reported. Each drills into a detail page so
@@ -192,6 +202,13 @@ export default function ProfileScreen() {
     { key: 'link', icon: 'qrcode-scan', label: 'Connect to desktop',
       sub: 'Scan the QR shown on the web app',
       onPress: () => { tapHaptic(); setLinkOpen(true); } },
+    // What this phone is running and whether anything newer is waiting. The
+    // card's own line is the ANSWER, not a label: it names what the latest
+    // update changed, so "is it worth updating?" is settled without opening
+    // anything. Two lines, since a publish message is a sentence.
+    { key: 'updates', icon: 'update', label: 'Check for updates',
+      sub: updateSummary.line, subLines: 2,
+      onPress: () => { tapHaptic(); setUpdatesOpen(true); } },
     { key: 'settings', icon: 'cog', label: 'Settings',
       sub: 'Appearance, server, account', onPress: () => { tapHaptic(); setSettingsOpen(true); } },
   ];
@@ -273,7 +290,7 @@ export default function ProfileScreen() {
 
           <View style={styles.identityBody}>
           {editing ? (
-            <TextInput
+            <AppTextInput
               value={draft}
               onChangeText={setDraft}
               onBlur={commitName}
@@ -368,7 +385,7 @@ export default function ProfileScreen() {
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={styles.cardLabel} numberOfLines={1}>{card.label}</Text>
-                <Text style={styles.cardSub} numberOfLines={1}>{card.sub}</Text>
+                <Text style={styles.cardSub} numberOfLines={card.subLines || 1}>{card.sub}</Text>
               </View>
               <Icon name="chevron-right" size={20} color={c.textMuted} />
             </TouchableOpacity>
@@ -423,6 +440,33 @@ export default function ProfileScreen() {
       {/* Connect to desktop — the existing QR flow (web shows the code, this
           scans it), hosted here now that the chat header's button is gone. */}
       <LinkDesktop visible={linkOpen} onClose={() => setLinkOpen(false)} />
+
+      {/* Check for updates — the SAME panel Settings shows, pushed from its own
+          card so "what am I running / is there anything newer" is one tap from
+          the profile instead of buried a screen deeper. A launcher, not a
+          second implementation: the panel keeps the check, the download, the
+          real error text and the owner's promote / roll back. */}
+      <EdgeSwipePage overlay visible={updatesOpen} onClose={() => setUpdatesOpen(false)}>
+        <View style={styles.page}>
+          <View style={[styles.pushHeader, styles.pushHeaderCentered, { paddingTop: insets.top + 6 }]}>
+            <TouchableOpacity
+              onPress={() => setUpdatesOpen(false)}
+              hitSlop={HIT}
+              accessibilityLabel="Close updates"
+              style={styles.pushHeaderSlot}
+            >
+              <Icon name="chevron-left" size={28} color={c.textPrimary} />
+            </TouchableOpacity>
+            <Text style={[styles.pushTitle, styles.pushTitleCentered]}>Updates</Text>
+            <View style={styles.pushHeaderSlot} />
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: dockOccupied(insets.bottom) + 24 }}>
+            {/* Same guard Settings gives it: a native-module throw in here
+                must not take the profile down with it. */}
+            {updatesOpen ? <ErrorBoundary label="App updates" compact><UpdatesPanel /></ErrorBoundary> : null}
+          </ScrollView>
+        </View>
+      </EdgeSwipePage>
 
       {/* Settings — the standalone screen, pushed from its card. It was already
           a standalone component (TurtleScreen only wrapped it in a Modal), so
@@ -949,6 +993,7 @@ const makeStyles = (theme) => {
       borderColor: c.border,
       // Clips the accent wash to the rounded corners.
       overflow: 'hidden',
+      ...depth(theme, 'card'),
     },
     // Accent wash behind the card's top half.
     cardWash: {
@@ -987,6 +1032,7 @@ const makeStyles = (theme) => {
       alignItems: 'center',
       justifyContent: 'center',
       overflow: 'hidden',
+      ...depth(theme, 'control'),
     },
     // Shortcut to the avatar uploader in Settings, pinned to the ring's
     // lower-right like a camera badge.
@@ -1024,6 +1070,7 @@ const makeStyles = (theme) => {
       backgroundColor: c.surfaceElevated,
       // Shrinks rather than pushing the row wider than the card.
       flexShrink: 1, maxWidth: '100%',
+      ...depth(theme, 'control'),
     },
     handleText: { fontSize: 12, fontWeight: '600', color: c.textTertiary, flexShrink: 1 },
     roleChip: {
@@ -1052,6 +1099,7 @@ const makeStyles = (theme) => {
       padding: 14, borderRadius: 16,
       backgroundColor: c.surfaceElevated,
       borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+      ...depth(theme, 'card'),
     },
     cardIcon: {
       width: 38, height: 38, borderRadius: 12,

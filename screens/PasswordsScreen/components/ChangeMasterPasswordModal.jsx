@@ -3,7 +3,6 @@ import {
   Modal,
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
@@ -11,6 +10,8 @@ import {
   Platform,
   Alert,
 } from 'react-native';
+import { depth } from '../../../utils/surfaceDepth';
+import AppTextInput from '../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useTheme } from '../../../context/ThemeContext';
@@ -148,7 +149,7 @@ export const ChangeMasterPasswordModal = ({ visible, onClose, onChangePassword, 
                   </Text>
                   <View style={styles.inputContainer}>
                     <Icon name="lock" size={20} color={theme.colors.textTertiary} />
-                    <TextInput
+                    <AppTextInput
                       style={styles.input}
                       placeholder="Current master password"
                       placeholderTextColor={theme.colors.textPlaceholder}
@@ -181,7 +182,7 @@ export const ChangeMasterPasswordModal = ({ visible, onClose, onChangePassword, 
               <Text style={styles.hint}>Choose a new master password (at least 8 characters).</Text>
               <View style={styles.inputContainer}>
                 <Icon name="lock-plus" size={20} color={theme.colors.textTertiary} />
-                <TextInput
+                <AppTextInput
                   style={styles.input}
                   placeholder="New password"
                   placeholderTextColor={theme.colors.textPlaceholder}
@@ -193,7 +194,7 @@ export const ChangeMasterPasswordModal = ({ visible, onClose, onChangePassword, 
               </View>
               <View style={styles.inputContainer}>
                 <Icon name="lock-check" size={20} color={theme.colors.textTertiary} />
-                <TextInput
+                <AppTextInput
                   style={styles.input}
                   placeholder="Confirm new password"
                   placeholderTextColor={theme.colors.textPlaceholder}
@@ -239,6 +240,7 @@ const createStyles = (theme) =>
       backgroundColor: theme.colors.surfaceElevated || theme.colors.surface,
       borderRadius: 18,
       padding: 18,
+      ...depth(theme, 'card'),
     },
     headerRow: {
       flexDirection: 'row',
@@ -291,6 +293,7 @@ const createStyles = (theme) =>
       alignItems: 'center',
       borderWidth: 1,
       borderColor: theme.colors.border,
+      ...depth(theme, 'control'),
     },
     buttonDisabled: {
       opacity: 0.6,

@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Keyboard,
 } from 'react-native';
+import AppTextInput from '../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { tapHaptic } from '../../../utils/haptics';
@@ -196,7 +197,7 @@ export const SectionHeader = ({ section, expanded, editMode = false, onToggleExp
               <Text style={styles.untaggedText}>Untagged</Text>
             ) : isAddingTag ? (
               <View style={styles.untaggedEditContainer}>
-                <TextInput
+                <AppTextInput
                   ref={newTagInputRef}
                   style={styles.untaggedInput}
                   placeholder="New tag"
@@ -254,7 +255,7 @@ export const SectionHeader = ({ section, expanded, editMode = false, onToggleExp
         isAdding ? (
           // Inline input mode
           <View style={styles.addTaskContainer}>
-            <TextInput
+            <AppTextInput
               ref={inputRef}
               style={styles.addTaskInput}
               placeholder="Add a new task"

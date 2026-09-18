@@ -44,10 +44,22 @@ jest.mock('expo-image', () => {
     }),
   };
 });
-jest.mock('expo-video', () => ({
-  useVideoPlayer: () => ({ play: jest.fn(), pause: jest.fn(), playing: false, muted: true }),
-  VideoView: () => null,
-}));
+const mockFullscreen = { calls: 0, options: null };
+jest.mock('expo-video', () => {
+  const React = require('react');
+  return {
+    useVideoPlayer: () => ({ play: jest.fn(), pause: jest.fn(), playing: false, muted: true }),
+    // Records what the page asked for, and exposes the imperative handle the
+    // chrome's fullscreen key reaches through.
+    VideoView: React.forwardRef((props, ref) => {
+      mockFullscreen.options = props.fullscreenOptions;
+      React.useImperativeHandle(ref, () => ({
+        enterFullscreen: () => { mockFullscreen.calls += 1; return Promise.resolve(); },
+      }));
+      return null;
+    }),
+  };
+});
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: () => null }));
 jest.mock('expo-blur', () => {
   const { View } = require('react-native');
@@ -57,6 +69,31 @@ jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 47, bottom: 34, left: 0, right: 0 }),
 }));
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
+
+// The offline store, over a toy filesystem — see services/__tests__ for the
+// store's own tests. Here it exists so the Save button has something real to
+// talk to: a download that lands, and one that 404s.
+const mockStore = new Map();
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  getItem: jest.fn((k) => Promise.resolve(mockStore.has(k) ? mockStore.get(k) : null)),
+  setItem: jest.fn((k, v) => { mockStore.set(k, v); return Promise.resolve(); }),
+  removeItem: jest.fn((k) => { mockStore.delete(k); return Promise.resolve(); }),
+}));
+const mockFs = new Map();
+const mockServer = { status: 200, urls: [] };
+jest.mock('expo-file-system/legacy', () => ({
+  documentDirectory: 'file:///docs/',
+  getInfoAsync: jest.fn((uri) => Promise.resolve(
+    mockFs.has(uri) ? { exists: true, size: 999, isDirectory: false } : { exists: false },
+  )),
+  makeDirectoryAsync: jest.fn(() => Promise.resolve()),
+  deleteAsync: jest.fn((uri) => { mockFs.delete(uri); return Promise.resolve(); }),
+  downloadAsync: jest.fn((url, dest) => {
+    mockServer.urls.push(url);
+    if (mockServer.status < 400) mockFs.set(dest, 999);
+    return Promise.resolve({ uri: dest, status: mockServer.status });
+  }),
+}));
 jest.mock('../../../../../context/MusicPlayerContext', () => ({
   useMusicPlayer: () => ({ pause: jest.fn() }),
 }));
@@ -64,6 +101,7 @@ jest.mock('../../../../../context/MusicPlayerContext', () => ({
 import PhotoViewer from '../PhotoViewer';
 import { formatClock } from '../ViewerChrome';
 import TagsSheet, { matchTags, mergeTags } from '../TagsSheet';
+import { OfflineMediaProvider } from '../../../../../context/OfflineMediaContext';
 
 describe('viewer helpers', () => {
   test('formatClock', () => {
@@ -144,6 +182,35 @@ async function renderViewer(overrides = {}) {
   return { view, props, user: userEvent.setup() };
 }
 
+/** The same viewer, wrapped in the real offline store. */
+async function renderViewerOffline(overrides = {}) {
+  const props = {
+    visible: true,
+    items,
+    initialIndex: 1,
+    origin: null,
+    activeStore: makeStore(),
+    hdStore: makeHdStore(),
+    dragStore: makeStore(),
+    getFullUrl: (p) => `https://pond${p}`,
+    tagSuggestions: [],
+    onIndexSettled: jest.fn(),
+    onCommitTags: jest.fn(),
+    onToggleFavourite: jest.fn(),
+    onShare: jest.fn(),
+    onEditImage: jest.fn(),
+    onClosed: jest.fn(),
+    theme,
+    insets: { top: 47, bottom: 34 },
+    bottomInset: 90,
+    ...overrides,
+  };
+  const view = await render(
+    <OfflineMediaProvider><PhotoViewer {...props} /></OfflineMediaProvider>,
+  );
+  return { view, props, user: userEvent.setup() };
+}
+
 describe('PhotoViewer', () => {
   test('renders the active photo on its fast uri, both neighbours, and the chrome', async () => {
     const { props } = await renderViewer();
@@ -197,6 +264,24 @@ describe('PhotoViewer', () => {
     expect(screen.queryByTestId('viewer-edit')).toBeNull();
   });
 
+  test('the fullscreen key hands the video to the native landscape player', async () => {
+    mockFullscreen.calls = 0;
+    const { user } = await renderViewer({ initialIndex: 2 });
+
+    // Landscape, and back out when the phone is turned upright again.
+    expect(mockFullscreen.options).toEqual({
+      enable: true, orientation: 'landscape', autoExitOnRotate: true,
+    });
+
+    await user.press(screen.getByTestId('viewer-fullscreen'));
+    expect(mockFullscreen.calls).toBe(1);
+  });
+
+  test('a photo has no fullscreen key — it is the video player going landscape', async () => {
+    await renderViewer();
+    expect(screen.queryByTestId('viewer-fullscreen')).toBeNull();
+  });
+
   test('renders nothing while hidden', async () => {
     await renderViewer({ visible: false });
     expect(screen.queryByTestId('photo-viewer')).toBeNull();
@@ -206,6 +291,59 @@ describe('PhotoViewer', () => {
     const { view, props } = await renderViewer();
     await view.rerender(<PhotoViewer {...props} items={[items[0], items[2]]} />);
     expect(props.onClosed).toHaveBeenCalled();
+  });
+});
+
+describe('Save for offline', () => {
+  beforeEach(() => {
+    mockStore.clear();
+    mockFs.clear();
+    mockServer.status = 200;
+    mockServer.urls = [];
+  });
+
+  test('with no provider the button is simply absent — never a crash', async () => {
+    await renderViewer();
+    expect(screen.queryByTestId('viewer-offline')).toBeNull();
+  });
+
+  test('the button saves the DISPLAY tier and then reads the picture off disk', async () => {
+    const { user } = await renderViewerOffline();
+    const button = screen.getByTestId('viewer-offline');
+    expect(button.props.accessibilityLabel).toBe('Save for offline');
+
+    await user.press(button);
+
+    // The bytes asked for are the ~1600px display variant, not the original.
+    expect(mockServer.urls).toEqual(['https://pond/api/media/display/m1']);
+    // The button now offers the way back out...
+    expect(screen.getByTestId('viewer-offline').props.accessibilityLabel).toBe('Remove offline copy');
+    // ...and the page paints from the local file, which is what makes it work
+    // with the pond unreachable.
+    expect(screen.getByTestId('img:file:///docs/offline-media/m1__IMG_0001.jpg')).toBeTruthy();
+  });
+
+  test('pressing it again removes the copy and hands the page back to the server', async () => {
+    const { user } = await renderViewerOffline();
+    await user.press(screen.getByTestId('viewer-offline'));
+    await user.press(screen.getByTestId('viewer-offline'));
+    expect(screen.getByTestId('viewer-offline').props.accessibilityLabel).toBe('Save for offline');
+    expect(screen.queryByTestId('img:file:///docs/offline-media/m1__IMG_0001.jpg')).toBeNull();
+    expect(screen.getByTestId('img:https://pond/c/m1.jpg')).toBeTruthy();
+  });
+
+  test('a failed download leaves nothing saved', async () => {
+    mockServer.status = 500;
+    const { user } = await renderViewerOffline();
+    await user.press(screen.getByTestId('viewer-offline'));
+    expect(screen.getByTestId('viewer-offline').props.accessibilityLabel).toBe('Save for offline');
+    expect(screen.getByTestId('img:https://pond/c/m1.jpg')).toBeTruthy();
+  });
+
+  test('a video has no offline button — its original is a different decision', async () => {
+    await renderViewerOffline({ initialIndex: 2 });
+    expect(screen.queryByTestId('viewer-offline')).toBeNull();
+    expect(screen.getByTestId('viewer-play')).toBeTruthy();
   });
 });
 
