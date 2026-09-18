@@ -25,10 +25,11 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia,
   const insets = useSafeAreaInsets();
   const { api } = useServer();
   const { data, loading, error, refresh, createFolder } = useFolderData('root');
-  const [stack, setStack] = useState([]); // [{ parent, title }]
+  const [stack, setStack] = useState([]); // [{ parent }]
   const [naming, setNaming] = useState(null); // null | { error }
+  const [refreshing, setRefreshing] = useState(false);
 
-  const push = useCallback((parent, title) => setStack((s) => [...s, { parent, title }]), []);
+  const push = useCallback((parent) => setStack((s) => [...s, { parent }]), []);
   const pop = useCallback(() => setStack((s) => s.slice(0, -1)), []);
 
   // Search hit → the crumb chain of the target folder (a document's folder,
@@ -39,10 +40,10 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia,
     (async () => {
       try {
         const folderId = target.kind === 'folder' ? target.id : (target.item?.folder_id || null);
-        if (!folderId) { if (!cancelled) setStack([{ parent: 'unfiled', title: 'Unfiled' }]); return; }
+        if (!folderId) { if (!cancelled) setStack([{ parent: 'unfiled' }]); return; }
         const r = await api.get(`/folders?parent=${encodeURIComponent(folderId)}&limit=1`);
         const path = Array.isArray(r?.path) ? r.path : [];
-        if (!cancelled) setStack(path.length ? path.map((p) => ({ parent: p.id, title: p.name })) : [{ parent: folderId, title: 'Folder' }]);
+        if (!cancelled) setStack(path.length ? path.map((p) => ({ parent: p.id })) : [{ parent: folderId }]);
       } catch { /* the target's folder is gone; stay on the root */ }
       finally { onTargetConsumed?.(); }
     })();
@@ -60,24 +61,24 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia,
     <View style={[styles.page, { backgroundColor: c.background, paddingTop: topInset }]}>
       <View style={styles.toolbar}>
         <Text style={[styles.title, { color: c.textPrimary }]} numberOfLines={1}>Files</Text>
-        <Pressable onPress={() => { tapHaptic(); setNaming({}); }} hitSlop={10} accessibilityRole="button" accessibilityLabel="New folder" style={styles.iconBtn}>
+        <Pressable onPressIn={tapHaptic} onPress={() => setNaming({})} hitSlop={10} accessibilityRole="button" accessibilityLabel="New folder" style={({ pressed }) => [styles.iconBtn, { opacity: pressed ? 0.6 : 1 }]}>
           <Icon name="folder-plus-outline" size={24} color={c.textPrimary} />
         </Pressable>
       </View>
       {loading && !data ? <ActivityIndicator style={{ marginTop: 40 }} color={c.textSecondary} /> : (
         <ScrollView
           contentContainerStyle={[styles.grid, { paddingBottom: Math.max(insets.bottom, bottomInset) + 24 }]}
-          refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} tintColor={c.textSecondary} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); try { await refresh(); } finally { setRefreshing(false); } }} tintColor={c.textSecondary} />}
           scrollIndicatorInsets={{ right: 1 }}
           indicatorStyle={theme.mode === 'dark' ? 'white' : 'default'}
         >
-          <Pressable delayPressIn={0} onPressIn={tapHaptic} onPress={() => push('unfiled', 'Unfiled')} accessibilityRole="button" accessibilityLabel="Open Unfiled" style={({ pressed }) => [styles.unfiled, { opacity: pressed ? 0.6 : 1 }]}>
+          <Pressable delayPressIn={0} onPressIn={tapHaptic} onPress={() => push('unfiled')} accessibilityRole="button" accessibilityLabel="Open Unfiled" style={({ pressed }) => [styles.unfiled, { opacity: pressed ? 0.6 : 1 }]}>
             <View style={[styles.unfiledDisc, { backgroundColor: c.surface, borderColor: c.border }]}><Icon name="file-outline" size={28} color={c.textSecondary} /></View>
-            <Text style={[styles.discName, { color: c.textPrimary }]}>Unfiled</Text>
-            <Text style={[styles.discCount, { color: c.textMuted }]}>{data?.unfiled?.count ?? 0}</Text>
+            <Text style={[styles.discName, { color: c.textPrimary }]} numberOfLines={1}>Unfiled</Text>
+            <Text style={[styles.discCount, { color: c.textMuted }]} numberOfLines={1}>{data?.unfiled?.count ?? 0}</Text>
           </Pressable>
           {folders.map((f) => (
-            <FolderDisc key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={!!f.pending} onPress={() => push(f.id, f.name)} testID={`root-${f.id}`} />
+            <FolderDisc key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={!!f.pending} onPress={() => push(f.id)} testID={`root-${f.id}`} />
           ))}
           {data && folders.length === 0 && (
             <Text style={[styles.empty, { color: c.textMuted }]}>No folders yet. Folders you watch on your PC appear here on their own; make one with the folder key above.</Text>
@@ -91,7 +92,7 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia,
           visible
           parent={level.parent}
           onClose={pop}
-          onOpenFolder={(f) => push(f.id, f.name)}
+          onOpenFolder={(f) => push(f.id)}
           onOpenMedia={onOpenMedia}
           onBulkTag={onBulkTag}
           onUploadHere={onUploadHere}

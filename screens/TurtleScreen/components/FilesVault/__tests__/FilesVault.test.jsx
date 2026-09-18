@@ -56,7 +56,7 @@ describe('FilesVault', () => {
 
   it('an open-target for a nested folder pushes the whole crumb chain', async () => {
     const consumed = jest.fn();
-    const { getAllByText } = await render(<FilesVault theme={theme} getFullUrl={(p) => p} base="" onOpenMedia={jest.fn()} onBulkTag={jest.fn()} onUploadHere={jest.fn()} target={{ kind: 'folder', id: 'fld_bbbbbbbbbbbb' }} onTargetConsumed={consumed} />);
+    const { getAllByText, getByText } = await render(<FilesVault theme={theme} getFullUrl={(p) => p} base="" onOpenMedia={jest.fn()} onBulkTag={jest.fn()} onUploadHere={jest.fn()} target={{ kind: 'folder', id: 'fld_bbbbbbbbbbbb' }} onTargetConsumed={consumed} />);
     await waitFor(() => getAllByText('Taxes'));
     expect(consumed).toHaveBeenCalled();
     // getAllByText, not getByText: the root's own "Scans" folder disc stays
@@ -65,5 +65,11 @@ describe('FilesVault', () => {
     // own crumb bar repeats "Scans" as an ancestor crumb — so it legitimately
     // renders more than once at once.
     expect(getAllByText('Scans').length).toBeGreaterThan(0);
+    // Discriminator: "a.pdf" only exists in the `scans` fixture's items,
+    // which useFolderData only serves to the Scans-level FolderPage (parent
+    // fld_aaaaaaaaaaaa). If only the Taxes leaf were pushed (its own crumb
+    // bar alone already renders "Scans" and "Taxes"), this would never
+    // appear — so this pins both stack levels being mounted, not just one.
+    await waitFor(() => getByText('a.pdf'));
   });
 });
