@@ -2382,8 +2382,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // that leaves nothing to show, decline to open rather than falling back
   // to a solo item that might itself be one.
   const openViewerFromList = useCallback((items, item) => {
-    if (isDocument(item)) return;
-    const list = (items || []).filter((it) => it && !isDocument(it));
+    if (!item || isDocument(item)) return;
+    // ── VAULT INVARIANT — swipe-right must always mean "newer" ─────────────
+    // (see .claude/skills/turtle-vault-invariants and the memory note
+    // photo-viewer-swipe-direction). The grid's own viewerSourceItems is the
+    // reversed (oldest-first) array for exactly this reason; a folder's list
+    // comes in newest-first (sortFolderItems' default), so it needs the same
+    // `.reverse()` treatment here, into a NEW array — never mutate `items`,
+    // which FolderPage still renders newest-first.
+    const list = (items || []).filter((it) => it && !isDocument(it)).reverse();
     if (list.length === 0) return;
     const index = Math.max(0, list.findIndex((it) => it.id === item.id));
     setViewerListOverride(list);

@@ -2,8 +2,9 @@
  * FolderDisc — a folder in the boards' visual language: a disc coloured from
  * its name, filled with a collage of the four newest covers in its subtree
  * (0 → tinted initial; 1 full; 2 columns; 3 big-left + two stacked; 4 → 2×2,
- * column-major), the name and count under it. A cover that fails to load is
- * dropped so the layout degrades 4→3→2→1→initial instead of leaving a hole.
+ * reading order (TL, TR, BL, BR)), the name and count under it. A cover that
+ * fails to load is dropped so the layout degrades 4→3→2→1→initial instead of
+ * leaving a hole.
  */
 import React, { memo, useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';

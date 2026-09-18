@@ -72,3 +72,32 @@ export function sortFolderItems(items, sort = 'date', order = 'desc') {
   const sign = order === 'asc' ? 1 : -1;
   return [...(items || [])].sort((a, b) => sign * cmp(a, b) || String(a.id).localeCompare(String(b.id)) * sign);
 }
+
+/**
+ * messageOf — turn a thrown Error (or a bare string) into words a person can
+ * read. ServerContext's apiPost/apiPatch/apiPut/apiDelete throw
+ * `API Error <status>: <body>`, and for the folders routes `<body>` is the
+ * server's raw JSON, e.g. `{"success":false,"error":"FOLDER_EXISTS",
+ * "message":"A folder named Taxes already exists here."}` — the human
+ * wording `services/folders.js` already sends lives in that `.message`.
+ * Without this, the sheets rendered the whole blob verbatim.
+ *
+ * Order: an embedded JSON object's `.message` (or `.error`) wins first;
+ * else an `API Error <status>: ` prefix is stripped so the server's own text
+ * survives; else the message is used as-is; empty/missing → a generic line.
+ */
+export function messageOf(e) {
+  const raw = typeof e === 'string' ? e : String(e?.message || '');
+  if (!raw) return 'Something went wrong.';
+  const jsonMatch = /\{[\s\S]*\}/.exec(raw);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const msg = parsed && (parsed.message || parsed.error);
+      if (msg) return String(msg);
+    } catch { /* not valid JSON — fall through */ }
+  }
+  const apiMatch = /^API Error \d+: ([\s\S]*)$/.exec(raw);
+  if (apiMatch) return apiMatch[1] || raw;
+  return raw;
+}

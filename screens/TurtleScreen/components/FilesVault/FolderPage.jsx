@@ -18,10 +18,15 @@ import FolderDisc from './FolderDisc';
 import DocumentRow from './DocumentRow';
 import { FolderNameSheet, FolderPickerSheet, FilesSortSheet, FolderActionsSheet } from './FolderSheets';
 import { openDocument } from './documentOpen';
-import { collapseCrumbs, isDocument, sortFolderItems } from './filesUtils';
+import { collapseCrumbs, isDocument, messageOf, sortFolderItems } from './filesUtils';
 
 const GRID_COLS = 3;
 const GAP = 2;
+// Shared with the header's own paddingTop and the ⋯ menu's top offset below,
+// so the menu derives from one source instead of duplicating styles.header's
+// minHeight/paddingBottom as separate literals (L71).
+const HEADER_TOP_PAD = 6;
+const MENU_TOP_GAP = 4;
 
 export default function FolderPage({ visible, parent, onClose, onOpenFolder, onOpenMedia, onBulkTag, onUploadHere, getFullUrl, base, theme, topInset = 0, bottomInset = 0 }) {
   const c = theme.colors;
@@ -55,6 +60,10 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
 
   const toggle = useCallback((id) => { setMenuOpen(false); setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; }); }, []);
   const clearSelection = useCallback(() => setSelected(new Set()), []);
+  // M3: the header Back chevron must behave exactly like the left-edge swipe
+  // (EdgeSwipePage's onClose below) — in select mode it clears the selection
+  // and stays on the page; only otherwise does it actually pop the page.
+  const handleBack = useCallback(() => { if (selectMode) { clearSelection(); return; } onClose(); }, [selectMode, clearSelection, onClose]);
   const selectedItems = useMemo(() => items.filter((i) => selected.has(i.id)), [items, selected]);
 
   const open = useCallback(async (item) => {
@@ -64,14 +73,14 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
       await openDocument(item, { getFullUrl, onProgress: (p) => setProgress((m) => ({ ...m, [item.id]: p })) });
     } catch (e) {
       notifyHaptic('error');
-      Alert.alert('Could not open', e?.message || 'Could not open the file.');
+      Alert.alert('Could not open', messageOf(e));
     } finally {
       busyRef.current = false;
       setProgress((m) => { const n = { ...m }; delete n[item.id]; return n; });
     }
   }, [getFullUrl]);
 
-  const fail = useCallback((e) => { notifyHaptic('error'); Alert.alert('Not saved', e?.message || 'Something went wrong.'); }, []);
+  const fail = useCallback((e) => { notifyHaptic('error'); Alert.alert('Not saved', messageOf(e)); }, []);
 
   const submitName = useCallback(async (name) => {
     try {
@@ -79,7 +88,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
       else if (sheet?.kind === 'rename') await renameFolder(sheet.folder.id, name);
       setSheet(null);
       notifyHaptic('success');
-    } catch (e) { setSheet((s) => (s ? { ...s, error: e?.message || 'Not saved' } : s)); }
+    } catch (e) { setSheet((s) => (s ? { ...s, error: messageOf(e) } : s)); }
   }, [sheet, createFolder, renameFolder]);
 
   const pickTarget = useCallback(async (target) => {
@@ -139,6 +148,13 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
           </Pressable>
         ))}
       </View>
+      {/* I5: the server caps a listing at 200 items (useFolderData's PAGE) and
+          faithfully returns pagination.hasMore/.total — say so instead of
+          silently truncating while FolderDisc shows the true itemCount next
+          to it. Full paging is a follow-up; this is the honest stopgap. */}
+      {!!data?.pagination && (data.pagination.hasMore || data.pagination.total > items.length) && (
+        <Text style={[styles.capNotice, { color: c.textMuted }]}>{`Showing the first ${items.length} of ${data.pagination.total}`}</Text>
+      )}
       {data && items.length === 0 && !data.folders?.length && (
         <Text style={[styles.empty, { color: c.textMuted }]}>{query ? 'Nothing matches.' : 'Nothing here yet.'}</Text>
       )}
@@ -147,10 +163,10 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   );
 
   return (
-    <EdgeSwipePage overlay visible={visible} onClose={selectMode ? () => { clearSelection(); return true; } : onClose} swipeEnabled={!sheet && !selectMode}>
+    <EdgeSwipePage overlay visible={visible} onClose={handleBack} swipeEnabled={!sheet && !selectMode}>
       <View style={[styles.page, { backgroundColor: c.background, paddingTop: topInset }]}>
-        <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
-          <Pressable onPress={onClose} onPressIn={tapHaptic} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back" style={({ pressed }) => [styles.iconBtn, { opacity: pressed ? 0.6 : 1 }]}>
+        <View style={[styles.header, { paddingTop: insets.top + HEADER_TOP_PAD }]}>
+          <Pressable onPress={handleBack} onPressIn={tapHaptic} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back" style={({ pressed }) => [styles.iconBtn, { opacity: pressed ? 0.6 : 1 }]}>
             <Icon name="chevron-left" size={28} color={c.textPrimary} />
           </Pressable>
           <View style={styles.crumbs}>
@@ -166,7 +182,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
           </Pressable>
         </View>
         {menuOpen && (
-          <View style={[styles.menu, { top: insets.top + 6 + 44 + 8 + 4, backgroundColor: c.surfaceElevated || c.surface, borderColor: c.border }]}>
+          <View style={[styles.menu, { top: insets.top + HEADER_TOP_PAD + styles.header.minHeight + styles.header.paddingBottom + MENU_TOP_GAP, backgroundColor: c.surfaceElevated || c.surface, borderColor: c.border }]}>
             {!isUnfiled && <MenuRow icon="folder-plus-outline" label="New folder" theme={theme} onPress={() => { setMenuOpen(false); setSheet({ kind: 'new' }); }} />}
             {!isUnfiled && <MenuRow icon="tray-arrow-up" label="Upload here" theme={theme} onPress={() => { setMenuOpen(false); onUploadHere(folderId); }} />}
             <MenuRow icon="sort" label="Sort & search" theme={theme} onPress={() => { setMenuOpen(false); setSheet({ kind: 'sort' }); }} />
@@ -239,6 +255,7 @@ const styles = StyleSheet.create({
   play: { position: 'absolute', right: 6, bottom: 6, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   check: { position: 'absolute', left: 6, top: 6 },
   empty: { textAlign: 'center', paddingVertical: 40, fontSize: 13 },
+  capNotice: { textAlign: 'center', paddingTop: 12, paddingHorizontal: 24, fontSize: 12 },
   bar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', paddingTop: 8, paddingHorizontal: 12, borderTopWidth: StyleSheet.hairlineWidth, zIndex: 50, gap: 4 },
   barCount: { fontSize: 13, fontWeight: '700', flexShrink: 1, marginRight: 6 },
   barBtn: { alignItems: 'center', justifyContent: 'center', minWidth: 56, minHeight: 44, flexShrink: 1 },
