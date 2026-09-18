@@ -80,6 +80,53 @@ describe('useFolderData', () => {
     expect(result.current.data.folders[0].itemCount).toBe(3);
   });
 
+  it('reverts are safe and errors are kept', async () => {
+    // moveItems: a permanent failure once a listing is loaded restores it exactly
+    // (the guarded `(l) => snapshot || l` undo, fed by the dataRef mirror).
+    mockApi.get.mockResolvedValue({ success: true, ...listing() });
+    const { result } = await renderHook(() => useFolderData('fld_aaaaaaaaaaaa'));
+    await waitFor(() => expect(result.current.data?.items?.length).toBe(1));
+    mockSendOrQueue.mockRejectedValueOnce(new Error('Not reachable'));
+    await act(async () => {
+      await expect(result.current.moveItems(['doc-1'], 'fld_bbbbbbbbbbbb')).rejects.toThrow('Not reachable');
+    });
+    expect(result.current.data.items.length).toBe(1);
+    expect(result.current.data.folders[0].itemCount).toBe(2);
+
+    // moveItems: a permanent failure BEFORE any listing has ever loaded must not
+    // throw a TypeError reading the ref mirror, and must leave data as it was (null).
+    mockStore.clear();
+    mockApi.get.mockImplementationOnce(() => new Promise(() => {})); // never resolves
+    const { result: result2 } = await renderHook(() => useFolderData('fld_aaaaaaaaaaaa'));
+    expect(result2.current.data).toBeNull();
+    mockSendOrQueue.mockRejectedValueOnce(new Error('Still offline'));
+    await act(async () => {
+      await expect(result2.current.moveItems(['doc-1'], 'fld_bbbbbbbbbbbb')).rejects.toThrow('Still offline');
+    });
+    expect(result2.current.data).toBeNull();
+
+    // removeItems: a permanent per-item failure keeps the real reason (not just a
+    // count) and puts the row back; a queued write resolves { queued: true }
+    // (not the old hard-coded { queued: false }).
+    mockStore.clear();
+    mockApi.get.mockResolvedValue({ success: true, ...listing() });
+    const { result: result3 } = await renderHook(() => useFolderData('fld_aaaaaaaaaaaa'));
+    await waitFor(() => expect(result3.current.data?.items?.length).toBe(1));
+    mockSendOrQueue.mockRejectedValueOnce(new Error('Forbidden'));
+    let caught;
+    await act(async () => {
+      try { await result3.current.removeItems(['doc-1']); } catch (e) { caught = e; }
+    });
+    expect(caught.message).toContain('1 item could not be deleted');
+    expect(caught.message).toContain('Forbidden');
+    expect(result3.current.data.items.map((i) => String(i.id))).toContain('doc-1');
+
+    mockSendOrQueue.mockResolvedValueOnce({ queued: true });
+    let out;
+    await act(async () => { out = await result3.current.removeItems(['doc-1']); });
+    expect(out).toEqual({ queued: true });
+  });
+
   it('pure list transforms', () => {
     const l = listing();
     expect(applyRename(l, 'fld_bbbbbbbbbbbb', 'Tax').folders[0].name).toBe('Tax');

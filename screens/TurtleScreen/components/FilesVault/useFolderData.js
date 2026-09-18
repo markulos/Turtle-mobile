@@ -39,6 +39,14 @@ const bumpCount = (l, folderId, delta) => ({ ...l, folders: l.folders.map((f) =>
 export default function useFolderData(parent, { sort = 'date', order = 'desc' } = {}) {
   const { api } = useServer();
   const [data, setData] = useState(null);
+  // Always-current snapshot of `data`, mirroring screens/TasksScreen/hooks/
+  // useTaskData.js's tasksRef: mutation handlers below read this synchronously
+  // instead of peeking at state through a setData updater. A peek's updater
+  // function may run twice under StrictMode or run late when another update
+  // is already pending, so a fast-rejecting request could otherwise capture a
+  // stale "before"/snapshot. Assigned during render, every render.
+  const dataRef = useRef(null);
+  dataRef.current = data;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const alive = useRef(true);
@@ -98,8 +106,7 @@ export default function useFolderData(parent, { sort = 'date', order = 'desc' } 
   }, [optimistic, parent]);
 
   const renameFolder = useCallback((id, name) => {
-    let before = name;
-    setData((l) => { before = l?.folders.find((f) => f.id === id)?.name ?? name; return l; });
+    const before = dataRef.current?.folders.find((f) => f.id === id)?.name ?? name;
     return optimistic(
       (l) => applyRename(l, id, name),
       { method: 'patch', path: `/folders/${id}`, body: { name }, key: `folder:rename:${id}`, label: `Rename “${name}”` },
@@ -108,18 +115,17 @@ export default function useFolderData(parent, { sort = 'date', order = 'desc' } 
   }, [optimistic]);
 
   const moveFolder = useCallback((id, parentId) => {
-    let snapshot = null;
-    setData((l) => { snapshot = l?.folders.find((f) => f.id === id) || null; return l; });
+    const snapshot = dataRef.current?.folders.find((f) => f.id === id) ?? null;
+    const target = parentId === 'root' || parentId === 'unfiled' ? null : parentId;
     return optimistic(
       (l) => withoutFolder(l, id),
-      { method: 'patch', path: `/folders/${id}`, body: { parentId }, key: `folder:move:${id}`, label: 'Move folder' },
+      { method: 'patch', path: `/folders/${id}`, body: { parentId: target }, key: `folder:move:${id}`, label: 'Move folder' },
       (l) => (snapshot ? withFolder(l, snapshot) : l),
     );
   }, [optimistic]);
 
   const deleteFolder = useCallback((id, moveTo = null) => {
-    let snapshot = null;
-    setData((l) => { snapshot = l?.folders.find((f) => f.id === id) || null; return l; });
+    const snapshot = dataRef.current?.folders.find((f) => f.id === id) ?? null;
     const q = moveTo ? `?moveTo=${encodeURIComponent(moveTo)}` : '';
     return optimistic(
       (l) => withoutFolder(l, id),
@@ -129,32 +135,37 @@ export default function useFolderData(parent, { sort = 'date', order = 'desc' } 
   }, [optimistic]);
 
   const moveItems = useCallback((ids, folderId) => {
-    let snapshot = null;
-    setData((l) => { snapshot = l; return l; });
+    const snapshot = dataRef.current;
     const target = folderId || null;
     return optimistic(
       (l) => bumpCount(withoutItems(l, ids), target, ids.length),
       { method: 'post', path: '/media/move', body: { ids, folderId: target }, key: `media:move:${ids.slice().sort().join(',').slice(0, 200)}`, label: `Move ${ids.length} item${ids.length === 1 ? '' : 's'}` },
-      () => snapshot,
+      (l) => snapshot || l,
     );
   }, [optimistic]);
 
   const removeItems = useCallback(async (ids) => {
-    let snapshot = null;
-    setData((l) => { snapshot = l; return withoutItems(l, ids); });
+    // Snapshot from the ref mirror, synchronously — same reason as the other
+    // mutations above: a setData((l) => { snapshot = l; ... }) peek can still
+    // be sitting unflushed when a fast-rejecting request needs it (proven by
+    // this hook's own tests), so a permanent failure would silently skip both
+    // the error and the restore below.
+    const snapshot = dataRef.current;
+    setData((l) => (l ? withoutItems(l, ids) : l));
     const failed = [];
+    const results = [];
     for (let i = 0; i < ids.length; i += 6) {
       await Promise.all(ids.slice(i, i + 6).map(async (id) => {
-        try { await sendOrQueue(api, { method: 'delete', path: `/media/${id}`, key: `media:delete:${id}`, label: 'Delete' }); }
-        catch { failed.push(id); }
+        try { results.push(await sendOrQueue(api, { method: 'delete', path: `/media/${id}`, key: `media:delete:${id}`, label: 'Delete' })); }
+        catch (e) { failed.push({ id, message: e?.message || 'Delete failed' }); }
       }));
     }
     if (failed.length && snapshot) {
-      const keep = new Set(failed.map(String));
+      const keep = new Set(failed.map((f) => String(f.id)));
       setData((l) => (l ? { ...l, items: [...l.items, ...snapshot.items.filter((it) => keep.has(String(it.id)))] } : l));
-      throw new Error(`${failed.length} item${failed.length === 1 ? '' : 's'} could not be deleted.`);
+      throw new Error(`${failed.length} item${failed.length === 1 ? '' : 's'} could not be deleted. ${failed[0].message}`);
     }
-    return { queued: false };
+    return { queued: results.some((r) => r?.queued) };
   }, [api]);
 
   return { data, loading, error, refresh, createFolder, renameFolder, moveFolder, deleteFolder, moveItems, removeItems };
