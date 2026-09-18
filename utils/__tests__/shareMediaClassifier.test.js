@@ -2,6 +2,7 @@ import {
   classifySharedFile,
   isHttpImportUrl,
   supportedAudioVideoFiles,
+  supportedDocumentFiles,
 } from '../shareMediaClassifier';
 
 describe('shareMediaClassifier', () => {
@@ -23,14 +24,14 @@ describe('shareMediaClassifier', () => {
     expect(classifySharedFile(entry)).toBe(expected);
   });
 
-  test('does not let an audio-looking extension override a specific document MIME', () => {
+  test('uses a specific document MIME over an audio-looking extension', () => {
     expect(
       classifySharedFile({
         path: 'file:///tmp/meeting.mp3',
         fileName: 'meeting.mp3',
         mimeType: 'application/pdf',
       })
-    ).toBe('unsupported');
+    ).toBe('document');
   });
 
   test.each([
@@ -81,5 +82,13 @@ describe('shareMediaClassifier', () => {
     [null, false],
   ])('accepts only valid HTTP(S) import URLs', (value, expected) => {
     expect(isHttpImportUrl(value)).toBe(expected);
+  });
+
+  it('recognises documents by mime or extension', () => {
+    expect(classifySharedFile({ path: '/x/a.pdf', mimeType: 'application/pdf' })).toBe('document');
+    expect(classifySharedFile({ path: '/x/a.docx' })).toBe('document');
+    expect(classifySharedFile({ path: '/x/a.zip', mimeType: 'application/octet-stream' })).toBe('document');
+    expect(classifySharedFile({ path: '/x/a.exe' })).toBe('unsupported');
+    expect(supportedDocumentFiles([{ path: '/x/a.pdf' }, { path: '/x/b.jpg' }]).length).toBe(1);
   });
 });
