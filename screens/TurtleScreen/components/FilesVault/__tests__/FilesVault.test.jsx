@@ -28,8 +28,43 @@ jest.mock('../documentOpen', () => ({ openDocument: jest.fn(() => Promise.resolv
 jest.mock('../../EdgeSwipePage', () => ({ visible, children }) => (visible ? children : null));
 
 import FilesVault from '../FilesVault';
+import FolderPage from '../FolderPage';
 
 const theme = { mode: 'dark', colors: { background: '#000', surface: '#0a0a0a', surfaceElevated: '#111', textPrimary: '#fff', textSecondary: '#aaa', textMuted: '#666', primary: '#fff', border: '#222', accentError: '#f55' } };
+
+// C1: FilesVault no longer owns its folder-page stack — MediaGallery does,
+// rendering the FolderPage list at the gallery root, above the vault's own
+// floating header (see the "zIndex is load-bearing" note on MediaGallery's
+// photos page). This Host mirrors that split exactly — FilesVault gets a
+// controlled `stack`/`onStackChange`, and the FolderPage list is rendered as
+// an EXTERNAL sibling, the same shape MediaGallery uses — so these tests
+// keep exercising the real push/pop contract instead of FilesVault's old
+// internal state.
+function Host(props) {
+  const [stack, setStack] = React.useState([]);
+  return (
+    <>
+      <FilesVault {...props} stack={stack} onStackChange={setStack} />
+      {stack.map((level, i) => (
+        <FolderPage
+          key={`${level.parent}-${i}`}
+          visible
+          parent={level.parent}
+          onClose={() => setStack((s) => s.slice(0, -1))}
+          onOpenFolder={(f) => setStack((s) => [...s, { parent: f.id }])}
+          onOpenMedia={props.onOpenMedia}
+          onBulkTag={props.onBulkTag}
+          onUploadHere={props.onUploadHere}
+          getFullUrl={props.getFullUrl}
+          base={props.base}
+          theme={props.theme}
+          topInset={0}
+          bottomInset={0}
+        />
+      ))}
+    </>
+  );
+}
 const root = { success: true, folder: null, path: [], folders: [{ id: 'fld_aaaaaaaaaaaa', name: 'Scans', itemCount: 3, folderCount: 1, covers: ['/t/1.jpg'] }], items: [], unfiled: { count: 2 }, pagination: { total: 0, limit: 200, offset: 0, hasMore: false } };
 const scans = { success: true, folder: { id: 'fld_aaaaaaaaaaaa', name: 'Scans' }, path: [{ id: 'fld_aaaaaaaaaaaa', name: 'Scans' }], folders: [], items: [{ id: 'd1', type: 'document', originalName: 'a.pdf', uploadDate: 1, rawUrl: '/r', thumbnailUrl: null }], pagination: { total: 1, limit: 200, offset: 0, hasMore: false } };
 const taxes = { success: true, folder: { id: 'fld_bbbbbbbbbbbb', name: 'Taxes' }, path: [{ id: 'fld_aaaaaaaaaaaa', name: 'Scans' }, { id: 'fld_bbbbbbbbbbbb', name: 'Taxes' }], folders: [], items: [], pagination: { total: 0, limit: 200, offset: 0, hasMore: false } };
@@ -44,7 +79,7 @@ beforeEach(() => {
 // FolderPage.test.jsx / FolderSheets.test.jsx) — every call is awaited here.
 describe('FilesVault', () => {
   it('shows Unfiled first, then the folders A–Z, and pushes a folder page on tap', async () => {
-    const { getByText, getByLabelText, queryByText } = await render(<FilesVault theme={theme} getFullUrl={(p) => `http://pond${p}`} base="http://pond" onOpenMedia={jest.fn()} onBulkTag={jest.fn()} onUploadHere={jest.fn()} />);
+    const { getByText, getByLabelText, queryByText } = await render(<Host theme={theme} getFullUrl={(p) => `http://pond${p}`} base="http://pond" onOpenMedia={jest.fn()} onBulkTag={jest.fn()} onUploadHere={jest.fn()} />);
     await waitFor(() => getByText('Scans'));
     expect(getByText('Unfiled')).toBeTruthy();
     expect(getByText('2')).toBeTruthy();
@@ -56,7 +91,7 @@ describe('FilesVault', () => {
 
   it('an open-target for a nested folder pushes the whole crumb chain', async () => {
     const consumed = jest.fn();
-    const { getAllByText, getByText } = await render(<FilesVault theme={theme} getFullUrl={(p) => p} base="" onOpenMedia={jest.fn()} onBulkTag={jest.fn()} onUploadHere={jest.fn()} target={{ kind: 'folder', id: 'fld_bbbbbbbbbbbb' }} onTargetConsumed={consumed} />);
+    const { getAllByText, getByText } = await render(<Host theme={theme} getFullUrl={(p) => p} base="" onOpenMedia={jest.fn()} onBulkTag={jest.fn()} onUploadHere={jest.fn()} target={{ kind: 'folder', id: 'fld_bbbbbbbbbbbb' }} onTargetConsumed={consumed} />);
     await waitFor(() => getAllByText('Taxes'));
     expect(consumed).toHaveBeenCalled();
     // getAllByText, not getByText: the root's own "Scans" folder disc stays
