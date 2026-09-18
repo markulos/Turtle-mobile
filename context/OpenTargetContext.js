@@ -9,7 +9,7 @@ import React, { createContext, useContext, useState, useCallback, useMemo } from
  * clears it, and opens the item through its own existing open path — so a
  * search hit opens exactly as a tap in that screen would.
  *
- *   kind: 'task' | 'note' | 'media' | 'board'
+ *   kind: 'task' | 'note' | 'media' | 'board' | 'folder' | 'document'
  *   id:   the item's id (board: its name)
  *   item: the object the producer holds (a search hit) — enough to open with
  *         when the owning screen has not loaded that row itself.

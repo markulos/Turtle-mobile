@@ -9,6 +9,9 @@
  * Per job:
  *   uploading → spinner + "Sending to {board}…" (+ "3/8" for multi-photo)
  *   success   → check + "Sent 8 photos to {board}", then auto-dismisses
+ *   queued    → check + job.message (e.g. "Queued for Music Vault"), then auto-dismisses
+ *   done      → check + job.message (e.g. "Filed in {folder}") — the Files tab's
+ *               terminal state, then auto-dismisses same as success/queued
  *   error     → alert + reason + Retry / Dismiss (Retry resumes the upload
  *               without re-opening the OS share sheet)
  */
@@ -23,20 +26,23 @@ import { impactHaptic, tapHaptic } from '../utils/haptics';
 const photoWord = (n) => (n === 1 ? 'photo' : 'photos');
 
 function JobCard({ job, theme, onRetry, onDismiss }) {
-  const { board, status, total, done, error, message, kind } = job;
+  const { board, status, total, done, error, message, kind, folderName } = job;
   const isAudioJob = kind === 'audio-files' || kind === 'audio-url';
+  const isFilesJob = kind === 'files';
   // Null board = the default "save as-is" share straight into the photo vault.
-  const boardName = isAudioJob ? 'Music Vault' : (board?.name || 'Photo vault');
+  const boardName = isAudioJob ? 'Music Vault' : isFilesJob ? (folderName || 'Files') : (board?.name || 'Photo vault');
 
   let icon, iconColor, title, subtitle;
   if (status === 'queued') {
     icon = 'check-circle';
     iconColor = theme.colors.accentSuccess;
     title = message || 'Queued for Music Vault';
-  } else if (status === 'success') {
+  } else if (status === 'success' || status === 'done') {
     icon = 'check-circle';
     iconColor = theme.colors.accentSuccess;
-    title = total > 0 ? `Sent ${total} ${photoWord(total)} to ${boardName}` : `Sent to ${boardName}`;
+    // Files jobs always carry a message ("Filed in {folder}"); the photo-count
+    // wording below is the fallback for the kinds that don't set one.
+    title = message || (total > 0 ? `Sent ${total} ${photoWord(total)} to ${boardName}` : `Sent to ${boardName}`);
   } else if (status === 'error') {
     // Partial batch (some landed, some didn't) reads as progress, not a flat
     // failure — Retry re-sends only the stragglers into the same content.
@@ -99,7 +105,7 @@ function JobCard({ job, theme, onRetry, onDismiss }) {
               <Icon name="close" size={18} color={theme.colors.textMuted} />
             </TouchableOpacity>
           </View>
-        ) : status === 'success' || status === 'queued' ? (
+        ) : status === 'success' || status === 'queued' || status === 'done' ? (
           <TouchableOpacity
             onPressIn={() => tapHaptic()}
             onPress={() => onDismiss(job.id)}

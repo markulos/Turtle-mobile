@@ -47,14 +47,15 @@ const mediaTitle = (m) => m?.originalName || m?.filename || '';
  */
 export async function searchEverything(api, query, { boards = [], limits = {} } = {}) {
   const q = String(query || '').trim();
-  const empty = { query: q, tasks: [], notes: [], media: [], boards: [], errors: [] };
+  const empty = { query: q, tasks: [], notes: [], media: [], documents: [], boards: [], errors: [] };
   if (!q) return empty;
   const enc = encodeURIComponent(q);
-  const lim = { tasks: 20, notes: 20, media: 24, ...limits };
-  const [tasks, notes, media] = await Promise.allSettled([
+  const lim = { tasks: 20, notes: 20, media: 24, documents: 20, ...limits };
+  const [tasks, notes, media, documents] = await Promise.allSettled([
     api.get(`/tasks/search?q=${enc}&scope=all&limit=${lim.tasks}`),
     api.get(`/turtle/notes/search?q=${enc}&limit=${lim.notes}`),
-    api.get(`/media/search?q=${enc}&limit=${lim.media}`),
+    api.get(`/media/search?q=${enc}&kind=visual&limit=${lim.media}`),
+    api.get(`/media/search?q=${enc}&kind=document&limit=${lim.documents}`),
   ]);
   const errors = [];
   const take = (settled, key, name) => {
@@ -67,6 +68,7 @@ export async function searchEverything(api, query, { boards = [], limits = {} } 
     tasks: rankPrefixFirst(take(tasks, 'results', 'tasks'), q, taskTitle),
     notes: rankPrefixFirst(take(notes, 'notes', 'notes'), q, noteTitle),
     media: rankPrefixFirst(take(media, 'items', 'media'), q, mediaTitle),
+    documents: rankPrefixFirst(take(documents, 'items', 'documents'), q, mediaTitle),
     boards: matchBoards(boards, q),
     errors,
   };

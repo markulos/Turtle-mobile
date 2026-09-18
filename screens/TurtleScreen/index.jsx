@@ -682,7 +682,7 @@ export default function TurtleScreen() {
       setShowConversations(true);
       return;
     }
-    if (target.kind === 'media') setIsGalleryOpen(false); // the Photos tab's gallery takes it
+    if (target.kind === 'media' || target.kind === 'document' || target.kind === 'folder') setIsGalleryOpen(false); // the Photos tab's gallery takes it
     openTarget(target);
     const tab = target.kind === 'task' ? 'Tasks' : target.kind === 'note' ? 'Notes' : 'Photos';
     navigation.navigate(tab);

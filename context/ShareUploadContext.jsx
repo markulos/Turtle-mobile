@@ -48,6 +48,7 @@ import {
   classifySharedFile,
   isHttpImportUrl,
   supportedAudioVideoFiles,
+  supportedDocumentFiles,
 } from '../utils/shareMediaClassifier';
 import { notifyHaptic } from '../utils/haptics';
 
@@ -196,6 +197,7 @@ export function ShareUploadProvider({ children }) {
       error: j.error,
       message: j.message,
       kind: j.kind,
+      folderName: j.folderName,
     })));
   }, []);
 
@@ -233,16 +235,18 @@ export function ShareUploadProvider({ children }) {
   }, [cleanupJobFiles, publish]);
 
   const persistAudioManifest = useCallback(async (job) => {
-    if (!job?.ownedDirectory || job.kind !== 'audio-files') return;
+    if (!job?.ownedDirectory || (job.kind !== 'audio-files' && job.kind !== 'files')) return;
     try {
       await writeShareUploadManifest(job.ownedDirectory, {
         id: job.id,
+        kind: job.kind,
         ownerIdentity: job.ownerIdentity,
         authGeneration: job.authGeneration,
         status: job.status,
         total: job.total,
         done: job.done,
         backendJobIds: job.backendJobIds,
+        ...(job.kind === 'files' ? { folderId: job.folderId ?? null, folderName: job.folderName || 'Unfiled' } : {}),
         media: job.media.map((media) => ({
           localPath: media.localPath,
           filename: media.filename,
@@ -300,10 +304,13 @@ export function ShareUploadProvider({ children }) {
               continue;
             }
             const auth = authRef.current;
+            // Old manifests (written before `kind` existed) are always audio —
+            // that was the only durable job kind at the time.
+            const kind = manifest.kind === 'files' ? 'files' : 'audio-files';
             jobsRef.current.set(manifest.id, {
               id: manifest.id,
-              kind: 'audio-files',
-              board: AUDIO_BOARD,
+              kind,
+              board: kind === 'files' ? null : AUDIO_BOARD,
               url: null,
               mediaFiles: [],
               media: manifest.media,
@@ -322,6 +329,9 @@ export function ShareUploadProvider({ children }) {
               apiClient: apiRef.current,
               abortController: new AbortController(),
               ownedDirectory: directory,
+              ...(kind === 'files'
+                ? { folderId: manifest.folderId ?? null, folderName: manifest.folderName || 'Unfiled' }
+                : {}),
             });
             changed = true;
           }
@@ -340,7 +350,7 @@ export function ShareUploadProvider({ children }) {
     if (existing) clearTimeout(existing);
     const t = setTimeout(() => {
       const job = jobsRef.current.get(id);
-      if (job && (job.status === 'success' || job.status === 'queued')) removeJob(id);
+      if (job && (job.status === 'success' || job.status === 'queued' || job.status === 'done')) removeJob(id);
     }, SUCCESS_TOAST_MS);
     autoDismissTimers.current.set(id, t);
   }, [removeJob]);
@@ -450,6 +460,41 @@ export function ShareUploadProvider({ children }) {
     }
 
     try {
+      // Files tab: documents already staged by enqueueFileShare → stream each
+      // to /media/upload with the chosen folderId. Kept inside this try/catch
+      // (unlike the audio-url delegation above, which has its own) so a bad
+      // server URL lands on the generic catch below instead of an unhandled
+      // rejection.
+      if (job.kind === 'files') {
+        const uploadUrl = uploadEndpointOf(getBaseUrlRef.current?.());
+        if (!uploadUrl.startsWith('http')) throw new Error('Turtle server URL is unavailable.');
+        let failures = 0;
+        for (const media of job.media) {
+          if (media.sent) continue;
+          if (!ownsJob(job)) return;
+          try {
+            await streamMultipartUpload({
+              url: uploadUrl, fileUri: media.localPath, mimeType: media.mimeType || 'application/octet-stream',
+              parameters: { tags: '[]', originalName: media.filename, clientImportId: media.clientImportId, ...(job.folderId ? { folderId: job.folderId } : {}) },
+              token: job.token, label: media.filename, onProgress: () => {}, signal: job.abortController.signal,
+            });
+            if (!ownsJob(job)) return;
+            media.sent = true; job.done += 1; publish();
+            await persistAudioManifest(job);
+            FileSystem.deleteAsync(media.localPath, { idempotent: true }).catch(() => {});
+          } catch (error) {
+            if (!ownsJob(job) || job.abortController.signal.aborted) return;
+            media.error = error.message || 'Upload failed.'; failures += 1;
+          }
+        }
+        job.status = failures === 0 ? 'done' : 'error';
+        job.message = failures === 0 ? `Filed in ${job.folderName}` : null;
+        job.error = failures === 0 ? null : `${failures} file${failures === 1 ? '' : 's'} failed`;
+        publish();
+        if (failures === 0) { notifyHaptic('success'); scheduleAutoDismiss(id); }
+        return;
+      }
+
       // 1. Copy the OS temp files into app storage once (cheap byte copy, no
       //    base64 in memory) so the upload loop can outlive the share session.
       if (!job.copied) {
@@ -610,7 +655,7 @@ export function ShareUploadProvider({ children }) {
       publish();
       notifyHaptic('error');
     }
-  }, [ensureDir, ownsJob, processAudioJob, publish, scheduleAutoDismiss]);
+  }, [ensureDir, ownsJob, persistAudioManifest, processAudioJob, publish, scheduleAutoDismiss]);
 
   const stageAudioFiles = useCallback(async (job) => {
     await assertShareStagingCapacity(job.mediaFiles.map((file) => file.path));
@@ -726,6 +771,27 @@ export function ShareUploadProvider({ children }) {
     return id;
   }, [processJob, publish, removeJob, stageAudioFiles]);
 
+  // Files tab: documents shared from another app, filed into a folder.
+  const enqueueFileShare = useCallback(async ({ mediaFiles, folderId, folderName } = {}) => {
+    const files = supportedDocumentFiles(mediaFiles);
+    if (files.length === 0) throw new Error('No document was shared.');
+    const auth = authRef.current;
+    if (!auth.isAuthenticated || !auth.authIdentity || !auth.authGeneration || !auth.token) throw new Error('Sign in before importing files.');
+    const id = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const job = {
+      id, kind: 'files', board: null, url: null, folderId: folderId || null, folderName: folderName || 'Unfiled',
+      mediaFiles: files, media: [], backendJobIds: [], total: files.length, done: 0, copied: false,
+      status: 'uploading', error: null, message: null,
+      ownerIdentity: auth.authIdentity, authGeneration: auth.authGeneration, token: auth.token,
+      apiClient: apiRef.current, abortController: new AbortController(),
+    };
+    jobsRef.current.set(id, job);
+    publish();
+    try { await stageAudioFiles(job); } catch (error) { removeJob(id); throw new Error(`Could not preserve shared files: ${error.message}`); }
+    processJob(id);
+    return id;
+  }, [processJob, publish, removeJob, stageAudioFiles]);
+
   const retryJob = useCallback((id) => {
     const job = jobsRef.current.get(id);
     if (!job || !ownsJob(job)) return;
@@ -744,8 +810,8 @@ export function ShareUploadProvider({ children }) {
   // on every provider render — re-rendering the toast + every subscriber even
   // when nothing they read had changed.
   const value = useMemo(
-    () => ({ jobs, enqueueShare, enqueueAudioShare, retryJob, dismissJob }),
-    [jobs, enqueueShare, enqueueAudioShare, retryJob, dismissJob],
+    () => ({ jobs, enqueueShare, enqueueAudioShare, enqueueFileShare, retryJob, dismissJob }),
+    [jobs, enqueueShare, enqueueAudioShare, enqueueFileShare, retryJob, dismissJob],
   );
   return <ShareUploadContext.Provider value={value}>{children}</ShareUploadContext.Provider>;
 }

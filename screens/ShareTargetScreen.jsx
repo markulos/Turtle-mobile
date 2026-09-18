@@ -79,7 +79,9 @@ import {
   classifySharedFile,
   isHttpImportUrl,
   supportedAudioVideoFiles,
+  supportedDocumentFiles,
 } from '../utils/shareMediaClassifier';
+import { FolderPickerSheet } from './TurtleScreen/components/FilesVault/FolderSheets';
 
 // Local cache of the boards list so the picker renders INSTANTLY on open
 // instead of waiting on the network — we show the cached list immediately and
@@ -105,7 +107,7 @@ const KIND_LABELS = {
 export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const { theme } = useTheme();
   const { api, serverIP, isConnected } = useServer();
-  const { enqueueShare, enqueueAudioShare } = useShareUpload();
+  const { enqueueShare, enqueueAudioShare, enqueueFileShare } = useShareUpload();
 
   // ── State ────────────────────────────────────────────────────
   const [boards, setBoards] = useState([]);
@@ -114,6 +116,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const [query, setQuery] = useState('');
   const [handoffError, setHandoffError] = useState(null);
   const [audioHandoffBusy, setAudioHandoffBusy] = useState(false);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
   const audioHandoffInFlightRef = useRef(false);
   const audioHandoffDismissedRef = useRef(false);
   const mountedRef = useRef(true);
@@ -134,6 +137,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const files = Array.isArray(shareIntent?.files) ? shareIntent.files : [];
   const imageFiles = files.filter((file) => classifySharedFile(file) === 'image');
   const mediaFiles = supportedAudioVideoFiles(files);
+  const documentFiles = supportedDocumentFiles(files);
   const hasImportUrl = isHttpImportUrl(url);
   const showAudioDestination = mediaFiles.length > 0 || hasImportUrl;
   const hasStandardContent = !!text || !!url || imageFiles.length > 0;
@@ -407,6 +411,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           url={url}
           imageFiles={imageFiles}
           mediaFiles={mediaFiles}
+          documentFiles={documentFiles}
           theme={theme}
         />
 
@@ -415,7 +420,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
             glance instead of hunted for among board rows. Anything that
             cannot work for THIS payload is not rendered - a share of loose
             photos has no link to keep, so it shows no Inbox. */}
-        {(canDownload || showAudioDestination || canInbox) && (
+        {(canDownload || showAudioDestination || canInbox || documentFiles.length > 0) && (
           <>
             <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary, marginTop: 4 }]}>
               Save as
@@ -453,6 +458,17 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
                   subtitle="Link only"
                   accessibilityLabel="Inbox - save the link only"
                   onPress={pickInbox}
+                />
+              )}
+              {documentFiles.length > 0 && (
+                <ActionTile
+                  theme={theme}
+                  icon="folder-outline"
+                  tint={theme.colors.accentInfo}
+                  title="Files"
+                  subtitle={documentFiles.length === 1 ? 'Into a folder' : `${documentFiles.length} files`}
+                  accessibilityLabel="Files - into a folder"
+                  onPress={() => setFilePickerOpen(true)}
                 />
               )}
             </View>
@@ -513,7 +529,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           </View>
         )}
 
-        {!hasStandardContent && !showAudioDestination && (
+        {!hasStandardContent && !showAudioDestination && documentFiles.length === 0 && (
           <View style={styles.centerState}>
             <Icon name="file-cancel-outline" size={36} color={theme.colors.textMuted} />
             <Text style={[styles.centerTitle, { color: theme.colors.textPrimary, fontSize: 15 }]}>
@@ -582,6 +598,30 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           </>
         )}
       </ScrollView>
+
+      {filePickerOpen && (
+        <FolderPickerSheet
+          title="File into"
+          onClose={() => setFilePickerOpen(false)}
+          onPick={(target) => {
+            setFilePickerOpen(false);
+            void (async () => {
+              try {
+                await enqueueFileShare({ mediaFiles: documentFiles, folderId: target.id === 'unfiled' ? null : target.id, folderName: target.name });
+              } catch (error) {
+                if (!mountedRef.current) return;
+                setHandoffError(error.message || 'Could not file the shared documents.');
+                notifyHaptic('error');
+                return;
+              }
+              if (!mountedRef.current) return;
+              notifyHaptic('success');
+              onDismiss?.();
+            })();
+          }}
+          theme={theme}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -639,9 +679,10 @@ function Header({ onDismiss, title, theme }) {
 // ── SharePreview ─────────────────────────────────────────────
 // Compact summary of the share payload at the top of the screen, so
 // the user can confirm what they're about to send.
-function SharePreview({ text, url, imageFiles, mediaFiles, theme }) {
+function SharePreview({ text, url, imageFiles, mediaFiles, documentFiles, theme }) {
   const hasImages = imageFiles.length > 0;
   const hasMedia = mediaFiles.length > 0;
+  const hasDocuments = documentFiles.length > 0;
   const hasText = !!text;
   const hasUrl = !!url;
 
@@ -691,6 +732,14 @@ function SharePreview({ text, url, imageFiles, mediaFiles, theme }) {
           </Text>
         </View>
       )}
+      {hasDocuments && (
+        <View style={styles.previewRow}>
+          <Icon name="file-document-outline" size={16} color={theme.colors.textSecondary} />
+          <Text style={{ color: theme.colors.textPrimary, flex: 1, fontSize: 13 }}>
+            {documentFiles.length} document{documentFiles.length === 1 ? '' : 's'}
+          </Text>
+        </View>
+      )}
       {hasUrl && (
         <View style={styles.previewRow}>
           <Icon name="link-variant" size={16} color={theme.colors.textSecondary} />
@@ -713,7 +762,7 @@ function SharePreview({ text, url, imageFiles, mediaFiles, theme }) {
           </Text>
         </View>
       )}
-      {!hasImages && !hasMedia && !hasText && !hasUrl && (
+      {!hasImages && !hasMedia && !hasDocuments && !hasText && !hasUrl && (
         <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontStyle: 'italic' }}>
           Empty share
         </Text>

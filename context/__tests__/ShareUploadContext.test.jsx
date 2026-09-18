@@ -187,12 +187,13 @@ describe('ShareTargetScreen Audio destination', () => {
 
   test('does not offer any destination that can turn an unsupported file-only share into an empty payload', async () => {
     const view = await renderTarget({
-      files: [{ path: 'file:///os/notes.pdf', fileName: 'notes.pdf', mimeType: 'application/pdf' }],
+      files: [{ path: 'file:///os/setup.exe', fileName: 'setup.exe', mimeType: 'application/x-msdownload' }],
     });
 
     expect(view.queryByText('Just the sound')).toBeNull();
     expect(view.queryByText('Audio')).toBeNull();
     expect(view.queryByText('Recipes')).toBeNull();
+    expect(view.queryByText('Files')).toBeNull();
     expect(mockApiPost).not.toHaveBeenCalled();
   });
 
@@ -648,6 +649,190 @@ describe('ShareUploadProvider audio imports', () => {
     await waitFor(() => expect(latestShareUpload.jobs[0]?.status).toBe('queued'));
     expect(latestShareUpload.jobs[0]?.message).toBe('Queued for Music Vault');
     expect(view.getByText('Queued for Music Vault')).toBeTruthy();
+    await act(async () => {
+      latestShareUpload.dismissJob(id);
+    });
+  });
+
+  test('restores a process-death files manifest as an owner-bound retry with its folder', async () => {
+    mockReadDirectoryAsync.mockResolvedValueOnce(['restored-files-job']);
+    mockGetInfoAsync.mockResolvedValue({
+      exists: true,
+      isDirectory: true,
+      modificationTime: Date.now() / 1000,
+    });
+    mockReadAsStringAsync.mockImplementation(async (uri) => {
+      if (String(uri).endsWith('/manifest.json')) {
+        return JSON.stringify({
+          version: 1,
+          id: 'restored-files-job',
+          kind: 'files',
+          folderId: 'fld_aaaaaaaaaaaa',
+          folderName: 'Recipes',
+          ownerIdentity: 'sub:account-a',
+          authGeneration: 'old-generation',
+          status: 'error',
+          total: 1,
+          done: 0,
+          backendJobIds: [],
+          media: [{
+            localPath: 'file:///app-cache/TurtleShareUploads/restored-files-job/0/notes.pdf',
+            filename: 'notes.pdf',
+            mimeType: 'application/pdf',
+            sent: false,
+            clientImportId: 'stable-files-process-death-id',
+          }],
+        });
+      }
+      return 'base64-image';
+    });
+    mockStreamMultipartUpload.mockResolvedValueOnce({ status: 200 });
+    await render(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    await waitFor(() =>
+      expect(latestShareUpload.jobs).toEqual([
+        expect.objectContaining({
+          id: 'restored-files-job',
+          status: 'error',
+          kind: 'files',
+          folderName: 'Recipes',
+        }),
+      ])
+    );
+    await act(async () => {
+      latestShareUpload.retryJob('restored-files-job');
+    });
+    await waitFor(() => expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1));
+
+    expect(mockStreamMultipartUpload.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        token: 'token-7',
+        parameters: expect.objectContaining({
+          clientImportId: 'stable-files-process-death-id',
+          folderId: 'fld_aaaaaaaaaaaa',
+        }),
+      })
+    );
+    await waitFor(() => expect(latestShareUpload.jobs[0]?.status).toBe('done'));
+    await act(async () => {
+      latestShareUpload.dismissJob('restored-files-job');
+    });
+  });
+});
+
+describe('ShareUploadProvider file imports', () => {
+  beforeEach(() => {
+    latestShareUpload = null;
+    mockAuth = {
+      isAuthenticated: true,
+      token: 'token-7',
+      authIdentity: 'sub:account-a',
+      authGeneration: 'generation-a',
+    };
+    jest.clearAllMocks();
+    mockRandomUUID.mockReturnValue('client-import-file');
+    mockStreamMultipartUpload.mockReset();
+    mockGetInfoAsync.mockResolvedValue({ exists: true });
+    mockMakeDirectoryAsync.mockResolvedValue(undefined);
+    mockCopyAsync.mockResolvedValue(undefined);
+    mockDeleteAsync.mockResolvedValue(undefined);
+    mockWriteAsStringAsync.mockResolvedValue(undefined);
+    mockReadDirectoryAsync.mockResolvedValue([]);
+    mockGetFreeDiskStorageAsync.mockResolvedValue(10 * 1024 * 1024 * 1024);
+  });
+
+  const notesPdf = { path: 'file:///os/notes.pdf', fileName: 'notes.pdf', mimeType: 'application/pdf' };
+
+  test('enqueueFileShare uploads a shared document with the chosen folder and reports done', async () => {
+    mockStreamMultipartUpload.mockResolvedValueOnce({ status: 200 });
+    await render(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    let id;
+    await act(async () => {
+      id = await latestShareUpload.enqueueFileShare({
+        mediaFiles: [notesPdf],
+        folderId: 'fld_aaaaaaaaaaaa',
+        folderName: 'Recipes',
+      });
+    });
+
+    await waitFor(() =>
+      expect(latestShareUpload.jobs.find((job) => job.id === id)?.status).toBe('done')
+    );
+    expect(mockStreamMultipartUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parameters: expect.objectContaining({ folderId: 'fld_aaaaaaaaaaaa' }),
+      })
+    );
+    expect(latestShareUpload.jobs.find((job) => job.id === id)?.message).toBe('Filed in Recipes');
+    // The staging manifest is re-persisted after the file lands (not just at
+    // stage time), so a kill mid-batch won't re-upload it on the next retry.
+    const manifestWrites = mockWriteAsStringAsync.mock.calls.filter(([uri]) => uri.endsWith('/manifest.json'));
+    expect(manifestWrites).toHaveLength(2); // initial stage + one persist for the sent file
+    expect(JSON.parse(manifestWrites[1][1]).media[0]).toEqual(
+      expect.objectContaining({ filename: 'notes.pdf', sent: true })
+    );
+    await act(async () => {
+      latestShareUpload.dismissJob(id);
+    });
+  });
+
+  test('enqueueFileShare surfaces a failed upload as an error job', async () => {
+    mockStreamMultipartUpload.mockRejectedValueOnce(new Error('Upload failed.'));
+    await render(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    let id;
+    await act(async () => {
+      id = await latestShareUpload.enqueueFileShare({
+        mediaFiles: [notesPdf],
+        folderId: 'fld_aaaaaaaaaaaa',
+        folderName: 'Recipes',
+      });
+    });
+
+    await waitFor(() =>
+      expect(latestShareUpload.jobs.find((job) => job.id === id)?.status).toBe('error')
+    );
+    expect(latestShareUpload.jobs.find((job) => job.id === id)?.error).toBe('1 file failed');
+    await act(async () => {
+      latestShareUpload.dismissJob(id);
+    });
+  });
+
+  test('enqueueFileShare omits folderId from the upload parameters when filed as Unfiled', async () => {
+    mockStreamMultipartUpload.mockResolvedValueOnce({ status: 200 });
+    await render(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    let id;
+    await act(async () => {
+      id = await latestShareUpload.enqueueFileShare({
+        mediaFiles: [notesPdf],
+        folderId: null,
+        folderName: 'Unfiled',
+      });
+    });
+
+    await waitFor(() =>
+      expect(latestShareUpload.jobs.find((job) => job.id === id)?.status).toBe('done')
+    );
+    const parameters = mockStreamMultipartUpload.mock.calls[0][0].parameters;
+    expect(parameters).not.toHaveProperty('folderId');
     await act(async () => {
       latestShareUpload.dismissJob(id);
     });

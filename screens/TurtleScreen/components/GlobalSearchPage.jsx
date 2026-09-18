@@ -101,7 +101,7 @@ export default function GlobalSearchPage({ visible, initialQuery = '', onClose, 
     onOpen?.({ kind, id, item });
   }, [onOpen]);
 
-  const total = results ? results.boards.length + results.tasks.length + results.notes.length + results.media.length : 0;
+  const total = results ? results.boards.length + results.tasks.length + results.notes.length + results.media.length + results.documents.length : 0;
   const styles = useMemo(() => makeStyles(c), [c]);
 
   const section = (title, count) => (
@@ -263,6 +263,18 @@ export default function GlobalSearchPage({ visible, initialQuery = '', onClose, 
               </View>
             </>
           )}
+
+          {results && results.documents?.length > 0 && (
+            <>
+              {section('Files', results.documents.length)}
+              {results.documents.map((d) => (
+                <Pressable key={d.id} onPress={() => pick('document', d.id, d)} style={({ pressed }) => [styles.docRow, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel={`Open file ${d.originalName || d.filename || ''}`} testID={`search-doc-${d.id}`}>
+                  <Icon name="file-document-outline" size={20} color={c.textSecondary} />
+                  <Text style={styles.docName} numberOfLines={1}>{d.originalName || d.filename}</Text>
+                </Pressable>
+              ))}
+            </>
+          )}
         </ScrollView>
       </View>
     </EdgeSwipePage>
@@ -399,6 +411,18 @@ const makeStyles = (c) => StyleSheet.create({
   done: {
     textDecorationLine: 'line-through',
     color: c.textTertiary,
+  },
+  docRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 44,
+    paddingHorizontal: 16,
+  },
+  docName: {
+    color: c.textPrimary,
+    fontSize: 14.5,
+    flexShrink: 1,
   },
   grid: {
     flexDirection: 'row',

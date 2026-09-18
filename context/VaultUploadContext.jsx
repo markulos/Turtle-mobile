@@ -467,6 +467,8 @@ export function VaultUploadProvider({ children }) {
           if (meta.width) parameters.width = String(meta.width);
           if (meta.height) parameters.height = String(meta.height);
           parameters.tags = JSON.stringify(batch.tags && batch.tags.length > 0 ? batch.tags : ['Phone Uploads']);
+          // Files tab: "Upload here" files the whole batch into one folder.
+          if (batch.folderId) parameters.folderId = batch.folderId;
 
           const originalFilename = item.fileName || String(meta.uri).split('/').pop() || 'file';
           const isVideo = item.type === 'video' || /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|3gp)$/i.test(originalFilename);
@@ -647,7 +649,7 @@ export function VaultUploadProvider({ children }) {
   // Public: start a batch. `assets` are picker/library entries; only plain
   // serializable fields are kept so the queue can persist. Returns false when
   // a batch is already running (one at a time keeps % meaningful).
-  const enqueue = useCallback(({ assets, tags }) => {
+  const enqueue = useCallback(({ assets, tags, folderId = null }) => {
     const auth = authRef.current;
     if (!auth.isAuthenticated || !auth.authIdentity || !auth.authGeneration || !auth.token) {
       return false;
@@ -658,6 +660,7 @@ export function VaultUploadProvider({ children }) {
     batchRef.current = {
       id,
       tags: Array.isArray(tags) ? tags : [],
+      folderId: folderId ? String(folderId) : null,
       startedAt: Date.now(),
       finishedAt: null,
       status: 'uploading',

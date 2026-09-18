@@ -33,6 +33,9 @@ const IMAGE_EXTENSIONS = new Set([
   'heif',
 ]);
 
+const DOCUMENT_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md', 'csv', 'json', 'zip', 'rtf', 'odt', 'ods', 'odp']);
+const DOCUMENT_MIME_PREFIXES = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats', 'application/vnd.ms-', 'application/vnd.oasis', 'text/plain', 'text/markdown', 'text/csv', 'application/json', 'application/zip'];
+
 const GENERIC_MIME_TYPES = new Set([
   '*/*',
   'application/octet-stream',
@@ -86,12 +89,14 @@ export function classifySharedFile(entry) {
   if (mime.startsWith('audio/')) return 'audio';
   if (mime.startsWith('video/')) return 'video';
   if (mime.startsWith('image/')) return 'image';
+  if (DOCUMENT_MIME_PREFIXES.some((p) => mime.startsWith(p))) return 'document';
   if (mimeResult.state === 'specific') return 'unsupported';
 
   const extension = extensionOf(entry);
   if (AUDIO_EXTENSIONS.has(extension)) return 'audio';
   if (VIDEO_EXTENSIONS.has(extension)) return 'video';
   if (IMAGE_EXTENSIONS.has(extension)) return 'image';
+  if (DOCUMENT_EXTENSIONS.has(extension)) return 'document';
   return 'unsupported';
 }
 
@@ -101,6 +106,10 @@ export function supportedAudioVideoFiles(entries) {
     const kind = classifySharedFile(entry);
     return kind === 'audio' || kind === 'video';
   });
+}
+
+export function supportedDocumentFiles(entries) {
+  return (Array.isArray(entries) ? entries : []).filter((e) => classifySharedFile(e) === 'document');
 }
 
 export function isHttpImportUrl(value) {
