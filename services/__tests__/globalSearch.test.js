@@ -38,3 +38,12 @@ test('searchEverything fans out to the three endpoints, boards locally, and isol
   const blank = await searchEverything(api, '   ');
   expect(blank.tasks).toEqual([]);
 });
+
+it('asks for documents as their own section and keeps Photos visual', async () => {
+  const calls = [];
+  const api = { get: jest.fn((p) => { calls.push(p); return Promise.resolve(p.includes('kind=document') ? { items: [{ id: 'd1', originalName: 'lease.pdf', type: 'document' }] } : { items: [], results: [], notes: [] }); }) };
+  const r = await searchEverything(api, 'lease');
+  expect(calls.find((p) => p.startsWith('/media/search') && !p.includes('kind=document'))).toContain('kind=visual');
+  expect(calls.some((p) => p.includes('/media/search') && p.includes('kind=document'))).toBe(true);
+  expect(r.documents.map((d) => d.id)).toEqual(['d1']);
+});
