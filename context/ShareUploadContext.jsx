@@ -235,16 +235,18 @@ export function ShareUploadProvider({ children }) {
   }, [cleanupJobFiles, publish]);
 
   const persistAudioManifest = useCallback(async (job) => {
-    if (!job?.ownedDirectory || job.kind !== 'audio-files') return;
+    if (!job?.ownedDirectory || (job.kind !== 'audio-files' && job.kind !== 'files')) return;
     try {
       await writeShareUploadManifest(job.ownedDirectory, {
         id: job.id,
+        kind: job.kind,
         ownerIdentity: job.ownerIdentity,
         authGeneration: job.authGeneration,
         status: job.status,
         total: job.total,
         done: job.done,
         backendJobIds: job.backendJobIds,
+        ...(job.kind === 'files' ? { folderId: job.folderId ?? null, folderName: job.folderName || 'Unfiled' } : {}),
         media: job.media.map((media) => ({
           localPath: media.localPath,
           filename: media.filename,
@@ -302,10 +304,13 @@ export function ShareUploadProvider({ children }) {
               continue;
             }
             const auth = authRef.current;
+            // Old manifests (written before `kind` existed) are always audio —
+            // that was the only durable job kind at the time.
+            const kind = manifest.kind === 'files' ? 'files' : 'audio-files';
             jobsRef.current.set(manifest.id, {
               id: manifest.id,
-              kind: 'audio-files',
-              board: AUDIO_BOARD,
+              kind,
+              board: kind === 'files' ? null : AUDIO_BOARD,
               url: null,
               mediaFiles: [],
               media: manifest.media,
@@ -324,6 +329,9 @@ export function ShareUploadProvider({ children }) {
               apiClient: apiRef.current,
               abortController: new AbortController(),
               ownedDirectory: directory,
+              ...(kind === 'files'
+                ? { folderId: manifest.folderId ?? null, folderName: manifest.folderName || 'Unfiled' }
+                : {}),
             });
             changed = true;
           }

@@ -411,6 +411,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
           url={url}
           imageFiles={imageFiles}
           mediaFiles={mediaFiles}
+          documentFiles={documentFiles}
           theme={theme}
         />
 
@@ -607,9 +608,15 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
             void (async () => {
               try {
                 await enqueueFileShare({ mediaFiles: documentFiles, folderId: target.id === 'unfiled' ? null : target.id, folderName: target.name });
-                notifyHaptic('success');
-                onDismiss?.();
-              } catch (error) { setHandoffError(error.message || 'Could not file the shared documents.'); notifyHaptic('error'); }
+              } catch (error) {
+                if (!mountedRef.current) return;
+                setHandoffError(error.message || 'Could not file the shared documents.');
+                notifyHaptic('error');
+                return;
+              }
+              if (!mountedRef.current) return;
+              notifyHaptic('success');
+              onDismiss?.();
             })();
           }}
           theme={theme}
@@ -672,9 +679,10 @@ function Header({ onDismiss, title, theme }) {
 // ── SharePreview ─────────────────────────────────────────────
 // Compact summary of the share payload at the top of the screen, so
 // the user can confirm what they're about to send.
-function SharePreview({ text, url, imageFiles, mediaFiles, theme }) {
+function SharePreview({ text, url, imageFiles, mediaFiles, documentFiles, theme }) {
   const hasImages = imageFiles.length > 0;
   const hasMedia = mediaFiles.length > 0;
+  const hasDocuments = documentFiles.length > 0;
   const hasText = !!text;
   const hasUrl = !!url;
 
@@ -724,6 +732,14 @@ function SharePreview({ text, url, imageFiles, mediaFiles, theme }) {
           </Text>
         </View>
       )}
+      {hasDocuments && (
+        <View style={styles.previewRow}>
+          <Icon name="file-document-outline" size={16} color={theme.colors.textSecondary} />
+          <Text style={{ color: theme.colors.textPrimary, flex: 1, fontSize: 13 }}>
+            {documentFiles.length} document{documentFiles.length === 1 ? '' : 's'}
+          </Text>
+        </View>
+      )}
       {hasUrl && (
         <View style={styles.previewRow}>
           <Icon name="link-variant" size={16} color={theme.colors.textSecondary} />
@@ -746,7 +762,7 @@ function SharePreview({ text, url, imageFiles, mediaFiles, theme }) {
           </Text>
         </View>
       )}
-      {!hasImages && !hasMedia && !hasText && !hasUrl && (
+      {!hasImages && !hasMedia && !hasDocuments && !hasText && !hasUrl && (
         <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontStyle: 'italic' }}>
           Empty share
         </Text>

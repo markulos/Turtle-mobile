@@ -116,7 +116,7 @@ const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8 },
   unfiled: { alignItems: 'center', width: 88, paddingVertical: 6 },
   unfiledDisc: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth },
-  discName: { marginTop: 6, fontSize: 12.5, fontWeight: '600' },
-  discCount: { fontSize: 11, marginTop: 1 },
+  discName: { marginTop: 6, fontSize: 12.5, fontWeight: '600', flexShrink: 1 },
+  discCount: { fontSize: 11, marginTop: 1, flexShrink: 1 },
   empty: { width: '100%', textAlign: 'center', paddingVertical: 24, paddingHorizontal: 24, fontSize: 13, lineHeight: 19 },
 });

@@ -242,5 +242,5 @@ const styles = StyleSheet.create({
   bar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', paddingTop: 8, paddingHorizontal: 12, borderTopWidth: StyleSheet.hairlineWidth, zIndex: 50, gap: 4 },
   barCount: { fontSize: 13, fontWeight: '700', flexShrink: 1, marginRight: 6 },
   barBtn: { alignItems: 'center', justifyContent: 'center', minWidth: 56, minHeight: 44, flexShrink: 1 },
-  barLabel: { fontSize: 11, marginTop: 2 },
+  barLabel: { fontSize: 11, marginTop: 2, flexShrink: 1 },
 });
