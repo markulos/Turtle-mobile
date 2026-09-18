@@ -10,6 +10,15 @@ describe('filesUtils', () => {
     for (const n of ['a', 'Taxes', 'Ünïcode 🎉']) expect(folderHue(n)).toBeLessThan(360);
     expect(folderColor('Taxes')).toMatch(/^hsl\(\d+, 55%, 55%\)$/);
     expect(folderTint('Taxes', 0.2)).toMatch(/^hsla\(\d+, 55%, 55%, 0\.2\)$/);
+
+    // Parity with boardColor (ConversationsOverlay.jsx): code-unit iteration, not
+    // code-point — must agree on emoji/non-BMP names too. Recomputed here rather
+    // than imported, since ConversationsOverlay.jsx is a component module with
+    // native deps.
+    const boardsWay = (name) => { let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360; return h; };
+    expect(folderHue('🎉')).toBe(boardsWay('🎉'));
+    expect(folderHue('Ünïcode 🎉')).toBe(boardsWay('Ünïcode 🎉'));
+    expect(folderHue('🎉')).toBe(261);
   });
 
   it('formats sizes for a row', () => {

@@ -3,10 +3,16 @@
  * breadcrumb collapsing. No React, no network; everything here is unit-tested.
  */
 
-/** The boards' hue formula, so a folder wears the same colour a board of that name would. */
+/**
+ * Mirrors boardColor (ConversationsOverlay.jsx) code-unit for code-unit, so a folder
+ * and a board of the same name share a hue — including emoji names. Do not switch
+ * this to iterating Unicode code points: that diverges from boardColor on any name
+ * outside the BMP.
+ */
 export function folderHue(name) {
+  const s = String(name || '');
   let h = 0;
-  for (const ch of String(name || '')) h = (h * 31 + ch.codePointAt(0)) % 360;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
   return h;
 }
 export const folderColor = (name) => `hsl(${folderHue(name)}, 55%, 55%)`;
