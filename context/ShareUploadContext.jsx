@@ -480,6 +480,7 @@ export function ShareUploadProvider({ children }) {
             });
             if (!ownsJob(job)) return;
             media.sent = true; job.done += 1; publish();
+            await persistAudioManifest(job);
             FileSystem.deleteAsync(media.localPath, { idempotent: true }).catch(() => {});
           } catch (error) {
             if (!ownsJob(job) || job.abortController.signal.aborted) return;
@@ -654,7 +655,7 @@ export function ShareUploadProvider({ children }) {
       publish();
       notifyHaptic('error');
     }
-  }, [ensureDir, ownsJob, processAudioJob, publish, scheduleAutoDismiss]);
+  }, [ensureDir, ownsJob, persistAudioManifest, processAudioJob, publish, scheduleAutoDismiss]);
 
   const stageAudioFiles = useCallback(async (job) => {
     await assertShareStagingCapacity(job.mediaFiles.map((file) => file.path));

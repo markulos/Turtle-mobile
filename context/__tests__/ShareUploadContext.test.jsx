@@ -773,6 +773,13 @@ describe('ShareUploadProvider file imports', () => {
       })
     );
     expect(latestShareUpload.jobs.find((job) => job.id === id)?.message).toBe('Filed in Recipes');
+    // The staging manifest is re-persisted after the file lands (not just at
+    // stage time), so a kill mid-batch won't re-upload it on the next retry.
+    const manifestWrites = mockWriteAsStringAsync.mock.calls.filter(([uri]) => uri.endsWith('/manifest.json'));
+    expect(manifestWrites).toHaveLength(2); // initial stage + one persist for the sent file
+    expect(JSON.parse(manifestWrites[1][1]).media[0]).toEqual(
+      expect.objectContaining({ filename: 'notes.pdf', sent: true })
+    );
     await act(async () => {
       latestShareUpload.dismissJob(id);
     });
