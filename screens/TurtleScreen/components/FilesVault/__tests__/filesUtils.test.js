@@ -1,5 +1,5 @@
 import {
-  folderHue, folderColor, folderTint, formatSize, documentIcon, isDocument, collapseCrumbs, sortFolderItems,
+  folderHue, folderColor, folderTint, formatSize, documentIcon, isDocument, collapseCrumbs, sortFolderItems, messageOf,
 } from '../filesUtils';
 
 describe('filesUtils', () => {
@@ -62,5 +62,35 @@ describe('filesUtils', () => {
     expect(sortFolderItems(items, 'date', 'desc').map((i) => i.id)).toEqual(['3', '1', '2']);
     expect(sortFolderItems(items, 'type', 'asc').map((i) => i.id)).toEqual(['1', '3', '2']);
     expect(sortFolderItems(items, 'nope', 'asc')).not.toBe(items);
+  });
+
+  // I3: the sheets used to render the raw `API Error 409: {...}` blob
+  // verbatim. messageOf() is the fix — three shapes a thrown Error can take.
+  it('turns a thrown API/network error into words a person can read', () => {
+    // 1) A JSON body with the server's own human wording (services/folders.js
+    // sends exactly this for FOLDER_EXISTS/FOLDER_CYCLE/FOLDER_TOO_DEEP/
+    // FOLDER_NAME_INVALID) — the embedded .message wins over the blob.
+    const apiJson = new Error('API Error 409: {"success":false,"error":"FOLDER_EXISTS","message":"A folder named Taxes already exists here."}');
+    expect(messageOf(apiJson)).toBe('A folder named Taxes already exists here.');
+
+    // 2) An `API Error <status>: <text>` shape whose body is NOT JSON (e.g. a
+    // plain-text 500) — the prefix is stripped and the server's text survives.
+    const apiPlain = new Error('API Error 500: Internal Server Error');
+    expect(messageOf(apiPlain)).toBe('Internal Server Error');
+
+    // 3) A plain Error with no API-Error shape at all (e.g. documentOpen.js's
+    // 'Could not download the file.') — passed through unchanged.
+    const plain = new Error('Could not download the file.');
+    expect(messageOf(plain)).toBe('Could not download the file.');
+
+    // Bare strings and the empty/missing fallback.
+    expect(messageOf('Just a string')).toBe('Just a string');
+    expect(messageOf(new Error(''))).toBe('Something went wrong.');
+    expect(messageOf(null)).toBe('Something went wrong.');
+
+    // A .message/.error-less JSON body falls back to the API-Error prefix
+    // strip rather than silently losing the body.
+    const apiJsonNoMessage = new Error('API Error 400: {"success":false}');
+    expect(messageOf(apiJsonNoMessage)).toBe('{"success":false}');
   });
 });

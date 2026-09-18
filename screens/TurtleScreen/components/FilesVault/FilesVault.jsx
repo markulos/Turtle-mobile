@@ -5,8 +5,16 @@
  * (search hit) for a folder or document pushes the whole crumb chain.
  * Contract mirrors MusicVault: topInset/bottomInset, its own scroll, no
  * onClose (a pager page has nothing to go back to).
+ *
+ * The folder-page STACK is controlled by the caller (`stack`/`onStackChange`)
+ * — MediaGallery owns the state and renders the actual FolderPage stack at
+ * the gallery root, above the vault's own floating header, instead of here.
+ * An opaque header painting over a page it doesn't own (and a pager swipe
+ * reaching a page that should be modal over it) is exactly the bug that
+ * split ownership avoids; see the "zIndex is load-bearing" note on
+ * MediaGallery's photos page.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,22 +23,24 @@ import { useServer } from '../../../../context/ServerContext';
 import { tapHaptic } from '../../../../utils/haptics';
 import useFolderData from './useFolderData';
 import FolderDisc from './FolderDisc';
-import FolderPage from './FolderPage';
 import { FolderNameSheet } from './FolderSheets';
+import { messageOf } from './filesUtils';
 
-export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia, onBulkTag, onUploadHere, getFullUrl, base, target = null, onTargetConsumed, theme: themeProp }) {
+export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia, onBulkTag, onUploadHere, getFullUrl, base, target = null, onTargetConsumed, theme: themeProp, stack = [], onStackChange = () => {} }) {
   const themeCtx = useTheme();
   const theme = themeProp || themeCtx.theme;
   const c = theme.colors;
   const insets = useSafeAreaInsets();
   const { api } = useServer();
   const { data, loading, error, refresh, createFolder } = useFolderData('root');
-  const [stack, setStack] = useState([]); // [{ parent }]
   const [naming, setNaming] = useState(null); // null | { error }
   const [refreshing, setRefreshing] = useState(false);
 
-  const push = useCallback((parent) => setStack((s) => [...s, { parent }]), []);
-  const pop = useCallback(() => setStack((s) => s.slice(0, -1)), []);
+  // Always-current snapshot of `stack`, so push never appends onto a copy
+  // captured by a stale closure — same pattern as useFolderData's dataRef.
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
+  const push = useCallback((parent) => onStackChange([...stackRef.current, { parent }]), [onStackChange]);
 
   // Search hit → the crumb chain of the target folder (a document's folder,
   // or Unfiled), one page per crumb, so Back walks up naturally.
@@ -40,10 +50,10 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia,
     (async () => {
       try {
         const folderId = target.kind === 'folder' ? target.id : (target.item?.folder_id || null);
-        if (!folderId) { if (!cancelled) setStack([{ parent: 'unfiled' }]); return; }
+        if (!folderId) { if (!cancelled) onStackChange([{ parent: 'unfiled' }]); return; }
         const r = await api.get(`/folders?parent=${encodeURIComponent(folderId)}&limit=1`);
         const path = Array.isArray(r?.path) ? r.path : [];
-        if (!cancelled) setStack(path.length ? path.map((p) => ({ parent: p.id })) : [{ parent: folderId }]);
+        if (!cancelled) onStackChange(path.length ? path.map((p) => ({ parent: p.id })) : [{ parent: folderId }]);
       } catch { /* the target's folder is gone; stay on the root */ }
       finally { onTargetConsumed?.(); }
     })();
@@ -53,7 +63,7 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia,
 
   const submitName = useCallback(async (name) => {
     try { await createFolder(name); setNaming(null); }
-    catch (e) { setNaming({ error: e?.message || 'Not saved' }); }
+    catch (e) { setNaming({ error: messageOf(e) }); }
   }, [createFolder]);
 
   const folders = data?.folders || [];
@@ -86,23 +96,6 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, onOpenMedia,
           {!!error && <Text style={[styles.empty, { color: c.accentError || '#e5484d' }]}>{error}</Text>}
         </ScrollView>
       )}
-      {stack.map((level, i) => (
-        <FolderPage
-          key={`${level.parent}-${i}`}
-          visible
-          parent={level.parent}
-          onClose={pop}
-          onOpenFolder={(f) => push(f.id)}
-          onOpenMedia={onOpenMedia}
-          onBulkTag={onBulkTag}
-          onUploadHere={onUploadHere}
-          getFullUrl={getFullUrl}
-          base={base}
-          theme={theme}
-          topInset={0}
-          bottomInset={bottomInset}
-        />
-      ))}
       {naming && <FolderNameSheet title="New folder" doneLabel="Create" error={naming.error} onSubmit={submitName} onClose={() => setNaming(null)} theme={theme} bottomInset={bottomInset} />}
     </View>
   );

@@ -105,6 +105,7 @@ import TimelineScrubber from './TimelineScrubber';
 import { dockOccupied } from '../../../components/tabBarLayout';
 import MusicVault from './MusicVault';
 import FilesVault from './FilesVault/FilesVault';
+import FolderPage from './FilesVault/FolderPage';
 import { isDocument } from './FilesVault/filesUtils';
 import EdgeSwipePage from './EdgeSwipePage';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
@@ -2381,8 +2382,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // that leaves nothing to show, decline to open rather than falling back
   // to a solo item that might itself be one.
   const openViewerFromList = useCallback((items, item) => {
-    if (isDocument(item)) return;
-    const list = (items || []).filter((it) => it && !isDocument(it));
+    if (!item || isDocument(item)) return;
+    // ── VAULT INVARIANT — swipe-right must always mean "newer" ─────────────
+    // (see .claude/skills/turtle-vault-invariants and the memory note
+    // photo-viewer-swipe-direction). The grid's own viewerSourceItems is the
+    // reversed (oldest-first) array for exactly this reason; a folder's list
+    // comes in newest-first (sortFolderItems' default), so it needs the same
+    // `.reverse()` treatment here, into a NEW array — never mutate `items`,
+    // which FolderPage still renders newest-first.
+    const list = (items || []).filter((it) => it && !isDocument(it)).reverse();
     if (list.length === 0) return;
     const index = Math.max(0, list.findIndex((it) => it.id === item.id));
     setViewerListOverride(list);
@@ -2421,6 +2429,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // when the photo is not loaded here, so any hit opens.
   const { pending: pendingTarget, clear: clearTarget } = useOpenTarget();
   const [filesTarget, setFilesTarget] = useState(null);
+  // C1: the Files folder-page stack, controlled here (not inside FilesVault)
+  // so the actual FolderPage overlays can be rendered at the gallery root —
+  // see the hoisted render near the photos page below for why.
+  const [filesStack, setFilesStack] = useState([]); // [{ parent }]
   useEffect(() => {
     if (!pendingTarget) return;
     if (pendingTarget.kind === 'media' && pendingTarget.item) {
@@ -3659,6 +3671,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // their own scroll, and the grid is no longer one of them.
     if (tab === pagerTab) return;
 
+    // Leaving Files: drop any open folder pages. They're hoisted to the
+    // gallery root (C1) and absolute-fill at zIndex 40, so a stale one would
+    // otherwise linger on screen over Boards or Music.
+    if (tab !== 'files') setFilesStack([]);
+
     // Native paging slide — starts instantly and runs buttery-smooth on the UI
     // thread (no JS-thread per-frame work to stutter it). Fire it FIRST and on
     // its own tick; the tab's heavier state work (grid active-tab gating +
@@ -4296,6 +4313,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               base={(getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '')}
               target={filesTarget}
               onTargetConsumed={() => setFilesTarget(null)}
+              stack={filesStack}
+              onStackChange={setFilesStack}
             />
           </View>
 
@@ -4816,6 +4835,37 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         </View>
       </EdgeSwipePage>
       </View>
+
+      {/* FILES FOLDER PAGES — pushed above the vault's own floating header,
+          exactly like the photos page above (same zIndex 40, same box-none
+          wrapper so a closed stack doesn't swallow taps meant for the pager).
+          Rendered here — not inside FilesVault / the pager page — so the
+          vault's opaque header can never paint over a folder page's own
+          header (and swallow its taps), and the horizontal pager swipe can
+          never reach past it to page the vault underneath. This is C1 from
+          the final review: see the "zIndex is load-bearing" note above,
+          which is the identical bug the photos page already solved. */}
+      {filesStack.length > 0 && (
+        <View style={[StyleSheet.absoluteFillObject, { zIndex: 40 }]} pointerEvents="box-none">
+          {filesStack.map((level, i) => (
+            <FolderPage
+              key={`${level.parent}-${i}`}
+              visible
+              parent={level.parent}
+              onClose={() => setFilesStack((s) => s.slice(0, -1))}
+              onOpenFolder={(f) => setFilesStack((s) => [...s, { parent: f.id }])}
+              onOpenMedia={openViewerFromList}
+              onBulkTag={openBulkTagsFor}
+              onUploadHere={pickForFolder}
+              getFullUrl={getFullUrl}
+              base={(getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '')}
+              theme={theme}
+              topInset={0}
+              bottomInset={tabBarH}
+            />
+          ))}
+        </View>
+      )}
 
       {/* Notch Shield */}
       <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: theme.colors.background, zIndex: 30 }} />

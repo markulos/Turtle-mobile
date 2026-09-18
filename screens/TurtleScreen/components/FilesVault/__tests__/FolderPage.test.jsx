@@ -87,4 +87,30 @@ describe('FolderPage', () => {
     await fireEvent.press(getByLabelText('Upload here'));
     expect(p.onUploadHere).toHaveBeenCalledWith('fld_bbbbbbbbbbbb');
   });
+
+  // M3: the header Back chevron used to call the raw onClose even in select
+  // mode (inconsistent with the left-edge swipe, which cleared the selection
+  // instead). Back must clear-and-stay once, then actually close.
+  it('Back clears the selection in select mode, and only closes the page once selection is empty', async () => {
+    const p = props();
+    const { getByText, getByLabelText, queryByText } = await render(<FolderPage {...p} />);
+    await waitFor(() => getByText('lease.pdf'));
+    await fireEvent(getByLabelText('Open lease.pdf'), 'longPress');
+    expect(getByText('1 selected')).toBeTruthy();
+    await fireEvent.press(getByLabelText('Back'));
+    expect(queryByText('1 selected')).toBeNull();
+    expect(p.onClose).not.toHaveBeenCalled();
+    await fireEvent.press(getByLabelText('Back'));
+    expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // I5: the server caps a listing at 200 (useFolderData's PAGE) and returns
+  // pagination.hasMore/.total; the footer must say so rather than silently
+  // truncating.
+  it('shows a "first N of total" notice when the server truncated the listing', async () => {
+    const capped = { ...listing, pagination: { total: 250, limit: 200, offset: 0, hasMore: true } };
+    mockApi.get.mockImplementation((p) => Promise.resolve(p.includes('parent=root') ? root : capped));
+    const { getByText } = await render(<FolderPage {...props()} />);
+    await waitFor(() => getByText('Showing the first 2 of 250'));
+  });
 });
