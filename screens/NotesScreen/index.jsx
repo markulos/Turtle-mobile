@@ -18,10 +18,20 @@
  * cleanly with flat fills at typical viewing distance + brightness.
  *
  * Server endpoints (from web NotesScreen + /api/turtle/note(s)):
- *   GET    /turtle/notes?limit=&offset=
- *   POST   /turtle/note     { content, description?, tags?, type?, done? }
- *   PATCH  /turtle/notes/:id  { content?, description?, tags?, type?, done? }
+ *   GET    /turtle/notes?limit=&offset=          → notes carry mediaIds
+ *   POST   /turtle/note     { content, description?, tags?, type?, done?, mediaIds? }
+ *   PATCH  /turtle/notes/:id  { content?, description?, tags?, type?, done?, mediaIds? }
  *   DELETE /turtle/notes/:id
+ *   GET    /media/by-ids?ids=1,2,3   → thumbnails for a note's attachment strip
+ *   POST   /media/upload (multipart) → { success, media: { id, thumbnailUrl, type } }
+ *
+ * Attachments (mediaIds) behave exactly like `tags` in the composer below: a
+ * local draft array that only reaches the note's own record on Done, via
+ * PATCH/POST's `mediaIds`. The one difference is the upload itself — that
+ * starts the moment a photo is picked, because the note can't reference an
+ * id the server hasn't handed out yet. The file it uploads is never deleted
+ * by removing it from a note; a note outlives its files by design (see the
+ * server's /media/by-ids comment) — "remove" only edits mediaIds.
  *
  * No optimistic merging yet — every mutation refreshes via refetch.
  * Notes are a low-traffic surface; the simpler code path wins.
@@ -78,6 +88,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../context/ThemeContext';
 import { useServer } from '../../context/ServerContext';
+import { useAuth } from '../../context/AuthContext';
 import { useOpenTarget } from '../../context/OpenTargetContext';
 import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
@@ -89,6 +100,10 @@ import { fuzzyRank } from '../../utils/trigram';
 // Tab predicates + the feedback tag vocabulary (pure, unit-tested separately).
 import { APP_TAGS, PLATFORM_TAGS, isFeedbackNote, matchesFilter } from './feedbackFilter';
 import { sendOrQueue } from '../../services/offlineQueue';
+// Photo/video attach — already-native, OTA-safe (see the module doc for why
+// this screen can't reach for expo-document-picker: it isn't installed).
+import * as ImagePicker from 'expo-image-picker';
+import { streamMultipartUpload } from '../../services/streamMultipartUpload';
 
 const FILTER_ALL = 'all';
 const FILTER_NOTE = 'note';
@@ -106,6 +121,12 @@ const UNTAGGED = '__untagged__';
 // Notes per request. Small enough that the first page paints in one round-trip,
 // large enough that a normal screenful doesn't immediately ask for another.
 const NOTES_PAGE = 60;
+// One Attach action's picker cap — generous for a handful of photos/videos on
+// a note without inviting a whole camera-roll dump through it. The server's
+// own ceiling on a note's mediaIds is 200 (routes/media.js /by-ids, matching
+// what POST/PATCH accept); this is just this screen's per-pick UX limit.
+const MAX_ATTACH_PICK = 20;
+const MAX_NOTE_ATTACHMENTS = 200;
 
 // Composer modes. 'feedback' persists as a to-do but auto-stamps an app tag
 // ("Turtle App" / "Turtle 3D") + a platform tag (Turtle App only) so the cue
@@ -431,7 +452,7 @@ export default function NotesScreen() {
   // reconnect / foreground by ServerContext's auto-flush) and the optimistic
   // row simply stays; nothing is reverted, no toast. Only a permanent 4xx
   // ("this will never work") reverts and alerts.
-  const createNote = async ({ content, description, type, tags }) => {
+  const createNote = async ({ content, description, type, tags, mediaIds }) => {
     if (!content.trim()) return false;
     const body = {
       // Send BOTH field names: the server's POST handler historically reads
@@ -444,6 +465,9 @@ export default function NotesScreen() {
       type: type || 'note',
       tags: tags || [],
       done: false,
+      // Whatever the composer finished uploading before Done was tapped —
+      // see ComposerModal's attachments state. [] is a normal "no photos".
+      mediaIds: Array.isArray(mediaIds) ? mediaIds : [],
     };
     // A local row so the note exists on screen before (or without) the pond.
     const localId = `local_${Date.now()}`;
@@ -468,13 +492,18 @@ export default function NotesScreen() {
 
   // Edit an existing note/todo via PATCH. The PATCH handler reads `content`
   // (consistent with what we send here), so no dual-field dance is needed.
-  const editNote = async (id, { content, description, type, tags }) => {
+  const editNote = async (id, { content, description, type, tags, mediaIds }) => {
     if (!content.trim()) return false;
     const body = {
       content: content.trim(),
       description: description?.trim() || '',
       type: type || 'note',
       tags: tags || [],
+      // PATCH REPLACES mediaIds wholesale — the composer always hands back
+      // its full current attachment list (existing + added − removed), so
+      // sending it every time is correct, not just for the notes that
+      // actually changed their photos.
+      mediaIds: Array.isArray(mediaIds) ? mediaIds : [],
     };
     let before = null;
     setNotes((cur) => cur.map((n) => {
@@ -1977,6 +2006,32 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
   // The page runs edge to edge, so it owns its own status-bar clearance.
   const insets = useSafeAreaInsets();
 
+  // Attachments — its own useServer()/useAuth() rather than threading props
+  // down, matching how every other screen in this file reaches the server.
+  const { api, getBaseUrl, getMediaBaseUrl } = useServer();
+  const { token } = useAuth();
+  // Each entry: { key, id, type:'image'|'video', mimeType, name, thumbnailUrl,
+  // thumbnailLgUrl, localUri, uploading, error }. `id` is null until the
+  // upload resolves — see pickAttachments. `key` is the stable React key for
+  // BOTH kinds (server-hydrated rows are keyed off their id; freshly-picked
+  // ones off a local nonce) and never changes once assigned.
+  const [attachments, setAttachments] = useState([]);
+  // Live objects, not render data — kept in refs instead of state.
+  //   uploadControllers: key -> AbortController, so removing a row mid-upload
+  //     actually cancels the transfer instead of letting it land unlinked.
+  //   uploadPromises: key -> Promise<{key,id,...}|null>, so Done can wait out
+  //     whatever is still uploading. Promises resolve (never reject) to a
+  //     definite outcome — handleSubmit reads THESE, not React state, to
+  //     avoid trusting a re-render to have landed by the time it resumes.
+  const uploadControllers = useRef(new Map());
+  const uploadPromises = useRef(new Map());
+  // Sends the by-ids hydration effect (below) a "hands off" signal once the
+  // user has picked or removed anything, so a slow fetch landing late can't
+  // stomp on a local edit — including a user clearing every attachment,
+  // which an `attachments.length === 0` check alone couldn't tell apart from
+  // "hasn't loaded yet".
+  const attachmentsDirtyRef = useRef(false);
+
   // The live keyboard height as a UI-thread shared value — the SAME primitive the
   // Turtle session dock rides. Driving the sheet's translateY straight off this
   // (a compositor-only transform, no relayout) is what makes the composer track
@@ -2020,8 +2075,57 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
       setTagDraft('');
       setBusy(false);
       setSettingsOpen(false);
+      // Attachments reset with everything else. Abort whatever a cancelled
+      // draft still had in flight — those bytes were never linked to any
+      // note, so there's nothing worth letting finish.
+      for (const c of uploadControllers.current.values()) {
+        try { c.abort(); } catch { /* already settled */ }
+      }
+      uploadControllers.current.clear();
+      uploadPromises.current.clear();
+      attachmentsDirtyRef.current = false;
+      setAttachments([]);
     }
   }, [visible, initialNote, initialMode, activeTopic]);
+
+  // Hydrate the strip for an EXISTING note's saved attachments. Separate from
+  // the reset above (async vs sync) and keyed narrowly on the note's own id +
+  // its mediaIds — not on the whole `initialNote` object, which the parent's
+  // optimistic setNotes reshapes on every keystroke-driven save elsewhere in
+  // the list and would otherwise re-fire this for no reason.
+  useEffect(() => {
+    if (!visible) return undefined;
+    const ids = Array.isArray(initialNote?.mediaIds)
+      ? initialNote.mediaIds.filter(Boolean).map(String)
+      : [];
+    if (ids.length === 0) return undefined;
+    let cancelled = false;
+    api.get(`/media/by-ids?ids=${ids.map(encodeURIComponent).join(',')}`)
+      .then((res) => {
+        if (cancelled || attachmentsDirtyRef.current) return;
+        if (!res?.success || !Array.isArray(res.items)) return;
+        setAttachments(res.items.map((it) => ({
+          key: `srv_${it.id}`,
+          id: String(it.id),
+          type: it.type === 'video' ? 'video' : 'image',
+          mimeType: it.mimeType || null,
+          name: it.name || null,
+          thumbnailUrl: it.thumbnailUrl || null,
+          thumbnailLgUrl: it.thumbnailLgUrl || null,
+          localUri: null,
+          uploading: false,
+          error: false,
+        })));
+      })
+      // Non-fatal — the strip just stays empty; Done still works, and the
+      // note's mediaIds are untouched until something here actually changes.
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // `initialNote` is a stable reference for the whole time the composer is
+    // open (the parent only re-sets it on open/close — see openEditNote), so
+    // keying on its id alone is enough to catch "a different note opened".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, initialNote?.id, api]);
 
   // EdgeSwipePage owns the slide-in, the mount/unmount and the swipe-back, so
   // the composer no longer runs its own reveal animation, backdrop dim or
@@ -2208,6 +2312,131 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
     </TouchableOpacity>
   );
 
+  // Full media URL for a server-relative thumbnail path (the vault's own
+  // convention — see MediaGallery's identically-named helper). The HTTP/2
+  // media origin when the device has one probed+trusted, else the plain
+  // origin; either way this note screen never has to know which.
+  const mediaUrl = useCallback((path) => {
+    if (!path) return null;
+    const base = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '');
+    return `${base}${path}`;
+  }, [getMediaBaseUrl, getBaseUrl]);
+
+  // Attach photos/videos. Mirrors MediaGallery's handleUpload (same
+  // permission call, same picker options, same passthrough flag — see its
+  // comment for why: without it PHPicker re-encodes every video on the way
+  // out, which silently hangs anything longer than about a minute) but skips
+  // the batch/background pipeline that VaultUploadContext runs for it — this
+  // is a handful of files that need their id back INTO this note, not a
+  // large resumable import, so it streams each one directly.
+  const pickAttachments = useCallback(async () => {
+    const room = MAX_NOTE_ATTACHMENTS - attachments.length;
+    if (room <= 0) {
+      Alert.alert('Too many attachments', 'This note already has the maximum number of attachments.');
+      return;
+    }
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Please allow access to photos and videos to attach one.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images', 'videos'],
+        allowsMultipleSelection: true,
+        selectionLimit: Math.min(MAX_ATTACH_PICK, room),
+        orderedSelection: true,
+        quality: 0.8,
+        // The ORIGINAL file, not a PHPicker export — see MediaGallery.
+        preferredAssetRepresentationMode:
+          ImagePicker.UIImagePickerPreferredAssetRepresentationMode?.Current ?? 'current',
+      });
+      if (result.canceled || !result.assets?.length) return;
+      attachmentsDirtyRef.current = true;
+
+      const uploadUrl = `${getBaseUrl()}/media/upload`;
+      // Whatever tags the note carries RIGHT NOW — matches "carrying the
+      // note's tags" in the brief. A tag added/removed after this point does
+      // not reach back into vault media already uploaded; that mirrors how
+      // vault tags work everywhere else (a one-time stamp at upload time).
+      const tagsForUpload = JSON.stringify(tags);
+
+      for (const asset of result.assets) {
+        const key = `local_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const type = asset.type === 'video' ? 'video' : 'image';
+        const mimeType = asset.mimeType || (type === 'video' ? 'video/mp4' : 'image/jpeg');
+        const name = asset.fileName || (type === 'video' ? 'Video' : 'Photo');
+
+        // Optimistic: the row (and, for images, the actual local photo) is
+        // on screen before a single byte has left the phone.
+        setAttachments((cur) => [...cur, {
+          key, id: null, type, mimeType, name,
+          thumbnailUrl: null, thumbnailLgUrl: null,
+          localUri: asset.uri, uploading: true, error: false,
+        }]);
+
+        const controller = new AbortController();
+        uploadControllers.current.set(key, controller);
+        const promise = streamMultipartUpload({
+          url: uploadUrl,
+          fileUri: asset.uri,
+          mimeType,
+          parameters: { tags: tagsForUpload },
+          token,
+          label: name,
+          onProgress: () => {},
+          signal: controller.signal,
+        })
+          .then((res) => {
+            let body = res?.body;
+            if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = null; } }
+            const media = body?.success ? body.media : null;
+            if (!media?.id) throw new Error(body?.error || 'Upload did not return a media id.');
+            const settled = {
+              key,
+              id: String(media.id),
+              type: media.type === 'video' ? 'video' : 'image',
+              thumbnailUrl: media.thumbnailUrl || null,
+            };
+            setAttachments((cur) => cur.map((a) => (a.key === key
+              ? { ...a, id: settled.id, type: settled.type, thumbnailUrl: settled.thumbnailUrl, uploading: false }
+              : a)));
+            // Resolved (never rejected) so handleSubmit can Promise.all every
+            // in-flight upload without a try/catch per entry, and read the id
+            // straight off this value instead of racing a re-render for it.
+            return settled;
+          })
+          .catch((e) => {
+            // A deliberate remove aborts the controller — that is the row
+            // leaving the list on purpose, not a failure to report.
+            if (String(e?.message || '') === 'Upload cancelled') return null;
+            console.warn('[Notes] attachment upload failed:', e?.message || e);
+            setAttachments((cur) => cur.map((a) => (a.key === key ? { ...a, uploading: false, error: true } : a)));
+            return null;
+          })
+          .finally(() => {
+            uploadControllers.current.delete(key);
+            uploadPromises.current.delete(key);
+          });
+        uploadPromises.current.set(key, promise);
+      }
+    } catch (e) {
+      Alert.alert('Could not attach', e?.message || 'Failed to open the photo picker.');
+    }
+  }, [attachments.length, getBaseUrl, tags, token]);
+
+  // Remove a row — from a fresh pick, an in-flight upload, or a previously
+  // saved note. Always just a local-state edit; the FILE stays in the vault
+  // either way (uploaded bytes are never deleted by detaching them from a
+  // note — see the module doc). Persisting the smaller mediaIds list still
+  // waits for Done, exactly like every other edit in this composer.
+  const removeAttachment = useCallback((key) => {
+    attachmentsDirtyRef.current = true;
+    const controller = uploadControllers.current.get(key);
+    if (controller) { try { controller.abort(); } catch { /* already settled */ } }
+    setAttachments((cur) => cur.filter((a) => a.key !== key));
+  }, []);
+
   const handleSubmit = async () => {
     if (!content.trim()) return;
     setBusy(true);
@@ -2224,7 +2453,31 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
       }
     }
     const type = mode === 'note' ? 'note' : 'todo';
-    await onSubmit({ content, description, type, tags: finalTags });
+    // Done cannot hand the server a mediaIds list containing a photo that
+    // doesn't have an id yet — wait out whatever is still uploading. The
+    // Done button already shows its busy spinner the instant Done is tapped
+    // (setBusy above), so this wait reads as part of the same save, not a
+    // freeze. Read ids from the PROMISES' own resolved values, not from
+    // `attachments` state — a promise settling and a re-render committing
+    // are two different clocks, and only the promise's value is guaranteed
+    // current the instant Promise.all resolves.
+    const pendingKeys = Array.from(uploadPromises.current.keys());
+    const pendingResults = pendingKeys.length > 0
+      ? await Promise.all(pendingKeys.map((k) => uploadPromises.current.get(k)))
+      : [];
+    const resolvedByKey = new Map();
+    pendingKeys.forEach((k, i) => {
+      if (pendingResults[i]?.id) resolvedByKey.set(k, pendingResults[i].id);
+    });
+    // Walk `attachments` in pick order for a stable strip order; each row
+    // resolves its id either from itself (already settled before Done was
+    // tapped) or from the wait just above. A row with neither (upload
+    // failed, or was cancelled by a remove) simply drops out — exactly the
+    // outcome its X already showed on screen.
+    const mediaIds = attachments
+      .map((a) => a.id || resolvedByKey.get(a.key))
+      .filter(Boolean);
+    await onSubmit({ content, description, type, tags: finalTags, mediaIds });
     setBusy(false);
   };
 
@@ -2339,13 +2592,98 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
                 caretAtEndRef.current = sel.start === sel.end && sel.end >= (descriptionRef.current?.length || 0);
               }}
             />
+
+            {/* Attachments — INLINE, at readable size: a screenshot attached
+                to a note IS the note, so it renders like part of the note
+                rather than a side strip of thumbnails. Videos (the only
+                other thing this picker can select — no document-picker in
+                this build) get a compact row instead of a playable inline
+                embed, per the brief. */}
+            {attachments.length > 0 && (
+              <View style={styles.attachmentsBlock}>
+                {attachments.map((att) => (
+                  att.type === 'image' ? (
+                    <View key={att.key} style={styles.attachmentImageWrap}>
+                      <ExpoImage
+                        source={{ uri: att.localUri || mediaUrl(att.thumbnailLgUrl || att.thumbnailUrl) }}
+                        style={styles.attachmentImage}
+                        contentFit="cover"
+                      />
+                      {att.uploading && (
+                        <View style={styles.attachmentOverlay}>
+                          <ActivityIndicator color="#fff" />
+                        </View>
+                      )}
+                      {att.error && (
+                        <View style={[styles.attachmentOverlay, styles.attachmentErrorOverlay]}>
+                          <Icon name="alert-circle-outline" size={22} color="#fff" />
+                          <Text style={styles.attachmentErrorText}>Couldn’t attach</Text>
+                        </View>
+                      )}
+                      <TouchableOpacity
+                        onPress={() => removeAttachment(att.key)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        style={styles.attachmentRemoveBadge}
+                        accessibilityRole="button"
+                        accessibilityLabel="Remove this photo from the note"
+                        accessibilityHint="The photo stays in your vault"
+                      >
+                        <Icon name="close" size={14} color={theme.colors.textPrimary} />
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <View key={att.key} style={styles.attachmentRow}>
+                      <View style={styles.attachmentRowIcon}>
+                        {att.uploading
+                          ? <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                          : (
+                            <Icon
+                              name={att.error ? 'alert-circle-outline' : 'movie-outline'}
+                              size={18}
+                              color={att.error ? theme.colors.accentError : theme.colors.textSecondary}
+                            />
+                          )}
+                      </View>
+                      <Text style={styles.attachmentRowText} numberOfLines={1}>
+                        {att.error ? `Couldn’t attach ${att.name || 'video'}` : (att.name || 'Video')}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => removeAttachment(att.key)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        style={styles.attachmentRowRemove}
+                        accessibilityRole="button"
+                        accessibilityLabel="Remove this video from the note"
+                        accessibilityHint="The video stays in your vault"
+                      >
+                        <Icon name="close" size={16} color={theme.colors.textSecondary} />
+                      </TouchableOpacity>
+                    </View>
+                  )
+                ))}
+                {/* Visible twin of each remove button's accessibilityHint —
+                    the X looks like a delete, and it isn't one. */}
+                <Text style={styles.attachmentsCaption}>
+                  Removing here only unlinks it from this note — the file stays in your vault.
+                </Text>
+              </View>
+            )}
           </ScrollView>
         </GestureDetector>
 
-        {/* Bottom toolbar — rides the keyboard, so the dismiss key is always to
-            hand while writing (the multiline inputs take Return as a newline,
-            so there's no other way down). */}
+        {/* Bottom toolbar — rides the keyboard, so attach + dismiss are always
+            to hand while writing (the multiline inputs take Return as a
+            newline, so there's no other way down). */}
         <Reanimated.View style={[styles.toolbar, { bottom: dockH }, toolbarLift]} pointerEvents="box-none">
+          <TouchableOpacity
+            onPress={pickAttachments}
+            disabled={busy}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={[styles.toolbarBtn, busy && styles.toolbarBtnDisabled]}
+            accessibilityRole="button"
+            accessibilityLabel="Attach a photo or video"
+          >
+            <Icon name="image-plus" size={20} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
           <TouchableOpacity
             onPress={Keyboard.dismiss}
             style={styles.toolbarBtn}
@@ -2600,15 +2938,63 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     color: theme.colors.textPrimary,
     padding: 0, minHeight: 200,
   },
+  // Attachment strip — images stack full-width at a fixed preview height
+  // (no width/height comes back from /media/by-ids to compute a real aspect
+  // ratio, and a fixed height keeps the page from jumping as uploads land).
+  attachmentsBlock: { marginTop: 16, gap: 10, paddingBottom: 4 },
+  attachmentImageWrap: {
+    position: 'relative',
+    borderRadius: 16,
+    overflow: 'hidden', // clips the cover-mode image AND the badge below to the radius
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  attachmentImage: { width: '100%', height: 240 },
+  attachmentOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  attachmentErrorOverlay: { backgroundColor: 'rgba(0,0,0,0.55)', gap: 6 },
+  attachmentErrorText: {
+    color: '#fff', fontSize: 12, fontWeight: '600',
+    textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2,
+  },
+  // Same shape as the Claude composer's picked-image badge (composerThumbX)
+  // — an opaque themed mini-card, not a media scrim, so it stays legible
+  // over any photo. Inset (not offset past the edge like that one) because
+  // this wrap clips to its radius and an offset badge would be cut in half.
+  attachmentRemoveBadge: {
+    position: 'absolute', top: 8, right: 8,
+    width: 26, height: 26, borderRadius: 13,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: isDark ? 'rgba(20,21,24,0.95)' : 'rgba(255,255,255,0.97)',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
+  },
+  // Non-images (video — the only other thing this picker can select).
+  attachmentRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
+  },
+  attachmentRowIcon: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
+  attachmentRowText: { flex: 1, flexShrink: 1, fontSize: 14, fontWeight: '500', color: theme.colors.textPrimary },
+  attachmentRowRemove: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  attachmentsCaption: {
+    fontSize: 11, fontWeight: '500', color: theme.colors.textMuted,
+    marginTop: 2,
+  },
   // Rides the keyboard; parked at the page's bottom edge when it's down.
   toolbar: {
     position: 'absolute', left: 0, right: 0, bottom: 0,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border,
     backgroundColor: theme.colors.background,
   },
   toolbarBtn: { width: 40, height: 34, alignItems: 'center', justifyContent: 'center' },
+  toolbarBtnDisabled: { opacity: 0.4 },
   // Settings — an in-page layer, not a Modal (iOS won't present one over the
   // page's own). Scrim + a card anchored to the bottom.
   settingsLayer: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end', zIndex: 20 },
