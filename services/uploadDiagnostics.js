@@ -8,20 +8,33 @@
  * probe files (tags Turtle App / Mobile app), so the fixes can be scheduled
  * from the notes later with the facts attached, instead of from memory.
  *
- * Deduped per kind for the life of the JS session and capped, so a bad
- * night can't spam the notes: the FIRST occurrence of each kind is filed with
- * its details; later ones only bump a counter in the console.
+ * Deduped and capped, so a bad night can't spam the notes: ONE report per
+ * anomaly kind per item per batch for the life of the JS session — the FIRST
+ * occurrence is filed with its details; later ones only bump a counter in the
+ * console. A kind that carries its attempt number (`watchdog-transfer-attempt-2`)
+ * dedupes on the kind WITHOUT it: the 184 MB thesis filed three tasks for one
+ * stall, one per attempt, and the pond ended up with 36 tasks describing three
+ * defects. The attempt still reaches the console line and the details.
  */
 const FEEDBACK_TAGS = ['Turtle App', 'Mobile app', 'bug', 'uploads'];
 const MAX_NOTES_PER_SESSION = 6;
 
-const filed = new Map(); // kind → count
+const filed = new Map(); // dedupe key → count
 let notesFiled = 0;
 
-function buildDescription(kind, details) {
+/** `<kind minus its attempt suffix>|<item>|<batch>` — what "the same report" means. */
+export function dedupeKeyOf(kind, details = {}, ctx = {}) {
+  const base = String(kind || '').replace(/-attempt-\d+$/, '');
+  const item = details?.item != null ? String(details.item) : '';
+  const batch = ctx?.batch != null ? String(ctx.batch) : (details?.batch != null ? String(details.batch) : '');
+  return `${base}|${item}|${batch}`;
+}
+
+function buildDescription(kind, details, ctx) {
   const lines = [
     `Upload pipeline anomaly: ${kind}`,
     `When: ${new Date().toISOString()}`,
+    ...(ctx?.batch && details?.batch == null ? [`Batch: ${ctx.batch}`] : []),
     '',
     'Details:',
     ...Object.entries(details || {}).map(([k, v]) => `  ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`),
@@ -33,12 +46,14 @@ function buildDescription(kind, details) {
 }
 
 /**
- * Log an anomaly. `ctx` = { getBaseUrl, token } — the pond and the session
- * to file the note under; missing either → console only.
+ * Log an anomaly. `ctx` = { getBaseUrl, token, batch } — the pond and the
+ * session to file the note under (missing either → console only), and the
+ * batch the item belongs to, which scopes the dedupe.
  */
 export function reportUploadIssue(kind, details = {}, ctx = {}) {
-  const count = (filed.get(kind) || 0) + 1;
-  filed.set(kind, count);
+  const key = dedupeKeyOf(kind, details, ctx);
+  const count = (filed.get(key) || 0) + 1;
+  filed.set(key, count);
   const summary = `[VaultUpload] ⚠ ${kind}${count > 1 ? ` (×${count})` : ''} ${JSON.stringify(details)}`;
   console.warn(summary);
   if (count > 1 || notesFiled >= MAX_NOTES_PER_SESSION) return Promise.resolve(false);
@@ -55,7 +70,7 @@ export function reportUploadIssue(kind, details = {}, ctx = {}) {
       // Both field names on purpose (older handlers read `note`).
       note: title,
       content: title,
-      description: buildDescription(kind, details),
+      description: buildDescription(kind, details, ctx),
       type: 'todo',
       done: false,
       tags: FEEDBACK_TAGS,

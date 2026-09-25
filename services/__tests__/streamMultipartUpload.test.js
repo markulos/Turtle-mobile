@@ -4,7 +4,26 @@ import { streamMultipartUpload } from '../streamMultipartUpload';
 jest.mock('expo-file-system/legacy', () => ({
   FileSystemUploadType: { MULTIPART: 'multipart' },
   createUploadTask: jest.fn(),
+  // Answers undefined unless a test says otherwise → "size unknown" → one body.
+  getInfoAsync: jest.fn(),
 }));
+// The part-wise transport, proven in chunkedUpload.test.js; here only WHEN it
+// is chosen matters.
+const mockChunkedUpload = jest.fn();
+jest.mock('../chunkedUpload', () => ({
+  chunkedUpload: (...args) => mockChunkedUpload(...args),
+}));
+
+const MB = 1024 * 1024;
+// The pond's admission gate, byte for byte (routes/media.js).
+const busyRefusal = (retryAfter = '1') => ({
+  uploadAsync: jest.fn().mockResolvedValue({
+    status: 503,
+    headers: { 'Retry-After': retryAfter },
+    body: '{"success":false,"retryable":true,"error":"Upload ingress is busy; retry shortly"}',
+  }),
+  cancelAsync: jest.fn().mockResolvedValue(undefined),
+});
 
 describe('streamMultipartUpload', () => {
   beforeEach(() => {
@@ -207,5 +226,144 @@ describe('streamMultipartUpload', () => {
     const retryParameters = FileSystem.createUploadTask.mock.calls[1][2].parameters;
     expect(firstParameters.clientImportId).toBe('stable-import-id');
     expect(retryParameters.clientImportId).toBe('stable-import-id');
+  });
+
+  /**
+   * The 503 reports. The pond refuses to START an upload while its ingress is
+   * full — in 3 ms, before a byte is read — with a Retry-After. That is not a
+   * failed transfer, so it must not spend one of the three transfer attempts,
+   * and the wait is the server's number, not a constant.
+   */
+  test('waits out a busy pond for as long as Retry-After says, without spending a transfer attempt', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(Math, 'random').mockReturnValue(0); // no jitter: exact waits
+    FileSystem.createUploadTask
+      .mockReturnValueOnce(busyRefusal('3'))
+      .mockReturnValueOnce({
+        uploadAsync: jest.fn().mockResolvedValue({ status: 500, body: 'temporary' }),
+        cancelAsync: jest.fn().mockResolvedValue(undefined),
+      })
+      .mockReturnValueOnce({
+        uploadAsync: jest.fn().mockResolvedValue({ status: 202, body: '{"queued":true}' }),
+        cancelAsync: jest.fn().mockResolvedValue(undefined),
+      });
+
+    const upload = streamMultipartUpload(uploadArgs);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(1);
+
+    // Not the old fixed 1.5 s: the server asked for 3.
+    await jest.advanceTimersByTimeAsync(2999);
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(2);
+
+    // The refusal cost no attempt: the 500 that follows is still attempt 1 of
+    // 3, and its retry lands on the transport ladder's first rung (1.5 s).
+    await jest.advanceTimersByTimeAsync(1500);
+    await expect(upload).resolves.toEqual({ status: 202, body: '{"queued":true}' });
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(3);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  test('gives up on a pond that stays busy past the budget, naming the wait rather than a bare 503', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+    FileSystem.createUploadTask.mockImplementation(() => busyRefusal('1'));
+
+    const outcome = streamMultipartUpload(uploadArgs).then(() => null, (e) => e);
+    await jest.advanceTimersByTimeAsync(300_000);
+
+    const err = await outcome;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/Turtle is busy with other uploads/);
+    expect(err.message).toMatch(/HTTP 503/);
+    // Backing off 1, 2, 4, 8, 15, 15… s until the 90 s budget: a handful of
+    // knocks, not a hammer.
+    const knocks = FileSystem.createUploadTask.mock.calls.length;
+    expect(knocks).toBeGreaterThan(3);
+    expect(knocks).toBeLessThanOrEqual(12);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  test('aborting during a busy wait cancels without another knock', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+    const controller = new AbortController();
+    FileSystem.createUploadTask.mockImplementation(() => busyRefusal('5'));
+
+    const outcome = streamMultipartUpload({ ...uploadArgs, signal: controller.signal }).then(() => null, (e) => e);
+    await jest.advanceTimersByTimeAsync(1000);
+    controller.abort();
+    await jest.advanceTimersByTimeAsync(10_000);
+
+    expect((await outcome).message).toBe('Upload cancelled');
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  /**
+   * The 184 MB thesis. A body over the single-body ceiling never goes out as
+   * one request — it stalled at 4 MB on every attempt — it goes in parts, and
+   * the caller sees the same result shape either way.
+   */
+  test('sends a file over the single-body ceiling in parts and resolves in the one-request shape', async () => {
+    FileSystem.getInfoAsync.mockResolvedValueOnce({ exists: true, size: 184414492 });
+    mockChunkedUpload.mockResolvedValueOnce({ success: true, media: { id: 'm1' } });
+    const onProgress = jest.fn();
+
+    const result = await streamMultipartUpload({
+      ...uploadArgs,
+      fileUri: 'file:///docs/thesis.pdf',
+      mimeType: 'application/pdf',
+      parameters: { originalName: '01BoulosMarkThesis2026 _final-revision-3.pdf', tags: '[]' },
+      onProgress,
+    });
+
+    expect(FileSystem.createUploadTask).not.toHaveBeenCalled();
+    expect(mockChunkedUpload).toHaveBeenCalledTimes(1);
+    expect(mockChunkedUpload).toHaveBeenCalledWith(expect.objectContaining({
+      baseUrl: 'https://pond.example/api',
+      fileUri: 'file:///docs/thesis.pdf',
+      fileSize: 184414492,
+      originalName: '01BoulosMarkThesis2026 _final-revision-3.pdf',
+      mimeType: 'application/pdf',
+      parameters: { originalName: '01BoulosMarkThesis2026 _final-revision-3.pdf', tags: '[]' },
+      token: 'token-7',
+      onProgress,
+    }));
+    expect(result.status).toBe(200);
+    expect(JSON.parse(result.body)).toEqual({ success: true, media: { id: 'm1' } });
+  });
+
+  test('a caller-supplied size skips the stat; small files and other routes stay on one request', async () => {
+    const ok = () => ({
+      uploadAsync: jest.fn().mockResolvedValue({ status: 202, body: '{"queued":true}' }),
+      cancelAsync: jest.fn().mockResolvedValue(undefined),
+    });
+    FileSystem.createUploadTask.mockImplementation(ok);
+
+    // A 5 MB photo: statted, and sent as one body.
+    FileSystem.getInfoAsync.mockResolvedValueOnce({ exists: true, size: 5 * MB });
+    await streamMultipartUpload(uploadArgs);
+    expect(FileSystem.getInfoAsync).toHaveBeenCalledWith('file:///owned/song.mp3', { size: true });
+    expect(mockChunkedUpload).not.toHaveBeenCalled();
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(1);
+
+    // A transcription: never statted, never chunked, whatever its size.
+    FileSystem.getInfoAsync.mockClear();
+    await streamMultipartUpload({
+      ...uploadArgs, url: 'https://pond.example/api/transcriptions', fieldName: 'file', fileSize: 500 * MB,
+    });
+    expect(FileSystem.getInfoAsync).not.toHaveBeenCalled();
+    expect(mockChunkedUpload).not.toHaveBeenCalled();
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(2);
+
+    // A known size is trusted without a stat.
+    mockChunkedUpload.mockResolvedValueOnce({ success: true });
+    await streamMultipartUpload({ ...uploadArgs, fileSize: 200 * MB });
+    expect(FileSystem.getInfoAsync).not.toHaveBeenCalled();
+    expect(mockChunkedUpload).toHaveBeenCalledTimes(1);
+    expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(2);
   });
 });

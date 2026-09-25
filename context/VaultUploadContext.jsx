@@ -138,7 +138,9 @@ export function VaultUploadProvider({ children }) {
   // The pool's "re-evaluate now" hook: the AppState listener pulls it when the
   // app backgrounds so the fan-out starts immediately, not at the next settle.
   const wakePoolRef = useRef(null);
-  const diagCtx = () => ({ getBaseUrl: getBaseUrlRef.current, token: authRef.current.token });
+  // `batch` scopes the reporter's dedupe: one report per anomaly per item per
+  // batch, instead of one per retry attempt (services/uploadDiagnostics).
+  const diagCtx = () => ({ getBaseUrl: getBaseUrlRef.current, token: authRef.current.token, batch: batchRef.current?.id || null });
   const [snapshot, setSnapshot] = useState(null);
   const lastShownPctRef = useRef(-1);
   // Pill visibility. `hidden` collapses the floating pill during an upload
