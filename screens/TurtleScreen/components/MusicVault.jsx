@@ -15,7 +15,12 @@ import { titleOf, sourceOf, resolveMediaUrl } from '../../../services/musicTrack
 import { TAP_ONLY } from '../../../utils/pressBehavior';
 import { tapHaptic } from '../../../utils/haptics';
 import { sendOrQueue, subscribe as subscribeOfflineQueue, loadQueue } from '../../../services/offlineQueue';
+import { capabilityFeatures, getCapabilities, listJobs } from '../../../services/transcriptions';
+import { getRecordings, loadRecordings, mergeServerJobs, subscribeRecordings } from '../../../services/transcriptionStore';
+import { readCapabilities } from '../../../utils/transcriptionOptions';
+import { latestByMedia, transcriptStateOf } from '../../../utils/transcriptionRecordings';
 import TrackActionsSheet from './TrackActionsSheet';
+import TranscriptReader from './TranscriptReader';
 import EdgeSwipePage from './EdgeSwipePage';
 import TimelineScrubber from './TimelineScrubber';
 
@@ -157,6 +162,74 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
   );
   const closeSheet = useCallback(() => setSheetId(null), []);
 
+  // ── Transcripts ────────────────────────────────────────────────────────────
+  // What this pond can transcribe, asked once per vault mount. `features`
+  // decides whether the transcript key exists at all: an older pond (no
+  // by-media submit) shows nothing here, and the Settings panel's
+  // download-and-re-upload path stays the way to do it.
+  const [transcriptCaps, setTranscriptCaps] = useState(null);
+  const [speakerName, setSpeakerName] = useState('');
+  const features = useMemo(() => capabilityFeatures(transcriptCaps), [transcriptCaps]);
+  // The job rows, from the same store Settings → Transcribe audio lists, so
+  // a transcript sent from either place shows in both.
+  const [recordings, setRecordings] = useState(() => getRecordings());
+  useEffect(() => subscribeRecordings(setRecordings), []);
+  const transcriptRows = useMemo(() => latestByMedia(recordings), [recordings]);
+  const transcriptStateFor = useCallback(
+    (id) => (features.mediaSubmit ? transcriptStateOf(transcriptRows.get(String(id))) : null),
+    [features.mediaSubmit, transcriptRows],
+  );
+
+  // Pull the pond's own job list into the store — once on mount and again
+  // after a submit — so a track transcribed from another phone (or the web)
+  // says "View transcript" here too. Only when the pond has a list to give.
+  const syncTranscriptJobs = useCallback(async () => {
+    try {
+      const jobs = await listJobs(api, { limit: 100 });
+      mergeServerJobs(jobs, { nameFor: (job) => titleOf({ originalName: job.originalName }) });
+    } catch (e) { /* the local list stands; the next open asks again */ }
+  }, [api]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadRecordings().catch(() => {});
+    (async () => {
+      try {
+        const caps = readCapabilities(await getCapabilities(api));
+        if (cancelled) return;
+        setTranscriptCaps(caps);
+        const flags = capabilityFeatures(caps);
+        if (!flags.mediaSubmit) return;
+        if (flags.list) syncTranscriptJobs();
+        // The transcript labels its main speaker with the profile name, as
+        // the Settings panel does; a pond without a profile keeps the
+        // route's own default.
+        try {
+          const me = await api.get('/me');
+          if (!cancelled) setSpeakerName(String(me?.user?.displayName || ''));
+        } catch (e) { /* no profile: the pond's default name */ }
+      } catch (e) {
+        // A 404 is a pond without transcription; anything else is a pond
+        // that could not answer. Both mean no key today.
+        if (!cancelled) setTranscriptCaps(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [api, syncTranscriptJobs]);
+
+  // The track whose transcript is open (null = closed). Held by ID for the
+  // same reason the sheet is.
+  const [readerId, setReaderId] = useState(null);
+  const readerTrack = useMemo(
+    () => visibleTracks.find((t) => String(t.id) === String(readerId)) || null,
+    [visibleTracks, readerId],
+  );
+  const openReader = useCallback((id) => {
+    if (id === undefined || id === null) return;
+    setReaderId(String(id));
+  }, []);
+  const closeReader = useCallback(() => setReaderId(null), []);
+
   // Measured height of the pinned transport bar, used as the list's bottom
   // padding so the last track can always scroll clear of it. MEASURED, not a
   // constant: the bar is seek strip + times + controls + a dock-clearing
@@ -294,6 +367,15 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
     if (String(item.id) === String(activeTrack?.mediaId)) togglePlayback();
     else playMedia(String(item.id));
   }, [sheetTrack, ready, activeTrack, togglePlayback, playMedia, closeSheet]);
+
+  // Open this track's transcript — or the offer to make one; the reader
+  // decides from the job row. The sheet closes first so the page arrives
+  // over the library rather than over the card.
+  const sheetTranscribe = useCallback(() => {
+    const item = sheetTrack;
+    closeSheet();
+    if (item) openReader(item.id);
+  }, [sheetTrack, closeSheet, openReader]);
 
   // Pull the audio file into the cache and hand it to the OS share sheet, then
   // drop the copy — same shape as the photo vault's share, so repeated shares
@@ -536,6 +618,29 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
     </TouchableOpacity>
   ), [c, trackStyles, playlists.length]);
 
+  // ── Transcript page ────────────────────────────────────────────────────────
+  // The reader is pushed with the same primitive as the playlists page, and
+  // takes the same FORM as its host: at the vault root it is a Modal-form
+  // EdgeSwipePage (the vault header and the tab bar are siblings of the
+  // pager at their own zIndex, so an in-tree overlay this deep would sit
+  // under both); inside the open playlists Modal it is the OVERLAY form,
+  // because iOS drops a sibling Modal over an open one. One element, placed
+  // in whichever of the two trees is showing — the reader can only be
+  // opened from the tree that is on top, so it never has to move.
+  const readerPage = (
+    <EdgeSwipePage overlay={playlistsOpen} visible={!!readerTrack} onClose={closeReader}>
+      {readerTrack ? (
+        <TranscriptReader
+          track={readerTrack}
+          capabilities={transcriptCaps}
+          defaultSpeakerName={speakerName}
+          onClose={closeReader}
+          onSubmitted={features.list ? syncTranscriptJobs : undefined}
+        />
+      ) : null}
+    </EdgeSwipePage>
+  );
+
   const renderPlaylistRow = useCallback(({ item }) => {
     const count = playlistIndex.get(item)?.length || 0;
     return (
@@ -655,10 +760,32 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
             <View style={[styles.art, trackStyles.artTint]}>
               <Icon name="music-note" size={20} color={MUSIC_TINT(c)} />
             </View>
-            <View style={{ flex: 1 }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={{ fontSize: 15, fontWeight: '700', color: c.textPrimary }} numberOfLines={1}>{titleOf(nowTrack)}</Text>
               <Text style={{ fontSize: 12, color: c.textTertiary }} numberOfLines={1}>{sourceOf(nowTrack) || 'audio'}</Text>
             </View>
+            {/* The transcript key — the "Lyrics" of a recording. Lit in the
+                accent once a transcript exists, quiet otherwise; absent on a
+                pond that cannot transcribe by media id. */}
+            {features.mediaSubmit && (() => {
+              const state = transcriptStateFor(nowTrack.id);
+              const done = state === 'completed';
+              return (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={done ? 'View transcript' : state === 'running' ? 'Transcribing…' : 'Transcribe'}
+                  onPress={() => { tapHaptic(); openReader(nowTrack.id); }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={styles.transcriptKey}
+                >
+                  <Icon
+                    name={done ? 'text-box-check-outline' : 'text-box-search-outline'}
+                    size={24}
+                    color={done ? MUSIC_TINT(c) : c.textTertiary}
+                  />
+                </TouchableOpacity>
+              );
+            })()}
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel="Previous track"
@@ -715,9 +842,10 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
       <EdgeSwipePage
         visible={playlistsOpen}
         onClose={closePlaylists}
-        // While a playlist is open on top, the parent's back-swipe must not fire
-        // underneath it — otherwise one drag would close BOTH levels at once.
-        swipeEnabled={!openPlaylist}
+        // While a playlist (or a transcript) is open on top, the parent's
+        // back-swipe must not fire underneath it — otherwise one drag would
+        // close BOTH levels at once.
+        swipeEnabled={!openPlaylist && !readerTrack}
       >
         <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
           <View style={styles.pageHeader}>
@@ -756,7 +884,7 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
               page would animate out and then have nothing left to show.
               `overlay` is required for the nesting — iOS won't present a second
               sibling Modal over an open one. */}
-          <EdgeSwipePage overlay visible={!!openPlaylist} onClose={() => setOpenPlaylist(null)}>
+          <EdgeSwipePage overlay visible={!!openPlaylist} onClose={() => setOpenPlaylist(null)} swipeEnabled={!readerTrack}>
             <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
               <View style={styles.pageHeader}>
                 <TouchableOpacity
@@ -782,8 +910,17 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
               />
             </View>
           </EdgeSwipePage>
+
+          {/* A transcript opened from inside the playlists page lives in this
+              Modal's tree (overlay form), after the playlist page so it stacks
+              above it. See `readerPage`. */}
+          {playlistsOpen ? readerPage : null}
         </View>
       </EdgeSwipePage>
+
+      {/* A transcript opened from the library: its own Modal-form page, so it
+          covers the vault header and the tab bar like the playlists page does. */}
+      {!playlistsOpen ? readerPage : null}
 
       {/* Per-track options, as a card that rises from the bottom edge. Rendered
           LAST so it stacks over the list and the transport bar; it's an in-tree
@@ -799,8 +936,10 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         playlists={playlists}
         currentPlaylists={sheetTrack ? tagsOf(sheetTrack) : []}
         busy={sheetBusy}
+        transcriptState={sheetTrack ? transcriptStateFor(sheetTrack.id) : null}
         onPlay={sheetPlay}
         onShare={sheetShare}
+        onTranscribe={sheetTranscribe}
         onRename={sheetRename}
         onAddToPlaylist={sheetAddToPlaylist}
         onDelete={sheetDelete}
@@ -818,6 +957,9 @@ const styles = StyleSheet.create({
   // rows rather than hanging off the artwork's left edge (row padding is 16).
   trackSep: { height: StyleSheet.hairlineWidth, marginHorizontal: 16, backgroundColor: 'rgba(142,142,147,0.4)' },
   moreBtn: { paddingLeft: 2, paddingVertical: 2 },
+  // A 24 pt glyph in a 36 pt box plus 8 pt of hitSlop: the 44 pt target the
+  // style rules ask for, without pushing the transport's own keys apart.
+  transcriptKey: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   pageHeader: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingBottom: 10 },
   pageBackBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   pageTitle: { flex: 1, fontSize: 22, fontWeight: '600' },

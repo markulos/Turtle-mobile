@@ -3,6 +3,11 @@ import { Alert } from 'react-native';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import MusicVault from '../MusicVault';
 import { __resetForTests, getPending } from '../../../../services/offlineQueue';
+import { __resetForTests as resetTranscripts } from '../../../../services/transcriptionStore';
+
+// The transcript reader (mounted by the vault) reads the player's progress
+// straight from the native package; the vault itself never touches it.
+jest.mock('@rntp/player', () => ({ useProgress: () => ({ position: 0, duration: 0, buffered: 0 }) }));
 
 // The outbox persists to AsyncStorage; keep it in memory for the test run.
 const mockStore = new Map();
@@ -107,6 +112,8 @@ describe('MusicVault', () => {
     jest.clearAllMocks();
     mockStore.clear();
     __resetForTests();
+    resetTranscripts();
+    mockApi.get.mockImplementation(() => Promise.resolve({}));
     mockApi.patch.mockImplementation(() => Promise.resolve({}));
     mockMusicPlayer.activeTrack = {
       mediaId: 'two',
@@ -177,7 +184,10 @@ describe('MusicVault', () => {
   test('refreshes the library whenever Music Vault opens or regains focus', async () => {
     await render(<MusicVault onClose={jest.fn()} />);
 
-    expect(mockRefreshLibrary).toHaveBeenCalledTimes(1);
+    // The useFocusEffect mock above runs its callback on EVERY render, and the
+    // vault re-renders once its transcription capabilities arrive — so this
+    // proves the focus effect refreshes, not how many times the tree painted.
+    expect(mockRefreshLibrary).toHaveBeenCalled();
   });
 
   test('offers an explicit production retry for player setup failure', async () => {
@@ -305,6 +315,83 @@ describe('MusicVault', () => {
     const rows = view.getAllByText('Third');
     await fireEvent.press(rows[rows.length - 1]);
     expect(mockPlayMedia).toHaveBeenCalledWith('three');
+  });
+
+  // A pond with the by-media transcription routes. Jobs list one finished
+  // transcript for 'First'; nothing for the others.
+  const newerPond = () => mockApi.get.mockImplementation((path) => {
+    if (path.startsWith('/transcriptions/capabilities')) {
+      return Promise.resolve({
+        models: ['small'],
+        defaults: { diarize: true, model: 'small', minSpeakers: 2, maxSpeakers: 5, primaryName: 'Primary' },
+        runtime: { pythonAvailable: true, workerAvailable: true, diarizationAvailable: true },
+        features: { mediaSubmit: true, list: true, words: true },
+      });
+    }
+    if (path.startsWith('/transcriptions?')) {
+      return Promise.resolve({ success: true, jobs: [
+        { id: 'tr_1', status: 'completed', mediaId: 'one', originalName: 'First.mp3', createdAt: '2026-09-25T10:00:00Z' },
+      ] });
+    }
+    if (path === '/me') return Promise.resolve({ user: { displayName: 'Mark' } });
+    if (/\/result$/.test(path)) {
+      return Promise.resolve({ turns: [{ speaker: 'Mark', start: 0, end: 2, text: 'Hello there', words: [] }] });
+    }
+    return Promise.resolve({});
+  });
+
+  test('a pond that cannot transcribe by media id gets no transcript key and no sheet row', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Options for First'));
+    expect(view.queryByLabelText('Transcribe')).toBeNull();
+    expect(view.queryByLabelText('View transcript')).toBeNull();
+    expect(view.queryByLabelText('Transcribing…')).toBeNull();
+  });
+
+  test('a newer pond: the sheet offers Transcribe, the pond’s own transcripts show as View transcript', async () => {
+    newerPond();
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    // The list was fetched once on mount and folded into the shared store.
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalledWith('/transcriptions?limit=100'));
+
+    // Second is playing and has no transcript: the transport key offers one.
+    await waitFor(() => view.getByLabelText('Transcribe'));
+
+    await fireEvent.press(view.getByLabelText('Options for First'));
+    await waitFor(() => view.getByLabelText('View transcript'));
+    await fireEvent.press(view.getByLabelText('View transcript'));
+
+    // The reader is up for First, over the library.
+    await waitFor(() => view.getByLabelText('Back to music'));
+    await waitFor(() => view.getByText('Hello there'));
+    expect(mockApi.get).toHaveBeenCalledWith('/transcriptions/tr_1/result');
+    expect(view.queryByTestId('track-actions-card')).toBeNull();
+  });
+
+  test('the transport key opens the reader for the playing track', async () => {
+    newerPond();
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await waitFor(() => view.getByLabelText('Transcribe'));
+    await fireEvent.press(view.getByLabelText('Transcribe'));
+    await waitFor(() => view.getByLabelText('Back to music'));
+    expect(view.getByText('No transcript yet')).toBeTruthy();
+    // The pond's defaults, with the profile name already the main speaker.
+    expect(view.getByText('small · 2–5 speakers · auto language')).toBeTruthy();
+  });
+
+  test('a job still running disables the sheet row and words the transport key', async () => {
+    newerPond();
+    // On disk, the way a job sent before this launch would be: the vault
+    // hydrates the store on mount, and an in-memory seed would be read over.
+    mockStore.set('turtle:transcriptions:v1', JSON.stringify([
+      { key: 'k', id: 'tr_2', mediaId: 'two', name: 'Second', status: 'transcribing', createdAt: 5 },
+    ]));
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await waitFor(() => view.getByLabelText('Transcribing…'));
+    await fireEvent.press(view.getByLabelText('Options for Second'));
+    const rows = view.getAllByLabelText('Transcribing…');
+    const row = rows[rows.length - 1];
+    expect(row.props.accessibilityState).toEqual({ disabled: true });
   });
 
   test('adding to a playlist keeps the tags the track already had', async () => {

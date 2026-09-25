@@ -34,10 +34,16 @@ const CLOSE_MS = 200;
  * the page has no such failure mode and animates the same.
  *
  * Three pages inside one card:
- *   1. actions — play/pause, share, rename, add to playlist, delete
+ *   1. actions — play/pause, share, transcript, rename, add to playlist, delete
  *   2. rename — edit the track's title in place
  *   3. playlists — pick an existing playlist or type a new one
  * Both sub-pages are PAGES, not second sheets, for the same iOS reason.
+ *
+ * `transcriptState` is the PARENT's verdict on this track's transcript —
+ * 'none' | 'running' | 'completed' (utils/transcriptionRecordings
+ * transcriptStateOf) — and null/undefined hides the row altogether, which is
+ * what a pond that cannot transcribe by media id gets. The sheet only words
+ * it: the vault owns the job list and the feature flag.
  */
 export default function TrackActionsSheet({
   visible,
@@ -49,8 +55,10 @@ export default function TrackActionsSheet({
   playlists = [],
   currentPlaylists = [],
   busy = false,
+  transcriptState = null,
   onPlay,
   onShare,
+  onTranscribe,
   onRename,
   onAddToPlaylist,
   onDelete,
@@ -229,6 +237,24 @@ export default function TrackActionsSheet({
               disabled={busy}
               onPress={run(onShare)}
             />
+            {/* Transcript. One row, three words: what there is to do about
+                this track's transcript. Disabled while the pond is working
+                on it — the reader shows that progress, but a row that says
+                "Transcribing…" and also opens something reads as two
+                different promises. */}
+            {transcriptState ? (
+              <ActionRow
+                icon={transcriptState === 'completed' ? 'text-box-check-outline' : 'text-box-search-outline'}
+                label={transcriptState === 'completed' ? 'View transcript'
+                  : transcriptState === 'running' ? 'Transcribing…'
+                    : 'Transcribe'}
+                color={c.textPrimary}
+                style={rowBorder}
+                chevron={transcriptState === 'completed'}
+                disabled={transcriptState === 'running'}
+                onPress={run(onTranscribe)}
+              />
+            ) : null}
             <ActionRow
               icon="pencil-outline"
               label="Rename track…"
