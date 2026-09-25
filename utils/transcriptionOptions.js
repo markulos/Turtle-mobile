@@ -99,6 +99,10 @@ export function readCapabilities(raw) {
     acceptedExtensions: Array.isArray(raw?.acceptedExtensions)
       ? raw.acceptedExtensions.map(String) : [],
     runtime: raw?.runtime || {},
+    // Carried through as published, not interpreted here: what the flags MEAN
+    // is `capabilityFeatures` in services/transcriptions, and a pond without
+    // them answers null, which that reads as "none of it".
+    features: raw?.features && typeof raw.features === 'object' ? { ...raw.features } : null,
   };
 }
 

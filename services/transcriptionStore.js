@@ -4,6 +4,7 @@ import {
   addRecording,
   normaliseList,
   patchRecording,
+  recordingFromJob,
   removeRecording,
   reviveList,
 } from '../utils/transcriptionRecordings';
@@ -109,6 +110,31 @@ export function patchLocalRecording(key, patch) {
 
 export function removeLocalRecording(key) {
   return commit(removeRecording(recordings, key));
+}
+
+/**
+ * Fold the pond's own job list into the local one.
+ *
+ * Only jobs this phone has never heard of are added (matched by job id —
+ * a row this phone sent already has one, and re-adding it would move it and
+ * wipe the fields only the phone knows, like an upload's progress). Jobs
+ * without a `mediaId` are skipped: the vault is the only caller and only
+ * wants what belongs to a track; an upload from some other phone's camera
+ * roll is that phone's history. Added oldest first so the newest lands on
+ * top, matching the order a send would have produced. One commit for the
+ * lot, so subscribers hear one change and disk is written once.
+ */
+export function mergeServerJobs(jobs, { nameFor } = {}) {
+  const known = new Set(recordings.map((row) => row.id).filter(Boolean));
+  const incoming = (Array.isArray(jobs) ? jobs : [])
+    .filter((job) => job?.id && job?.mediaId && !known.has(String(job.id)))
+    .map((job) => recordingFromJob(job, { name: nameFor ? nameFor(job) : undefined }))
+    .filter(Boolean)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  if (!incoming.length) return recordings;
+  let next = recordings;
+  for (const row of incoming) next = addRecording(next, row);
+  return commit(next);
 }
 
 /** Test seam — the module is a singleton and suites must not inherit each other. */

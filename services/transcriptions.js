@@ -50,6 +50,47 @@ export async function getCapabilities(api) {
 }
 
 /**
+ * The newer routes, as the pond declares them on `/capabilities`:
+ *
+ *   mediaSubmit — POST accepts `{ mediaId }` and transcribes the pond's own
+ *                 copy, so a vault track needs no download-and-re-upload.
+ *   list        — GET / lists the caller's jobs (the vault learns which
+ *                 tracks already have a transcript from one request).
+ *   words       — each turn of a result carries aligned `words`, which is
+ *                 what word-level playback sync needs.
+ *
+ * Only a literal `true` counts. An older pond publishes no `features` at all
+ * and every flag comes back false, which is exactly the fallback: upload
+ * only, the local job list, turn-level sync. Works on the raw response and
+ * on the normalised shape `readCapabilities` returns, which carries
+ * `features` through untouched.
+ */
+export function capabilityFeatures(caps) {
+  const flags = caps?.features;
+  const on = (key) => !!(flags && typeof flags === 'object' && flags[key] === true);
+  return { mediaSubmit: on('mediaSubmit'), list: on('list'), words: on('words') };
+}
+
+/**
+ * Only the options the caller actually chose, as strings.
+ *
+ * Every field has a server-side default (see the capabilities response), and
+ * echoing a default back is how a client's stale idea of one silently
+ * overrides the server's current one — so empties are dropped. Values go as
+ * STRINGS in the JSON body too, not just the multipart one: multipart fields
+ * can only ever be strings, so that is the shape the route's validators are
+ * proven against, and one shape for both modes means one validation path.
+ */
+export function cleanOptions(options = {}) {
+  const parameters = {};
+  for (const [key, value] of Object.entries(options || {})) {
+    if (value === undefined || value === null || value === '') continue;
+    parameters[key] = String(value);
+  }
+  return parameters;
+}
+
+/**
  * Send one local file for transcription.
  *
  * `fileUri` is a local content URI — the file is STREAMED from it by the
@@ -72,14 +113,7 @@ export async function submitTranscription({
   if (!baseUrl) throw new Error('Not connected to a pond');
   if (!fileUri) throw new Error('No file to send');
 
-  // Only send options the caller actually chose. Every field has a server-side
-  // default (see the capabilities response), and echoing a default back is how
-  // a client's stale idea of one silently overrides the server's current one.
-  const parameters = {};
-  for (const [key, value] of Object.entries(options)) {
-    if (value === undefined || value === null || value === '') continue;
-    parameters[key] = String(value);
-  }
+  const parameters = cleanOptions(options);
 
   const result = await streamMultipartUpload({
     url: `${String(baseUrl).replace(/\/$/, '')}/api/transcriptions`,
@@ -102,6 +136,65 @@ export async function submitTranscription({
   }
   if (!body?.id) throw new Error(body?.error || 'The pond did not accept the recording');
   return body;
+}
+
+/**
+ * Transcribe a recording the pond already holds, by its vault media id.
+ *
+ * A plain JSON POST through `api.post` (the JWT interceptor attaches the
+ * token): the bytes never leave the pond, so there is no upload to stream, no
+ * progress to report and nothing to cancel — acceptance is the whole request.
+ * Resolves to `{ id, status, mediaId }`; a job already running for the same
+ * recording comes back as that job with `existing: true` rather than a
+ * second one, which is the server's dedupe and needs nothing from us.
+ *
+ * Single-attempt for the same reason `submitTranscription` is: a retry after
+ * an accepted-but-unanswered request would queue the GPU twice.
+ */
+export async function submitMediaTranscription(api, { mediaId, options = {} } = {}) {
+  if (mediaId === undefined || mediaId === null || String(mediaId).trim() === '') {
+    throw new Error('No recording to transcribe');
+  }
+  const body = await api.post(ROOT, { mediaId: String(mediaId), ...cleanOptions(options) });
+  if (!body?.id) throw new Error(body?.error || 'The pond did not accept the recording');
+  return body;
+}
+
+/**
+ * The caller's jobs, newest first. `mediaId` narrows it to one recording;
+ * `limit` caps the count (the server's default is 50, its ceiling 200).
+ * Resolves to the array itself — an answer without one is an empty list, so
+ * a caller can map over it without a guard.
+ */
+export async function listJobs(api, { mediaId, limit } = {}) {
+  const query = [];
+  if (mediaId !== undefined && mediaId !== null && String(mediaId) !== '') {
+    query.push(`mediaId=${encodeURIComponent(String(mediaId))}`);
+  }
+  if (Number(limit) > 0) query.push(`limit=${Math.floor(Number(limit))}`);
+  const response = await api.get(`${ROOT}${query.length ? `?${query.join('&')}` : ''}`);
+  return Array.isArray(response?.jobs) ? response.jobs : [];
+}
+
+/**
+ * The server's sanitized rejection, in the words of someone who just pressed
+ * a button. The uploader wraps the body in "HTTP 415: {json}" and the api
+ * layer in "API Error 409: …" — both diagnostics, not sentences. Shared by
+ * the Settings panel and the music reader so the two never disagree about
+ * what a 409 means.
+ */
+export function friendlySubmitError(error) {
+  const status = statusOfError(error);
+  const known = {
+    404: 'The pond cannot find that recording',
+    409: 'This recording has no copy on the pond to transcribe',
+    413: 'That file is bigger than this pond accepts',
+    415: 'The pond cannot read that file, or it has no audio in it',
+    422: 'That recording is longer than this pond allows',
+    429: 'Too many transcriptions on the go — try again shortly',
+    503: 'The pond’s transcription worker is busy or offline',
+  };
+  return known[status] || 'The pond would not accept that recording';
 }
 
 /** Poll one job. A 404 means it is gone — callers stop rather than retry. */

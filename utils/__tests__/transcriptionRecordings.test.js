@@ -7,13 +7,17 @@
 const {
   MAX_RECORDINGS,
   addRecording,
+  latestByMedia,
   normaliseList,
   normaliseRecording,
   patchRecording,
   pollableRecordings,
+  recordingForMedia,
+  recordingFromJob,
   removeRecording,
   reviveList,
   summariseRecordings,
+  transcriptStateOf,
 } = require('../transcriptionRecordings');
 
 const row = (over = {}) => ({
@@ -42,6 +46,85 @@ describe('normaliseRecording', () => {
     expect(r.token).toBeUndefined();
     expect(r.fileUri).toBeUndefined();
     expect(r.transcript).toBeUndefined();
+  });
+
+  it('keeps the vault media id as a string, and null when there is none', () => {
+    expect(normaliseRecording({ key: 'k', mediaId: 12 }).mediaId).toBe('12');
+    expect(normaliseRecording({ key: 'k', mediaId: ' ' }).mediaId).toBeNull();
+    expect(normaliseRecording({ key: 'k' }).mediaId).toBeNull();
+  });
+});
+
+describe('recordingFromJob', () => {
+  const job = {
+    id: 'tr_7', status: 'completed', mediaId: 12, originalName: 'standup.m4a',
+    createdAt: '2026-09-25T10:00:00.000Z', durationSeconds: 95, detectedSpeakers: 2,
+    language: 'en',
+  };
+
+  it('reads a listed job into a row keyed by the job id', () => {
+    expect(recordingFromJob(job)).toMatchObject({
+      key: 'tr_7', id: 'tr_7', mediaId: '12', name: 'standup.m4a', status: 'completed',
+      durationSeconds: 95, speakerCount: 2, language: 'en',
+      createdAt: Date.parse('2026-09-25T10:00:00.000Z'),
+    });
+  });
+
+  it('prefers the name the caller knows, and carries a failure’s message', () => {
+    const r = recordingFromJob({ ...job, status: 'failed', error: { code: 'E', message: 'Boom' } }, { name: 'Standup' });
+    expect(r.name).toBe('Standup');
+    expect(r.error).toBe('Boom');
+  });
+
+  it('takes a numeric stamp as it is and an unreadable one as unknown', () => {
+    expect(recordingFromJob({ ...job, createdAt: 1700000000000 }).createdAt).toBe(1700000000000);
+    expect(recordingFromJob({ ...job, createdAt: 'yesterday' }).createdAt).toBe(0);
+    expect(recordingFromJob({ status: 'queued' })).toBeNull();
+  });
+});
+
+describe('latestByMedia / recordingForMedia', () => {
+  it('speaks for each recording with its newest row', () => {
+    const list = [
+      row({ key: 'a', mediaId: '1', status: 'completed', createdAt: 10 }),
+      row({ key: 'b', mediaId: '1', status: 'failed', createdAt: 20 }),
+      row({ key: 'c', mediaId: '2', status: 'queued', createdAt: 5 }),
+      row({ key: 'd', status: 'completed', createdAt: 99 }), // an upload, no media
+    ];
+    const latest = latestByMedia(list);
+    expect(latest.get('1').key).toBe('b');
+    expect(latest.get('2').key).toBe('c');
+    expect(latest.size).toBe(2);
+    expect(recordingForMedia(list, 1).key).toBe('b');
+    expect(recordingForMedia(list, '3')).toBeNull();
+    expect(recordingForMedia(list, null)).toBeNull();
+  });
+
+  it('never lets a cancelled job hide an earlier transcript', () => {
+    const list = [
+      row({ key: 'new', mediaId: '1', status: 'cancelled', createdAt: 20 }),
+      row({ key: 'old', mediaId: '1', status: 'completed', createdAt: 10 }),
+    ];
+    expect(recordingForMedia(list, '1').key).toBe('old');
+    // …but with nothing else to show, the cancelled row is what there is.
+    expect(recordingForMedia([list[0]], '1').key).toBe('new');
+  });
+
+  it('keeps list order (newest first) when the stamps tie', () => {
+    const list = [row({ key: 'top', mediaId: '1' }), row({ key: 'under', mediaId: '1' })];
+    expect(recordingForMedia(list, '1').key).toBe('top');
+  });
+});
+
+describe('transcriptStateOf', () => {
+  it('maps a row to what the transcript key should offer', () => {
+    expect(transcriptStateOf(null)).toBe('none');
+    expect(transcriptStateOf(row({ status: 'completed' }))).toBe('completed');
+    expect(transcriptStateOf(row({ status: 'uploading' }))).toBe('running');
+    expect(transcriptStateOf(row({ status: 'queued' }))).toBe('running');
+    expect(transcriptStateOf(row({ status: 'diarizing' }))).toBe('running');
+    expect(transcriptStateOf(row({ status: 'failed' }))).toBe('none');
+    expect(transcriptStateOf(row({ status: 'cancelled' }))).toBe('none');
   });
 });
 

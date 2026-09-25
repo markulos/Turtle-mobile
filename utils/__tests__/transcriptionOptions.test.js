@@ -44,6 +44,13 @@ describe('readCapabilities', () => {
     expect(caps.defaults.model).toBe('small');
     expect(caps.ranges.minSpeakers).toEqual([1, 10]);
   });
+
+  it('carries the feature flags through as published, and null from a pond without them', () => {
+    expect(readCapabilities({ features: { mediaSubmit: true, list: false } }).features)
+      .toEqual({ mediaSubmit: true, list: false });
+    expect(readCapabilities({}).features).toBeNull();
+    expect(readCapabilities({ features: 'yes' }).features).toBeNull();
+  });
 });
 
 describe('runtimeState', () => {

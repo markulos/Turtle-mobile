@@ -5,6 +5,7 @@ import {
   addLocalRecording,
   getRecordings,
   loadRecordings,
+  mergeServerJobs,
   patchLocalRecording,
   removeLocalRecording,
   subscribeRecordings,
@@ -94,5 +95,35 @@ describe('transcriptionStore', () => {
     const before = getRecordings();
     patchLocalRecording('vanished', { status: 'failed' });
     expect(getRecordings()).toBe(before);
+  });
+
+  test('merging the pond’s list adds only the jobs this phone never sent, newest on top', async () => {
+    addLocalRecording({ key: 'local', id: 'tr_1', mediaId: '1', name: 'Mine', status: 'transcribing', uploadPercent: 100 });
+    const seen = [];
+    subscribeRecordings((list) => seen.push(list.map((r) => r.key)));
+
+    mergeServerJobs([
+      { id: 'tr_3', mediaId: '3', originalName: 'newest.m4a', status: 'queued', createdAt: '2026-09-25T12:00:00Z' },
+      { id: 'tr_1', mediaId: '1', originalName: 'mine.m4a', status: 'completed', createdAt: '2026-09-25T11:00:00Z' },
+      { id: 'tr_2', mediaId: '2', originalName: 'older.m4a', status: 'completed', createdAt: '2026-09-25T10:00:00Z' },
+      { id: 'tr_9', originalName: 'camera-roll.mov', status: 'completed', createdAt: '2026-09-25T13:00:00Z' },
+    ], { nameFor: (job) => String(job.originalName).replace(/\.\w+$/, '') });
+
+    // tr_1 was this phone's own send and is left exactly as it was (its status
+    // is the poller's to move); tr_9 has no media and is not the vault's business.
+    expect(getRecordings().map((r) => r.key)).toEqual(['tr_3', 'tr_2', 'local']);
+    expect(getRecordings()[0]).toMatchObject({ mediaId: '3', name: 'newest', status: 'queued' });
+    expect(getRecordings()[2].status).toBe('transcribing');
+    // One publish for the whole merge, and one write.
+    expect(seen).toEqual([['local'], ['tr_3', 'tr_2', 'local']]);
+    await flush();
+    expect(stored().map((r) => r.key)).toEqual(['tr_3', 'tr_2', 'local']);
+  });
+
+  test('a merge with nothing new leaves the list identical', () => {
+    addLocalRecording({ key: 'local', id: 'tr_1', mediaId: '1', status: 'queued' });
+    const before = getRecordings();
+    expect(mergeServerJobs([{ id: 'tr_1', mediaId: '1', status: 'completed' }])).toBe(before);
+    expect(mergeServerJobs('junk')).toBe(before);
   });
 });

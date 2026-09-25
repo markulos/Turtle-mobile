@@ -42,9 +42,14 @@ export function normaliseRecording(raw) {
   const key = String(raw.key || raw.id || '').trim();
   if (!key) return null;
   const status = String(raw.status || '') || UPLOADING;
+  const mediaId = raw.mediaId === undefined || raw.mediaId === null ? '' : String(raw.mediaId).trim();
   return {
     key,
     id: raw.id ? String(raw.id) : null,
+    // The vault row this job was made from, when it was made from one. It is
+    // how the music player finds "the transcript for this track" — a job sent
+    // as an upload from the camera roll has none.
+    mediaId: mediaId || null,
     name: String(raw.name || 'Recording').slice(0, 120),
     status,
     uploadPercent: Number(raw.uploadPercent) || 0,
@@ -127,6 +132,76 @@ export function removeRecording(list, key) {
  */
 export function pollableRecordings(list) {
   return list.filter((row) => row.id && row.status !== UPLOADING && !isTerminal(row.status));
+}
+
+/**
+ * A job as the pond lists it, turned into a row this phone can hold.
+ *
+ * The list route is how the music player learns about transcripts made from
+ * another device (or from the web): they never passed through this store, so
+ * they are read into it in the same shape as a row this phone sent, keyed by
+ * the job id — the one identity both sides share. `createdAt` on the wire is
+ * whatever SQLite wrote (an ISO string on this server), so it is parsed
+ * rather than coerced; `Number('2026-09-25…')` is NaN and would sort every
+ * merged row to the dawn of time.
+ */
+export function recordingFromJob(job, { name } = {}) {
+  const id = job?.id ? String(job.id) : '';
+  if (!id) return null;
+  const stamp = typeof job.createdAt === 'string' ? Date.parse(job.createdAt) : Number(job.createdAt);
+  return normaliseRecording({
+    key: id,
+    id,
+    mediaId: job.mediaId,
+    name: name || job.originalName || 'Recording',
+    status: job.status || 'queued',
+    createdAt: Number.isFinite(stamp) ? stamp : 0,
+    durationSeconds: job.durationSeconds,
+    speakerCount: job.detectedSpeakers,
+    language: job.language,
+    error: job.error?.message || null,
+  });
+}
+
+/**
+ * The one row that speaks for each recording: newest first, but a cancelled
+ * job never hides an earlier transcript — cancelling is changing your mind,
+ * not a result. A failed one DOES win over an older success, because the
+ * reader then offers Retry, which is what a failure is for.
+ */
+export function latestByMedia(list) {
+  const byMedia = new Map();
+  const rows = Array.isArray(list) ? list : [];
+  for (const row of rows) {
+    if (!row?.mediaId) continue;
+    const current = byMedia.get(row.mediaId);
+    if (!current) { byMedia.set(row.mediaId, row); continue; }
+    const cancelled = row.status === 'cancelled';
+    const currentCancelled = current.status === 'cancelled';
+    if (cancelled && !currentCancelled) continue;
+    if (!cancelled && currentCancelled) { byMedia.set(row.mediaId, row); continue; }
+    if ((row.createdAt || 0) > (current.createdAt || 0)) byMedia.set(row.mediaId, row);
+  }
+  return byMedia;
+}
+
+export function recordingForMedia(list, mediaId) {
+  if (mediaId === undefined || mediaId === null) return null;
+  return latestByMedia(list).get(String(mediaId)) || null;
+}
+
+/**
+ * What a track's transcript key should say: 'completed' opens a transcript,
+ * 'running' waits (the key is disabled), 'none' offers to make one — a failed
+ * or cancelled job counts as none, because the only thing to do with it is
+ * to try again, and the reader itself says why it failed.
+ */
+export function transcriptStateOf(row) {
+  const status = String(row?.status || '');
+  if (!status) return 'none';
+  if (status === 'completed') return 'completed';
+  if (isTerminal(status)) return 'none';
+  return 'running';
 }
 
 /**
