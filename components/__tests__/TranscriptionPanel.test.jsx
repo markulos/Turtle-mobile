@@ -128,6 +128,41 @@ describe('TranscriptionPanel', () => {
     expect(view.getByText('Recordings')).toBeTruthy();
   });
 
+  test('on a pond that transcribes by media id, a pond audio is sent by id and never downloaded', async () => {
+    const FileSystem = require('expo-file-system/legacy');
+    mockApi = makeApi({
+      get: jest.fn((path) => {
+        if (path.startsWith('/transcriptions/capabilities')) {
+          return Promise.resolve({ ...CAPABILITIES, features: { mediaSubmit: true, list: true, words: true } });
+        }
+        if (path.startsWith('/media/gallery')) return Promise.resolve({ items: [AUDIO_ROW] });
+        return Promise.resolve({ job: { id: 'tr_1', status: 'transcribing' } });
+      }),
+      post: jest.fn(() => Promise.resolve({ success: true, id: 'tr_1', status: 'queued', mediaId: '12' })),
+    });
+    const view = await render(<TranscriptionPanel />);
+    await waitFor(() => view.getByText('Send an audio'));
+
+    await fireEvent.press(view.getByLabelText('Choose an audio to transcribe'));
+    await waitFor(() => view.getByLabelText('Transcribe standup'));
+    await fireEvent.press(view.getByLabelText('Transcribe standup'));
+
+    await waitFor(() => expect(mockApi.post).toHaveBeenCalledWith('/transcriptions', { mediaId: '12' }));
+    // The bytes stayed on the pond: no cache copy, no multipart upload.
+    expect(FileSystem.downloadAsync).not.toHaveBeenCalled();
+    expect(mockSubmit).not.toHaveBeenCalled();
+    await waitFor(() => expect(getRecordings()[0]).toMatchObject({ id: 'tr_1', mediaId: '12', name: 'standup', status: 'queued' }));
+  });
+
+  test('the fallback upload of a pond audio still remembers which track it came from', async () => {
+    const view = await render(<TranscriptionPanel />);
+    await waitFor(() => view.getByText('Send an audio'));
+    await fireEvent.press(view.getByLabelText('Choose an audio to transcribe'));
+    await waitFor(() => view.getByLabelText('Transcribe standup'));
+    await fireEvent.press(view.getByLabelText('Transcribe standup'));
+    await waitFor(() => expect(getRecordings()[0]).toMatchObject({ id: 'tr_1', mediaId: '12' }));
+  });
+
   test('a rejected upload leaves a row that says why, in words', async () => {
     mockSubmit.mockRejectedValue(new Error('HTTP 415: {"error":"Unsupported media type"}'));
     const view = await render(<TranscriptionPanel />);

@@ -32,11 +32,15 @@
  * native module and therefore a dev-client rebuild — deliberately not added
  * here, since a missing native module is a crash at the tap, not a warning.
  *
- * Pond audio is downloaded to the cache and re-uploaded rather than
- * transcribed in place: the route only accepts a multipart upload, and the
- * phone cannot ask the server to read its own vault. For a voice recording
- * over the LAN that is a couple of seconds and it is shown honestly as its own
- * step ("Fetching from the pond") rather than hidden inside the progress bar.
+ * Pond audio goes by MEDIA ID when the pond can take it that way
+ * (`features.mediaSubmit` on capabilities): a JSON POST naming the vault row,
+ * and the pond transcribes its own copy — nothing crosses the wire twice.
+ * An older pond only accepts a multipart upload and cannot be asked to read
+ * its own vault, so there the audio is downloaded to the cache and
+ * re-uploaded. For a voice recording over the LAN that is a couple of seconds
+ * and it is shown honestly as its own step ("Fetching from the pond") rather
+ * than hidden inside the progress bar. Either way the row carries the
+ * `mediaId`, which is how the music player finds the transcript for a track.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -54,12 +58,12 @@ import { useTheme } from '../context/ThemeContext';
 import { getApiAuthToken, useServer } from '../context/ServerContext';
 import { resolveMediaUrl, titleOf } from '../services/musicTrackMapper';
 import {
-  cancelOrDelete, getCapabilities, getJob, getResult, statusOfError,
-  submitTranscription,
+  cancelOrDelete, capabilityFeatures, friendlySubmitError, getCapabilities, getJob,
+  getResult, statusOfError, submitMediaTranscription, submitTranscription,
 } from '../services/transcriptions';
 import {
-  addLocalRecording, loadRecordings, patchLocalRecording, removeLocalRecording,
-  subscribeRecordings,
+  addLocalRecording, getRecordings, loadRecordings, patchLocalRecording,
+  removeLocalRecording, subscribeRecordings,
 } from '../services/transcriptionStore';
 import { tapHaptic, notifyHaptic } from '../utils/haptics';
 import {
@@ -388,7 +392,9 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
    * cancelled — so "it adds to the recordings" is true from the first byte, and
    * a cancelled send leaves nothing behind.
    */
-  const send = useCallback(async ({ fileUri, mimeType, name, sizeBytes = 0, durationSeconds = 0, prepare }) => {
+  const send = useCallback(async ({
+    fileUri, mimeType, name, sizeBytes = 0, durationSeconds = 0, mediaId = null, prepare,
+  }) => {
     // Refused here rather than by the route: the 503 for this arrives AFTER the
     // whole file has gone up the wire, which is a long wait to be told the
     // pond was never going to do it.
@@ -403,7 +409,7 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
     const controller = new AbortController();
     uploads.current.set(key, controller);
     addLocalRecording({
-      key, name, status: UPLOADING, uploadPercent: 0, sizeBytes, durationSeconds,
+      key, name, mediaId, status: UPLOADING, uploadPercent: 0, sizeBytes, durationSeconds,
       createdAt: Date.now(), note: prepare ? 'Fetching from the pond' : null,
     });
     setBusy(true);
@@ -438,7 +444,7 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
         removeLocalRecording(key);
       } else {
         patchLocalRecording(key, {
-          status: 'failed', note: null, uploadPercent: 0, error: friendlyUploadError(error),
+          status: 'failed', note: null, uploadPercent: 0, error: friendlySubmitError(error),
         });
       }
     } finally {
@@ -447,6 +453,53 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
       if (mounted.current) setBusy(false);
     }
   }, [choices, capabilities, getBaseUrl, startPoller]);
+
+  /**
+   * Send a vault row by its id — the pond transcribes its own copy.
+   *
+   * No upload, so no progress and nothing to cancel: the row is 'queued'
+   * with a note from the tap until the pond answers with an id, and a
+   * refusal turns it into a failure that says why. If the pond deduped onto
+   * a job this phone already lists (sent from the music player, or merged
+   * from the pond's list), that row is kept and the stand-in dropped — two
+   * rows for one job would poll it twice and read as two jobs.
+   */
+  const sendByMediaId = useCallback(async (item) => {
+    if (choices.diarize && runtimeState(capabilities) === 'no-diarization') {
+      Alert.alert('Transcribe', 'This pond cannot separate speakers. Turn off “Separate speakers” in the options to send it anyway.');
+      return;
+    }
+    const problem = optionsProblem(choices, capabilities);
+    if (problem) { Alert.alert('Transcribe', problem); return; }
+
+    const key = newKey();
+    const mediaId = String(item.id);
+    addLocalRecording({
+      key, name: titleOf(item), mediaId, status: 'queued', note: 'Asking the pond',
+      sizeBytes: Number(item.size) || 0, durationSeconds: Number(item.duration) || 0,
+      createdAt: Date.now(),
+    });
+    setBusy(true);
+    try {
+      const accepted = await submitMediaTranscription(apiRef.current, {
+        mediaId, options: submitParameters(choices, capabilities),
+      });
+      const id = String(accepted.id);
+      const existing = getRecordings().find((r) => r.key !== key && r.id === id);
+      if (existing) {
+        removeLocalRecording(key);
+        patchLocalRecording(existing.key, { status: accepted.status || existing.status, note: null });
+        startPoller(existing.key, id, { immediate: false });
+      } else {
+        patchLocalRecording(key, { id, status: accepted.status || 'queued', note: null });
+        startPoller(key, id, { immediate: false });
+      }
+    } catch (error) {
+      patchLocalRecording(key, { status: 'failed', note: null, error: friendlySubmitError(error) });
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }, [choices, capabilities, startPoller]);
 
   const sendVideoFromLibrary = useCallback(async () => {
     setSourceOpen(false);
@@ -487,6 +540,11 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
 
   const sendPondAudio = useCallback(async (item) => {
     setSourceOpen(false);
+    // A pond that transcribes by media id is asked to; the bytes stay put.
+    if (capabilityFeatures(capabilities).mediaSubmit) {
+      await sendByMediaId(item);
+      return;
+    }
     const base = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '');
     const url = resolveMediaUrl(item.rawUrl || item.url, base);
     if (!url) { Alert.alert('Transcribe', 'That track has no file to send.'); return; }
@@ -496,15 +554,17 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
       name: titleOf(item),
       sizeBytes: Number(item.size) || 0,
       durationSeconds: Number(item.duration) || 0,
-      // The pond holds the bytes; the route only takes an upload. So: pull a
-      // copy into the cache first, and let the row say that is what it is doing.
+      mediaId: String(item.id),
+      // An older pond holds the bytes but its route only takes an upload. So:
+      // pull a copy into the cache first, and let the row say that is what it
+      // is doing.
       prepare: async () => {
         const target = `${FileSystem.cacheDirectory}transcribe_${item.id}_${safeName}`;
         const { uri } = await FileSystem.downloadAsync(url, target);
         return uri;
       },
     });
-  }, [send, getBaseUrl, getMediaBaseUrl]);
+  }, [send, sendByMediaId, capabilities, getBaseUrl, getMediaBaseUrl]);
 
   // ── Row actions ───────────────────────────────────────────────────────────
 
@@ -844,23 +904,6 @@ function Stepper({ label, value, onChange, styles, colors }) {
       </View>
     </View>
   );
-}
-
-/**
- * The server's sanitized rejection, in the words of someone who just pressed a
- * button. The uploader wraps the body in "HTTP 415: {json}", which is a
- * diagnostic, not a sentence.
- */
-function friendlyUploadError(error) {
-  const status = statusOfError(error);
-  const known = {
-    413: 'That file is bigger than this pond accepts',
-    415: 'The pond cannot read that file, or it has no audio in it',
-    422: 'That recording is longer than this pond allows',
-    429: 'Too many transcriptions on the go — try again shortly',
-    503: 'The pond’s transcription worker is busy or offline',
-  };
-  return known[status] || 'The pond would not accept that recording';
 }
 
 const makeStyles = (theme) => {
