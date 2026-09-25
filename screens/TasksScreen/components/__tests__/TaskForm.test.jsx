@@ -3,6 +3,13 @@ import { fireEvent, render } from '@testing-library/react-native';
 import { TaskForm } from '../TaskForm';
 
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
+// The People picker keeps its "Often with you" tally in AsyncStorage
+// (utils/peopleFrequency), which the form imports to bump on save.
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  getItem: jest.fn(() => Promise.resolve(null)),
+  setItem: jest.fn(() => Promise.resolve()),
+  removeItem: jest.fn(() => Promise.resolve()),
+}));
 jest.mock('react-native-gesture-handler', () => ({
   GestureHandlerRootView: 'GestureHandlerRootView',
 }));
@@ -33,12 +40,13 @@ jest.mock('../../../TurtleScreen/components/EdgeSwipePage', () => {
 jest.mock('../FormField', () => ({
   FormField: ({ children }) => children,
 }));
-jest.mock('../ParticipantPicker', () => () => null);
+
 jest.mock('../DatePickerModal', () => ({ DatePickerModal: () => null }));
 jest.mock('../WheelTimePicker', () => ({ WheelTimePicker: () => null }));
 jest.mock('../../../../utils/haptics', () => ({
   impactHaptic: jest.fn(),
   notifyHaptic: jest.fn(),
+  tapHaptic: jest.fn(),
 }));
 
 const baseProps = {
@@ -188,5 +196,105 @@ describe('TaskForm option disclosure', () => {
     await fireEvent.press(event.getByLabelText('Add an option to this item'));
     expect(event.getByLabelText('Add Guests')).toBeTruthy();
     expect(event.queryByLabelText('Add Linked note')).toBeNull();
+  });
+
+  // It shipped once behind the "+ Add" chip, which meant a PEOPLE heading with
+  // nothing under it and no way to reach the picker without knowing it was
+  // there. A task's people are not an edge case.
+  test('the People picker is on the page for a task without adding anything', async () => {
+    const view = await render(<TaskForm {...baseProps} />);
+    expect(view.getByTestId('people-open')).toBeTruthy();
+  });
+
+  // (What the picker does once open — search, suggestions, contacts — is
+  // covered by PeoplePicker.test.js; opening a Modal inside this form's own
+  // overlay is not something this suite can drive.)
+});
+
+/**
+ * The board picker. Tapping Board opens a search field with the boards listed
+ * under it — one control that both finds an existing board and names a new one.
+ * The old version listed every board as a chip with a separate "New board"
+ * input, which stopped scaling at about a dozen boards.
+ */
+describe('TaskForm board picker', () => {
+  const MANY = [
+    'Mayfield Construction', 'Home', 'Thesis', 'Groceries', 'Reading',
+    'Turtle App', 'Physio', 'Taxes', 'Garden', 'Cabin',
+  ];
+
+  const openPicker = async (props = {}) => {
+    const view = await render(<TaskForm {...baseProps} projects={MANY} {...props} />);
+    await fireEvent.press(view.getByText('Board'));
+    return view;
+  };
+
+  test('the Board chip opens a search PAGE listing every board', async () => {
+    const view = await openPicker();
+    expect(view.getByTestId('board-search')).toBeTruthy();
+    // No cap any more. The old list was sliced to eight with a "2 more — keep
+    // typing" line under it, because an in-form list cannot scroll (a nested
+    // scroller fights the form for every drag). As a pushed page it scrolls,
+    // so the tenth board is reachable without guessing letters of its name.
+    expect(view.getByTestId('board-option-Mayfield Construction')).toBeTruthy();
+    expect(view.getByTestId('board-option-Cabin')).toBeTruthy();
+    expect(view.queryByText(/keep typing to narrow it down/)).toBeNull();
+  });
+
+  test('typing filters the list on any part of a board name', async () => {
+    const view = await openPicker();
+
+    // Substring, not prefix: "cons" has to find "Mayfield Construction".
+    await fireEvent.changeText(view.getByTestId('board-search'), 'cons');
+
+    expect(view.getByTestId('board-option-Mayfield Construction')).toBeTruthy();
+    expect(view.queryByTestId('board-option-Home')).toBeNull();
+  });
+
+  test('a name that is already a board is not also offered as a new one', async () => {
+    const view = await openPicker();
+
+    await fireEvent.changeText(view.getByTestId('board-search'), 'thesis'); // any case
+    expect(view.getByTestId('board-option-Thesis')).toBeTruthy();
+    expect(view.queryByTestId('board-option-create')).toBeNull();
+  });
+
+  test('picking a board closes the picker and puts it on the Board chip', async () => {
+    const view = await openPicker();
+
+    await fireEvent.press(view.getByTestId('board-option-Thesis'));
+
+    expect(view.queryByTestId('board-search')).toBeNull();
+    expect(view.getByText('Thesis')).toBeTruthy();
+  });
+
+  test('a name no board has is offered as a new board, from the same field', async () => {
+    const view = await openPicker();
+
+    await fireEvent.changeText(view.getByTestId('board-search'), 'Boat repair');
+    await fireEvent.press(view.getByTestId('board-option-create'));
+
+    // Chosen, and flagged as a creation — the form creates it on save.
+    expect(view.queryByTestId('board-search')).toBeNull();
+    expect(view.getByText('Will create new board "Boat repair"')).toBeTruthy();
+  });
+
+  test('"No board — later" is reachable even from a query nothing matches', async () => {
+    // An item that already has a board: the chip carries its name, so that is
+    // what opens the picker.
+    const view = await render(
+      <TaskForm
+        {...baseProps}
+        projects={MANY}
+        initialData={{ id: 9, title: 'Filed already', itemType: 'task', project: 'Thesis' }}
+      />,
+    );
+    await fireEvent.press(view.getByText('Thesis'));
+
+    await fireEvent.changeText(view.getByTestId('board-search'), 'zzz nothing matches');
+    await fireEvent.press(view.getByTestId('board-option-none'));
+
+    expect(view.queryByTestId('board-search')).toBeNull();
+    expect(view.getByText('Board')).toBeTruthy();  // back to the unset label
   });
 });

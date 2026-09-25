@@ -22,13 +22,15 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useShareUpload } from '../context/ShareUploadContext';
 import { impactHaptic, tapHaptic } from '../utils/haptics';
-
-const photoWord = (n) => (n === 1 ? 'photo' : 'photos');
+import { countOf, jobKind, pluralise } from '../utils/uploadWording';
 
 function JobCard({ job, theme, onRetry, onDismiss }) {
   const { board, status, total, done, error, message, kind, folderName } = job;
   const isAudioJob = kind === 'audio-files' || kind === 'audio-url';
   const isFilesJob = kind === 'files';
+  // What this job is moving. A folder filled from the phone's file browser was
+  // counting its PDFs as "2/3 photos" before this.
+  const noun = jobKind(kind);
   // Null board = the default "save as-is" share straight into the photo vault.
   const boardName = isAudioJob ? 'Music Vault' : isFilesJob ? (folderName || 'Files') : (board?.name || 'Photo vault');
 
@@ -42,7 +44,7 @@ function JobCard({ job, theme, onRetry, onDismiss }) {
     iconColor = theme.colors.accentSuccess;
     // Files jobs always carry a message ("Filed in {folder}"); the photo-count
     // wording below is the fallback for the kinds that don't set one.
-    title = message || (total > 0 ? `Sent ${total} ${photoWord(total)} to ${boardName}` : `Sent to ${boardName}`);
+    title = message || (total > 0 ? `Sent ${countOf(noun, total)} to ${boardName}` : `Sent to ${boardName}`);
   } else if (status === 'error') {
     // Partial batch (some landed, some didn't) reads as progress, not a flat
     // failure — Retry re-sends only the stragglers into the same content.
@@ -54,7 +56,7 @@ function JobCard({ job, theme, onRetry, onDismiss }) {
   } else {
     // uploading
     title = `Sending to ${boardName}…`;
-    if (total > 1) subtitle = `${done}/${total} ${isAudioJob ? 'files' : photoWord(total)}`;
+    if (total > 1) subtitle = `${done}/${total} ${pluralise(noun, total)}`;
   }
 
   const progress = total > 0 ? Math.max(0, Math.min(1, done / total)) : 0;

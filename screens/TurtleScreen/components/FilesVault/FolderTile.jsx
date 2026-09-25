@@ -1,10 +1,17 @@
 /**
- * FolderDisc — a folder in the boards' visual language: a disc coloured from
- * its name, filled with a collage of the four newest covers in its subtree
- * (0 → tinted initial; 1 full; 2 columns; 3 big-left + two stacked; 4 → 2×2,
- * reading order (TL, TR, BL, BR)), the name and count under it. A cover that
- * fails to load is dropped so the layout degrades 4→3→2→1→initial instead of
- * leaving a hole.
+ * FolderTile — a folder as a ROUNDED SQUARE coloured from its name, filled with
+ * a collage of the four newest covers in its subtree (0 → tinted initial;
+ * 1 full; 2 columns; 3 big-left + two stacked; 4 → 2×2, reading order
+ * (TL, TR, BL, BR)), the name and count under it. A cover that fails to load is
+ * dropped so the layout degrades 4→3→2→1→initial instead of leaving a hole.
+ *
+ * It was a DISC, in the boards' visual language. A circle is the right shape
+ * for a board — a board is a subject, and subjects are round here the way faces
+ * and avatars are. A folder is not a subject; it is a container of rectangular
+ * things, and every cover inside it is a photograph. Cropping four photographs
+ * into quarters of a circle cost the corners of all four to say something the
+ * name already said. The square keeps them whole, and the small radius is what
+ * stops it reading as a hard-edged thumbnail.
  */
 import React, { memo, useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -12,9 +19,24 @@ import { Image } from 'expo-image';
 import { tapHaptic } from '../../../../utils/haptics';
 import { folderColor, folderTint } from './filesUtils';
 
-export const DISC_SIZE = 72;
+export const TILE_SIZE = 72;
 
-function FolderDisc({ name, covers = [], count = 0, size = DISC_SIZE, base = '', pending = false, onPress, onLongPress, theme, testID }) {
+/**
+ * The corner. FIXED rather than a fraction of the tile, because "small" is what
+ * it has to stay — a proportional radius stops being small the moment anything
+ * asks for a bigger tile, and at that point it is on its way back to a circle.
+ *
+ * 14 on 72 sits just inside the vault's own family (the boards page crops a
+ * 46 pt cover at 10), tight enough to read as a square with the corners taken
+ * off rather than as a squircle.
+ *
+ * Exported because the Unfiled tile beside these is the same shape drawn by a
+ * different file, twice — the root page and the folder picker. One number, or
+ * they drift.
+ */
+export const TILE_RADIUS = 14;
+
+function FolderTile({ name, covers = [], count = 0, size = TILE_SIZE, base = '', pending = false, onPress, onLongPress, theme, testID }) {
   const [failed, setFailed] = useState(() => new Set());
   const urls = useMemo(
     () => (covers || []).map((t) => (String(t).startsWith('http') ? String(t) : `${String(base).replace(/\/api$/, '')}${t}`)).filter((u) => !failed.has(u)).slice(0, 4),
@@ -45,7 +67,10 @@ function FolderDisc({ name, covers = [], count = 0, size = DISC_SIZE, base = '',
       style={({ pressed }) => [styles.wrap, { width: size + 16, opacity: pressed ? 0.6 : pending ? 0.5 : 1 }]}
       testID={testID}
     >
-      <View style={[styles.disc, { width: size, height: size, borderRadius: half, backgroundColor: folderTint(name, 0.22), borderColor: c.border }]}>
+      <View
+        style={[styles.tile, { width: size, height: size, backgroundColor: folderTint(name, 0.22), borderColor: c.border }]}
+        testID={testID ? `${testID}-box` : undefined}
+      >
         {collage || <Text style={[styles.initial, { color: folderColor(name), fontSize: Math.round(size * 0.42) }]}>{String(name || '?').trim().charAt(0).toUpperCase()}</Text>}
       </View>
       <Text style={[styles.name, { color: c.textPrimary }]} numberOfLines={2}>{name}</Text>
@@ -56,11 +81,13 @@ function FolderDisc({ name, covers = [], count = 0, size = DISC_SIZE, base = '',
 
 const styles = StyleSheet.create({
   wrap: { alignItems: 'center', paddingVertical: 6 },
-  disc: { overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth },
+  // `overflow` is what crops the collage to the corners — without it the covers
+  // are a hard-edged square sitting inside a rounded one.
+  tile: { borderRadius: TILE_RADIUS, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth },
   abs: { position: 'absolute' },
   initial: { fontWeight: '700' },
   name: { marginTop: 6, fontSize: 12.5, fontWeight: '600', textAlign: 'center', flexShrink: 1 },
   count: { fontSize: 11, marginTop: 1, flexShrink: 1 },
 });
 
-export default memo(FolderDisc);
+export default memo(FolderTile);

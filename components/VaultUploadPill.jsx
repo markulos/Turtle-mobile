@@ -177,6 +177,11 @@ export default function VaultUploadPill() {
                   onPress={deleteOriginals}
                 >
                   <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                    {/* The count is the number of the USER's files that will
+                        actually disappear — never our own staging copies, and
+                        never the ones the OS won't let us touch (an iOS
+                        document is a copy, not the original). So a batch of
+                        three photos and two PDFs offers "Delete 3". */}
                     Delete {state.deletableCount} from phone
                   </Text>
                 </TouchableOpacity>

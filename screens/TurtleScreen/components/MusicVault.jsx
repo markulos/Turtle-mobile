@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList, ActivityIndicator, StyleSheet, Pressable, Alert,
+  Animated, Keyboard, ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -18,6 +19,19 @@ import { sendOrQueue, subscribe as subscribeOfflineQueue, loadQueue } from '../.
 import TrackActionsSheet from './TrackActionsSheet';
 import EdgeSwipePage from './EdgeSwipePage';
 import TimelineScrubber from './TimelineScrubber';
+import TranscriptionPanel from '../../../components/TranscriptionPanel';
+import FollowAlongTranscript from '../../../components/FollowAlongTranscript';
+import { getResult, statusOfError } from '../../../services/transcriptions';
+import { getRecordings, loadRecordings, subscribeRecordings } from '../../../services/transcriptionStore';
+import {
+  TRANSCRIBED_PLAYLIST, pendingRowForMedia, transcribedMediaIds, transcriptRowForMedia,
+} from '../../../utils/transcriptionRecordings';
+import { captionAt } from '../../../utils/followAlong';
+// The vault's ONE search: the same pill, the same lift, the same result rows
+// the Boards and Files tabs use. Music had no search at all, which meant the
+// only route to a track was to scroll the whole library.
+import { VaultResultRow, VaultSearchDock, useVaultSearch, PICKER_GAP } from './VaultSearchDock';
+import { rankTracks, trackCountLabel } from './trackSearch';
 
 // Tags double as playlists for audio: the vault already models "a named group of
 // media" as a tag, so a music playlist is just a tag on an audio row. This reads
@@ -58,7 +72,14 @@ const fmtTime = (sec) => {
  * pager there is nothing to go back to and the vault header already names the
  * page, so the internal back/title row is omitted.
  */
-export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
+export default function MusicVault({
+  onClose, topInset = 0, bottomInset = 0,
+  // Search, on the same contract the Boards and Files pages use: the query is
+  // the vault's (so it survives a swipe away and back), and searchTopInset is
+  // the bare safe area left once the vault header has stood down — the
+  // difference between the two insets is how far this page lifts.
+  query = '', onQueryChange, searchTopInset, onSearchActiveChange,
+}) {
   const { theme } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
@@ -248,10 +269,56 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
     }
     return byName;
   }, [visibleTracks]);
+  // ── Transcription ──────────────────────────────────────────────────────────
+  // The recordings list, subscribed to here because THREE things on this page
+  // read it: the Transcribed playlist, the ⋯ menu's label for a track that
+  // already has one (or is mid-job), and the follow-along under the transport.
+  // Seeded from the store's CURRENT value rather than from []: subscribing
+  // publishes immediately, and starting empty would mean a second render (and
+  // a second library refresh, since this page refreshes on focus) for a list
+  // that was already in memory.
+  const [recordings, setRecordings] = useState(getRecordings);
+  useEffect(() => {
+    loadRecordings().catch(() => {});
+    return subscribeRecordings(setRecordings);
+  }, []);
+  const transcribedIds = useMemo(() => transcribedMediaIds(recordings), [recordings]);
+  const transcribeSubtitle = useMemo(() => {
+    const running = recordings.filter((r) => !['completed', 'failed', 'cancelled'].includes(r.status));
+    if (running.length === 1) return `${running[0].name} · in progress`;
+    if (running.length > 1) return `${running.length} in progress`;
+    if (transcribedIds.size) {
+      return `${transcribedIds.size} track${transcribedIds.size === 1 ? '' : 's'} transcribed`;
+    }
+    return 'Turn a recording into text you can follow';
+  }, [recordings, transcribedIds]);
+
   const playlists = useMemo(
-    () => Array.from(playlistIndex.keys()).sort((a, b) => a.localeCompare(b)),
-    [playlistIndex]
+    () => {
+      const names = Array.from(playlistIndex.keys());
+      // The Transcribed playlist is offered as soon as this phone has
+      // transcribed something, without waiting for the tag write to land — and
+      // it survives that write failing. The tag is still written (see
+      // services/transcribedPlaylist) so the playlist is real on the pond too;
+      // when both exist, this is the same name and the index below merges them.
+      if (transcribedIds.size && !names.includes(TRANSCRIBED_PLAYLIST)) {
+        names.push(TRANSCRIBED_PLAYLIST);
+      }
+      return names.sort((a, b) => a.localeCompare(b));
+    },
+    [playlistIndex, transcribedIds]
   );
+
+  /** One playlist's tracks, with Transcribed unioned from the local list. */
+  const tracksInPlaylist = useCallback((name) => {
+    const tagged = playlistIndex.get(name) || [];
+    if (name !== TRANSCRIBED_PLAYLIST) return tagged;
+    const seen = new Set(tagged.map((t) => String(t.id)));
+    const derived = visibleTracks.filter(
+      (t) => transcribedIds.has(String(t.id)) && !seen.has(String(t.id)),
+    );
+    return derived.length ? [...tagged, ...derived] : tagged;
+  }, [playlistIndex, visibleTracks, transcribedIds]);
 
   // ── Playlists page ─────────────────────────────────────────────────────────
   // Pushed over the library as an EdgeSwipePage (the app's push-page primitive),
@@ -265,7 +332,29 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
     setPlaylistsOpen(false);
     setOpenPlaylist(null);
   }, []);
-  const openPlaylistTracks = openPlaylist ? (playlistIndex.get(openPlaylist) || []) : [];
+  const openPlaylistTracks = openPlaylist ? tracksInPlaylist(openPlaylist) : [];
+
+  // ── The transcription page ─────────────────────────────────────────────────
+  // The panel (source picker + WhisperX options + the job list) lives behind
+  // its own row in the library, pushed like Playlists is. `autoSendTrack` is
+  // set when the page was opened FROM a track's ⋯ menu, which sends that track
+  // as soon as the pond has said what its options are.
+  const [transcribeOpen, setTranscribeOpen] = useState(false);
+  const [autoSendTrack, setAutoSendTrack] = useState(null);
+  const openTranscribe = useCallback((track = null) => {
+    // The ⋯ menu is reachable from INSIDE a playlist, and an EdgeSwipePage is
+    // a Modal: iOS silently never presents a second sibling Modal over an open
+    // one, so the playlist pages stand down before this one comes up. (The
+    // page underneath is the library, which is where Back should land anyway.)
+    setOpenPlaylist(null);
+    setPlaylistsOpen(false);
+    setAutoSendTrack(track);
+    setTranscribeOpen(true);
+  }, []);
+  const closeTranscribe = useCallback(() => {
+    setTranscribeOpen(false);
+    setAutoSendTrack(null);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -402,6 +491,26 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
     [sheetTrack, api, refreshLibrary, closeSheet]
   );
 
+  // ⋯ → Transcribe. Opens the transcription page with this track queued: the
+  // options and the job list are the same ones the library's own Transcribe
+  // row shows, so there is one place where a transcription is watched no
+  // matter which door started it.
+  // What the ⋯ menu's Transcribe row should say for THIS track: there is
+  // nothing to do yet, one is running, or it already has one (which is a
+  // re-transcribe — a bigger model, or speakers separated this time).
+  const sheetTranscriptState = useMemo(() => {
+    const id = sheetTrack?.id;
+    if (!id) return 'none';
+    if (pendingRowForMedia(recordings, id)) return 'running';
+    return transcribedIds.has(String(id)) ? 'done' : 'none';
+  }, [sheetTrack?.id, recordings, transcribedIds]);
+
+  const sheetTranscribe = useCallback(() => {
+    const item = sheetTrack;
+    closeSheet();
+    if (item) openTranscribe(item);
+  }, [sheetTrack, closeSheet, openTranscribe]);
+
   const sheetDelete = useCallback(() => {
     const item = sheetTrack;
     if (!item) return;
@@ -442,6 +551,60 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
     );
   }, [sheetTrack, api, refreshLibrary, closeSheet]);
 
+  // ── Follow-along ───────────────────────────────────────────────────────────
+  // The transcript of whatever is PLAYING, fetched when the track changes to
+  // one this phone has transcribed. Not persisted: a transcript can be large,
+  // it lives on the pond, and the only moment it is wanted is this one. Kept
+  // in a per-job cache so skipping back and forth between two transcribed
+  // tracks doesn't re-fetch either of them.
+  const nowRow = useMemo(
+    () => transcriptRowForMedia(recordings, nowTrack?.id),
+    [recordings, nowTrack?.id],
+  );
+  const [transcript, setTranscript] = useState(null);
+  const [transcriptError, setTranscriptError] = useState(null);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [followOpen, setFollowOpen] = useState(false);
+  const transcriptCache = useRef(new Map());
+
+  useEffect(() => {
+    const jobId = nowRow?.id;
+    if (!jobId) { setTranscript(null); setTranscriptError(null); return undefined; }
+    const cached = transcriptCache.current.get(jobId);
+    if (cached) { setTranscript(cached); setTranscriptError(null); return undefined; }
+    let cancelled = false;
+    setTranscriptLoading(true);
+    setTranscriptError(null);
+    (async () => {
+      try {
+        const result = await getResult(api, jobId);
+        const turns = (Array.isArray(result?.turns) ? result.turns : [])
+          .filter((t) => t && String(t.text || '').trim());
+        if (cancelled) return;
+        transcriptCache.current.set(jobId, turns);
+        setTranscript(turns);
+      } catch (error) {
+        if (cancelled) return;
+        setTranscript(null);
+        // A completed job whose artifact aged out is the expected version of
+        // this, and it is not the same sentence as "something broke".
+        setTranscriptError(statusOfError(error) === 404
+          ? 'The pond no longer keeps this transcript.'
+          : 'Could not read that transcript.');
+      } finally {
+        if (!cancelled) setTranscriptLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [nowRow?.id, api]);
+
+  // The line being spoken, for the one-line caption on the transport bar.
+  const caption = useMemo(
+    () => (transcript ? captionAt(transcript, position) : ''),
+    [transcript, position],
+  );
+  const hasFollowAlong = !!nowRow && (transcriptLoading || !!transcript || !!transcriptError);
+
   const seekFromFraction = useCallback(
     (fraction) => {
       if (!duration) return;
@@ -465,10 +628,35 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
     });
   }, [c]);
 
+  // ── Search ────────────────────────────────────────────────────────────
+  // What one track looks like to the matcher. Built here, not in trackSearch,
+  // because only this file knows about the local rename overrides and that a
+  // tag IS a playlist.
+  const describeTrack = useCallback(
+    (row) => ({ title: titleOf(row), source: sourceOf(row), tags: tagsOf(row) }),
+    [],
+  );
+  const matchedTracks = useMemo(
+    () => rankTracks(visibleTracks, query, describeTrack),
+    [visibleTracks, query, describeTrack],
+  );
+  const lift = Math.max(0, topInset - (searchTopInset ?? topInset));
+  const search = useVaultSearch({
+    query,
+    items: matchedTracks,
+    onQueryChange: onQueryChange || (() => {}),
+    onSearchActiveChange,
+    lift,
+  });
+  const { searching, displayQuery, displayItems: displayTracks } = search;
+
   const renderTrack = useCallback(({ item }) => {
     // Active is decided by the PLAYING id, not by list position, so the same row
     // highlights correctly in the library and inside a playlist.
     const active = String(item.id) === String(activeTrack?.mediaId);
+    // A track with a transcript reads along as it plays, so the row says so —
+    // otherwise the only way to find out is to play it and notice.
+    const hasTranscript = transcribedIds.has(String(item.id));
     return (
       <TouchableOpacity
         {...TAP_ONLY}
@@ -492,6 +680,14 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
             {sourceOf(item) || 'Audio'}
           </Text>
         </View>
+        {hasTranscript ? (
+          <Icon
+            name="text-box-check-outline"
+            size={16}
+            color={c.textTertiary}
+            accessibilityLabel="Has a transcript"
+          />
+        ) : null}
         {item.duration ? <Text style={trackStyles.duration}>{fmtTime(item.duration)}</Text> : null}
         {/* Per-track options. Its own touchable so it doesn't start playback —
             hitSlop widens the 24pt glyph to a comfortable target without
@@ -507,37 +703,119 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         </TouchableOpacity>
       </TouchableOpacity>
     );
-  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready]);
+  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready, transcribedIds]);
 
-  // The "Playlists" row, pinned as the list's first item. A destination, not a
-  // track — same row metrics so it reads as part of the list, with a chevron
-  // marking it as a push rather than a play.
-  const playlistsRow = useCallback(() => (
-    <TouchableOpacity
-      {...TAP_ONLY}
-      activeOpacity={0.7}
-      accessibilityRole="button"
-      accessibilityLabel={`Playlists, ${playlists.length}`}
-      onPress={() => { tapHaptic(); setPlaylistsOpen(true); }}
-      style={styles.row}
-    >
-      <View style={[styles.art, trackStyles.artTint]}>
-        <Icon name="playlist-music" size={22} color={MUSIC_TINT(c)} />
-      </View>
-      <View style={trackStyles.body}>
-        <Text style={trackStyles.titleIdle} numberOfLines={1}>Playlists</Text>
-        <Text style={trackStyles.source} numberOfLines={1}>
-          {playlists.length === 0
-            ? 'None yet — add a track from its ⋯ menu'
-            : `${playlists.length} playlist${playlists.length === 1 ? '' : 's'}`}
-        </Text>
-      </View>
-      <Icon name="chevron-right" size={22} color={c.textTertiary} />
-    </TouchableOpacity>
-  ), [c, trackStyles, playlists.length]);
+  /**
+   * One search result, in the vault's shared row.
+   *
+   * Rows, not the library's own cards, for the reason VaultResultRow
+   * documents: while searching you are looking for ONE thing by name, and a
+   * column of names is what you can run your eye down. The options key comes
+   * along — renaming or filing a track is often exactly why you went looking
+   * for it.
+   */
+  const renderSearchRow = useCallback(({ item }) => {
+    const active = String(item.id) === String(activeTrack?.mediaId);
+    const playlists = tagsOf(item);
+    const meta = [
+      sourceOf(item) || 'Audio',
+      item.duration ? fmtTime(item.duration) : null,
+      playlists.length ? playlists.slice(0, 2).join(' · ') : null,
+    ].filter(Boolean).join(' · ');
+    return (
+      <VaultResultRow
+        theme={theme}
+        name={titleOf(item)}
+        meta={meta}
+        accessibilityLabel={`Play ${titleOf(item)}`}
+        onPress={() => { Keyboard.dismiss(); playTrack(item); }}
+        leading={(
+          <Icon
+            name={active && isPlaying ? 'pause' : 'music-note'}
+            size={22}
+            color={active ? MUSIC_TINT(c) : c.textSecondary}
+          />
+        )}
+        trailing={(
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`Options for ${titleOf(item)}`}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
+            onPress={() => setSheetId(String(item.id))}
+            style={styles.moreBtn}
+          >
+            <Icon name="dots-horizontal" size={22} color={c.textTertiary} />
+          </TouchableOpacity>
+        )}
+      />
+    );
+  }, [theme, c, activeTrack, isPlaying, playTrack]);
+
+  // The library's two destination rows, pinned above the tracks: Playlists and
+  // Transcribe. Not tracks — same row metrics so they read as part of the
+  // list, with a chevron marking each as a push rather than a play.
+  const headerRows = useCallback(() => (
+    <>
+      <TouchableOpacity
+        {...TAP_ONLY}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={`Playlists, ${playlists.length}`}
+        onPress={() => { tapHaptic(); setPlaylistsOpen(true); }}
+        style={styles.row}
+      >
+        <View style={[styles.art, trackStyles.artTint]}>
+          <Icon name="playlist-music" size={22} color={MUSIC_TINT(c)} />
+        </View>
+        <View style={trackStyles.body}>
+          <Text style={trackStyles.titleIdle} numberOfLines={1}>Playlists</Text>
+          <Text style={trackStyles.source} numberOfLines={1}>
+            {playlists.length === 0
+              ? 'None yet — add a track from its ⋯ menu'
+              : `${playlists.length} playlist${playlists.length === 1 ? '' : 's'}`}
+          </Text>
+        </View>
+        <Icon name="chevron-right" size={22} color={c.textTertiary} />
+      </TouchableOpacity>
+
+      {/* Transcribe — the same panel Settings has, in the tab where the audio
+          actually is. Its subtitle is the one thing worth saying about the
+          jobs from out here: whether anything is running. */}
+      <TouchableOpacity
+        {...TAP_ONLY}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel="Transcribe audio"
+        testID="music-transcribe-row"
+        onPress={() => { tapHaptic(); openTranscribe(null); }}
+        style={styles.row}
+      >
+        <View style={[styles.art, trackStyles.artTint]}>
+          {/* A nib with a written stroke under it — a scribe taking it down,
+              which is what this does. It also stays clear of the text-box
+              family this screen uses for the transcript ITSELF (the caption
+              strip, and the marker on a track that has one): the pen is the
+              act, the page is the result.
+              (`text-to-speech`, which this started as, was the wrong way
+              round: that glyph is a mouth emitting sound.) */}
+          <Icon name="signature-freehand" size={22} color={MUSIC_TINT(c)} />
+        </View>
+        <View style={trackStyles.body}>
+          <Text style={trackStyles.titleIdle} numberOfLines={1}>Transcribe</Text>
+          <Text style={trackStyles.source} numberOfLines={1}>
+            {transcribeSubtitle}
+          </Text>
+        </View>
+        <Icon name="chevron-right" size={22} color={c.textTertiary} />
+      </TouchableOpacity>
+    </>
+  ), [c, trackStyles, playlists.length, openTranscribe, transcribeSubtitle]);
 
   const renderPlaylistRow = useCallback(({ item }) => {
-    const count = playlistIndex.get(item)?.length || 0;
+    // Through the same accessor the page below uses, so a playlist's count and
+    // its contents can't disagree — Transcribed is partly derived from the
+    // local jobs list rather than wholly from tags.
+    const count = tracksInPlaylist(item).length;
     return (
       <TouchableOpacity
         {...TAP_ONLY}
@@ -559,10 +837,36 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         <Icon name="chevron-right" size={22} color={c.textTertiary} />
       </TouchableOpacity>
     );
-  }, [c, trackStyles, playlistIndex]);
+  }, [c, trackStyles, tracksInPlaylist]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background, paddingTop: topInset }}>
+    <View style={{ flex: 1, backgroundColor: c.background }}>
+    {/* The lifting layer. Permanently `lift` taller than the page (the negative
+        bottom margin is static), so the rise into search is a pure transform
+        with nothing underneath it to re-lay out — same construction as the
+        Boards page, on the same shared timings. */}
+    <Animated.View style={[{ flex: 1, marginBottom: -lift }, search.liftStyle]}>
+      {/* The dock, above the list rather than inside it: in the list's header
+          the field would be a child of whichever list is mounted, and swapping
+          the library rows for result rows would tear the focused TextInput out
+          mid-keystroke. */}
+      <View style={{ paddingTop: topInset + PICKER_GAP, paddingHorizontal: 16, paddingBottom: 10 }}>
+        <VaultSearchDock
+          search={search}
+          theme={theme}
+          placeholder="Search your music"
+          accessibilityLabel="Search your music"
+          cancelLabel="Cancel music search"
+          clearLabel="Clear music search"
+          // No "add" here — music arrives by sharing a link, not from a picker.
+          // Refresh is the key this tab actually wants next to its field.
+          trailingIcon="refresh"
+          trailingLabel="Refresh the music library"
+          onTrailingPress={refreshLibrary}
+          onChangeText={onQueryChange}
+          testIDPrefix="music-search"
+        />
+      </View>
       {onClose ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: insets.top + 6, paddingBottom: 8, paddingHorizontal: 10 }}>
           <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }} accessibilityLabel="Back">
@@ -596,7 +900,7 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator color={c.textSecondary} />
         </View>
-      ) : visibleTracks.length === 0 ? (
+      ) : visibleTracks.length === 0 && !searching ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
           <Icon name="music-off" size={40} color={c.textTertiary} />
           <Text style={{ color: c.textSecondary, marginTop: 12, textAlign: 'center' }}>
@@ -606,13 +910,31 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
       ) : (
         <FlatList
           ref={listRef}
-          data={visibleTracks}
+          // Searching swaps BOTH the data and the row — the library's cards for
+          // the vault's result rows. `displayItems` rather than the matches
+          // directly: during a cancel it is the frozen copy, so the rows do not
+          // change under a page that is still gliding back down.
+          data={searching ? displayTracks : visibleTracks}
           keyExtractor={(t) => String(t.id)}
-          renderItem={renderTrack}
+          renderItem={searching ? renderSearchRow : renderTrack}
           onScroll={handleMusicScroll}
           scrollEventThrottle={16}
-          ListHeaderComponent={playlistsRow}
-          extraData={`${current}:${isPlaying}:${ready}:${playlists.length}`}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          // While searching the count replaces the Playlists row: it is the one
+          // thing worth saying about a result set, and a destination row in the
+          // middle of matches is something to tap by accident.
+          ListHeaderComponent={searching ? (
+            <Text style={[styles.resultCount, { color: c.textTertiary }]}>
+              {trackCountLabel(displayTracks.length)}
+            </Text>
+          ) : headerRows}
+          ListEmptyComponent={searching ? (
+            <Text style={[styles.resultCount, { color: c.textTertiary }]}>
+              Nothing matches “{displayQuery.trim()}”.
+            </Text>
+          ) : null}
+          extraData={`${current}:${isPlaying}:${ready}:${playlists.length}:${searching}`}
           // With a track loaded, reserve the transport bar's real height plus a
           // gap so the last row rests clear of it rather than under it. Falls
           // back to a sane estimate for the single frame before onLayout lands.
@@ -624,6 +946,7 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
           ItemSeparatorComponent={() => <View style={styles.trackSep} />}
         />
       )}
+    </Animated.View>
 
       {/* The transport (play/pause, skip, scrub) is PINNED, so it must end
           above the floating tab bar — `bottomInset` carries that height from
@@ -636,6 +959,29 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
           }}
           style={[styles.nowBar, { backgroundColor: c.surfaceElevated, borderTopColor: c.border, paddingBottom: Math.max(insets.bottom, bottomInset) + 8 }]}
         >
+          {/* The live caption: the line being spoken, above the transport.
+              Playing a transcribed track follows along WITHOUT being asked —
+              this is the whole of it when the vault is what's on screen, and
+              it opens the full transcript when there's more to read than one
+              line. */}
+          {hasFollowAlong && (
+            <TouchableOpacity
+              activeOpacity={0.75}
+              onPress={() => { tapHaptic(); setFollowOpen(true); }}
+              accessibilityRole="button"
+              accessibilityLabel="Open the transcript and follow along"
+              testID="follow-along-caption"
+              style={[styles.captionRow, { borderBottomColor: c.border }]}
+            >
+              <Icon name="text-box-outline" size={15} color={MUSIC_TINT(c)} />
+              <Text style={[styles.captionText, { color: c.textSecondary }]} numberOfLines={1}>
+                {transcriptError
+                  || (transcriptLoading ? 'Fetching the transcript…' : (caption || 'Transcript'))}
+              </Text>
+              <Icon name="chevron-up" size={18} color={c.textTertiary} />
+            </TouchableOpacity>
+          )}
+
           <Pressable
             disabled={!ready}
             onLayout={(e) => { barWidthRef.current = e.nativeEvent.layout.width || 1; }}
@@ -785,6 +1131,84 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         </View>
       </EdgeSwipePage>
 
+      {/* ── Transcribe, pushed over the library ─────────────────────────────
+          The Settings card, verbatim, in the tab where the audio is: source
+          picker, the pond's own WhisperX options (model, speakers, language),
+          and the list of jobs. Opened from the library's Transcribe row, or
+          from a track's ⋯ with that track already on its way. */}
+      <EdgeSwipePage visible={transcribeOpen} onClose={closeTranscribe}>
+        <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
+          <View style={styles.pageHeader}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Back to all songs"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              onPress={() => { tapHaptic(); closeTranscribe(); }}
+              style={styles.pageBackBtn}
+            >
+              <Icon name="chevron-left" size={28} color={c.textPrimary} />
+            </TouchableOpacity>
+            <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>
+              Transcribe
+            </Text>
+          </View>
+          <ScrollView
+            contentContainerStyle={{ padding: 16, paddingBottom: (nowBarH || 150) + 24 }}
+            keyboardShouldPersistTaps="handled"
+          >
+            <TranscriptionPanel
+              active={transcribeOpen}
+              autoSend={autoSendTrack}
+              onAutoSendHandled={() => setAutoSendTrack(null)}
+            />
+          </ScrollView>
+        </View>
+      </EdgeSwipePage>
+
+      {/* ── Follow along ────────────────────────────────────────────────────
+          The playing track's transcript, with the line being spoken outlined
+          as it is said. Tapping a line seeks there. */}
+      <EdgeSwipePage visible={followOpen} onClose={() => setFollowOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
+          <View style={styles.pageHeader}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Back to all songs"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              onPress={() => { tapHaptic(); setFollowOpen(false); }}
+              style={styles.pageBackBtn}
+            >
+              <Icon name="chevron-left" size={28} color={c.textPrimary} />
+            </TouchableOpacity>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>
+                {nowTrack ? titleOf(nowTrack) : 'Transcript'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
+              onPress={togglePlayback}
+              disabled={!ready}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.pageBackBtn}
+            >
+              <Icon name={isPlaying ? 'pause-circle' : 'play-circle'} size={32} color={MUSIC_TINT(c)} />
+            </TouchableOpacity>
+          </View>
+          <FollowAlongTranscript
+            turns={transcript}
+            position={position}
+            onSeek={seekTo}
+            loading={transcriptLoading}
+            error={transcriptError}
+            theme={theme}
+            contentInsetBottom={Math.max(insets.bottom, bottomInset)}
+            testID="follow-along"
+          />
+        </View>
+      </EdgeSwipePage>
+
       {/* Per-track options, as a card that rises from the bottom edge. Rendered
           LAST so it stacks over the list and the transport bar; it's an in-tree
           overlay rather than a Modal because the vault itself can be inside one
@@ -799,10 +1223,12 @@ export default function MusicVault({ onClose, topInset = 0, bottomInset = 0 }) {
         playlists={playlists}
         currentPlaylists={sheetTrack ? tagsOf(sheetTrack) : []}
         busy={sheetBusy}
+        transcriptState={sheetTranscriptState}
         onPlay={sheetPlay}
         onShare={sheetShare}
         onRename={sheetRename}
         onAddToPlaylist={sheetAddToPlaylist}
+        onTranscribe={sheetTranscribe}
         onDelete={sheetDelete}
         onClose={closeSheet}
         bottomInset={Math.max(insets.bottom, bottomInset)}
@@ -817,6 +1243,8 @@ const styles = StyleSheet.create({
   // Hairline grey rule, inset EQUALLY on both sides so it sits centred between
   // rows rather than hanging off the artwork's left edge (row padding is 16).
   trackSep: { height: StyleSheet.hairlineWidth, marginHorizontal: 16, backgroundColor: 'rgba(142,142,147,0.4)' },
+  // "6 tracks" / "Nothing matches …", above the result rows.
+  resultCount: { fontSize: 12, fontWeight: '700', paddingHorizontal: 18, paddingTop: 2, paddingBottom: 10 },
   moreBtn: { paddingLeft: 2, paddingVertical: 2 },
   pageHeader: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingBottom: 10 },
   pageBackBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
@@ -827,4 +1255,15 @@ const styles = StyleSheet.create({
   nowBar: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8 },
   seekHit: { paddingVertical: 8, paddingHorizontal: 16 },
   seekTrack: { height: 4, borderRadius: 2, overflow: 'hidden' },
+  // The live transcript line, across the top of the transport bar.
+  captionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    marginBottom: 2,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  captionText: { flex: 1, minWidth: 0, fontSize: 12.5, fontStyle: 'italic' },
 });

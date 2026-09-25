@@ -22,11 +22,22 @@ import useKeyboardHeight from '../../../utils/useKeyboardHeight';
 import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
 import { FormField } from './FormField';
+// The "Linked note" field, and the search PAGE behind it: three-tier search
+// (loaded page → server FTS → trigram fuzzy), ranked. Two components because
+// the field belongs in the scroll content and the page must not be in it.
+import NoteLinkPicker, { NoteSearchPanel } from './NoteLinkPicker';
+// The Board chip's picker: search, pick, or name a new board — also a page.
+import BoardSearchPanel from './BoardSearchPanel';
 import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import { DatePickerModal } from './DatePickerModal';
 import { WheelTimePicker } from './WheelTimePicker';
 import { normalizeTags, getPriorityColor } from '../utils/taskHelpers';
-import ParticipantPicker from './ParticipantPicker';
+import PeoplePicker from './PeoplePicker';
+// Who is involved, ranked by how often you put them on things.
+import { bumpInvolved } from '../utils/peopleFrequency';
+// What a guest on an item forces the reminder settings to become — a guest has
+// no app, so a text is the only channel. Pure policy, kept out of here.
+import { guestReminderConfig } from '../utils/guestReminders';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 import {
   PRIORITIES,
@@ -54,7 +65,10 @@ const OPTIONS = [
   { key: 'repeat', label: 'Repeat', icon: 'repeat', types: ['task', 'event', 'birthday'] },
   { key: 'reminders', label: 'Reminders', icon: 'bell-outline', types: ['task', 'event', 'birthday'] },
   { key: 'scheduling', label: 'Scheduling', icon: 'calendar-clock', types: ['task'] },
-  { key: 'people', label: 'People', icon: 'account-multiple-outline', types: ['task', 'event'] },
+  // People is NOT here on purpose. It shipped behind the + key once, which
+  // meant a PEOPLE heading with nothing under it and no way to reach the
+  // picker without already knowing it was there. A task's people are not an
+  // edge case, so the picker is simply on the page.
   { key: 'guests', label: 'Guests', icon: 'account-plus-outline', types: ['event'] },
 ];
 
@@ -213,7 +227,7 @@ export const TaskForm = ({
   // (Tasks screen "+") leave this false → the Modal form.
   asOverlay = false,
 }) => {
-  const { theme } = useTheme();
+  const { theme, isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const { api } = useServer();
   const RECURRING_OPTIONS = [
@@ -225,36 +239,16 @@ export const TaskForm = ({
 
   const [formData, setFormData] = useState(blankForm('task'));
   const [tagInput, setTagInput] = useState('');
-  const [guestInput, setGuestInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
-  // Note-linking: search an existing note to attach to the task. Notes are
-  // fetched lazily the first time the search opens.
-  const [notes, setNotes] = useState([]);
-  const [notesLoaded, setNotesLoaded] = useState(false);
+  // Note-linking: the fetching, the three search tiers, the ranking and the
+  // rows all live in NoteSearchPanel. This form holds the picked {id, title},
+  // which is what gets packed into meta on save, and whether the page is up.
   const [noteSearchOpen, setNoteSearchOpen] = useState(false);
-  const [noteQuery, setNoteQuery] = useState('');
-  const loadNotesOnce = useCallback(async () => {
-    if (notesLoaded) return;
-    try {
-      const res = await api.get('/turtle/notes?limit=200');
-      if (res?.success && Array.isArray(res.notes)) setNotes(res.notes);
-    } catch (e) { /* offline / no notes — the picker just shows empty */ }
-    setNotesLoaded(true);
-  }, [api, notesLoaded]);
-  // A note's display title = its first non-empty line, trimmed to a chip length.
-  const noteTitleOf = (n) => {
-    const s = (n?.content || '').trim();
-    if (!s) return 'Untitled note';
-    const first = (s.split('\n')[0] || '').trim() || 'Untitled note';
-    return first.length > 60 ? `${first.slice(0, 60)}…` : first;
-  };
-  const noteResults = useMemo(() => {
-    const q = noteQuery.trim().toLowerCase();
-    const list = q
-      ? notes.filter((n) => `${n.content || ''} ${n.description || ''}`.toLowerCase().includes(q))
-      : notes;
-    return list.slice(0, 8);
-  }, [notes, noteQuery]);
+  // What has been typed into the BOARD picker. It is both the filter over the
+  // existing boards and the name of a board being created — one field, so
+  // picking an existing board and making a new one are the same gesture. Held
+  // here rather than in the panel so the form can clear it on reset.
+  const [boardQuery, setBoardQuery] = useState('');
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -297,9 +291,8 @@ export const TaskForm = ({
   // Inline board picker under the Board row (replaces the old Alert picker —
   // Android caps Alert at 3 buttons, silently dropping the rest).
   const [boardListOpen, setBoardListOpen] = useState(false);
-  // Inline "name a new board" input under the board row (opened from the
-  // board list's "New board…" chip).
-  const [newBoardOpen, setNewBoardOpen] = useState(false);
+  // (The separate "name a new board" input is gone: the picker's search field
+  // is the new board's name, so creating and choosing are one gesture.)
   // Inline Low/Med/High picker under the essentials chip row (opened by the
   // Priority chip — replaces the old silent tap-to-cycle behaviour).
   const [priorityListOpen, setPriorityListOpen] = useState(false);
@@ -437,17 +430,17 @@ export const TaskForm = ({
         });
       }
       setTagInput('');
-      setGuestInput('');
       setShowSuggestions(false);
+      // Both search pages close when the form is reset for a different item.
       setNoteSearchOpen(false);
-      setNoteQuery('');
+      setBoardListOpen(false);
+      setBoardQuery('');
       // Manual additions don't survive a re-open; anything the item actually
       // carries comes back on its own through `shows`, so editing still lands
       // on a page showing everything that's set.
       setRevealed(new Set());
       setAddSheetOpen(false);
       setBoardListOpen(false);
-      setNewBoardOpen(false);
       savingRef.current = false;
     }
   }, [visible, initialData, initialType, initialDate, initialProject, initialTitle, initialTime]);
@@ -532,6 +525,14 @@ export const TaskForm = ({
       finalTask.createdAt = appointmentDate.getTime();
     }
 
+    // A guest has no app and no notification tray, so adding one forces the
+    // reminder settings: SMS on, and a default pair of leads if none were
+    // chosen. Applied HERE rather than as the guest is added, so it reflects
+    // the guests the item is actually saved with — and so it never fights the
+    // user mid-edit. See utils/guestReminders for the policy and why it never
+    // turns SMS back off.
+    const remindersForSave = guestReminderConfig(formData.taskReminders, formData.guests);
+
     // Pack the type-specific extras into a single `meta` blob (the column the
     // server persists). Tasks carry an empty meta so they round-trip unchanged.
     if (type === 'event') {
@@ -556,6 +557,9 @@ export const TaskForm = ({
         : {};
       // Carry the linked-note reference (if any) inside meta.
       if (formData.linkedNote && formData.linkedNote.id) finalTask.meta.linkedNote = formData.linkedNote;
+      // A task's guests ride in meta too — they are not an event-only idea any
+      // more (a dentist appointment has a guest; it is not an "event").
+      if ((formData.guests || []).length > 0) finalTask.meta.guests = formData.guests;
     }
 
     // Strip the UI-only flat fields — they now live inside meta (or are task-only).
@@ -568,8 +572,15 @@ export const TaskForm = ({
     // Task/event reminder config → the tasks.reminders column (separate from
     // the birthday meta.reminders packed above). The delete above removed the
     // stale spread, so re-set it from taskReminders. Birthdays don't carry it.
-    if (type === 'task' || type === 'event') finalTask.reminders = formData.taskReminders || { leads: [], sms: false, involved: false };
+    if (type === 'task' || type === 'event') finalTask.reminders = remindersForSave || { leads: [], sms: false, involved: false };
     delete finalTask.taskReminders;
+
+    // Remember who you put on this, so the picker can lead with the people you
+    // actually work with instead of an alphabetical pond. Fire-and-forget: a
+    // failed tally is not worth failing a save over.
+    if ((formData.involvedUsers || []).length > 0) {
+      bumpInvolved(formData.involvedUsers).catch(() => {});
+    }
 
     // Optimistic commit + instant dismissal — a success buzz replaces the old
     // blocking "Saved [OK]" alert, so a quick add is typed → saved → gone.
@@ -613,24 +624,19 @@ export const TaskForm = ({
     }));
   };
 
-  // ── Guests (events) ──────────────────────────────────────────────
-  const addGuest = (raw) => {
-    const value = (raw ?? guestInput).trim();
-    if (!value) return;
-    const parts = value.split(',').map(g => g.trim()).filter(Boolean);
-    setFormData(prev => {
-      const next = [...prev.guests];
-      for (const g of parts) {
-        if (!next.some(existing => existing.toLowerCase() === g.toLowerCase())) next.push(g);
-      }
-      return { ...prev, guests: next };
-    });
-    setGuestInput('');
-  };
-
-  const removeGuest = (guest) => {
-    setFormData(prev => ({ ...prev, guests: prev.guests.filter(g => g !== guest) }));
-  };
+  // ── Guests ───────────────────────────────────────────────────────
+  // A guest is `{ name, phone }` now — PeoplePicker adds them from the phone's
+  // contacts, and the phone number is the whole point: it is the only way
+  // somebody without the app hears about the item.
+  //
+  // Events saved before that stored bare name STRINGS. They are still in the
+  // list (nothing rewrites stored data on open), so they are pulled out here
+  // and shown in their own read-only field rather than being silently dropped
+  // or crashing the picker, which expects objects.
+  const legacyGuestNames = useMemo(
+    () => (formData.guests || []).filter((g) => typeof g === 'string'),
+    [formData.guests],
+  );
 
   // ── Reminders (birthdays) ────────────────────────────────────────
   const toggleReminder = (value) => {
@@ -642,26 +648,24 @@ export const TaskForm = ({
     }));
   };
 
-  // Toggle the inline board list under the Board row. An in-card list (not an
-  // Alert): Android caps Alert.alert at 3 buttons and silently drops the rest,
-  // which would make most boards — and "New board…" — unreachable.
+  // The Board chip opens a search PAGE (BoardSearchPanel), not an in-card list.
+  // It replaces three things at once: the chip list (which could not scroll
+  // inside this form, so it could not grow), the separate "New board" input
+  // (the search field IS the new board's name), and the Alert it was before
+  // that — Android caps Alert.alert at 3 buttons and drops the rest.
+  //
+  // No LayoutAnimation either side any more: EdgeSwipePage owns the page's
+  // arrival, and configuring a layout animation for a change that no longer
+  // alters THIS page would animate whatever else re-rendered on the frame.
   const selectProject = () => {
     Keyboard.dismiss();
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setBoardQuery('');
     setBoardListOpen(prev => !prev);
-    setNewBoardOpen(false);
   };
   const pickBoard = (name) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setNewBoardOpen(false);
     setBoardListOpen(false);
+    setBoardQuery('');
     setFormData(prev => ({ ...prev, project: name }));
-  };
-  const openNewBoard = () => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setBoardListOpen(false);
-    setFormData(prev => ({ ...prev, project: '' }));
-    setNewBoardOpen(true);
   };
 
   const updateField = (field, value) => {
@@ -719,7 +723,6 @@ export const TaskForm = ({
     if (lockType) return; // locked callers (BoardTimeline) never change type
     if (type !== 'task') {
       setBoardListOpen(false);
-      setNewBoardOpen(false);
     }
     setFormData(prev => ({
       ...prev,
@@ -971,57 +974,8 @@ export const TaskForm = ({
               </View>
             )}
 
-            {/* Inline board list — toggled open/closed by the Board chip
-                above (selectProject/boardListOpen). Unchanged from the old
-                Board row: every board as a chip (scales past Android's
-                3-button Alert cap), plus "choose later" + new-board input. */}
-            {isTask && boardListOpen && (
-              <View style={styles.boardList}>
-                <TouchableOpacity
-                  style={[styles.boardChip, !formData.project && styles.boardChipActive]}
-                  onPress={() => pickBoard('')}
-                >
-                  <Text style={[styles.boardChipText, !formData.project && styles.boardChipTextActive]}>
-                    No board — later
-                  </Text>
-                </TouchableOpacity>
-                {projects.map(p => (
-                  <TouchableOpacity
-                    key={p}
-                    style={[styles.boardChip, formData.project === p && styles.boardChipActive]}
-                    onPress={() => pickBoard(p)}
-                  >
-                    <Text style={[styles.boardChipText, formData.project === p && styles.boardChipTextActive]}>
-                      {p}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-                <TouchableOpacity style={styles.boardChip} onPress={openNewBoard}>
-                  <Icon name="plus" size={13} color={theme.colors.accentInfo} />
-                  <Text style={[styles.boardChipText, { color: theme.colors.accentInfo }]}>New board</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            {isTask && newBoardOpen && (
-              <View style={[styles.projectRow, { marginTop: 8 }]}>
-                <AppTextInput
-                  style={[styles.input, styles.projectInput]}
-                  placeholder="New board name..."
-                  placeholderTextColor={theme.colors.textPlaceholder}
-                  value={formData.project}
-                  onChangeText={text => updateField('project', text)}
-                  autoFocus
-                  returnKeyType="done"
-                />
-                <TouchableOpacity
-                  style={styles.projectBtn}
-                  onPress={() => { setNewBoardOpen(false); Keyboard.dismiss(); }}
-                  accessibilityLabel="Done naming board"
-                >
-                  <Icon name="check" size={20} color={theme.colors.textPrimary} />
-                </TouchableOpacity>
-              </View>
-            )}
+            {/* The board picker is a PAGE now (BoardSearchPanel, mounted at
+                the bottom of this form) — nothing for it here. */}
             {isTask && !!formData.project && !projects.includes(formData.project) && (
               <Text style={styles.hint}>Will create new board "{formData.project}"</Text>
             )}
@@ -1123,80 +1077,16 @@ export const TaskForm = ({
                 the essentials fast path into the expanded block. */}
             {isTask && shows('linkedNote') && (
               <FormField label="Linked note">
-                {formData.linkedNote ? (
-                  <View style={styles.linkedNoteChip}>
-                    <Icon name="link-variant" size={16} color={theme.colors.accentInfo} />
-                    <Text style={styles.linkedNoteText} numberOfLines={1}>
-                      Linked to note: {formData.linkedNote.title}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() => updateField('linkedNote', null)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Unlink note"
-                    >
-                      <Icon name="close-circle" size={18} color={theme.colors.textTertiary} />
-                    </TouchableOpacity>
-                  </View>
-                ) : !noteSearchOpen ? (
-                  <TouchableOpacity
-                    style={styles.linkNoteBtn}
-                    onPress={() => { setNoteSearchOpen(true); loadNotesOnce(); }}
-                    activeOpacity={0.7}
-                  >
-                    <Icon name="link-plus" size={18} color={theme.colors.accentInfo} />
-                    <Text style={styles.linkNoteBtnText}>Link a note</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <View>
-                    <View style={styles.tagRow}>
-                      <AppTextInput
-                        style={[styles.input, styles.tagInput]}
-                        placeholder="Search notes..."
-                        placeholderTextColor={theme.colors.textPlaceholder}
-                        value={noteQuery}
-                        onChangeText={setNoteQuery}
-                        autoFocus
-                        returnKeyType="search"
-                      />
-                      <TouchableOpacity
-                        style={styles.addTagBtn}
-                        onPress={() => { setNoteSearchOpen(false); setNoteQuery(''); }}
-                        accessibilityLabel="Close note search"
-                      >
-                        <Icon name="close" size={20} color={theme.colors.textPrimary} />
-                      </TouchableOpacity>
-                    </View>
-                    <View style={styles.suggestionsContainer}>
-                      <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled>
-                        {noteResults.length === 0 ? (
-                          <Text style={styles.noteEmptyText}>
-                            {notesLoaded ? 'No matching notes' : 'Loading notes…'}
-                          </Text>
-                        ) : noteResults.map((n) => (
-                          <TouchableOpacity
-                            key={n.id}
-                            style={styles.suggestionItem}
-                            onPress={() => {
-                              updateField('linkedNote', { id: n.id, title: noteTitleOf(n) });
-                              setNoteSearchOpen(false);
-                              setNoteQuery('');
-                              Keyboard.dismiss();
-                            }}
-                          >
-                            <Icon
-                              name={n.type === 'todo' ? 'checkbox-marked-circle-outline' : 'note-text-outline'}
-                              size={14}
-                              color={theme.colors.textPrimary}
-                            />
-                            <Text style={styles.suggestionText} numberOfLines={1}>{noteTitleOf(n)}</Text>
-                            <Icon name="link-variant" size={16} color={theme.colors.accentInfo} />
-                          </TouchableOpacity>
-                        ))}
-                      </ScrollView>
-                    </View>
-                  </View>
-                )}
+                <NoteLinkPicker
+                  value={formData.linkedNote}
+                  onClear={() => updateField('linkedNote', null)}
+                  // The search itself is a PAGE, mounted at the bottom of this
+                  // form beside the ScrollView — an absolute child of scrolling
+                  // content is positioned against the content, not the screen.
+                  onRequestOpen={() => { Keyboard.dismiss(); setNoteSearchOpen(true); }}
+                  theme={theme}
+                  isDark={isDark}
+                />
               </FormField>
             )}
 
@@ -1587,48 +1477,46 @@ export const TaskForm = ({
             {/* ── PEOPLE — who's attached: assignees (tasks) or guests (events). */}
             {(isTask || isEvent) && <GroupHeader theme={theme} label="People" />}
 
-            {/* People involved — Tasks only. They see the task (view-only) and
-                get an assignment notification when newly added. */}
-            {isTask && shows('people') && (
-              <FormField label="People involved">
-                <ParticipantPicker
+            {/* People — pond members who get the item (view-only, with an
+                assignment notification when newly added), and guests, who are a
+                phone number and a text. One picker for both: "who is on this"
+                is one question, and splitting it made you find two controls.
+
+                Always on the page for a task or an event — never behind the +
+                key (see OPTIONS). The GUEST half is what the Guests option
+                gates on an event; a task can always carry one, which is the
+                case guestReminderConfig exists for. */}
+            {(isTask || isEvent) && (
+              <FormField label={isEvent ? 'People & guests' : 'People involved'}>
+                <PeoplePicker
                   selected={formData.involvedUsers || []}
                   onChange={(ids) => { involvedTouched.current = true; updateField('involvedUsers', ids); }}
+                  // Only the modern {name, phone} guests reach the picker; the
+                  // legacy bare-name ones are listed below it and preserved on
+                  // save, so nothing is lost by keeping them out of here.
+                  guests={(formData.guests || []).filter((g) => g && typeof g === 'object')}
+                  onGuestsChange={(list) => updateField('guests', [...legacyGuestNames, ...list])}
+                  allowGuests={isTask || shows('guests')}
                 />
               </FormField>
             )}
 
-            {/* Guests — events only. */}
-            {isEvent && shows('guests') && (
-              <FormField label="Guests">
-                <View style={styles.tagRow}>
-                  <AppTextInput
-                    style={[styles.input, styles.tagInput]}
-                    placeholder="Add a guest by name..."
-                    placeholderTextColor={theme.colors.textPlaceholder}
-                    value={guestInput}
-                    onChangeText={setGuestInput}
-                    onSubmitEditing={() => addGuest()}
-                    blurOnSubmit={false}
-                    returnKeyType="done"
-                  />
-                  <TouchableOpacity style={styles.addTagBtn} onPress={() => addGuest()}>
-                    <Icon name="account-plus" size={20} color={theme.colors.textPrimary} />
-                  </TouchableOpacity>
-                </View>
-                {formData.guests.length > 0 && (
-                  <View style={styles.tagsContainer}>
-                    {formData.guests.map((guest, idx) => (
+            {/* Left for a legacy event whose guests were saved as bare names,
+                before a guest was a name AND a number. Read-only: the picker
+                above is where guests are added now. */}
+            {isEvent && legacyGuestNames.length > 0 && (
+              <FormField label="Guests (older event)">
+                <View style={styles.tagsContainer}>
+                  {legacyGuestNames.map((guest, idx) => (
                       <View key={idx} style={styles.selectedTagChip}>
                         <Icon name="account" size={13} color={theme.colors.textSecondary} style={{ marginRight: 4 }} />
                         <Text style={styles.selectedTagText}>{guest}</Text>
-                        <TouchableOpacity onPress={() => removeGuest(guest)}>
+                        <TouchableOpacity onPress={() => updateField('guests', (formData.guests || []).filter((g) => g !== guest))}>
                           <Icon name="close-circle" size={16} color={theme.colors.accentError} />
                         </TouchableOpacity>
                       </View>
                     ))}
-                  </View>
-                )}
+                </View>
               </FormField>
             )}
 
@@ -1771,6 +1659,30 @@ export const TaskForm = ({
             </Animated.View>
           </View>
         </View>
+
+        {/* The two search PAGES. Mounted here, as siblings of the form's
+            ScrollView rather than inside it: each is an absolute-fill layer,
+            and an absolute child of scrolling content is positioned against
+            that content — it would ride up and down with the scroll instead of
+            covering the screen. Both render nothing while closed. */}
+        <BoardSearchPanel
+          visible={isTask && boardListOpen}
+          query={boardQuery}
+          onQueryChange={setBoardQuery}
+          onClose={() => { setBoardListOpen(false); setBoardQuery(''); }}
+          onPick={pickBoard}
+          projects={projects}
+          selected={formData.project}
+          theme={theme}
+          isDark={isDark}
+        />
+        <NoteSearchPanel
+          visible={noteSearchOpen}
+          onPick={(note) => updateField('linkedNote', note)}
+          onClose={() => setNoteSearchOpen(false)}
+          theme={theme}
+          isDark={isDark}
+        />
       </GestureHandlerRootView>
     </EdgeSwipePage>
   );

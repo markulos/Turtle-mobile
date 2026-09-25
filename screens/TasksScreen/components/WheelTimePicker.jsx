@@ -34,17 +34,19 @@ import { useSheetDismiss } from '../../../utils/useSheetDismiss';
 
 const { height: SCREEN_H } = Dimensions.get('window');
 
-const ITEM_HEIGHT = 44;
+export const ITEM_HEIGHT = 44;
 const VISIBLE_ROWS = 5; // odd so there's a clear centre
-const WHEEL_HEIGHT = ITEM_HEIGHT * VISIBLE_ROWS;
-const PAD_ROWS = Math.floor(VISIBLE_ROWS / 2); // padding so first/last can centre
+export const WHEEL_HEIGHT = ITEM_HEIGHT * VISIBLE_ROWS;
+export const PAD_ROWS = Math.floor(VISIBLE_ROWS / 2); // padding so first/last can centre
 
-const HOURS = Array.from({ length: 12 }, (_, i) => i + 1); // 1..12
-const MINUTES = Array.from({ length: 60 }, (_, i) => i); // 0..59
-const PERIODS = ['AM', 'PM'];
+export const HOURS = Array.from({ length: 12 }, (_, i) => i + 1); // 1..12
+export const MINUTES = Array.from({ length: 60 }, (_, i) => i); // 0..59
+export const PERIODS = ['AM', 'PM'];
 
 // ── A single momentum-snap wheel column ──────────────────────────────
-const WheelColumn = ({ data, initialIndex, onIndexChange, renderLabel, theme, width, align }) => {
+// Exported so other pickers (SchedulePickerSheet's time panel) present the
+// SAME wheel rather than a second implementation that drifts from this one.
+export const WheelColumn = ({ data, initialIndex, onIndexChange, renderLabel, theme, width, align }) => {
   const scrollRef = useRef(null);
   const scrollY = useRef(new Animated.Value(initialIndex * ITEM_HEIGHT)).current;
   const lastIdxRef = useRef(initialIndex);

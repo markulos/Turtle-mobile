@@ -134,7 +134,8 @@
         }
       ],
       "expo-asset",
-      "expo-background-task"
+      "expo-background-task",
+      "react-native-blob-util"
     ],
     "experiments": {
       "tsconfigPaths": false

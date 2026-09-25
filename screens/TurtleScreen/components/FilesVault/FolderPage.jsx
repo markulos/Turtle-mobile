@@ -14,11 +14,13 @@ import EdgeSwipePage from '../EdgeSwipePage';
 import { ActionButton } from '../../../../components/ActionButton';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../../utils/haptics';
 import useFolderData from './useFolderData';
-import FolderDisc from './FolderDisc';
+import FolderTile from './FolderTile';
 import DocumentRow from './DocumentRow';
 import { FolderNameSheet, FolderPickerSheet, FilesSortSheet, FolderActionsSheet } from './FolderSheets';
 import { openDocument } from './documentOpen';
-import { collapseCrumbs, isDocument, messageOf, sortFolderItems } from './filesUtils';
+import PdfViewer, { canRenderPdf } from './PdfViewer';
+import DocumentPeek from './DocumentPeek';
+import { collapseCrumbs, isDocument, isPdf, messageOf, sortFolderItems } from './filesUtils';
 
 const GRID_COLS = 3;
 const GAP = 2;
@@ -28,7 +30,7 @@ const GAP = 2;
 const HEADER_TOP_PAD = 6;
 const MENU_TOP_GAP = 4;
 
-export default function FolderPage({ visible, parent, onClose, onOpenFolder, onOpenMedia, onBulkTag, onUploadHere, getFullUrl, base, theme, topInset = 0, bottomInset = 0 }) {
+export default function FolderPage({ visible, parent, onClose, onOpenFolder, onOpenMedia, onBulkTag, onUploadHere, onAddFromStorage, getFullUrl, base, theme, topInset = 0, bottomInset = 0 }) {
   const c = theme.colors;
   const danger = c.accentError || '#e5484d';
   const insets = useSafeAreaInsets();
@@ -42,6 +44,11 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   // null | { kind: 'new'|'rename'|'move-items'|'move-folder'|'sort'|'actions'|'delete-target', folder?, error? }
   const [sheet, setSheet] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  // The document the in-app PDF viewer is showing, or null. A pushed page over
+  // this one, so the left-edge swipe pops the reader before the folder.
+  const [viewing, setViewing] = useState(null);
+  // The document being peeked at (long-press), or null.
+  const [peek, setPeek] = useState(null);
   const [progress, setProgress] = useState({}); // id → 0..1
   const [refreshing, setRefreshing] = useState(false);
   const busyRef = useRef(false);
@@ -70,8 +77,15 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   const handleBack = useCallback(() => { if (selectMode) { clearSelection(); return; } onClose(); }, [selectMode, clearSelection, onClose]);
   const selectedItems = useMemo(() => items.filter((i) => selected.has(i.id)), [items, selected]);
 
-  const open = useCallback(async (item) => {
-    if (busyRef.current) return;
+  // A PDF opens IN the app — the viewer does its own download and shows its
+  // own progress, so the row's hairline bar is not started for it. Every other
+  // document still goes out to the system share sheet (Quick Look previews a
+  // .docx; we do not), and so does a PDF in a binary with no renderer in it,
+  // which is exactly where these opened before the viewer existed.
+  // Out to the OS: Quick Look, Open in …, print, mark up. The peek's Share key
+  // and every non-PDF tap land here.
+  const shareOut = useCallback(async (item) => {
+    if (!item || busyRef.current) return;
     busyRef.current = true;
     try {
       await openDocument(item, { getFullUrl, onProgress: (p) => setProgress((m) => ({ ...m, [item.id]: p })) });
@@ -83,6 +97,12 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
       setProgress((m) => { const n = { ...m }; delete n[item.id]; return n; });
     }
   }, [getFullUrl]);
+
+  const open = useCallback(async (item) => {
+    if (busyRef.current) return;
+    if (isPdf(item) && canRenderPdf()) { setViewing(item); return; }
+    await shareOut(item);
+  }, [shareOut]);
 
   const fail = useCallback((e) => { notifyHaptic('error'); Alert.alert('Not saved', messageOf(e)); }, []);
 
@@ -130,7 +150,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
       {!!data?.folders?.length && (
         <View style={styles.discs}>
           {data.folders.map((f) => (
-            <FolderDisc key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={!!f.pending}
+            <FolderTile key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={!!f.pending}
               onPress={() => onOpenFolder(f)} onLongPress={() => { impactHaptic('medium'); setSheet({ kind: 'actions', folder: f }); }} testID={`disc-${f.id}`} />
           ))}
         </View>
@@ -154,7 +174,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
       </View>
       {/* I5: the server caps a listing at 200 items (useFolderData's PAGE) and
           faithfully returns pagination.hasMore/.total — say so instead of
-          silently truncating while FolderDisc shows the true itemCount next
+          silently truncating while FolderTile shows the true itemCount next
           to it. Full paging is a follow-up; this is the honest stopgap. */}
       {!!data?.pagination && !query.trim() && (data.pagination.hasMore || data.pagination.total > pageCount) && (
         <Text style={[styles.capNotice, { color: c.textMuted }]}>{`Showing the first ${pageCount} of ${data.pagination.total}`}</Text>
@@ -166,8 +186,11 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
     </View>
   );
 
+  // `!viewing` joins the page's swipe guard below for the same reason `!sheet`
+  // is there: the PDF reader is an in-tree overlay, so without it a left-edge
+  // swipe meant for the reader would close this folder out from under it.
   return (
-    <EdgeSwipePage overlay visible={visible} onClose={handleBack} swipeEnabled={!sheet && !selectMode}>
+    <EdgeSwipePage overlay visible={visible} onClose={handleBack} swipeEnabled={!sheet && !selectMode && !viewing}>
       <View style={[styles.page, { backgroundColor: c.background, paddingTop: topInset }]}>
         <View style={[styles.header, { paddingTop: insets.top + HEADER_TOP_PAD }]}>
           <Pressable onPress={handleBack} onPressIn={tapHaptic} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back" style={({ pressed }) => [styles.iconBtn, { opacity: pressed ? 0.6 : 1 }]}>
@@ -188,7 +211,14 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
         {menuOpen && (
           <View style={[styles.menu, { top: insets.top + HEADER_TOP_PAD + styles.header.minHeight + styles.header.paddingBottom + MENU_TOP_GAP, backgroundColor: c.surfaceElevated || c.surface, borderColor: c.border }]}>
             {!isUnfiled && <MenuRow icon="folder-plus-outline" label="New folder" theme={theme} onPress={() => { setMenuOpen(false); setSheet({ kind: 'new' }); }} />}
-            {!isUnfiled && <MenuRow icon="tray-arrow-up" label="Upload here" theme={theme} onPress={() => { setMenuOpen(false); onUploadHere(folderId); }} />}
+            {/* Two sources, named by where they READ from rather than one
+                "Upload here" that silently meant the camera roll. The photo
+                picker cannot see a PDF or anything in Downloads — which is
+                most of what a Files folder holds — so the storage row is not
+                a convenience, it is the only way to put a document in from
+                the phone without going out to another app's share sheet. */}
+            {!isUnfiled && <MenuRow icon="image-multiple-outline" label="Add photos & videos" theme={theme} onPress={() => { setMenuOpen(false); onUploadHere(folderId); }} />}
+            {!isUnfiled && <MenuRow icon="folder-open-outline" label="Add from phone storage" theme={theme} onPress={() => { setMenuOpen(false); onAddFromStorage?.({ id: folderId, name: data?.folder?.name || 'this folder' }); }} />}
             <MenuRow icon="sort" label="Sort & search" theme={theme} onPress={() => { setMenuOpen(false); setSheet({ kind: 'sort' }); }} />
             {items.length > 0 && <MenuRow icon="checkbox-multiple-marked-circle-outline" label="Select" theme={theme} onPress={() => { setMenuOpen(false); setSelected(new Set([items[0].id])); }} />}
           </View>
@@ -198,8 +228,15 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
             data={docs}
             keyExtractor={(i) => String(i.id)}
             renderItem={({ item }) => (
+              // Long-press PEEKS rather than selects — the picture is the
+              // thing you reach for far more often than a bulk operation, and
+              // Select is one tap away inside the peek. Once you are already
+              // in select mode it toggles, because that is the only thing a
+              // long-press could sensibly mean there.
               <DocumentRow item={item} theme={theme} thumbUri={thumbOf(item)} selectMode={selectMode} selected={selected.has(item.id)} progress={progress[item.id] ?? null}
-                onPress={() => (selectMode ? toggle(item.id) : open(item))} onLongPress={() => { impactHaptic('medium'); toggle(item.id); }} testID={`row-${item.id}`} />
+                onPress={() => (selectMode ? toggle(item.id) : open(item))}
+                onLongPress={() => { impactHaptic('medium'); if (selectMode) toggle(item.id); else { setMenuOpen(false); setPeek(item); } }}
+                testID={`row-${item.id}`} />
             )}
             ListHeaderComponent={header}
             ListFooterComponent={footer}
@@ -228,6 +265,23 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
           <FolderActionsSheet folder={sheet.folder} theme={theme} bottomInset={bottomInset} onClose={() => setSheet(null)}
             onRename={() => setSheet({ kind: 'rename', folder: sheet.folder })} onMove={() => setSheet({ kind: 'move-folder', folder: sheet.folder })} onDelete={() => askDelete(sheet.folder)} />
         )}
+        <DocumentPeek
+          visible={!!peek}
+          item={peek}
+          // The LARGE variant: the peek is the one place the 200px grid
+          // thumbnail is visibly not enough.
+          thumbUri={peek ? (peek.thumbnailLgUrl ? getFullUrl(peek.thumbnailLgUrl) : thumbOf(peek)) : null}
+          onClose={() => setPeek(null)}
+          onOpen={() => { const it = peek; setPeek(null); open(it); }}
+          onSelect={() => { const it = peek; setPeek(null); setSelected(new Set([it.id])); }}
+          onShare={() => { const it = peek; setPeek(null); shareOut(it); }}
+          theme={theme}
+        />
+        {/* No bottomInset: the reader hides the dock, so it measures off the
+            bare safe area rather than reserving room for a bar that is gone. */}
+        {!!viewing && (
+          <PdfViewer visible item={viewing} onClose={() => setViewing(null)} getFullUrl={getFullUrl} theme={theme} />
+        )}
       </View>
     </EdgeSwipePage>
   );
@@ -250,7 +304,10 @@ const styles = StyleSheet.create({
   crumb: { fontSize: 13, flexShrink: 1 },
   crumbTail: { fontSize: 15, fontWeight: '700', flexShrink: 1 },
   crumbSep: { fontSize: 13 },
-  menu: { position: 'absolute', right: 12, zIndex: 20, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 4, minWidth: 200 },
+  // Wide enough for its longest label ("Add from phone storage") to sit on one
+  // line next to the icon — a menu row that ellipsises is a row you have to
+  // guess at (STYLE-RULES: nothing oversets its container).
+  menu: { position: 'absolute', right: 12, zIndex: 20, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 4, minWidth: 240 },
   menuRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 44, paddingHorizontal: 14 },
   menuText: { fontSize: 14.5, fontWeight: '600', flexShrink: 1 },
   discs: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8, paddingBottom: 6 },

@@ -77,7 +77,10 @@ export const useTaskData = (api, isConnected, onTaskCompleted) => {
   // that adds/normalises other fields never blocks convergence.
   const pendingRef = useRef(new Map());
   const PENDING_TTL_MS = 15000; // backstop: never pin an optimistic value forever
-  const completionSig = (t) => `${t.completed ? 1 : 0}|${t.completedAt || ''}|${t.dueDate || ''}|${Array.isArray(t.meta?.completedDates) ? t.meta.completedDates.join(',') : ''}`;
+  // `time` rides along with `dueDate`: rescheduling from the agenda's time
+  // bubble is the same shape of optimistic write as a tick, and without it a
+  // refetch racing the PATCH snaps the row back to its old hour.
+  const completionSig = (t) => `${t.completed ? 1 : 0}|${t.completedAt || ''}|${t.dueDate || ''}|${t.time || ''}|${Array.isArray(t.meta?.completedDates) ? t.meta.completedDates.join(',') : ''}`;
   const [projects, setProjects] = useState([]);
   const [allTags, setAllTags] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -148,7 +151,7 @@ export const useTaskData = (api, isConnected, onTaskCompleted) => {
           }
           const local = localById.get(st.id);
           return local
-            ? { ...st, completed: local.completed, completedAt: local.completedAt, completedTime: local.completedTime, dueDate: local.dueDate, meta: local.meta }
+            ? { ...st, completed: local.completed, completedAt: local.completedAt, completedTime: local.completedTime, dueDate: local.dueDate, time: local.time, meta: local.meta }
             : st;
         });
       }
@@ -238,7 +241,10 @@ export const useTaskData = (api, isConnected, onTaskCompleted) => {
    * so two offline ticks on different tasks both survive — a list snapshot
    * could only carry the last one.
    */
-  const saveTaskPatch = async (id, patch, nextTasks) => {
+  // `kind` names the write for the offline outbox. Entries collapse by key, so
+  // two DIFFERENT edits of the same row (a tick and a reschedule) must not
+  // share one — the later would silently swallow the earlier while offline.
+  const saveTaskPatch = async (id, patch, nextTasks, kind = 'completion') => {
     const prevTasks = tasksRef.current;
     const nextRow = nextTasks.find((t) => t.id === id);
     pendingRef.current.set(id, { sig: completionSig(nextRow || {}), at: Date.now() });
@@ -248,7 +254,7 @@ export const useTaskData = (api, isConnected, onTaskCompleted) => {
         method: 'patch',
         path: `/tasks/${encodeURIComponent(id)}`,
         body: patch,
-        key: `task:${id}:completion`,
+        key: `task:${id}:${kind}`,
         label: 'task',
       });
     } catch (error) {

@@ -38,6 +38,7 @@ import * as Crypto from 'expo-crypto';
 import { useServer } from './ServerContext';
 import { useAuth } from './AuthContext';
 import { streamMultipartUpload } from '../services/streamMultipartUpload';
+import { chunkedUpload, CHUNKED_UPLOAD_THRESHOLD_BYTES } from '../services/chunkedUpload';
 import {
   SHARE_UPLOAD_ROOT,
   assertShareStagingCapacity,
@@ -49,6 +50,7 @@ import {
   isHttpImportUrl,
   supportedAudioVideoFiles,
   supportedDocumentFiles,
+  supportedFolderFiles,
 } from '../utils/shareMediaClassifier';
 import { notifyHaptic } from '../utils/haptics';
 
@@ -114,6 +116,16 @@ const ownedMediaName = (file, index) => {
   ] || (kind === 'video' ? '.mp4' : '.mp3');
   const safe = safeFileName(original, `shared-media-${index}${fallbackExtension}`);
   return /\.[a-z0-9]+$/i.test(safe) ? safe : `${safe}${fallbackExtension}`;
+};
+
+/** Bytes of a staged copy, or 0 when the stat fails (→ the whole-file path). */
+const stagedSize = async (uri) => {
+  try {
+    const info = await FileSystem.getInfoAsync(uri, { size: true });
+    return info?.exists ? (info.size || 0) : 0;
+  } catch {
+    return 0;
+  }
 };
 
 const uploadEndpointOf = (baseUrl) => {
@@ -466,18 +478,37 @@ export function ShareUploadProvider({ children }) {
       // server URL lands on the generic catch below instead of an unhandled
       // rejection.
       if (job.kind === 'files') {
-        const uploadUrl = uploadEndpointOf(getBaseUrlRef.current?.());
+        const baseUrl = getBaseUrlRef.current?.();
+        const uploadUrl = uploadEndpointOf(baseUrl);
         if (!uploadUrl.startsWith('http')) throw new Error('Turtle server URL is unavailable.');
         let failures = 0;
         for (const media of job.media) {
           if (media.sent) continue;
           if (!ownsJob(job)) return;
           try {
-            await streamMultipartUpload({
-              url: uploadUrl, fileUri: media.localPath, mimeType: media.mimeType || 'application/octet-stream',
-              parameters: { tags: '[]', originalName: media.filename, clientImportId: media.clientImportId, ...(job.folderId ? { folderId: job.folderId } : {}) },
-              token: job.token, label: media.filename, onProgress: () => {}, signal: job.abortController.signal,
-            });
+            const mimeType = media.mimeType || 'application/octet-stream';
+            const parameters = { tags: '[]', originalName: media.filename, clientImportId: media.clientImportId, ...(job.folderId ? { folderId: job.folderId } : {}) };
+            // A document filed into a folder is the one thing here that is
+            // routinely enormous — a scanned thesis, a video, a zip — and a
+            // body that size does not survive the path between a phone and the
+            // pond in one request: it stalls a few MB in and dies on every
+            // retry. Over the threshold it goes up in parts instead. Size is
+            // read from the staged copy (the only thing that knows), and a
+            // failed stat simply means the old one-request path.
+            const size = await stagedSize(media.localPath);
+            if (size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+              await chunkedUpload({
+                baseUrl, fileUri: media.localPath, fileSize: size,
+                originalName: media.filename, mimeType, parameters,
+                token: job.token, label: media.filename, signal: job.abortController.signal,
+              });
+            } else {
+              await streamMultipartUpload({
+                url: uploadUrl, fileUri: media.localPath, mimeType,
+                parameters,
+                token: job.token, label: media.filename, onProgress: () => {}, signal: job.abortController.signal,
+              });
+            }
             if (!ownsJob(job)) return;
             media.sent = true; job.done += 1; publish();
             await persistAudioManifest(job);
@@ -772,9 +803,15 @@ export function ShareUploadProvider({ children }) {
   }, [processJob, publish, removeJob, stageAudioFiles]);
 
   // Files tab: documents shared from another app, filed into a folder.
-  const enqueueFileShare = useCallback(async ({ mediaFiles, folderId, folderName } = {}) => {
-    const files = supportedDocumentFiles(mediaFiles);
-    if (files.length === 0) throw new Error('No document was shared.');
+  //
+  // `includeMedia` widens the filter to the photos and videos a folder also
+  // shows — the folder page's own "pick from storage" row sets it, because a
+  // pick out of Downloads that quietly dropped the one JPEG in it would read
+  // as a broken upload. The share-extension path leaves it off: an image
+  // arriving through the OS share sheet is a Boards share, not a filing.
+  const enqueueFileShare = useCallback(async ({ mediaFiles, folderId, folderName, includeMedia = false } = {}) => {
+    const files = includeMedia ? supportedFolderFiles(mediaFiles) : supportedDocumentFiles(mediaFiles);
+    if (files.length === 0) throw new Error(includeMedia ? 'No file Turtle can file was chosen.' : 'No document was shared.');
     const auth = authRef.current;
     if (!auth.isAuthenticated || !auth.authIdentity || !auth.authGeneration || !auth.token) throw new Error('Sign in before importing files.');
     const id = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
