@@ -26,9 +26,20 @@
         "resourceClass": "m-medium"
       },
       "distribution": "internal"
+    },
+    "testflight": {
+      "distribution": "store",
+      "channel": "production",
+      "autoIncrement": false,
+      "ios": {
+        "resourceClass": "m-medium"
+      }
     }
   },
   "submit": {
-    "production": {}
+    "production": {},
+    "testflight": {
+      "ios": {}
+    }
   }
 }
