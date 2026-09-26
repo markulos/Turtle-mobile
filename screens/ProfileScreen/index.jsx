@@ -1,12 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator,
+  RefreshControl, AppState,
 } from 'react-native';
 import { depth } from '../../utils/surfaceDepth';
 import AppTextInput from '../../components/AppTextInput';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useKeyboardHeight from '../../utils/useKeyboardHeight';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../context/ThemeContext';
@@ -69,6 +70,9 @@ export default function ProfileScreen() {
   const [friendCount, setFriendCount] = useState(null);
   const [showFriends, setShowFriends] = useState(false);
   const [friends, setFriends] = useState([]);
+  // Invites the owner has sent that nobody has signed in against yet. The
+  // server only returns these to the owner, so for everyone else it stays [].
+  const [pendingFriends, setPendingFriends] = useState([]);
   const [vaultOpen, setVaultOpen] = useState(false);
   const [convosOpen, setConvosOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -86,36 +90,82 @@ export default function ProfileScreen() {
   const [me, setMe] = useState(null);
   // Which stat's detail page is open (null = none).
   const [statDetail, setStatDetail] = useState(null);
-  // The heavy breakdown behind those pages. Deliberately NOT part of the /me
-  // fetch above (which runs on every profile mount) — it's pulled the first time
-  // a stat is opened and then reused for all of them, since one response covers
-  // every metric.
+  // The full breakdown (GET /me/stats): daily series, streaks, rhythms, logs
+  // and the rolling windows the strip's "today" chips are drawn from.
   const [statsDetail, setStatsDetail] = useState(null);
-  const [statsDetailLoading, setStatsDetailLoading] = useState(false);
-  useEffect(() => {
-    if (!statDetail || statsDetail || statsDetailLoading) return;
-    let alive = true;
-    setStatsDetailLoading(true);
-    (async () => {
-      try {
-        const r = await api.get('/me/stats');
-        if (alive && r?.success) setStatsDetail(r);
-      } catch { /* older server / offline — the page falls back to headline numbers */ }
-      finally { if (alive) setStatsDetailLoading(false); }
-    })();
-    return () => { alive = false; };
-  }, [statDetail, statsDetail, statsDetailLoading, api]);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const r = await api.get('/me');
-        if (alive && r?.user) setMe(r.user);
-      } catch { /* offline / older server — the local identity still renders */ }
-    })();
-    return () => { alive = false; };
+  /**
+   * Load everything the identity card renders.
+   *
+   * WHY THIS IS ONE FUNCTION AND NOT THREE EFFECTS
+   * It used to be three `useEffect`s keyed on `api`. `api` is memoised per
+   * server (ServerContext), and Profile is a TAB — mounted once and kept
+   * mounted — so every one of them ran exactly once per app launch and never
+   * again. The strip then showed whatever the numbers were at launch: finish
+   * five tasks and it still read the old total, which is what "outdated and the
+   * data does not fetch" was. Now the same loader runs on mount, on every tab
+   * focus, on foreground, and on pull-to-refresh.
+   *
+   * `/me/stats` is fetched here too rather than lazily on first stat tap. It
+   * was held back as "the expensive breakdown", but it's ~10 grouped queries
+   * over one user's rows, and the strip needs its `trend` block to show
+   * movement. The throttle below is what keeps that honest.
+   */
+  const inFlight = useRef(false);
+  const lastLoad = useRef(0);
+  // The screen normally outlives every request it makes (it's a tab), but a
+  // logout or server switch can unmount it mid-flight — same guard the effects
+  // this replaced each carried.
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
+  const load = useCallback(async ({ force = false } = {}) => {
+    // Tab focus fires on every switch back; without this a flick between tabs
+    // would put three identical round-trips on the wire.
+    if (inFlight.current) return;
+    if (!force && Date.now() - lastLoad.current < 30000) return;
+    inFlight.current = true;
+    try {
+      // Settled, not all-or-nothing: an older server with no /me/stats must
+      // still leave the headline numbers and the friends list on screen.
+      const [meRes, friendsRes, statsRes] = await Promise.allSettled([
+        api.get('/me'),
+        api.get('/friends'),
+        api.get('/me/stats'),
+      ]);
+      if (!mounted.current) return;
+      if (meRes.status === 'fulfilled' && meRes.value?.user) setMe(meRes.value.user);
+      if (friendsRes.status === 'fulfilled') {
+        const r = friendsRes.value;
+        const list = Array.isArray(r?.friends) ? r.friends : (Array.isArray(r) ? r : []);
+        setFriends(list);
+        setFriendCount(list.length);
+        setPendingFriends(Array.isArray(r?.pending) ? r.pending : []);
+      }
+      if (statsRes.status === 'fulfilled' && statsRes.value?.success) setStatsDetail(statsRes.value);
+      lastLoad.current = Date.now();
+    } finally {
+      inFlight.current = false;
+      if (mounted.current) setStatsLoading(false);
+    }
   }, [api]);
+
+  // Mount + every return to this tab. The throttle inside `load` means the
+  // common case (tab away, tab back) costs nothing.
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Coming back from the background is the other moment the numbers are stale —
+  // the tab never lost focus, so useFocusEffect alone would not re-ask.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => { if (s === 'active') load(); });
+    return () => sub.remove();
+  }, [load]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try { await load({ force: true }); } finally { setRefreshing(false); }
+  }, [load]);
 
   // Stored name wins over the generated one; absent ⇒ keep the generated
   // default (which is stable, so it doesn't churn between launches).
@@ -142,21 +192,6 @@ export default function ProfileScreen() {
     try { await AsyncStorage.setItem(nameKey(identity), next); } catch { /* keep the UI value */ }
   }, [draft, name, identity]);
 
-  // Friends: only the COUNT lives on the profile; the list is one tap away.
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const r = await api.get('/friends');
-        const list = Array.isArray(r?.friends) ? r.friends : (Array.isArray(r) ? r : []);
-        if (alive) { setFriends(list); setFriendCount(list.length); }
-      } catch {
-        if (alive) setFriendCount(null); // unreachable — hide rather than lie
-      }
-    })();
-    return () => { alive = false; };
-  }, [api]);
-
   const goTab = useCallback((tab) => { tapHaptic(); navigation.navigate(tab); }, [navigation]);
 
   // Server origin (no /api) so a server-relative avatar path resolves — same
@@ -164,28 +199,101 @@ export default function ProfileScreen() {
   const serverBase = getBaseUrl().replace(/\/api$/, '');
   const avatarFullUrl = resolveAvatarUrl(me?.avatarUrl, serverBase);
 
+  // Headline numbers. /me/stats is the fuller and fresher source; /me's own
+  // stats block is the fallback that keeps the strip populated on an older
+  // server or before the breakdown lands.
+  const totals = statsDetail?.totals || null;
   const stats = me?.stats || null;
-  // Only stats the server actually reported. Each drills into a detail page so
-  // the number is a doorway to the log behind it, not a dead badge.
+  const doneValue = totals?.completed ?? stats?.tasksCompleted ?? null;
+  const focusValue = totals?.pomodoros ?? stats?.pomodoros ?? null;
+  const pointsValue = totals?.points ?? stats?.points ?? null;
+  const level = statsDetail?.level || stats?.level || null;
+  const today = statsDetail?.trend?.today || null;
+
+  /**
+   * Everyone in the org ranked by points — me included.
+   *
+   * /api/friends returns each friend's stats but deliberately excludes the
+   * caller, so "my rank" can't be read off it directly; splicing myself in is
+   * what turns a list of names into a standing.
+   */
+  const leaderboard = useMemo(() => {
+    const rows = friends.map((f) => {
+      const fid = String(f.id ?? f.userId ?? f.phone ?? f.displayName ?? '');
+      return {
+        id: fid,
+        name: f.displayName || f.phone || generatedName(fid),
+        avatarUrl: f.avatarUrl || null,
+        role: f.role,
+        joined: f.joined !== false,
+        stats: f.stats || {},
+        isMe: false,
+      };
+    });
+    rows.push({
+      id: String(me?.id || identity),
+      name,
+      avatarUrl: me?.avatarUrl || null,
+      role: me?.role,
+      joined: true,
+      // My own numbers come from the same two sources the strip uses, so a row
+      // can't disagree with the card above it.
+      stats: {
+        points: pointsValue ?? 0,
+        tasksCompleted: doneValue ?? 0,
+        pomodoros: focusValue ?? 0,
+        level,
+      },
+      isMe: true,
+    });
+    return rows
+      .sort((a, b) => (b.stats?.points || 0) - (a.stats?.points || 0))
+      .map((r, i) => ({ ...r, rank: i + 1 }));
+  }, [friends, me, identity, name, pointsValue, doneValue, focusValue, level]);
+  const myRank = leaderboard.find((r) => r.isMe)?.rank || null;
+
+  // Each cell is a number, a label, and one line of context under it. The
+  // context prefers TODAY'S movement — that's what makes the strip feel live
+  // rather than a set of totals that look identical every time it's opened —
+  // and falls back to a standing fact so a cell is never bare.
+  const fmtDelta = (n) => (n > 0 ? `+${n} today` : null);
   const STATS = [
-    friendCount != null && {
-      key: 'friends', value: friendCount,
+    {
+      key: 'friends',
+      icon: 'account-group',
+      value: friendCount,
       label: friendCount === 1 ? 'friend' : 'friends',
+      hint: myRank && leaderboard.length > 1 ? `#${myRank} of ${leaderboard.length}` : null,
       onPress: () => setShowFriends(true),
     },
-    stats?.tasksCompleted != null && {
-      key: 'done', value: stats.tasksCompleted, label: 'done',
+    {
+      key: 'done',
+      icon: 'check-circle',
+      value: doneValue,
+      label: 'done',
+      hint: fmtDelta(today?.completed)
+        || (statsDetail?.streak?.current > 0 ? `${statsDetail.streak.current}d streak` : null)
+        || (statsDetail?.trend?.week?.completed ? `${statsDetail.trend.week.completed} this week` : null),
       onPress: () => setStatDetail('done'),
     },
-    stats?.pomodoros != null && {
-      key: 'focus', value: stats.pomodoros, label: 'focus',
+    {
+      key: 'focus',
+      icon: 'timer',
+      value: focusValue,
+      label: 'focus',
+      hint: fmtDelta(today?.pomodoros)
+        || (totals?.focusMinutes ? `${fmtMinutes(totals.focusMinutes)} total` : null),
       onPress: () => setStatDetail('focus'),
     },
-    stats?.points != null && {
-      key: 'points', value: stats.points, label: 'points',
+    {
+      key: 'points',
+      icon: 'star-four-points',
+      value: pointsValue,
+      label: 'points',
+      hint: fmtDelta(today?.points) || level?.name || null,
       onPress: () => setStatDetail('points'),
     },
-  ].filter(Boolean);
+  ];
 
   const CARDS = [
     { key: 'vault', icon: 'shield-lock', label: 'Password Vault',
@@ -230,6 +338,11 @@ export default function ProfileScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
+        // The manual escape hatch from the 30s throttle — a pull always goes to
+        // the server, which is the behaviour a stale-looking number invites.
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.textSecondary} />
+        }
       >
         {/* Identity card — a HERO block, not a settings row: an accent wash
             behind a ringed picture on the LEFT, with the name, handle, role and
@@ -349,24 +462,37 @@ export default function ProfileScreen() {
               the server doesn't report is simply omitted. Hairline separators
               between cells, so it reads as one instrument rather than four
               loose numbers. */}
-          {STATS.length > 0 && (
-            <View style={styles.statStrip}>
-              {STATS.map((s, i) => (
-                <React.Fragment key={s.key}>
-                  {i > 0 && <View style={styles.statDivider} />}
-                  <TouchableOpacity
-                    onPress={() => { tapHaptic(); s.onPress(); }}
-                    style={styles.stat}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${s.value} ${s.label}`}
-                  >
-                    <Text style={styles.statNum}>{s.value}</Text>
-                    <Text style={styles.statLabel}>{s.label}</Text>
-                  </TouchableOpacity>
-                </React.Fragment>
-              ))}
-            </View>
-          )}
+          <View style={styles.statStrip}>
+            {STATS.map((s, i) => (
+              <React.Fragment key={s.key}>
+                {i > 0 && <View style={styles.statDivider} />}
+                <TouchableOpacity
+                  onPress={() => { tapHaptic(); s.onPress(); }}
+                  style={styles.stat}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    s.value == null
+                      ? `${s.label}, loading`
+                      : `${s.value} ${s.label}${s.hint ? `, ${s.hint}` : ''}`
+                  }
+                >
+                  <Icon name={s.icon} size={13} color={c.textMuted} style={{ marginBottom: 3 }} />
+                  {/* An em dash while the first load is in flight, rather than
+                      hiding the strip: a card that grows a row once the network
+                      answers shifts everything under it. */}
+                  <Text style={styles.statNum}>{s.value == null ? '—' : s.value}</Text>
+                  <Text style={styles.statLabel} numberOfLines={1}>{s.label}</Text>
+                  {/* Fixed-height slot so cells with a hint and cells without
+                      still share a baseline. */}
+                  <View style={styles.statHintSlot}>
+                    {!!s.hint && (
+                      <Text style={styles.statHint} numberOfLines={1}>{s.hint}</Text>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              </React.Fragment>
+            ))}
+          </View>
         </View>
 
         {/* Cards */}
@@ -393,32 +519,19 @@ export default function ProfileScreen() {
         </View>
       </ScrollView>
 
-      {/* Friends list — pushed, Instagram-style, from the count. */}
-      <EdgeSwipePage overlay visible={showFriends} onClose={() => setShowFriends(false)}>
-        <View style={[styles.page, { paddingTop: insets.top + 6 }]}>
-          <View style={styles.pushHeader}>
-            <TouchableOpacity onPress={() => setShowFriends(false)} hitSlop={HIT} accessibilityLabel="Back">
-              <Icon name="chevron-left" size={28} color={c.textPrimary} />
-            </TouchableOpacity>
-            <Text style={styles.pushTitle}>Friends</Text>
-          </View>
-          <ScrollView contentContainerStyle={{ paddingBottom: dockOccupied(insets.bottom) + 24 }}>
-            {friends.length === 0 ? (
-              <Text style={styles.empty}>No friends yet.</Text>
-            ) : friends.map((f) => {
-              const fid = String(f.id ?? f.userId ?? f.phone ?? f.displayName ?? '');
-              return (
-                <View key={fid} style={styles.friendRow}>
-                  <AnimalAvatar id={fid} size={40} />
-                  <Text style={styles.friendName} numberOfLines={1}>
-                    {f.displayName || f.phone || generatedName(fid)}
-                  </Text>
-                </View>
-              );
-            })}
-          </ScrollView>
-        </View>
-      </EdgeSwipePage>
+      {/* Friends — a standing, not a phone book. Pushed from the count. */}
+      <FriendsPage
+        visible={showFriends}
+        onClose={() => setShowFriends(false)}
+        leaderboard={leaderboard}
+        pending={pendingFriends}
+        serverBase={serverBase}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        theme={theme}
+        insets={insets}
+        styles={styles}
+      />
 
       {/* Board conversations — hosted HERE now rather than reached by switching
           to the Turtle tab. It already owns its own EdgeSwipePage, so it is
@@ -500,10 +613,15 @@ export default function ProfileScreen() {
       <StatDetailPage
         metric={statDetail}
         detail={statsDetail}
-        loading={statsDetailLoading}
+        loading={statsLoading}
         headline={stats}
+        rank={myRank}
+        fieldSize={leaderboard.length}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
         onClose={() => setStatDetail(null)}
         onOpenTasks={() => { setStatDetail(null); goTab('Tasks'); }}
+        onOpenFriends={() => { setStatDetail(null); setShowFriends(true); }}
         theme={theme}
         insets={insets}
         styles={styles}
@@ -527,11 +645,80 @@ export default function ProfileScreen() {
 
 const HIT = { top: 10, bottom: 10, left: 10, right: 10 };
 
-const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * What each stat page is MADE of.
+ *
+ * This table exists because the three pages used to share one set of arrays:
+ * `weekday`, `hours`, `topBoards` and `recent` are all task-COMPLETION
+ * queries, so the focus page drew the hours at which tasks were ticked off
+ * under a heading that said "when you focus", and its "day streak" counted
+ * completion days on a page where no timer may have run for a week. Each
+ * metric now names the series it is actually about; the server sends both.
+ */
 const METRICS = {
-  done: { title: 'Tasks completed', unit: 'completed', series: 'completed' },
-  focus: { title: 'Focus sessions', unit: 'sessions', series: 'pomodoros' },
-  points: { title: 'Points', unit: 'points', series: 'completed' },
+  done: {
+    title: 'Tasks completed',
+    unit: 'completed',
+    icon: 'check-circle',
+    series: 'completed',        // field within detail.daily[]
+    trendField: 'completed',    // field within detail.trend.<window>
+    streakKey: 'streak',
+    weekdayKey: 'weekday',
+    hoursKey: 'hours',
+    boardsKey: 'topBoards',
+    boardField: 'completed',
+    rhythmTitle: 'When you finish things',
+    boardsTitle: 'Where you finish things',
+    logKey: 'recent',
+    logTitle: 'Recent completions',
+  },
+  focus: {
+    title: 'Focus sessions',
+    unit: 'sessions',
+    icon: 'timer',
+    series: 'pomodoros',
+    trendField: 'pomodoros',
+    streakKey: 'focusStreak',
+    weekdayKey: 'focusWeekday',
+    hoursKey: 'focusHours',
+    boardsKey: 'topFocusBoards',
+    boardField: 'minutes',
+    boardSuffix: 'm',
+    rhythmTitle: 'When you focus',
+    boardsTitle: 'Where the time went',
+    logKey: 'recentFocus',
+    logTitle: 'Recent focus blocks',
+  },
+  points: {
+    title: 'Points',
+    unit: 'points',
+    icon: 'star-four-points',
+    series: 'points',
+    trendField: 'points',
+    streakKey: 'streak',
+    // Points are earned by BOTH actions, so its rhythm is the two weighted
+    // series added together — computed in the page, since no single server
+    // array answers "when do you score".
+    weekdayKey: null,
+    hoursKey: null,
+    boardsKey: 'topBoards',
+    boardField: 'completed',
+    rhythmTitle: 'When you score',
+    boardsTitle: 'Where the points came from',
+    logKey: 'recent',
+    logTitle: 'Recent completions',
+  },
+};
+
+/** Ordinal suffix for the rank line ("1st of 4"). */
+const ordinal = (n) => {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '';
+  const rem100 = v % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${v}th`;
+  return `${v}${['th', 'st', 'nd', 'rd'][v % 10] || 'th'}`;
 };
 
 // "3d ago" / "just now" for the completions log. Local to this screen — the
@@ -621,6 +808,157 @@ function RankRow({ label, value, max, tint, theme, suffix }) {
   );
 }
 
+/** Medal tint for the podium, or null for everyone else. */
+const MEDAL = { 1: '#F5B301', 2: '#A8B3BD', 3: '#C9773F' };
+
+/**
+ * FriendsPage — the page behind the "friends" count.
+ *
+ * It used to be a list of names and nothing else, which threw away the fact
+ * that /api/friends already returns each person's stats block. The same
+ * response ranked by points is a standing: who is ahead, by how much, and where
+ * you sit in it. The caller splices ITSELF into the list before passing it
+ * here (the server excludes the requester), so "you" is a row like any other —
+ * highlighted, but ranked honestly.
+ */
+function FriendsPage({
+  visible, onClose, leaderboard, pending, serverBase, refreshing, onRefresh, theme, insets, styles,
+}) {
+  const c = theme.colors;
+  const tint = c.accent || c.accentInfo;
+  const top = leaderboard[0];
+  // Totals across the whole pond — the "look what we did together" line, and
+  // the reason this page is worth opening when you're not winning.
+  const pondPoints = leaderboard.reduce((s, r) => s + (r.stats?.points || 0), 0);
+  const pondDone = leaderboard.reduce((s, r) => s + (r.stats?.tasksCompleted || 0), 0);
+  const pondFocus = leaderboard.reduce((s, r) => s + (r.stats?.pomodoros || 0), 0);
+
+  return (
+    <EdgeSwipePage overlay visible={visible} onClose={onClose}>
+      <View style={styles.page}>
+        <View style={[styles.pushHeader, { paddingTop: insets.top + 6 }]}>
+          <TouchableOpacity onPress={onClose} hitSlop={HIT} accessibilityLabel="Back">
+            <Icon name="chevron-left" size={28} color={c.textPrimary} />
+          </TouchableOpacity>
+          <Text style={styles.pushTitle}>Friends</Text>
+        </View>
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: dockOccupied(insets.bottom) + 24 }}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.textSecondary} />
+          }
+        >
+          {leaderboard.length <= 1 ? (
+            <Text style={styles.empty}>
+              No friends yet. Invite someone from Settings and this becomes a leaderboard.
+            </Text>
+          ) : (
+            <>
+              {/* What the pond has done between everyone in it. */}
+              <View style={statStyles.grid}>
+                {[
+                  { label: 'Pond points', value: pondPoints },
+                  { label: 'Tasks done', value: pondDone },
+                  { label: 'Focus blocks', value: pondFocus },
+                  { label: 'In the pond', value: leaderboard.length },
+                ].map((g) => (
+                  <View key={g.label} style={[statStyles.gridCell, { backgroundColor: c.surface, borderColor: c.border }]}>
+                    <Text style={[statStyles.gridValue, { color: c.textPrimary }]} numberOfLines={1}>{g.value}</Text>
+                    <Text style={[statStyles.gridLabel, { color: c.textTertiary }]} numberOfLines={1}>{g.label}</Text>
+                  </View>
+                ))}
+              </View>
+
+              <Text style={[statStyles.sectionHead, { color: c.textTertiary }]}>LEADERBOARD</Text>
+              {leaderboard.map((r) => {
+                const medal = MEDAL[r.rank];
+                const pts = r.stats?.points || 0;
+                // Distance to the person directly above — the number that makes
+                // a standing feel catchable rather than fixed.
+                const gap = top && r.rank > 1 ? (leaderboard[r.rank - 2]?.stats?.points || 0) - pts : 0;
+                const avatar = resolveAvatarUrl(r.avatarUrl, serverBase);
+                return (
+                  <View
+                    key={r.id}
+                    style={[
+                      statStyles.boardRow,
+                      { borderColor: c.border },
+                      r.isMe && { backgroundColor: tint + '14' },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        statStyles.boardRank,
+                        { color: medal || c.textMuted, fontWeight: medal ? '900' : '700' },
+                      ]}
+                    >
+                      {r.rank}
+                    </Text>
+                    {avatar ? (
+                      <Image
+                        source={{ uri: avatar }}
+                        style={statStyles.boardAvatar}
+                        contentFit="cover"
+                        cachePolicy="memory-disk"
+                        transition={150}
+                      />
+                    ) : (
+                      <AnimalAvatar id={r.id} size={38} />
+                    )}
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <View style={statStyles.boardNameRow}>
+                        <Text style={[statStyles.boardName, { color: c.textPrimary }]} numberOfLines={1}>
+                          {r.name}
+                        </Text>
+                        {r.isMe && (
+                          <View style={[statStyles.youChip, { backgroundColor: tint }]}>
+                            <Text style={[statStyles.youChipText, { color: c.background }]}>YOU</Text>
+                          </View>
+                        )}
+                        {!r.joined && (
+                          <Text style={[statStyles.boardPending, { color: c.textMuted }]}>invited</Text>
+                        )}
+                      </View>
+                      <Text style={[statStyles.boardMeta, { color: c.textTertiary }]} numberOfLines={1}>
+                        {r.stats?.level?.name ? `${r.stats.level.name} · ` : ''}
+                        {r.stats?.tasksCompleted || 0} done · {r.stats?.pomodoros || 0} focus
+                        {gap > 0 ? ` · ${gap} behind` : ''}
+                      </Text>
+                    </View>
+                    <Text style={[statStyles.boardPoints, { color: r.isMe ? tint : c.textPrimary }]}>{pts}</Text>
+                  </View>
+                );
+              })}
+            </>
+          )}
+
+          {/* Owner-only: invites nobody has signed in against yet. They have no
+              stats to rank, so they sit below the board rather than at the
+              bottom of it on zero points. */}
+          {pending.length > 0 && (
+            <>
+              <Text style={[statStyles.sectionHead, { color: c.textTertiary }]}>INVITED</Text>
+              {pending.map((p) => (
+                <View key={p.phone} style={styles.friendRow}>
+                  <AnimalAvatar id={p.phone} size={38} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.friendName} numberOfLines={1}>{p.phone}</Text>
+                    <Text style={[statStyles.boardMeta, { color: c.textTertiary }]} numberOfLines={1}>
+                      Hasn&apos;t signed in yet
+                      {p.invitedAt ? ` · invited ${formatRelativeTime(p.invitedAt)}` : ''}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </>
+          )}
+        </ScrollView>
+      </View>
+    </EdgeSwipePage>
+  );
+}
+
 /**
  * StatDetailPage — the page behind a profile stat, plus its sub-pages.
  *
@@ -630,7 +968,10 @@ function RankRow({ label, value, max, tint, theme, suffix }) {
  * the back-swipe steps up one level at a time (a sub-page that shared its
  * parent's page would slide away with nothing left to show).
  */
-function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTasks, theme, insets, styles }) {
+function StatDetailPage({
+  metric, detail, loading, headline, rank, fieldSize, refreshing, onRefresh,
+  onClose, onOpenTasks, onOpenFriends, theme, insets, styles,
+}) {
   const [sub, setSub] = useState(null);
   const c = theme.colors;
   const tint = c.accent || c.accentInfo;
@@ -638,11 +979,17 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
 
   const meta = METRICS[metric] || METRICS.done;
   const totals = detail?.totals;
-  const streak = detail?.streak;
-  const recent = Array.isArray(detail?.recent) ? detail.recent : [];
+  // The metric's OWN streak: focus counts days a timer ran, the others count
+  // days something was finished.
+  const streak = detail?.[meta.streakKey] || null;
+  const log = Array.isArray(detail?.[meta.logKey]) ? detail[meta.logKey] : [];
+  const perTask = detail?.points?.perTask ?? 10;
+  const perPomodoro = detail?.points?.perPomodoro ?? 5;
 
-  // Headline figure: the detailed totals when they've landed, else the four
-  // numbers the profile already had — so the page is never blank while loading.
+  // Headline figure: the detailed totals when they've landed, else the numbers
+  // the profile already had — so the page is never blank while loading, and a
+  // degraded /me/stats (which now omits `totals` entirely) falls through to the
+  // real number rather than overwriting it with a zero.
   const value = metric === 'focus'
     ? (totals?.pomodoros ?? headline?.pomodoros ?? 0)
     : metric === 'points'
@@ -650,7 +997,33 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
       : (totals?.completed ?? headline?.tasksCompleted ?? 0);
 
   const completionRate = totals?.created ? Math.round((totals.completed / totals.created) * 100) : null;
-  const windowTotal = (detail?.daily || []).reduce((s, d) => s + (d?.[meta.series] || 0), 0);
+  // `points` per day is newer than the rest of this payload; derive it from the
+  // two series when an older server hasn't sent it, so the points chart isn't a
+  // flat line against a pond that hasn't been updated yet.
+  const rawDaily = Array.isArray(detail?.daily) ? detail.daily : [];
+  const daily = metric === 'points' && rawDaily.length && rawDaily[0]?.points == null
+    ? rawDaily.map((d) => ({
+      ...d,
+      points: (d?.completed || 0) * perTask + (d?.pomodoros || 0) * perPomodoro,
+    }))
+    : rawDaily;
+  const windowDays = detail?.windowDays ?? 90;
+  const windowTotal = daily.reduce((s, d) => s + (d?.[meta.series] || 0), 0);
+
+  // Movement, in this metric's own unit. This is the block that answers "is
+  // this number going anywhere" — the old page only ever showed lifetime
+  // totals, which look identical on every visit.
+  const trend = detail?.trend || null;
+  const f = meta.trendField;
+  const thisWeek = trend?.week?.[f] ?? null;
+  const lastWeek = trend?.prevWeek?.[f] ?? null;
+  const weekDelta = thisWeek != null && lastWeek != null ? thisWeek - lastWeek : null;
+
+  // Per-day averages over the days that actually had activity, not over the
+  // whole window — "2.4 on a working day" is a truer self-description than a
+  // figure diluted by every weekend off.
+  const activeDays = trend?.activeDays || 0;
+  const perActiveDay = activeDays > 0 ? (windowTotal / activeDays) : null;
 
   // The grid under the chart. Each metric gets the figures that actually
   // explain it rather than one shared set.
@@ -658,15 +1031,15 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
     ? [
       { label: 'Focus time', value: fmtMinutes(totals?.focusMinutes) },
       { label: 'Avg session', value: totals?.pomodoros ? fmtMinutes((totals.focusMinutes || 0) / totals.pomodoros) : '—' },
-      { label: `Last ${detail?.windowDays ?? 90}d`, value: windowTotal },
+      { label: `Last ${windowDays}d`, value: windowTotal },
       { label: 'Points earned', value: detail?.points?.fromPomodoros ?? '—' },
     ]
     : metric === 'points'
       ? [
         { label: 'From tasks', value: detail?.points?.fromTasks ?? '—' },
         { label: 'From focus', value: detail?.points?.fromPomodoros ?? '—' },
-        { label: 'Per task', value: detail?.points?.perTask ?? '—' },
-        { label: 'Per session', value: detail?.points?.perPomodoro ?? '—' },
+        { label: 'Per task', value: perTask },
+        { label: 'Per session', value: perPomodoro },
       ]
       : [
         { label: 'Created', value: totals?.created ?? headline?.tasksCreated ?? '—' },
@@ -675,18 +1048,40 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
         { label: 'Completion', value: completionRate == null ? '—' : `${completionRate}%` },
       ];
 
-  const weekday = Array.isArray(detail?.weekday) ? detail.weekday : [];
+  // Rhythm arrays, chosen per metric. Points has no server array of its own
+  // (it isn't a logged event — it's a weighting of two others), so its rhythm
+  // is the two weighted series summed.
+  const blend = (a, b) => {
+    const A = Array.isArray(a) ? a : [];
+    const B = Array.isArray(b) ? b : [];
+    const n = Math.max(A.length, B.length);
+    return Array.from({ length: n }, (_, i) => (A[i] || 0) * perTask + (B[i] || 0) * perPomodoro);
+  };
+  const weekday = meta.weekdayKey
+    ? (Array.isArray(detail?.[meta.weekdayKey]) ? detail[meta.weekdayKey] : [])
+    : blend(detail?.weekday, detail?.focusWeekday);
   const weekdayMax = weekday.reduce((m, n) => Math.max(m, n), 0);
-  const hours = Array.isArray(detail?.hours) ? detail.hours : [];
+  const hours = meta.hoursKey
+    ? (Array.isArray(detail?.[meta.hoursKey]) ? detail[meta.hoursKey] : [])
+    : blend(detail?.hours, detail?.focusHours);
   const hoursMax = hours.reduce((m, n) => Math.max(m, n), 0);
-  const topBoards = Array.isArray(detail?.topBoards) ? detail.topBoards : [];
-  const boardMax = topBoards.reduce((m, b) => Math.max(m, b?.completed || 0), 0);
+
+  const topBoards = Array.isArray(detail?.[meta.boardsKey]) ? detail[meta.boardsKey] : [];
+  const boardMax = topBoards.reduce((m, b) => Math.max(m, b?.[meta.boardField] || 0), 0);
   // Only the busiest few hours are worth a row — 24 bars of mostly zero is noise.
   const topHours = hours
     .map((n, h) => ({ h, n }))
     .filter((x) => x.n > 0)
     .sort((a, b) => b.n - a.n)
     .slice(0, 5);
+
+  const level = detail?.level || headline?.level || null;
+  const best = detail?.best || null;
+  // The personal best that belongs to THIS metric, phrased in its own unit.
+  const bestLine = metric === 'focus'
+    ? (best?.focusDay ? `${best.focusDay.n} blocks · ${fmtMinutes(best.focusDay.minutes)}` : null)
+    : (best?.doneDay ? `${best.doneDay.n} tasks` : null);
+  const bestDay = metric === 'focus' ? best?.focusDay?.day : best?.doneDay?.day;
 
   return (
     <EdgeSwipePage overlay visible={!!metric} onClose={onClose} swipeEnabled={!sub}>
@@ -701,13 +1096,113 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
         <ScrollView
           contentContainerStyle={{ paddingBottom: dockOccupied(insets.bottom) + 24 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.textSecondary} />
+          }
         >
-          {/* Hero */}
+          {/* Hero. The metric's icon sits above the figure so the three pages
+              are distinguishable at a glance rather than by their title alone. */}
           <View style={statStyles.hero}>
+            <Icon name={meta.icon} size={22} color={tint} style={{ marginBottom: 6 }} />
             <Text style={[statStyles.heroValue, { color: c.textPrimary }]}>{value}</Text>
             <Text style={[statStyles.heroUnit, { color: c.textTertiary }]}>{meta.unit}</Text>
+            {/* Week-on-week, right under the headline: the difference between a
+                trophy cabinet and a dashboard. */}
+            {weekDelta != null && (thisWeek > 0 || lastWeek > 0) && (
+              <View style={[statStyles.deltaChip, { backgroundColor: (weekDelta >= 0 ? tint : c.textMuted) + '22' }]}>
+                <Icon
+                  name={weekDelta > 0 ? 'trending-up' : weekDelta < 0 ? 'trending-down' : 'trending-neutral'}
+                  size={13}
+                  color={weekDelta >= 0 ? tint : c.textSecondary}
+                />
+                <Text style={[statStyles.deltaText, { color: weekDelta >= 0 ? tint : c.textSecondary }]}>
+                  {weekDelta === 0
+                    ? 'level with last week'
+                    : `${weekDelta > 0 ? '+' : ''}${weekDelta} vs last week`}
+                </Text>
+              </View>
+            )}
             {loading && !detail && <ActivityIndicator style={{ marginTop: 10 }} color={c.textTertiary} />}
           </View>
+
+          {/* Level — only on the points page, where it IS the story: which tier
+              the score sits in and how far the next one is. */}
+          {metric === 'points' && !!level && (
+            <View style={[statStyles.card, { backgroundColor: c.surface, borderColor: c.border }]}>
+              <View style={statStyles.levelHead}>
+                <Icon name="shield-star" size={20} color={tint} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[statStyles.levelName, { color: c.textPrimary }]} numberOfLines={1}>
+                    {level.name}
+                  </Text>
+                  <Text style={[statStyles.linkSub, { color: c.textTertiary }]} numberOfLines={1}>
+                    {level.nextName
+                      ? `${level.toNext} points to ${level.nextName}`
+                      : 'Top tier — nothing left to climb'}
+                  </Text>
+                </View>
+                <Text style={[statStyles.levelPct, { color: tint }]}>
+                  {Math.round((level.progress || 0) * 100)}%
+                </Text>
+              </View>
+              {/* Deliberately NOT statStyles.rankTrack: that one is flex:1 for
+                  its row layout, and flexBasis:0 inside this column would fight
+                  the fixed height. */}
+              <View style={[statStyles.levelTrack, { backgroundColor: c.surfaceElevated }]}>
+                <View
+                  style={[
+                    statStyles.rankFill,
+                    { width: `${Math.round((level.progress || 0) * 100)}%`, backgroundColor: tint },
+                  ]}
+                />
+              </View>
+              {/* The whole ladder, so what's ahead is visible rather than a
+                  surprise. Reached tiers are tinted; the rest are outlines. */}
+              {Array.isArray(detail?.levels) && (
+                <View style={statStyles.ladder}>
+                  {detail.levels.map((l, i) => (
+                    <View key={l.name} style={statStyles.ladderCell}>
+                      <View
+                        style={[
+                          statStyles.ladderDot,
+                          {
+                            backgroundColor: i <= level.index ? tint : 'transparent',
+                            borderColor: i <= level.index ? tint : c.border,
+                          },
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          statStyles.ladderLabel,
+                          { color: i === level.index ? c.textPrimary : c.textMuted },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {l.name}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Today / week / month, in this metric's unit. */}
+          {!!trend && (
+            <View style={statStyles.grid}>
+              {[
+                { label: 'Today', value: trend.today?.[f] ?? 0 },
+                { label: 'This week', value: thisWeek ?? 0 },
+                { label: 'This month', value: trend.month?.[f] ?? 0 },
+                { label: `Active days / ${windowDays}`, value: activeDays },
+              ].map((g) => (
+                <View key={g.label} style={[statStyles.gridCell, { backgroundColor: c.surface, borderColor: c.border }]}>
+                  <Text style={[statStyles.gridValue, { color: c.textPrimary }]} numberOfLines={1}>{g.value}</Text>
+                  <Text style={[statStyles.gridLabel, { color: c.textTertiary }]} numberOfLines={1}>{g.label}</Text>
+                </View>
+              ))}
+            </View>
+          )}
 
           {/* Streaks — the one figure that rewards consistency rather than volume. */}
           {!!streak && (
@@ -715,7 +1210,9 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
               <View style={statStyles.streakCell}>
                 <Icon name="fire" size={18} color={streak.current > 0 ? tint : c.textMuted} />
                 <Text style={[statStyles.streakNum, { color: c.textPrimary }]}>{streak.current}</Text>
-                <Text style={[statStyles.streakLabel, { color: c.textTertiary }]}>day streak</Text>
+                <Text style={[statStyles.streakLabel, { color: c.textTertiary }]}>
+                  {metric === 'focus' ? 'focus streak' : 'day streak'}
+                </Text>
               </View>
               <View style={[statStyles.streakDivider, { backgroundColor: c.border }]} />
               <View style={statStyles.streakCell}>
@@ -723,16 +1220,68 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
                 <Text style={[statStyles.streakNum, { color: c.textPrimary }]}>{streak.best}</Text>
                 <Text style={[statStyles.streakLabel, { color: c.textTertiary }]}>best ever</Text>
               </View>
+              {perActiveDay != null && (
+                <>
+                  <View style={[statStyles.streakDivider, { backgroundColor: c.border }]} />
+                  <View style={statStyles.streakCell}>
+                    <Icon name="chart-line" size={18} color={c.textMuted} />
+                    <Text style={[statStyles.streakNum, { color: c.textPrimary }]}>
+                      {perActiveDay >= 10 ? Math.round(perActiveDay) : perActiveDay.toFixed(1)}
+                    </Text>
+                    <Text style={[statStyles.streakLabel, { color: c.textTertiary }]}>per active day</Text>
+                  </View>
+                </>
+              )}
             </View>
           )}
 
+          {/* Personal best — the record to beat, with the day it happened. */}
+          {!!bestLine && metric !== 'points' && (
+            <View style={[statStyles.bestCard, { backgroundColor: tint + '14', borderColor: tint + '33' }]}>
+              <Icon name="medal-outline" size={22} color={tint} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[statStyles.linkTitle, { color: c.textPrimary }]} numberOfLines={1}>
+                  Best day: {bestLine}
+                </Text>
+                <Text style={[statStyles.linkSub, { color: c.textTertiary }]} numberOfLines={1}>
+                  {fmtDay(bestDay)}
+                  {metric === 'focus' && best?.longestSession
+                    ? ` · longest block ${fmtMinutes(best.longestSession)}`
+                    : ''}
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {/* Standing among the pond — on the points page, because points are
+              what the leaderboard ranks by. */}
+          {metric === 'points' && !!rank && fieldSize > 1 && (
+            <TouchableOpacity
+              style={[statStyles.bestCard, { backgroundColor: tint + '14', borderColor: tint + '33' }]}
+              onPress={() => { tapHaptic(); onOpenFriends(); }}
+              accessibilityRole="button"
+              accessibilityLabel="Open the leaderboard"
+            >
+              <Icon name="podium" size={22} color={tint} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[statStyles.linkTitle, { color: c.textPrimary }]} numberOfLines={1}>
+                  {ordinal(rank)} of {fieldSize} in the pond
+                </Text>
+                <Text style={[statStyles.linkSub, { color: c.textTertiary }]} numberOfLines={1}>
+                  See the full leaderboard
+                </Text>
+              </View>
+              <Icon name="chevron-right" size={20} color={c.textMuted} />
+            </TouchableOpacity>
+          )}
+
           {/* 90-day chart */}
-          {!!detail?.daily?.length && (
+          {daily.length > 0 && (
             <View style={[statStyles.card, { backgroundColor: c.surface, borderColor: c.border }]}>
               <Text style={[statStyles.cardTitle, { color: c.textPrimary }]}>
-                Last {detail.windowDays} days
+                Last {windowDays} days · {windowTotal} {meta.unit}
               </Text>
-              <DailyBars daily={detail.daily} field={meta.series} tint={tint} theme={theme} />
+              <DailyBars daily={daily} field={meta.series} tint={tint} theme={theme} />
             </View>
           )}
 
@@ -746,10 +1295,10 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
             ))}
           </View>
 
-          {/* Rhythm — when the work actually happens. */}
+          {/* Rhythm — when the work actually happens, measured in this metric. */}
           {weekdayMax > 0 && (
             <View style={[statStyles.card, { backgroundColor: c.surface, borderColor: c.border }]}>
-              <Text style={[statStyles.cardTitle, { color: c.textPrimary }]}>By day of week</Text>
+              <Text style={[statStyles.cardTitle, { color: c.textPrimary }]}>{meta.rhythmTitle}</Text>
               {weekday.map((n, i) => (
                 <RankRow key={i} label={WEEKDAYS[i]} value={n} max={weekdayMax} tint={tint} theme={theme} />
               ))}
@@ -758,7 +1307,7 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
 
           {topHours.length > 0 && (
             <View style={[statStyles.card, { backgroundColor: c.surface, borderColor: c.border }]}>
-              <Text style={[statStyles.cardTitle, { color: c.textPrimary }]}>Busiest hours</Text>
+              <Text style={[statStyles.cardTitle, { color: c.textPrimary }]}>Peak hours</Text>
               {topHours.map((x) => (
                 <RankRow
                   key={x.h}
@@ -772,11 +1321,19 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
             </View>
           )}
 
-          {topBoards.length > 0 && metric !== 'focus' && (
+          {topBoards.length > 0 && (
             <View style={[statStyles.card, { backgroundColor: c.surface, borderColor: c.border }]}>
-              <Text style={[statStyles.cardTitle, { color: c.textPrimary }]}>Top boards</Text>
+              <Text style={[statStyles.cardTitle, { color: c.textPrimary }]}>{meta.boardsTitle}</Text>
               {topBoards.map((b) => (
-                <RankRow key={b.name} label={b.name} value={b.completed} max={boardMax} tint={tint} theme={theme} />
+                <RankRow
+                  key={b.name}
+                  label={b.name}
+                  value={b[meta.boardField] || 0}
+                  max={boardMax}
+                  tint={tint}
+                  theme={theme}
+                  suffix={meta.boardSuffix}
+                />
               ))}
             </View>
           )}
@@ -787,13 +1344,15 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
               style={[statStyles.linkRow, { backgroundColor: c.surfaceElevated, borderColor: c.border }]}
               onPress={() => { tapHaptic(); setSub('log'); }}
               accessibilityRole="button"
-              accessibilityLabel="Recent completions"
+              accessibilityLabel={meta.logTitle}
             >
               <Icon name="history" size={20} color={tint} />
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={[statStyles.linkTitle, { color: c.textPrimary }]}>Recent completions</Text>
+                <Text style={[statStyles.linkTitle, { color: c.textPrimary }]}>{meta.logTitle}</Text>
                 <Text style={[statStyles.linkSub, { color: c.textTertiary }]} numberOfLines={1}>
-                  {recent.length ? `Last ${recent.length} finished tasks` : 'Nothing finished yet'}
+                  {log.length
+                    ? `The last ${log.length} records behind this number`
+                    : 'Nothing recorded yet'}
                 </Text>
               </View>
               <Icon name="chevron-right" size={20} color={c.textMuted} />
@@ -833,28 +1392,45 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
           </View>
         </ScrollView>
 
-        {/* SUB-PAGE: the completions log. Its own page so the back-swipe returns
-            here rather than closing the whole stat. */}
+        {/* SUB-PAGE: the log behind the number. Its own page so the back-swipe
+            returns here rather than closing the whole stat.
+
+            The rows differ by metric: completions are "task, when", focus
+            blocks are "task, when, how long". The focus page used to show the
+            completions log, which listed tasks that no timer had ever run
+            against. */}
         <EdgeSwipePage overlay visible={sub === 'log'} onClose={() => setSub(null)}>
           <View style={styles.page}>
             <View style={[styles.pushHeader, { paddingTop: insets.top + 6 }]}>
               <TouchableOpacity onPress={() => setSub(null)} hitSlop={HIT} accessibilityLabel="Back">
                 <Icon name="chevron-left" size={28} color={c.textPrimary} />
               </TouchableOpacity>
-              <Text style={styles.pushTitle}>Recent completions</Text>
+              <Text style={styles.pushTitle}>{meta.logTitle}</Text>
             </View>
             <ScrollView contentContainerStyle={{ paddingBottom: dockOccupied(insets.bottom) + 24 }}>
-              {recent.length === 0 ? (
-                <Text style={styles.empty}>No completed tasks yet.</Text>
-              ) : recent.map((r) => (
+              {log.length === 0 ? (
+                <Text style={styles.empty}>
+                  {metric === 'focus' ? 'No focus blocks finished yet.' : 'No completed tasks yet.'}
+                </Text>
+              ) : log.map((r) => (
                 <View key={String(r.id)} style={statStyles.logRow}>
-                  <Icon name="check-circle" size={18} color={tint} />
+                  <Icon
+                    name={metric === 'focus' ? 'timer' : 'check-circle'}
+                    size={18}
+                    color={tint}
+                  />
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={[statStyles.logTitle, { color: c.textPrimary }]} numberOfLines={1}>{r.title}</Text>
                     <Text style={[statStyles.logMeta, { color: c.textTertiary }]} numberOfLines={1}>
-                      {formatRelativeTime(r.completedAt)}{r.project ? ` · ${r.project}` : ''}
+                      {formatRelativeTime(metric === 'focus' ? r.at : r.completedAt)}
+                      {r.project ? ` · ${r.project}` : ''}
                     </Text>
                   </View>
+                  {metric === 'focus' && !!r.minutes && (
+                    <Text style={[statStyles.logMinutes, { color: c.textSecondary }]}>
+                      {fmtMinutes(r.minutes)}
+                    </Text>
+                  )}
                 </View>
               ))}
             </ScrollView>
@@ -905,8 +1481,47 @@ function StatDetailPage({ metric, detail, loading, headline, onClose, onOpenTask
               <View style={[statStyles.ledgerRow, { borderColor: 'transparent' }]}>
                 <View style={{ width: 20 }} />
                 <Text style={[statStyles.linkTitle, { flex: 1, color: c.textPrimary }]}>Total</Text>
-                <Text style={[statStyles.ledgerTotal, { color: tint }]}>{totals?.points ?? 0}</Text>
+                <Text style={[statStyles.ledgerTotal, { color: tint }]}>
+                  {totals?.points ?? headline?.points ?? 0}
+                </Text>
               </View>
+
+              {/* What the total buys. The ladder is the server's, so a tier
+                  rename or a re-weighting shows up here without a new build. */}
+              {!!level && (
+                <>
+                  <Text style={[statStyles.sectionHead, { color: c.textTertiary, paddingHorizontal: 0 }]}>
+                    TIERS
+                  </Text>
+                  {(Array.isArray(detail?.levels) ? detail.levels : []).map((l, i) => (
+                    <View key={l.name} style={[statStyles.ledgerRow, { borderColor: c.border }]}>
+                      <Icon
+                        name={i <= level.index ? 'shield-star' : 'shield-outline'}
+                        size={20}
+                        color={i <= level.index ? tint : c.textMuted}
+                      />
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text
+                          style={[
+                            statStyles.linkTitle,
+                            { color: i === level.index ? tint : c.textPrimary },
+                          ]}
+                        >
+                          {l.name}{i === level.index ? ' · you are here' : ''}
+                        </Text>
+                        <Text style={[statStyles.linkSub, { color: c.textTertiary }]}>
+                          {l.floor === 0 ? 'from the start' : `${l.floor} points`}
+                        </Text>
+                      </View>
+                      {i === level.index + 1 && (
+                        <Text style={[statStyles.linkSub, { color: c.textSecondary }]}>
+                          {level.toNext} to go
+                        </Text>
+                      )}
+                    </View>
+                  ))}
+                </>
+              )}
             </ScrollView>
           </View>
         </EdgeSwipePage>
@@ -921,6 +1536,54 @@ const statStyles = StyleSheet.create({
   hero: { alignItems: 'center', paddingTop: 18, paddingBottom: 20 },
   heroValue: { fontSize: 56, fontWeight: '800', letterSpacing: -1 },
   heroUnit: { fontSize: 13, marginTop: 2 },
+  // Week-on-week pill under the hero figure.
+  deltaChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, marginTop: 10,
+  },
+  deltaText: { fontSize: 12, fontWeight: '700' },
+  sectionHead: {
+    fontSize: 11, fontWeight: '800', letterSpacing: 0.8,
+    paddingHorizontal: 16, marginTop: 10, marginBottom: 6,
+  },
+  // Level block on the points page.
+  levelHead: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  levelName: { fontSize: 17, fontWeight: '800' },
+  levelPct: { fontSize: 15, fontWeight: '800' },
+  // Full-width bar in a COLUMN container — alignSelf:'stretch' rather than
+  // flex:1, so it spans the card without growing vertically.
+  levelTrack: {
+    alignSelf: 'stretch', height: 10, borderRadius: 5,
+    overflow: 'hidden', marginTop: 12,
+  },
+  ladder: { flexDirection: 'row', marginTop: 14 },
+  ladderCell: { flex: 1, alignItems: 'center', gap: 5 },
+  ladderDot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5 },
+  // 9pt because eight tier names have to share the card's width.
+  ladderLabel: { fontSize: 9, fontWeight: '600' },
+  // Personal-best / standing callout: tinted, so it reads as an award rather
+  // than another data card.
+  bestCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    marginHorizontal: 16, marginBottom: 14, padding: 14,
+    borderRadius: 16, borderWidth: StyleSheet.hairlineWidth,
+  },
+  // Leaderboard rows.
+  boardRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 16, paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  // Fixed width so avatars line up however many digits the rank has.
+  boardRank: { width: 22, fontSize: 15, textAlign: 'center' },
+  boardAvatar: { width: 38, height: 38, borderRadius: 19 },
+  boardNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  boardName: { fontSize: 15, fontWeight: '700', flexShrink: 1 },
+  boardMeta: { fontSize: 12, marginTop: 1 },
+  boardPoints: { fontSize: 17, fontWeight: '800' },
+  boardPending: { fontSize: 11, fontStyle: 'italic' },
+  youChip: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 999 },
+  youChipText: { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
   streakRow: {
     flexDirection: 'row', marginHorizontal: 16, marginBottom: 14,
     borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 14,
@@ -965,6 +1628,7 @@ const statStyles = StyleSheet.create({
   },
   logTitle: { fontSize: 15, fontWeight: '600' },
   logMeta: { fontSize: 12, marginTop: 1 },
+  logMinutes: { fontSize: 13, fontWeight: '700' },
   ledgerNote: { fontSize: 13, lineHeight: 19, marginBottom: 16 },
   ledgerRow: {
     flexDirection: 'row', alignItems: 'center', gap: 14,
@@ -1090,9 +1754,18 @@ const makeStyles = (theme) => {
       borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border,
     },
     statDivider: { width: StyleSheet.hairlineWidth, backgroundColor: c.border, marginVertical: 2 },
-    stat: { flex: 1, alignItems: 'center', paddingVertical: 4, paddingHorizontal: 6 },
+    // paddingHorizontal is 4, not 6: the cells now carry a hint line ("12h 30m
+    // total") that needs every point of width it can get before it ellipsises.
+    stat: { flex: 1, alignItems: 'center', paddingVertical: 4, paddingHorizontal: 4 },
     statNum: { fontSize: 19, fontWeight: '800', color: c.textPrimary },
     statLabel: { fontSize: 11, color: c.textTertiary, marginTop: 1 },
+    // Reserved height, so a cell whose hint hasn't loaded (or has none) keeps
+    // the same footprint as its neighbours and the strip can't jump.
+    statHintSlot: { height: 14, justifyContent: 'center', alignSelf: 'stretch' },
+    statHint: {
+      fontSize: 9, fontWeight: '700', color: c.accent || c.accentInfo,
+      textAlign: 'center',
+    },
     cards: { marginTop: 26, paddingHorizontal: 16, gap: 10 },
     card: {
       flexDirection: 'row', alignItems: 'center', gap: 14,

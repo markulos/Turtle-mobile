@@ -17,7 +17,8 @@
  *               phone in one tap (the OS shows its own confirm).
  */
 import React from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Linking } from 'react-native';
+import { NO_OFFER_IOS_DOCUMENTS, NO_OFFER_PHOTO_ACCESS } from '../utils/originalDeletion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
@@ -163,6 +164,30 @@ export default function VaultUploadPill() {
                 <Icon name="close" size={18} color={c.textMuted} />
               </TouchableOpacity>
             </View>
+            {/* Nothing to offer, but there WERE originals on the phone: say
+                which of the two reasons it is. An iOS document is a permanent
+                fact (the picker copies the file and never gives us the user's
+                own), so it is a sentence. Limited photo access is a setting,
+                so it gets the button that changes it. */}
+            {state.deletableCount === 0 && !!state.deleteHint && (
+              <View style={styles.buttons}>
+                <Text style={[styles.subtitle, { color: c.textMuted, flex: 1 }]} numberOfLines={3}>
+                  {state.deleteHint === NO_OFFER_IOS_DOCUMENTS
+                    ? 'Originals stay on your phone — iOS hands apps a copy of a file you pick, never the file itself.'
+                    : 'Turtle needs full Photos access to offer to delete the originals.'}
+                </Text>
+                {state.deleteHint === NO_OFFER_PHOTO_ACCESS && (
+                  <TouchableOpacity
+                    style={[styles.btn, { backgroundColor: c.surface }]}
+                    onPress={() => Linking.openSettings().catch(() => {})}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open Turtle's settings to allow full photo access"
+                  >
+                    <Text style={{ color: c.textPrimary, fontWeight: '600', fontSize: 13 }}>Allow</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
             {state.deletableCount > 0 && (
               <View style={styles.buttons}>
                 <TouchableOpacity
@@ -177,6 +202,11 @@ export default function VaultUploadPill() {
                   onPress={deleteOriginals}
                 >
                   <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                    {/* The count is the number of the USER's files that will
+                        actually disappear — never our own staging copies, and
+                        never the ones the OS won't let us touch (an iOS
+                        document is a copy, not the original). So a batch of
+                        three photos and two PDFs offers "Delete 3". */}
                     Delete {state.deletableCount} from phone
                   </Text>
                 </TouchableOpacity>

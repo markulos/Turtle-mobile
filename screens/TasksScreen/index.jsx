@@ -35,7 +35,7 @@ import { useTaskData } from './hooks/useTaskData';
 import { useCollapsibleTasks } from './hooks/useCollapsibleTasks';
 import { advanceDueDate, minDate, maxDate, localTodayStr, lastCompletedDate, isTaskDoneNow, matchesRecurrence, nextOccurrenceAfter, itemTypeOf, taskPassesFilters, boardLabel } from './utils/taskHelpers';
 import { completionChange } from './utils/completionChange';
-import { tapHaptic, impactHaptic } from '../../utils/haptics';
+import { tapHaptic, impactHaptic, selectionHaptic } from '../../utils/haptics';
 import { resolveAvatarUrl } from '../../utils/avatarUrl';
 
 // An event is "over" once its end is in the past — start time + duration (a
@@ -125,6 +125,20 @@ import {
   SectionHeader,
   CalendarView,
 } from './components';
+// The x the agenda's thread is drawn at — shared with the rows so the
+// dividers' segments and the rows' segments are one line.
+import {
+  RAIL_ABS_X, RAIL_W, threadColor, TimelineGutter, TimelinePointer,
+  // The band's width and the card column's left edge — the agenda's own chrome
+  // aligns to these so it clears the gutter and matches the rows exactly.
+  GUTTER_W, CARD_COL_X, ROW_PAD,
+  setScrubbing as setGutterScrubbing,
+} from './components/TimelineTaskRow';
+import { clockLabel } from './components/ScheduleCard';
+// `pointerLabel` is aliased: the screen already has state by that name.
+import { indexAtContentY, dayKeyAt, pointerLabel as pointerReadout } from './utils/timelinePointer';
+import { boardCardPalette } from './utils/cardPalette';
+import { boardColorAt } from './utils/boardColors';
 import FriendCard from '../TurtleScreen/components/FriendCard';
 import PeoplePopover from './components/PeoplePopover';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
@@ -136,7 +150,13 @@ import BoardRail from './components/BoardRail';
 import StatusSegment, { STATUS_OPTIONS } from './components/StatusSegment';
 import BoardManagerSheet from './components/BoardManagerSheet';
 import TaskInspectorSheet from './components/TaskInspectorSheet';
+import SchedulePickerSheet from './components/SchedulePickerSheet';
 import OverviewPage from './components/OverviewPage';
+
+// The row's real board, or null. "None" is stored three ways — absent, empty,
+// and the legacy 'No Project' sentinel (see boardLabel) — and all three mean
+// the same plain card.
+const boardOf = (t) => (t?.project && t.project !== 'No Project' ? t.project : null);
 
 
 // Distinct project colours that read well against the green/yellow palette.
@@ -153,28 +173,8 @@ const RAIL_OPEN_MS = 280;
 const RAIL_CLOSE_MS = 240;
 const RAIL_EASE = ReEasing.bezier(0.4, 0, 0.2, 1);
 
-const PROJECT_COLORS = [
-  '#4CAF50', // Green
-  '#2196F3', // Blue
-  '#9C27B0', // Purple
-  '#FF5722', // Deep Orange
-  '#00BCD4', // Cyan
-  '#795548', // Brown
-  '#E91E63', // Pink
-  '#3F51B5', // Indigo
-  '#009688', // Teal
-  '#FF9800', // Orange
-  '#607D8B', // Blue Grey
-  '#8BC34A', // Light Green
-  '#00E676', // Bright Green
-  '#2979FF', // Bright Blue
-  '#D500F9', // Bright Purple
-  '#FF3D00', // Bright Orange
-  '#00B0FF', // Light Blue
-  '#76FF03', // Lime
-  '#FFEA00', // Yellow
-  '#FF9100', // Amber
-];
+// The board palette lives in utils/boardColors — shared with the calendar,
+// which used to hash board names into a palette of its own.
 
 // Lazy-load placeholder shown at the top of the history band while an older
 // batch resolves. Fixed-height rows (icon-rail dot + card with two text bars)
@@ -251,13 +251,20 @@ function getSharedPulse() {
 function PastPlaceholderRow({ theme }) {
   const pulse = getSharedPulse();
   const block = theme.colors.border;
-  const card = theme.mode === 'dark' ? theme.colors.surfaceHighlight : theme.colors.surface;
+  // A slot whose row hasn't loaded has no board yet either — the PLAIN card,
+  // so the swap to a real row changes tone only when that row turns out to
+  // belong to a board.
+  const card = boardCardPalette(theme, null).card;
   const bar = (w, h, extra) => ({ width: w, height: h, borderRadius: h / 2, backgroundColor: block, ...(extra || {}) });
   return (
     <View style={{ flexDirection: 'row', marginBottom: 12, paddingHorizontal: 14 }} pointerEvents="none">
-      {/* Time column — a short bar where the real row shows its start time. */}
-      <View style={{ width: 62, paddingTop: 13 }}>
-        <View style={bar(40, 10)} />
+      {/* Time column — a short bar where the real row prints its time. Width
+          and inset track TimelineTaskRow's TIME_COL so the placeholder's
+          footprint stays pixel-identical to a real row; it hugs the column's
+          LEFT edge, and wears the band's own ink rather than the page's,
+          because it sits ON the black gutter. */}
+      <View style={{ width: 74, paddingTop: 9, alignItems: 'flex-start', justifyContent: 'center', height: 22 + 9 }}>
+        <View style={bar(44, 9, { backgroundColor: 'rgba(255,255,255,0.22)' })} />
       </View>
       {/* Card — locked to the uniform card height; when/title/subtitle bars. */}
       <Animated.View
@@ -342,7 +349,7 @@ function UpcomingSkeletonRow({ theme, index, titleW, isFirst, isLast }) {
     }).start();
   }, [enter, index]);
   const block = theme.colors.border;
-  const card = theme.mode === 'dark' ? theme.colors.surfaceHighlight : theme.colors.surface;
+  const card = boardCardPalette(theme, null).card;
   const bar = (w, h, extra) => ({ width: w, height: h, borderRadius: h / 2, backgroundColor: block, ...(extra || {}) });
   return (
     <Animated.View
@@ -964,16 +971,19 @@ export default function TasksScreen() {
   const projectColorMap = useMemo(() => {
     const map = {};
     projects.forEach((project, index) => {
-      map[project] = PROJECT_COLORS[index % PROJECT_COLORS.length];
+      map[project] = boardColorAt(index);
     });
     return map;
   }, [projects]);
 
-  // Get color for a project
-  const getProjectColor = (projectName) => {
+  // Get color for a project. Memoized on the map it reads: it is handed to
+  // MEMOIZED children (the calendar's month pages and day panes), whose
+  // comparators shallow-compare every prop — a fresh closure each render would
+  // bust their memo on every keystroke elsewhere on the screen.
+  const getProjectColor = useCallback((projectName) => {
     if (!projectName || projectName === 'All') return theme.colors.textSecondary;
     return projectColorMap[projectName] || theme.colors.textSecondary;
-  };
+  }, [projectColorMap, theme.colors.textSecondary]);
   
   // Use collapsible tasks hook - ALL collapsed by default
   const collapsible = useCollapsibleTasks(doneTasks, projects, {
@@ -1509,6 +1519,112 @@ export default function TasksScreen() {
     placeholderVisibleRef.current = anyPlaceholder;
     if (anyPlaceholder) loadOlderRef.current?.();
   }).current;
+
+  // ── The timeline pointer ──────────────────────────────────────────────────
+  // A fixed mark on the gutter's edge that reads whatever the agenda is
+  // passing under it. Scrolling scrubs the timeline PAST the pointer, so the
+  // mark itself never moves — it's the one still thing on the screen, and its
+  // readout is where you are in the timeline.
+  //
+  // Position is a fraction of the list's height (an upper-third playhead),
+  // clamped so it stays sane on a very short or very tall viewport.
+  const [listH, setListH] = useState(0);
+  const pointerTop = Math.max(110, Math.min(280, Math.round(listH * 0.3)));
+  const pointerTopRef = useRef(pointerTop);
+  pointerTopRef.current = pointerTop;
+  const [pointerLabel, setPointerLabel] = useState(null);
+  const [scrubbing, setScrubbing] = useState(false);
+  // Bumped on each day crossing — the pointer springs on the change, so the
+  // kick and the buzz land on the same frame.
+  const [dayBeat, setDayBeat] = useState(0);
+  // `armed` keeps the FIRST resolution silent: landing on the agenda is not a
+  // day crossing, and buzzing on mount would be a phantom.
+  const pointerRef = useRef({ dateKey: null, label: null, armed: false });
+  const scrubTimer = useRef(null);
+  // The scroll handler runs every frame; it reads the agenda off a ref rather
+  // than closing over it so it never has to be rebuilt as the list changes.
+  const agendaRef = useRef(agenda.items);
+  agendaRef.current = agenda.items;
+  // Mirrors `scrubbing` so the handler can tell "already open" without
+  // depending on state it may not have re-rendered with yet.
+  const scrubbingRef = useRef(false);
+
+  // Which item is under the pointer right now. FlashList knows the content
+  // geometry (computeVisibleIndices + getLayout), so this is a scan of the
+  // handful of on-screen items rather than anything measured or guessed.
+  const resolvePointer = useCallback(() => {
+    const list = listRef.current;
+    const items = agendaRef.current;
+    if (!list?.computeVisibleIndices || !list?.getLayout || !items?.length) return;
+    let range;
+    try { range = list.computeVisibleIndices(); } catch (e) { return; }
+    if (!range) return;
+    const targetY = scrollY.current + pointerTopRef.current;
+    const hit = indexAtContentY(
+      targetY,
+      Math.max(0, range.startIndex),
+      Math.min(range.endIndex, items.length - 1),
+      (i) => list.getLayout(i), // bound: FlashList's ref methods want their `this`
+    );
+    if (hit < 0) return;
+
+    const dateKey = dayKeyAt(items, hit);
+    if (!dateKey) return;
+    const label = pointerReadout(
+      items[hit],
+      dateKey,
+      agendaDateLabel,
+      (mins) => clockLabel(mins, timeFormat === '24h', { pad: false }),
+    );
+    if (!label) return;
+
+    if (dateKey !== pointerRef.current.dateKey) {
+      // Subtle tick on every new day the timeline crosses.
+      if (pointerRef.current.armed) {
+        selectionHaptic();
+        setDayBeat((b) => b + 1);
+      }
+      pointerRef.current.dateKey = dateKey;
+      pointerRef.current.armed = true;
+    }
+    // Only ever setState when the printed string actually changes — this runs
+    // on every scroll frame.
+    if (label !== pointerRef.current.label) {
+      pointerRef.current.label = label;
+      setPointerLabel(label);
+    }
+  }, [timeFormat]);
+
+  // A scroll opens the pointer (and hands it the margin, see `scrubFade`);
+  // going quiet for a beat closes it again.
+  const onAgendaScroll = useCallback((e) => {
+    scrollY.current = e.nativeEvent.contentOffset.y;
+    if (!scrubbingRef.current) {
+      scrubbingRef.current = true;
+      setGutterScrubbing(true);
+      setScrubbing(true);
+    }
+    clearTimeout(scrubTimer.current);
+    scrubTimer.current = setTimeout(() => {
+      scrubbingRef.current = false;
+      setGutterScrubbing(false);
+      setScrubbing(false);
+    }, 650);
+    resolvePointer();
+  }, [resolvePointer]);
+
+  // Settle the readout whenever the agenda itself changes under a still
+  // finger (a fill, a new task), not only when something scrolls.
+  useEffect(() => {
+    const t = setTimeout(resolvePointer, 60);
+    return () => clearTimeout(t);
+  }, [agenda.items, listH, resolvePointer]);
+
+  useEffect(() => () => {
+    clearTimeout(scrubTimer.current);
+    // Leaving mid-scrub would strand the rows' times faded out.
+    setGutterScrubbing(false);
+  }, []);
   // "Scroll to today" — rebuilt for INSTANT response, mid-flick included.
   //
   // Why the old one felt dead until scrolling stopped: a live deceleration is
@@ -1908,6 +2024,34 @@ export default function TasksScreen() {
     setSelectedTask(task);
     setShowDetail(true);
   };
+
+  // ── Reschedule from the agenda's time bubble ───────────────────────────────
+  // The bubble is the row's when, so tapping it edits the when — a dated row
+  // goes straight to the wheels, an undated one picks its day first (see
+  // SchedulePickerSheet). Held as the task itself: the sheet is open exactly
+  // when there is a row to reschedule.
+  const [reschedulingTask, setReschedulingTask] = useState(null);
+
+  const handleReschedule = useCallback(async ({ dueDate, time }) => {
+    const task = reschedulingTask;
+    if (!task?.id) return;
+    // One MERGING patch of this row, like a completion — a whole-list save is a
+    // delete-and-reinsert on the server, so it would clobber whatever another
+    // device changed meanwhile. Its own outbox key: a queued reschedule and a
+    // queued tick of the same task are different writes and must both survive.
+    const patch = { dueDate, time: time || '' };
+    const nextTasks = tasksRef.current.map((t) => (t.id === task.id ? { ...t, ...patch } : t));
+    try {
+      await saveTaskPatch(task.id, patch, nextTasks, 'schedule');
+    } catch {
+      /* saveTaskPatch has already reverted the row and told the user */
+      return;
+    }
+    // A move is a FROZEN-ORDER boundary, like an edit-form save: the row now
+    // belongs to a different day, so the agenda re-files it under that date's
+    // divider instead of showing a new time under the old heading.
+    bumpOrderEpoch();
+  }, [reschedulingTask, saveTaskPatch, bumpOrderEpoch]);
 
   // A task handed over from elsewhere (global search): open its detail the
   // way a tap here would. Prefer the loaded row (subtasks, meta); fall back
@@ -2341,6 +2485,11 @@ export default function TasksScreen() {
           onUpdateTask={handleUpdateTask}
           onDeleteTask={deleteTask}
           projects={projects}
+          // THE board colour — the same map the board rail, the header key and
+          // the agenda's cards read. The calendar had its own hash-of-the-name
+          // palette, so one board was two different colours depending on which
+          // page you were looking at.
+          boardColorOf={getProjectColor}
           onAddTask={(title, project, dueDate, time, extras) => {
             // `time` is the fourth argument — set when the user
             // long-pressed a slot on the day calendar grid. Null for
@@ -2394,7 +2543,21 @@ export default function TasksScreen() {
               agenda (the old always-visible box read as a stray black band
               under the header). searchQuery stays '' so agenda filtering is a
               no-op; wire a new entry point here if search comes back. */}
-          <View style={styles.listShift}>
+          <View
+            style={styles.listShift}
+            // The pointer sits a third of the way down the LIST, not the
+            // screen, so it has to know how tall the list actually is.
+            onLayout={(e) => {
+              const h = Math.round(e.nativeEvent.layout.height);
+              setListH((prev) => (prev === h ? prev : h));
+            }}
+          >
+          {/* The timeline's black band, behind the list and ONE piece: the
+              rows, the date dividers and the gaps between them all scroll over
+              it, so the margin is continuous instead of restarting at every
+              row. Skipped when there is nothing to scroll — a black stripe
+              beside the empty state is just a stray band. */}
+          {agenda.items.length > 0 && <TimelineGutter theme={theme} />}
           <FlashList
             // Remount per scope: a fresh list opens on Upcoming at offset 0
             // (see agendaScopeKey) instead of inheriting the previous scope's
@@ -2425,11 +2588,12 @@ export default function TasksScreen() {
             // no obvious gesture to close it.
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             keyboardShouldPersistTaps="handled"
-            // Scrolling carries NO logic — fills are visibility-driven; this
-            // only tracks the offset for the keyboard-scroll helpers.
-            onScroll={(e) => {
-              scrollY.current = e.nativeEvent.contentOffset.y;
-            }}
+            // Scrolling still carries NO fill logic — fills are
+            // visibility-driven. It tracks the offset for the keyboard-scroll
+            // helpers, and drives the timeline pointer (see resolvePointer):
+            // cheap arithmetic over the on-screen items, and it only ever
+            // setStates when the readout's text actually changes.
+            onScroll={onAgendaScroll}
             scrollEventThrottle={16}
             renderItem={({ item, index }) => {
               if (!item) return null;
@@ -2532,14 +2696,19 @@ export default function TasksScreen() {
                   onPress={openDetail}
                   onLongPress={openEditForm}
                   onToggleComplete={(it) => handleToggleComplete(it.id)}
+                  // The time bubble is the row's when — tapping it reschedules.
+                  onPressTime={setReschedulingTask}
                   isFirst={isFirstRow}
                   isLast={isLastRow}
                   // The left rail is the STRONG line here — black in light
                   // mode, white in dark so it stays visible.
                   railColor={theme.mode === 'dark' ? '#FFFFFF' : '#000000'}
-                  // Slightly lighter card than the default elevated surface —
-                  // matches the airier feel of the day-schedule to-do cards.
-                  cardColor={theme.mode === 'dark' ? theme.colors.surfaceHighlight : theme.colors.surface}
+                  // The card wears its board's colour; a row with no board
+                  // gets the plain (white) card. `getProjectColor` answers
+                  // with a neutral grey for "no board", which would paint a
+                  // grey card that looks like a board — so ask only when
+                  // there IS one.
+                  boardColor={boardOf(item) ? getProjectColor(boardOf(item)) : null}
                   // Recurring rows read ✓ while their latest ticked occurrence
                   // is still current (done-now) and label the when-line with
                   // THAT date — not the already-advanced next dueDate.
@@ -2587,6 +2756,19 @@ export default function TasksScreen() {
               </View>
             )}
           />
+          {/* The pointer, OVER the list (the notch stands proud of the band,
+              across the thread) but pointerEvents:none, so it marks the spot
+              without ever catching a scroll. Needs the list measured first —
+              its position is a fraction of that height. */}
+          {agenda.items.length > 0 && listH > 0 && (
+            <TimelinePointer
+              theme={theme}
+              label={pointerLabel}
+              scrubbing={scrubbing}
+              beat={dayBeat}
+              top={pointerTop}
+            />
+          )}
           {/* Cold-load skeleton for the Upcoming agenda — a fading overlay that
               cross-fades to the real rows the moment /tasks resolves (see
               UpcomingSkeletonOverlay). pointerEvents none; unmounts after the
@@ -2977,6 +3159,15 @@ export default function TasksScreen() {
           />
         </Modal>
       )}
+
+      {/* Reschedule, opened from an agenda row's time bubble. Its own Modal,
+          so it covers the tab bar like the inspector does. */}
+      <SchedulePickerSheet
+        visible={!!reschedulingTask}
+        task={reschedulingTask}
+        onSubmit={handleReschedule}
+        onClose={() => setReschedulingTask(null)}
+      />
     </View>
   );
 }
@@ -3251,8 +3442,23 @@ const createStyles = (theme) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: theme.spacing.md,
+    // STOPS AT THE BAND'S EDGE. This used to start at x=16 and paint an opaque
+    // page-coloured strip straight across the gutter — deliberately, because a
+    // header writing dark ink onto the black band would have been unreadable.
+    // But cutting the band is what left HOLES in it: the pointer's notch is
+    // pinned to a fixed y, so whenever a header happened to be scrolled under
+    // it the notch had no band to bite into and its shoulders floated as loose
+    // black crescents on the white page.
+    //
+    // Starting at the gutter's edge solves both at once — the header never
+    // touches the band (so it stays readable and the band stays unbroken), and
+    // its content lines up with the card column rather than the screen edge.
+    marginLeft: GUTTER_W,
+    paddingLeft: CARD_COL_X - GUTTER_W,
+    paddingRight: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
+    // Still opaque: it separates the two bands from the rows above it.
+    backgroundColor: theme.colors.background,
   },
   upcomingHeaderText: {
     fontSize: theme.typography.body,
@@ -3263,18 +3469,30 @@ const createStyles = (theme) => StyleSheet.create({
   },
   // The dashed add-task template at the head of Upcoming: an empty inset
   // slot the next task drops into.
+  // It is a TASK CARD, so it occupies exactly what a task card occupies: the
+  // same column, the same width, the same height, the same corner. It used to
+  // run marginHorizontal:16 — starting left of the gutter, ending flush with
+  // the screen edge — so it was visibly wider than every card under it AND
+  // painted an opaque strip over the band (another hole for the notch to fall
+  // into). Only the dashed edge sets it apart now, which is the one difference
+  // that carries meaning: this is the empty slot, not a task.
   addTaskCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginHorizontal: theme.spacing.md,
+    marginLeft: CARD_COL_X,
+    marginRight: ROW_PAD,
     marginBottom: 12,
-    paddingVertical: 12,
+    height: UNIFORM_CARD_H,
     paddingHorizontal: 14,
     borderRadius: 16,
     borderWidth: 1.5,
     borderStyle: 'dashed',
     borderColor: theme.colors.borderStrong,
+    // Transparent now. The opacity existed only to hide the band this card
+    // used to overlap; clear of the gutter it has nothing to hide, and an
+    // empty slot should show the page through it.
+    backgroundColor: 'transparent',
   },
   addTaskIcon: {
     width: 32,
@@ -3366,16 +3584,20 @@ const createStyles = (theme) => StyleSheet.create({
     paddingBottom: 14,
     paddingRight: 14,
   },
-  // Vertical rail continuing the timeline through the divider — same x (≈33),
-  // width (2) and STRONG colour as the agenda's rail (black / white), so the
-  // left line stays unbroken and prominent across the divider.
+  // The thread, continuing through the divider — same x, same hairline width
+  // and the same colour as the rail TimelineTaskRow draws, so the line is
+  // unbroken from the first row of the agenda to the last. All three are
+  // IMPORTED rather than repeated: the divider and the rows agreeing on these
+  // numbers is the whole difference between one timeline and a column of
+  // dashes. (This segment used to be full-strength ink while the rows drew
+  // theirs at 45%, so the line darkened at every date.)
   agendaRailThrough: {
     position: 'absolute',
-    left: 33,
+    left: RAIL_ABS_X - RAIL_W / 2,
     top: 0,
     bottom: 0,
-    width: 2,
-    backgroundColor: theme.mode === 'dark' ? '#FFFFFF' : '#000000',
+    width: RAIL_W,
+    backgroundColor: threadColor(theme),
   },
   agendaDateLabel: {
     alignSelf: 'flex-end',
@@ -3387,9 +3609,11 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 4,
   },
   agendaDateLine: {
-    // Stop clear of the strong left rail (rail ≈ x33) so they never intersect or
-    // cut; run to the row's right edge.
-    marginLeft: 66,
+    // Start clear of the thread (and of the beads strung on it) so the date
+    // rule never cuts across it; run to the row's right edge.
+    // Starts at the CARD's left edge (row padding + time column + card gap),
+    // so the date rule never crosses the thread or a bubble.
+    marginLeft: 14 + 74 + 12,
     height: 1,
     // Faint line.
     backgroundColor: theme.colors.border,

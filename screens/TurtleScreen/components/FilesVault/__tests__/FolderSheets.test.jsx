@@ -27,7 +27,7 @@ const theme = { mode: 'dark', colors: { background: '#000', surface: '#0a0a0a', 
 // NOTE: @testing-library/react-native 14.0.1's render/rerender/fireEvent/waitFor
 // are all `async function`s in this repo's installed version (confirmed in
 // node_modules/@testing-library/react-native/dist/render.js + fire-event.js,
-// same fact FolderDisc.test.jsx documents) — every call is awaited here.
+// same fact FolderTile.test.jsx documents) — every call is awaited here.
 describe('FolderSheets', () => {
   it('FolderNameSheet submits a trimmed name on Done and shows a server error inline', async () => {
     const onSubmit = jest.fn();

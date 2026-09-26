@@ -41,11 +41,12 @@ import * as Sharing from 'expo-sharing';
 import { sweepTransientCaches } from '../../../utils/cacheManager';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { impactHaptic, tapHaptic } from '../../../utils/haptics';
+import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 // Dev-only responsiveness watchdog — every call below compiles to an immediate
 // return in a release build (see utils/gestureProbe).
 import gestureProbe from '../../../utils/gestureProbe';
 import { buildBucketsUrl, buildGalleryUrl } from '../../../utils/galleryFilters';
+import { describeBatch } from '../../../utils/uploadWording';
 // DEV-ONLY commit timer — names the tree that owned the JS thread when the probe
 // reports a stall. Identity function outside __DEV__. See components/DevProfiler.
 import DevProfiler from '../../../components/DevProfiler';
@@ -107,6 +108,10 @@ import MusicVault from './MusicVault';
 import FilesVault from './FilesVault/FilesVault';
 import FolderPage from './FilesVault/FolderPage';
 import { isDocument } from './FilesVault/filesUtils';
+// The folder ⋯ menu's second source: the OS file browser, for the documents
+// the photo picker above cannot see. Lazily loads its own native module —
+// see systemFilePick.js.
+import { pickSystemFiles } from './FilesVault/systemFilePick';
 import { chromeOffsetNode, backToTopIntent, newFlingAnchor } from '../../../utils/scrollChrome';
 import EdgeSwipePage from './EdgeSwipePage';
 import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context/VaultUploadContext';
@@ -555,10 +560,24 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // the screen and the results start directly under it — the header is the
   // reason the field sat ~86pt down, and none of it is any use mid-search.
   const [boardSearchActive, setBoardSearchActive] = useState(false);
-  // Gated on the pager page too: swiping to Music mid-search must not leave the
-  // vault wearing no header, and the boards page keeps its query for when you
+  // The same, for the Files tab — it runs the same dock (VaultSearchDock), so
+  // it needs the same room. Two flags rather than one because each page owns
+  // its own mode and keeps it across a swipe; which one counts is decided by
+  // which page you are looking at.
+  const [filesSearchActive, setFilesSearchActive] = useState(false);
+  // And Music, which runs the same dock for the same reason: the header is
+  // what put the field ~86pt down the screen, and none of it is any use
+  // mid-search. Its query lives here too, so swiping away and back keeps it.
+  const [musicSearchActive, setMusicSearchActive] = useState(false);
+  const [musicSearchQuery, setMusicSearchQuery] = useState('');
+  // Gated on the pager page too: swiping away mid-search must not leave the
+  // vault wearing no header, and the page you left keeps its query for when you
   // swipe back.
-  const boardHeaderCollapsed = boardSearchActive && pagerTab === 'albums' && !photosOpen;
+  const vaultHeaderCollapsed = !photosOpen && (
+    (boardSearchActive && pagerTab === 'albums')
+    || (musicSearchActive && pagerTab === 'music')
+    || (filesSearchActive && pagerTab === 'files')
+  );
   // 0 = header in place, 1 = header parked above the screen. The boards page
   // runs the same curve on its own lift, so the field and the header move as
   // one piece (Facebook's search: the chrome leaves, the field takes its
@@ -566,13 +585,13 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const boardSearchAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(boardSearchAnim, {
-      toValue: boardHeaderCollapsed ? 1 : 0,
+      toValue: vaultHeaderCollapsed ? 1 : 0,
       // The page's own timings, imported rather than copied — see the note on
       // SEARCH_ENTER: one movement, two components, one set of numbers.
-      ...(boardHeaderCollapsed ? SEARCH_ENTER : SEARCH_EXIT),
+      ...(vaultHeaderCollapsed ? SEARCH_ENTER : SEARCH_EXIT),
       useNativeDriver: true,
     }).start();
-  }, [boardHeaderCollapsed, boardSearchAnim]);
+  }, [vaultHeaderCollapsed, boardSearchAnim]);
 
   // ── Chrome that goes up with the page ──────────────────────────────────
   // The title, the tabs, the search field and the sort chips sit at the top of
@@ -722,6 +741,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [pendingAssets, setPendingAssets] = useState([]);
+  // "3 photos" / "4 videos" / "2 files" — what the batch ACTUALLY holds. The
+  // sheet used to say "photos" for every batch, including one that was all
+  // video. See utils/uploadWording.
+  const pendingBatchLabel = useMemo(() => describeBatch(pendingAssets), [pendingAssets]);
   const [selectedTags, setSelectedTags] = useState([]);
   
   // Album currently open in the public "share to the web" sheet (null = closed).
@@ -2853,8 +2876,81 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
   }, [selectedAlbum]);
 
-  // Files tab: "Upload here" — the normal picker, the batch filed into a folder.
+  // Files tab: "Add photos & videos" — the normal picker, the batch filed into
+  // a folder.
   const pickForFolder = useCallback((folderId) => handleUpload(folderId || null), [handleUpload]);
+
+  // Files tab: "Add from phone storage" — the OS document browser, the batch
+  // filed into the same folder. Everything that can go wrong here is something
+  // the user has to be TOLD about rather than left guessing at, so each branch
+  // ends in its own sentence: a binary with no picker in it, a pick of nothing
+  // Turtle can file, and a partial pick where some of what was chosen is being
+  // left behind.
+  const addFromStorageForFolder = useCallback(async (folder) => {
+    const folderId = folder?.id || null;
+    const folderName = folder?.name || 'Unfiled';
+
+    let picked;
+    try {
+      picked = await pickSystemFiles();
+    } catch (error) {
+      console.error('[MediaGallery] Document picker failed:', error);
+      Alert.alert('Could not open your files', error?.message || 'The file browser did not open.');
+      return;
+    }
+
+    if (picked.status === 'canceled') return;
+    if (picked.status === 'unavailable') {
+      // The npm package is in this bundle but the native module is not, i.e.
+      // an OTA update landed on a binary built before it was added.
+      Alert.alert(
+        'Not in this build yet',
+        'Picking from phone storage needs the next app build. Until it lands, open the file in your Files app and share it to Turtle.'
+      );
+      return;
+    }
+
+    const skippedNames = picked.skipped.map((s) => s.fileName).join(', ');
+    const hasAudio = picked.skipped.some((s) => s.kind === 'audio');
+    const audioNote = hasAudio ? ' Audio belongs in the Music vault — import it from there.' : '';
+
+    if (picked.status === 'empty') {
+      Alert.alert('Nothing to add', `Turtle can’t file ${skippedNames || 'that'} in a folder.${audioNote}`);
+      return;
+    }
+
+    // The VAULT queue, not the share toast. It is the one with the live
+    // percentage, the collapsible pill, pause/resume, and a checkpoint after
+    // every item — all of which a 300 MB file filed into a folder wants at
+    // least as much as a camera-roll batch does. The share toast stays for the
+    // OS share-sheet path, which has no queue of its own.
+    const started = vaultActions.enqueue({
+      assets: picked.files.map((f) => ({
+        uri: f.path,
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        type: 'document',
+        // Carried so the queue can (a) reclaim our staging copy the moment the
+        // file is safe in the vault and (b) offer to delete the user's own
+        // file where the OS actually permits it — Android's SAF documents.
+        // See utils/originalDeletion for why iOS documents cannot be offered.
+        sourceUri: f.sourceUri || null,
+        stagedPath: f.stagedPath || null,
+      })),
+      tags: [],
+      folderId,
+    });
+    if (!started) {
+      Alert.alert('Upload in progress', 'Another vault upload is still running — let it finish (or dismiss it from the pill) first.');
+      return;
+    }
+
+    // The pill carries the progress, so success is silent — the only thing
+    // left worth saying is what did NOT come along.
+    if (picked.skipped.length > 0) {
+      Alert.alert('Some files skipped', `${skippedNames} can’t be filed in a folder.${audioNote}`);
+    }
+  }, [vaultActions]);
 
   // === SMART SYNC FUNCTIONS ===
   const fetchLocalMedia = useCallback(async (loadMore = false) => {
@@ -4583,8 +4679,18 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 the Boards page leaves under the picker, so the two pages start
                 at the same line and no track card slides under the tabs. */}
             <MusicVault
-              topInset={(vaultHeaderH || insets.top + 90) + VAULT_PICKER_GAP}
+              // NOT + VAULT_PICKER_GAP any more: the page applies the gap
+              // itself now (under its search dock, the same way the Boards
+              // page does), so adding it here too would double it.
+              topInset={vaultHeaderH || insets.top + 90}
               bottomInset={tabBarH}
+              // The bare safe area the page keeps once the vault header has
+              // slid away; the difference is how far it lifts. Same contract as
+              // the Boards and Files pages.
+              searchTopInset={insets.top}
+              query={musicSearchQuery}
+              onQueryChange={setMusicSearchQuery}
+              onSearchActiveChange={setMusicSearchActive}
             />
           </View>
 
@@ -4594,6 +4700,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             <FilesVault
               topInset={(vaultHeaderH || insets.top + 90) + VAULT_PICKER_GAP}
               bottomInset={tabBarH}
+              // The bare safe area the page keeps once the vault header has
+              // slid away; the difference is how far it lifts. Same contract as
+              // the Boards page above.
+              searchTopInset={insets.top}
+              onSearchActiveChange={setFilesSearchActive}
               onOpenMedia={openViewerFromList}
               onBulkTag={openBulkTagsFor}
               onUploadHere={pickForFolder}
@@ -5145,6 +5256,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               onOpenMedia={openViewerFromList}
               onBulkTag={openBulkTagsFor}
               onUploadHere={pickForFolder}
+              onAddFromStorage={addFromStorageForFolder}
               getFullUrl={getFullUrl}
               base={(getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '')}
               theme={theme}
@@ -5167,7 +5279,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           the same curve. Absolutely positioned, so this transform costs a
           composite and nothing else. */}
       <Animated.View
-        pointerEvents={boardHeaderCollapsed ? 'none' : 'auto'}
+        pointerEvents={vaultHeaderCollapsed ? 'none' : 'auto'}
         onLayout={(e) => {
           const h = Math.round(e.nativeEvent.layout.height);
           if (h > 0 && h !== vaultHeaderH) setVaultHeaderH(h);
@@ -5402,15 +5514,15 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           doneLabel={uploadBusy ? 'Busy' : 'Upload'}
           onDone={() => { if (!uploadBusy) { tapHaptic(); executeUpload(); } }}
           theme={theme}
-          title={`Upload ${pendingAssets.length} ${pendingAssets.length === 1 ? 'photo' : 'photos'}`}
-          subtitle="Tags go on every photo in this upload"
+          title={`Upload ${pendingBatchLabel}`}
+          subtitle="Tags go on everything in this upload"
           bottomInset={Math.max(tabBarH, insets.bottom) + 12}
           footer={(
             <Pressable
               onPress={() => { if (!uploadBusy) { tapHaptic(); executeUpload(); } }}
               disabled={uploadBusy}
               accessibilityRole="button"
-              accessibilityLabel={uploadBusy ? 'Upload running' : `Upload ${pendingAssets.length} photos`}
+              accessibilityLabel={uploadBusy ? 'Upload running' : `Upload ${pendingBatchLabel}`}
               testID="upload-confirm"
               style={({ pressed }) => ({
                 minHeight: 48,
@@ -5424,7 +5536,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               })}
             >
               <Text style={{ color: '#000000', fontSize: 16, fontWeight: '700' }} numberOfLines={1}>
-                {uploadBusy ? 'Upload running…' : `Upload ${pendingAssets.length} ${pendingAssets.length === 1 ? 'photo' : 'photos'}`}
+                {uploadBusy ? 'Upload running…' : `Upload ${pendingBatchLabel}`}
               </Text>
             </Pressable>
           )}

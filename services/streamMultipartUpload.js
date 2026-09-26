@@ -4,6 +4,20 @@ const UPLOAD_MAX_ATTEMPTS = 3;
 const UPLOAD_STALL_MS = 60000;
 const UPLOAD_PROCESSING_MS = 300000;
 
+const mb = (bytes) => `${(Number(bytes || 0) / (1024 * 1024)).toFixed(1)} MB`;
+
+/** "1.7 MB of 86.2 MB (2%)" — the sentence that names a body-size wall. */
+function describeStallPoint(sent, total) {
+  if (!(total > 0)) return `sent ${mb(sent)}, total unknown`;
+  return `sent ${mb(sent)} of ${mb(total)} (${Math.round((sent / total) * 100)}%)`;
+}
+
+/** Host only — the URL carries an auth token in some callers' query strings. */
+function hostOf(url) {
+  const m = /^[a-z]+:\/\/([^/?#]+)/i.exec(String(url || ''));
+  return m ? m[1] : 'unknown';
+}
+
 export async function streamMultipartUpload({
   url,
   fileUri,
@@ -34,6 +48,8 @@ export async function streamMultipartUpload({
     let allSentAt = null;
     let stallTimer = null;
     let abortHandler = null;
+    let lastSentBytes = 0;
+    let lastTotalBytes = 0;
     try {
       const task = FileSystem.createUploadTask(
         url,
@@ -50,6 +66,13 @@ export async function streamMultipartUpload({
           lastProgressAt = Date.now();
           const total = progress.totalBytesExpectedToSend || 0;
           const sent = progress.totalBytesSent || 0;
+          // Remembered for the watchdog below. WHERE a transfer died is the
+          // number that names the culprit — a stall at the same byte count on
+          // every attempt is something in the path refusing the body, not a
+          // flaky link. Without it the anomaly only said "no progress for 60s",
+          // which is the symptom and tells you nothing about the cause.
+          lastSentBytes = sent;
+          lastTotalBytes = total;
           if (total > 0 && onProgress) {
             onProgress(Math.min(99, Math.round((sent / total) * 100)));
           }
@@ -99,12 +122,27 @@ export async function streamMultipartUpload({
             console.warn(
               `[VaultUpload] ⏱ ${label} · watchdog tripped during ${phase} (idle ${Math.round(idleMs / 1000)}s)`
             );
-            try { onAnomaly?.({ phase, idleMs: Math.round(idleMs), attempt }); } catch { /* never throw from a timer */ }
+            const where = describeStallPoint(lastSentBytes, lastTotalBytes);
+            try {
+              onAnomaly?.({
+                phase,
+                idleMs: Math.round(idleMs),
+                attempt,
+                sentBytes: lastSentBytes,
+                totalBytes: lastTotalBytes,
+                stalledAt: where,
+                // The host, not the path: which way OUT of the phone the bytes
+                // were going is what distinguishes "the pond is down" from
+                // "something in front of the pond will not take a body this
+                // big". Never the query string — it carries the token.
+                host: hostOf(url),
+              });
+            } catch { /* never throw from a timer */ }
             task.cancelAsync().catch(() => {});
             settle(
               reject,
               new Error(
-                `stalled during ${phase} — no progress for ${Math.round(threshold / 1000)}s`
+                `stalled during ${phase} — no progress for ${Math.round(threshold / 1000)}s (${where})`
               )
             );
           }

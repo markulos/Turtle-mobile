@@ -129,39 +129,28 @@ describe('ScheduleCard done key', () => {
     }
   });
 
-  // Two crossed linears — white at both ends, transparent through the middle —
-  // so the light comes in from all four sides. expo-linear-gradient has no
-  // radial mode; this is what reads as one.
-  test('carries white off the edges, down the key and across it', async () => {
+  // The keys used to carry a white gloss: two crossed linear gradients standing
+  // in for a radial, because expo-linear-gradient has no radial mode. It read
+  // as a highlight baked into the button rather than the flat surface the rest
+  // of the app uses, so it is gone — fill, board tint, outline, nothing else.
+  test('keys carry no gloss over the fill', async () => {
+    // With a board colour, so the tint layer that SHOULD still be there is.
     const view = await render(
-      <ScheduleCard task={task} theme={theme} timeLabel="09 AM" range=""
+      <ScheduleCard task={task} theme={theme} timeLabel="09 AM" range="" color="#4C6FBF"
         onToggle={jest.fn()} onStartPomodoro={jest.fn()} testID="row" />,
     );
-    // The native prop is processed ARGB, not the string that went in.
-    const { processColor } = require('react-native');
-    const WHITE = (a) => processColor(`rgba(255,255,255,${a})`);
-    // One pair per key: one down, one across.
     for (const id of ['row-done-sheen', 'row-pomodoro-sheen']) {
-      for (const g of [view.getByTestId(id), view.getByTestId(`${id}-across`)]) {
-        expect(g.props.colors[0]).toBe(WHITE(0.92));
-        // Transparent through the middle, or it is a flat white wash.
-        expect(g.props.colors[1]).toBe(WHITE(0));
-        expect(g.props.colors[2]).toBe(WHITE(0.72));
-        expect(g.props.locations).toEqual([0, 0.5, 1]);
-      }
-      // The second of each pair runs ACROSS, so the light is not only vertical.
-      // `start`/`end` reach the native view as point ARRAYS.
-      const across = view.getByTestId(`${id}-across`);
-      expect(across.props.startPoint).toEqual([0, 0.5]);
-      expect(across.props.endPoint).toEqual([1, 0.5]);
-      // The first passes no points at all — the default is straight down.
-      expect(view.getByTestId(id).props.startPoint).toBeUndefined();
+      expect(view.queryByTestId(id)).toBeNull();
+      expect(view.queryByTestId(`${id}-across`)).toBeNull();
     }
+    // The board tint is the ONE layer left over the fill.
+    expect(view.getByTestId('row-done-tint')).toBeTruthy();
+    expect(view.getByTestId('row-pomodoro-tint')).toBeTruthy();
   });
 
-  // The gloss belongs to a key that is waiting to be pressed; on the green it
-  // would only wash out the one colour on the row that is meant to carry.
-  test('a done key is flat mint — no outline, no gloss', async () => {
+  // The mint is the one colour on the row that is meant to carry, so the done
+  // key takes no outline and no board wash over it either.
+  test('a done key is flat mint — no outline, no tint', async () => {
     const view = await render(
       <ScheduleCard task={task} theme={theme} timeLabel="09 AM" range="" done
         onToggle={jest.fn()} testID="row" />,
@@ -169,11 +158,12 @@ describe('ScheduleCard done key', () => {
     const s = flat(view.getByTestId('row-done'));
     expect(s.backgroundColor).toBe('#34D399');
     expect(s.borderColor).toBe('transparent');
-    expect(view.queryByTestId('row-done-sheen')).toBeNull();
-    expect(view.queryByTestId('row-done-sheen-across')).toBeNull();
+    // A board wash over the mint only muddies the single most readable state
+    // on the row.
+    expect(view.queryByTestId('row-done-tint')).toBeNull();
   });
 
-  test('is clipped, so the outline and the sheen take the corner with them', async () => {
+  test('is clipped, so the outline and the board tint take the corner with them', async () => {
     const view = await render(
       <ScheduleCard task={task} theme={theme} timeLabel="09 AM" range=""
         onToggle={jest.fn()} onStartPomodoro={jest.fn()} testID="row" />,
@@ -555,17 +545,16 @@ describe('ScheduleCard pomodoro state', () => {
     expect(absent.queryByTestId('row-pomo-count')).toBeNull();
   });
 
-  // ...and it costs nothing when it is absent. The line used to be RESERVED on
-  // every card to keep the column level, which spent 20 pt of blank space on
-  // every untouched task. The card's height being a floor is what buys that
-  // back: an ordinary card is still the same 120 either way.
-  test('a card with no sessions is no taller for the line it does not draw', async () => {
-    for (const [id, count] of [['a', 0], ['b', 4]]) {
-      const view = await render(
-        <ScheduleCard task={task} theme={theme} timeLabel="09 AM" range="" testID={id} pomodoro={{ count }} />,
-      );
-      expect(flat(view.getByTestId(`${id}-card`)).minHeight).toBe(CARD_H);
-    }
+  // ...and it costs nothing when it is absent: no line drawn, no room taken.
+  // The line used to be RESERVED on every card to keep a column level, which
+  // spent 20 pt of blank space on every untouched task.
+  test('a card with no sessions draws no line and reserves no room for one', async () => {
+    const none = await render(
+      <ScheduleCard task={task} theme={theme} timeLabel="09 AM" range="" testID="a" pomodoro={{ count: 0 }} />,
+    );
+    expect(none.queryByTestId('a-pomo-count')).toBeNull();
+    // The card is the same box either way — the line lives OUTSIDE it.
+    expect(flat(none.getByTestId('a-card')).height).toBe(CARD_H);
   });
 
   // The whole point of fixing the card height: two keys and their gap ARE the
@@ -574,40 +563,87 @@ describe('ScheduleCard pomodoro state', () => {
     expect(KEY * 2 + KEY_GAP).toBe(CARD_H);
   });
 
-  // A FLOOR, not a lock. The card is the familiar 120 whatever it carries; only
-  // the one combination that genuinely will not fit — a two-line title with
-  // focus sessions under it — makes it taller. A hard height either spent 19 pt
-  // of dead space at the foot of every ordinary card or cut titles to one line.
-  test('the card takes its height as a floor, so it can never be shorter than the keys', async () => {
-    const view = await render(
-      <ScheduleCard task={{ id: 'a', title: 'Short', project: 'P' }} theme={theme} timeLabel="09 AM" range="" testID="a" />,
-    );
-    const s = flat(view.getByTestId('a-card'));
-    expect(s.minHeight).toBe(CARD_H);
-    // Not also pinned — that is what put the hole under the focus line.
-    expect(s.height).toBeUndefined();
+  // ONE card and ONE key, everywhere. Not tidiness: keys cut from their own
+  // card mean a SHORTER card has smaller keys, a smaller key column is a
+  // NARROWER column, and the card — which takes what is left — comes out WIDER.
+  // One wrapped title and the whole list steps in and out, down the right-hand
+  // edge and through three sizes of checkmark.
+  test('every card is the same box, short title or long', async () => {
+    for (const [id, title] of [['a', 'Short'], ['b', 'Export Mayfield Package - no revision clouds']]) {
+      const view = await render(
+        <ScheduleCard task={{ id, title, project: 'P' }} theme={theme} timeLabel="09 AM" range="" testID={id} />,
+      );
+      expect(flat(view.getByTestId(`${id}-card`)).height).toBe(CARD_H);
+    }
   });
 
-  // Whatever the card does, the keys do not follow it: they are cut from the
-  // constant, so a column of cards has one size of key down it even where one
-  // card has grown. (Sizing them per card is what gave the old build keys of
-  // three different sizes in one column.)
-  test('the keys are one size whatever the card carries', async () => {
-    const plain = await render(
-      <ScheduleCard task={{ id: 'a', title: 'Short', project: 'P' }} theme={theme} timeLabel="09 AM" range=""
-        testID="a" onToggle={jest.fn()} onStartPomodoro={jest.fn()} />,
+  // The title is ONE line, and the card is sized for one line. The two are the
+  // same fact: a fixed box with a wrappable title in it is a box that clips,
+  // and sizing the box for the wrap makes every card as tall as its longest
+  // possible title — which is how it ended up ~20 pt taller than the card it
+  // is meant to be.
+  test('the title is capped to one line', async () => {
+    const view = await render(
+      <ScheduleCard task={{ id: 'a', title: 'Export Mayfield Package - no revision clouds', project: 'P' }}
+        theme={theme} timeLabel="09 AM" range="" testID="a" />,
     );
-    const grown = await render(
-      <ScheduleCard
-        task={{ id: 'b', title: 'Export Mayfield Package - no revision clouds', project: 'P' }}
-        theme={theme} timeLabel="09 AM" range="" testID="b" pomodoro={{ count: 3 }}
-        onToggle={jest.fn()} onStartPomodoro={jest.fn()} />,
-    );
-    for (const [view, id] of [[plain, 'a'], [grown, 'b']]) {
+    expect(view.getByText('Export Mayfield Package - no revision clouds').props.numberOfLines).toBe(1);
+  });
+
+  test('and the card is the ONE-line card, not the two-line one', () => {
+    // Everything here scales with the device's accessibility font setting, so
+    // the bounds do too — jest's PixelRatio reports its own.
+    const scale = Math.max(1, require('react-native').PixelRatio.getFontScale());
+    // padding 14 + a title line + the board line + the bottom row + padding 12,
+    // and the same with TWO title lines — the height this used to be, and must
+    // not drift back to.
+    const box = (lines) => (14 + 21 * lines + 19 + 32 + 12) * scale;
+    expect(CARD_H).toBeLessThan(box(2));
+    expect(CARD_H).toBeGreaterThanOrEqual(box(1));
+  });
+
+  test('and every key the same size, so the column beside it never changes width', async () => {
+    for (const [id, title] of [['a', 'Short'], ['b', 'Export Mayfield Package - no revision clouds']]) {
+      const view = await render(
+        <ScheduleCard task={{ id, title, project: 'P' }} theme={theme} timeLabel="09 AM" range=""
+          testID={id} onToggle={jest.fn()} onStartPomodoro={jest.fn()} />,
+      );
       expect(flat(view.getByTestId(`${id}-done`)).height).toBe(KEY);
       expect(flat(view.getByTestId(`${id}-pomodoro`)).height).toBe(KEY);
     }
+    // Smaller card, smaller keys — but never below §3's target.
+    expect(KEY).toBeGreaterThanOrEqual(44);
   });
+
+  // A short title's spare room goes in the MIDDLE — the bottom row is pushed to
+  // the card's foot — rather than being reserved as a blank line under the
+  // title or pooled under everything. Both of those have been tried and both
+  // read as a hole.
+  test('the faces and the time sit on the card’s foot, however long the title ran', async () => {
+    const view = await render(
+      <ScheduleCard task={{ id: 'a', title: 'Short', project: 'P' }} theme={theme} timeLabel="09 AM" range="" testID="a" />,
+    );
+    expect(flat(view.getByTestId('a-top')).minHeight).toBeUndefined();
+  });
+
+  // ...and it costs nothing when it is absent: no line drawn, no room taken.
+  // The line used to be RESERVED on every card to keep a column level, which
+  // spent 20 pt of blank space on every untouched task.
+  test('a card with no sessions draws no line and reserves no room for one', async () => {
+    const none = await render(
+      <ScheduleCard task={task} theme={theme} timeLabel="09 AM" range="" testID="a" pomodoro={{ count: 0 }} />,
+    );
+    expect(none.queryByTestId('a-pomo-count')).toBeNull();
+    // The card is the same box either way — the line lives OUTSIDE it.
+    expect(flat(none.getByTestId('a-card')).height).toBe(CARD_H);
+  });
+
+  // The whole point of fixing the card height: two keys and their gap ARE the
+  // card, so the column starts and ends exactly where it does.
+  test('two keys and their gap come to exactly one card', () => {
+    expect(KEY * 2 + KEY_GAP).toBe(CARD_H);
+  });
+
 });
 
 // While a block is RUNNING on a task, the circle is not a start button any
@@ -805,12 +841,14 @@ describe('ScheduleCard key tint', () => {
       onToggle={jest.fn()} onStartPomodoro={jest.fn()} {...extra} />,
   );
 
-  test('both keys carry a faint wash of the board colour', async () => {
+  test('both keys carry the board colour, just under the card’s own', async () => {
     const view = await draw();
     for (const id of ['row-done-tint', 'row-pomodoro-tint']) {
-      // The card's own wash is 18 %; the keys take less, or they stop being
-      // controls and become more of the card.
-      expect(flat(view.getByTestId(id)).backgroundColor).toBe('#8B5CF629');
+      // 22 % against the card's 18 % over a DARKER base (the key's grey, not
+      // the page), which lands the key a shade lighter than the card: plainly
+      // the same object, still plainly a control beside it rather than more
+      // card. Take it much further and the key stops reading as pressable.
+      expect(flat(view.getByTestId(id)).backgroundColor).toBe('#8B5CF638');
     }
   });
 
@@ -833,13 +871,22 @@ describe('ScheduleCard key tint', () => {
     expect(live.getByTestId('row-done-tint')).toBeTruthy();
   });
 
-  // The check is the deep green at rest and white on the mint — the key's two
-  // states, told twice: by the fill and by the glyph on it.
-  test('the check follows the key it is on', async () => {
+  // The check is the page's INK at rest and white on the mint. Green at rest
+  // put the DONE colour on a key that was not done, and beside a red timer
+  // glyph the pair read as two warnings rather than two controls — the mint is
+  // what you get for pressing it, and it is the only colour on the row that
+  // means anything.
+  test('the check is ink at rest and white once done', async () => {
     const open = await draw({ done: false });
-    expect(open.getByTestId('row-done-check').props.color).toBe('#0E9F6E');
+    expect(open.getByTestId('row-done-check').props.color).toBe(theme.colors.textPrimary);
     const done = await draw({ done: true });
     expect(done.getByTestId('row-done-check').props.color).toBe('#FFFFFF');
+  });
+
+  // Both glyphs, one ink — they are two controls, not two signals.
+  test('the idle timer glyph is the same ink as the check', async () => {
+    const view = await draw();
+    expect(view.getByTestId('row-pomodoro-glyph').props.color).toBe(theme.colors.textPrimary);
   });
 });
 

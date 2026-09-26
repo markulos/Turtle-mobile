@@ -31,6 +31,25 @@ export function formatSize(bytes) {
 
 export const isDocument = (item) => !!item && item.type === 'document';
 
+/**
+ * Can the in-app viewer render this? PDF only — the one document type with a
+ * real renderer behind it (PDFKit on iOS). Everything else still goes out to
+ * the system share sheet, which knows how to preview a .docx and we do not.
+ *
+ * MIME first, extension as the fallback: a row uploaded before the server
+ * stored mimeType has none, and a tunnelled row can arrive as
+ * application/octet-stream — both are still PDFs, and both used to be right
+ * there in the name.
+ */
+export function isPdf(item) {
+  if (!item) return false;
+  const mime = String(item.mimeType || '').split(';', 1)[0].trim().toLowerCase();
+  if (mime === 'application/pdf') return true;
+  if (mime && mime !== 'application/octet-stream' && mime !== 'binary/octet-stream') return false;
+  const name = String(item.originalName || item.filename || '').split(/[?#]/, 1)[0];
+  return /\.pdf$/i.test(name);
+}
+
 const EXT_ICON = {
   pdf: 'file-pdf-box',
   doc: 'file-word-box', docx: 'file-word-box', odt: 'file-word-box', rtf: 'file-word-box',

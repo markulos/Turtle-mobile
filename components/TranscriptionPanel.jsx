@@ -58,9 +58,10 @@ import {
   submitTranscription,
 } from '../services/transcriptions';
 import {
-  addLocalRecording, loadRecordings, patchLocalRecording, removeLocalRecording,
-  subscribeRecordings,
+  addLocalRecording, getRecordings, loadRecordings, patchLocalRecording,
+  removeLocalRecording, subscribeRecordings,
 } from '../services/transcriptionStore';
+import { fileIntoTranscribedPlaylist } from '../services/transcribedPlaylist';
 import { tapHaptic, notifyHaptic } from '../utils/haptics';
 import {
   describeJob, isRetryableStatus, isTerminal, nextPollDelay, UPLOADING,
@@ -70,13 +71,31 @@ import {
   modelNote, optionsProblem, readCapabilities, runtimeState, submitParameters,
   summariseChoices,
 } from '../utils/transcriptionOptions';
-import { pollableRecordings, summariseRecordings } from '../utils/transcriptionRecordings';
+import {
+  pendingRowForMedia, pollableRecordings, summariseRecordings,
+} from '../utils/transcriptionRecordings';
 
 const BAR_H = 6;
 
 /** A local row key. Unique per send; never leaves the phone. */
 let keySeed = 0;
 const newKey = () => `local_${Date.now().toString(36)}_${(keySeed += 1)}`;
+
+/**
+ * A media row's playlists. The gallery returns `tags` as a JSON STRING, and a
+ * vault caller may hand us the parsed array it already has — both are read
+ * here so neither side has to know what the other did.
+ */
+const tagsOfMedia = (item) => {
+  const raw = item?.tags;
+  if (Array.isArray(raw)) return raw.filter((t) => typeof t === 'string');
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed.filter((t) => typeof t === 'string') : [];
+  } catch {
+    return [];
+  }
+};
 
 /** Clock for a transcript turn: "1:04". */
 const at = (seconds) => formatDuration(seconds) || '0:00';
@@ -201,7 +220,17 @@ function RecordingRow({
   );
 }
 
-export default function TranscriptionPanel({ active = true, defaultSpeakerName = '' }) {
+/**
+ * `autoSend` — a pond audio row to send the moment the panel is ready, used by
+ * the music vault's "⋯ → Transcribe": the tap belongs to a track, so the panel
+ * opens already doing the thing rather than opening a picker at someone who
+ * has just finished picking. It waits for `choices` (the pond's own defaults)
+ * rather than sending with this build's guesses, and it fires ONCE per item —
+ * `onAutoSendHandled` tells the caller it may clear its pending track.
+ */
+export default function TranscriptionPanel({
+  active = true, defaultSpeakerName = '', autoSend = null, onAutoSendHandled,
+}) {
   const { theme } = useTheme();
   const c = theme.colors;
   const { api, isConnected, getBaseUrl, getMediaBaseUrl } = useServer();
@@ -232,6 +261,10 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
   const pollers = useRef(new Map());
   const apiRef = useRef(api);
   apiRef.current = api;
+  // "The pond has answered and we could send right now". Assigned during
+  // render, below, and read by the auto-send effect — which must not fire
+  // before the options are the POND's rather than this build's fallbacks.
+  const sendableRef = useRef(false);
   const backgrounded = useRef(false);
   const mounted = useRef(true);
 
@@ -318,7 +351,15 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
       patchLocalRecording(key, patch);
       if (isTerminal(status)) {
         stopPoller(key);
-        if (status === 'completed') notifyHaptic();
+        if (status === 'completed') {
+          notifyHaptic();
+          // A finished transcript of a VAULT track files that track into the
+          // "Transcribed" playlist. Here, because completion is only ever
+          // observed by this poller — there is no other moment at which the
+          // app learns a job is done.
+          const row = getRecordings().find((r) => r.key === key);
+          if (row?.mediaId) fileIntoTranscribedPlaylist(apiRef.current, row);
+        }
         return;
       }
     } catch (error) {
@@ -388,7 +429,13 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
    * cancelled — so "it adds to the recordings" is true from the first byte, and
    * a cancelled send leaves nothing behind.
    */
-  const send = useCallback(async ({ fileUri, mimeType, name, sizeBytes = 0, durationSeconds = 0, prepare }) => {
+  const send = useCallback(async ({
+    fileUri, mimeType, name, sizeBytes = 0, durationSeconds = 0, prepare,
+    // Set when the source is a track in this pond's audio library: it is the
+    // link the music vault follows to know which tracks it can play along
+    // with, and the row it files into the Transcribed playlist when this ends.
+    mediaId = null, mediaTags = [],
+  }) => {
     // Refused here rather than by the route: the 503 for this arrives AFTER the
     // whole file has gone up the wire, which is a long wait to be told the
     // pond was never going to do it.
@@ -405,6 +452,7 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
     addLocalRecording({
       key, name, status: UPLOADING, uploadPercent: 0, sizeBytes, durationSeconds,
       createdAt: Date.now(), note: prepare ? 'Fetching from the pond' : null,
+      mediaId, mediaTags,
     });
     setBusy(true);
 
@@ -487,6 +535,14 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
 
   const sendPondAudio = useCallback(async (item) => {
     setSourceOpen(false);
+    // One job per track at a time. Without this, tapping ⋯ → Transcribe twice
+    // (or once here and once from the vault) queues the same audio onto the
+    // pond's single GPU slot twice, and the second is pure waiting.
+    const already = pendingRowForMedia(getRecordings(), item?.id);
+    if (already) {
+      Alert.alert('Transcribe', `“${already.name}” is already being transcribed.`);
+      return;
+    }
     const base = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '');
     const url = resolveMediaUrl(item.rawUrl || item.url, base);
     if (!url) { Alert.alert('Transcribe', 'That track has no file to send.'); return; }
@@ -496,6 +552,8 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
       name: titleOf(item),
       sizeBytes: Number(item.size) || 0,
       durationSeconds: Number(item.duration) || 0,
+      mediaId: String(item.id),
+      mediaTags: tagsOfMedia(item),
       // The pond holds the bytes; the route only takes an upload. So: pull a
       // copy into the cache first, and let the row say that is what it is doing.
       prepare: async () => {
@@ -505,6 +563,19 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
       },
     });
   }, [send, getBaseUrl, getMediaBaseUrl]);
+
+  // A track handed in from the vault's ⋯ menu. Guarded by a ref rather than
+  // by the effect's deps alone: `send` is rebuilt whenever the options change,
+  // and a second run would submit the same audio twice.
+  const autoSent = useRef(new Set());
+  useEffect(() => {
+    const id = autoSend?.id;
+    if (!id || !sendableRef.current) return;
+    const seen = String(id);
+    if (autoSent.current.has(seen)) return;
+    autoSent.current.add(seen);
+    sendPondAudio(autoSend).finally(() => onAutoSendHandled?.(autoSend));
+  }, [autoSend, choices, capabilities, sendPondAudio, onAutoSendHandled]);
 
   // ── Row actions ───────────────────────────────────────────────────────────
 
@@ -560,6 +631,7 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
   // inside the options block, and hiding the block would leave the notice above
   // pointing at a control that isn't there.
   const sendable = !!capabilities && !!choices && runtime !== 'no-worker';
+  sendableRef.current = sendable;
 
   // A pond that has never heard of transcription is not a broken pond, and an
   // error row for it would be a permanent complaint about a feature nobody
@@ -570,7 +642,9 @@ export default function TranscriptionPanel({ active = true, defaultSpeakerName =
     <View style={styles.section}>
       <View style={styles.headerRow}>
         <View style={styles.iconContainer}>
-          <Icon name="text-to-speech" size={20} color={tint} />
+          {/* The scribe's nib — the same mark the music vault's Transcribe
+              row wears, so the two doors to this look like one feature. */}
+          <Icon name="signature-freehand" size={20} color={tint} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={styles.title}>Transcribe audio</Text>

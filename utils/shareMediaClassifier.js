@@ -112,6 +112,17 @@ export function supportedDocumentFiles(entries) {
   return (Array.isArray(entries) ? entries : []).filter((e) => classifySharedFile(e) === 'document');
 }
 
+// Everything a Files FOLDER will take: documents, plus the photos and videos it
+// already shows in its own grid. Audio is deliberately out — it belongs in the
+// Music vault, which has its own import path (enqueueAudioShare), and filing an
+// album track as a "document" would hide it from the player that should own it.
+export function supportedFolderFiles(entries) {
+  return (Array.isArray(entries) ? entries : []).filter((e) => {
+    const kind = classifySharedFile(e);
+    return kind === 'document' || kind === 'image' || kind === 'video';
+  });
+}
+
 export function isHttpImportUrl(value) {
   if (typeof value !== 'string' || !value.trim()) return false;
   try {

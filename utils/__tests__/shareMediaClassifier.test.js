@@ -3,6 +3,7 @@ import {
   isHttpImportUrl,
   supportedAudioVideoFiles,
   supportedDocumentFiles,
+  supportedFolderFiles,
 } from '../shareMediaClassifier';
 
 describe('shareMediaClassifier', () => {
@@ -90,5 +91,19 @@ describe('shareMediaClassifier', () => {
     expect(classifySharedFile({ path: '/x/a.zip', mimeType: 'application/octet-stream' })).toBe('document');
     expect(classifySharedFile({ path: '/x/a.exe' })).toBe('unsupported');
     expect(supportedDocumentFiles([{ path: '/x/a.pdf' }, { path: '/x/b.jpg' }]).length).toBe(1);
+  });
+
+  // What the folder page's "Add from phone storage" row will take: a folder
+  // shows documents AND a photo/video grid, so all three come along. Audio is
+  // the deliberate exclusion — it has the Music vault's own import.
+  it('takes documents, photos and videos into a folder but leaves audio out', () => {
+    const pdf = { path: '/x/lease.pdf', mimeType: 'application/pdf' };
+    const jpg = { path: '/x/b.jpg', mimeType: 'image/jpeg' };
+    const mov = { path: '/x/c.mov', mimeType: 'video/quicktime' };
+    const mp3 = { path: '/x/d.mp3', mimeType: 'audio/mpeg' };
+    const exe = { path: '/x/e.exe' };
+
+    expect(supportedFolderFiles([pdf, jpg, mp3, mov, exe, null])).toEqual([pdf, jpg, mov]);
+    expect(supportedFolderFiles(undefined)).toEqual([]);
   });
 });

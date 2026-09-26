@@ -49,10 +49,15 @@ export default function TrackActionsSheet({
   playlists = [],
   currentPlaylists = [],
   busy = false,
+  // 'none' | 'running' | 'done' — what this track's transcript situation is,
+  // so the row can say what the tap will actually do instead of offering
+  // "Transcribe" for something already being transcribed.
+  transcriptState = 'none',
   onPlay,
   onShare,
   onRename,
   onAddToPlaylist,
+  onTranscribe,
   onDelete,
   onClose,
   bottomInset = 0,
@@ -252,6 +257,21 @@ export default function TrackActionsSheet({
                 setPage('playlists');
               }}
             />
+            {/* Transcribe. Above the destructive row and below the filing
+                ones, because it is a thing you DO to a track rather than a
+                thing you do with the library. */}
+            {onTranscribe ? (
+              <ActionRow
+                icon={transcriptState === 'running' ? 'progress-clock'
+                  : transcriptState === 'done' ? 'text-box-check-outline' : 'signature-freehand'}
+                label={transcriptState === 'running' ? 'Transcribing…'
+                  : transcriptState === 'done' ? 'Transcribe again…' : 'Transcribe…'}
+                color={c.textPrimary}
+                style={rowBorder}
+                chevron
+                onPress={run(onTranscribe)}
+              />
+            ) : null}
             <ActionRow
               icon="trash-can-outline"
               label="Delete from vault"

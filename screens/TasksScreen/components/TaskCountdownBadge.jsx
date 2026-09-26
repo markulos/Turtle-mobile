@@ -67,17 +67,22 @@ export function useTaskTimer(task) {
   return timer;
 }
 
-const TaskCountdownBadge = ({ task }) => {
+const TaskCountdownBadge = ({ task, palette }) => {
   const { theme } = useTheme();
   const timer = useTaskTimer(task);
   if (!timer) return null;
 
-  // The badge sits on an INSET card, so it draws from that palette: a
-  // pending badge is the card's icon tile (a step darker) with full-contrast
+  // The badge sits on a card, so it draws from THAT card's palette: a pending
+  // badge is the card's icon tile (a step off the fill) with full-contrast
   // text; the timed states keep their accent but on a light wash of it.
   // (The old `${color}1A` alpha suffix was appended to an rgba() token —
   // an invalid colour, hence the flat grey with grey text.)
-  const pal = insetCardPalette(theme);
+  //
+  // `palette` is the host card's — the agenda's rows are board-coloured and
+  // can be WHITE, where the inset palette's white-on-charcoal pending pill
+  // would be a dark blob wearing invisible text. Callers on an inset card
+  // pass nothing and get the old look.
+  const pal = palette || insetCardPalette(theme);
   const pending = timer.state === 'pending';
   const color =
     timer.state === 'started'

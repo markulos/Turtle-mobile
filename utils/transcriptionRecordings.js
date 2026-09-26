@@ -59,7 +59,62 @@ export function normaliseRecording(raw) {
     sizeBytes: Number(raw.sizeBytes) || 0,
     speakerCount: Number(raw.speakerCount) || 0,
     language: raw.language ? String(raw.language) : null,
+    // ── The link back to the vault ──────────────────────────────────────────
+    // Set only when the source WAS a track in this pond's audio library: it is
+    // what lets the music vault know which of its tracks have a transcript, so
+    // playing one can follow along with it and so they can be gathered into
+    // their own playlist. A video from the camera roll has no such row and
+    // leaves this null.
+    mediaId: raw.mediaId ? String(raw.mediaId) : null,
+    // That track's playlists AS THEY WERE when it was sent. Carried so the
+    // "Transcribed" tag written on completion can be a union rather than a
+    // replacement — the tags route REPLACES the list, and a job finishing
+    // minutes later must not silently drop the playlists someone filed the
+    // track into meanwhile. (Stale by at most one job's duration; the union
+    // only ever adds.)
+    mediaTags: Array.isArray(raw.mediaTags)
+      ? raw.mediaTags.filter((t) => typeof t === 'string' && t).slice(0, 40)
+      : [],
   };
+}
+
+/**
+ * The name of the playlist every transcribed track is filed into. A plain tag,
+ * because in this vault a playlist IS a tag on an audio row.
+ */
+export const TRANSCRIBED_PLAYLIST = 'Transcribed';
+
+/**
+ * The finished transcript for one vault track, or null.
+ *
+ * Newest wins: re-transcribing a track (a bigger model, speakers separated)
+ * should be what you follow along with, not the first attempt.
+ */
+export function transcriptRowForMedia(list, mediaId) {
+  if (!mediaId) return null;
+  const id = String(mediaId);
+  let best = null;
+  for (const row of list || []) {
+    if (row.mediaId !== id || row.status !== 'completed' || !row.id) continue;
+    if (!best || (row.createdAt || 0) > (best.createdAt || 0)) best = row;
+  }
+  return best;
+}
+
+/** Every vault track this phone has a finished transcript for. */
+export function transcribedMediaIds(list) {
+  const ids = new Set();
+  for (const row of list || []) {
+    if (row.mediaId && row.status === 'completed') ids.add(row.mediaId);
+  }
+  return ids;
+}
+
+/** Is there a job already running for this track? Stops a double send. */
+export function pendingRowForMedia(list, mediaId) {
+  if (!mediaId) return null;
+  const id = String(mediaId);
+  return (list || []).find((row) => row.mediaId === id && !isTerminal(row.status)) || null;
 }
 
 export function normaliseList(raw) {

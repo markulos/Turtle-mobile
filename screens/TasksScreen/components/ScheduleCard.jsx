@@ -12,7 +12,6 @@
 import React, { memo, useEffect, useMemo, useState } from 'react';
 import { PixelRatio, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { tapHaptic, impactHaptic } from '../../../utils/haptics';
 import { boardLabel } from '../utils/taskHelpers';
@@ -116,8 +115,22 @@ function ScheduleCard({
 }) {
   const c = theme.colors;
   const dark = theme.mode === 'dark';
-  // No measuring: the card is a fixed height and the keys are a fixed size cut
-  // from it, so every key in the app is the same as every other one.
+
+  // ── ONE card, ONE key ──────────────────────────────────────────────────
+  // Every card is CARD_H and every key is KEY, everywhere — the timeline, the
+  // To-Do list, the Pending strip. Not because uniformity is tidy, but because
+  // the alternative does not survive a column: keys cut from their own card
+  // mean a SHORTER card has smaller keys, a smaller key column is a NARROWER
+  // column, and the card — which takes what is left — comes out WIDER. One task
+  // whose title happens to wrap and the whole list steps in and out, down the
+  // right-hand edge and through three sizes of checkmark.
+  //
+  // Two keys and their gap ARE the card (see KEY), so the column still starts
+  // and ends exactly where the card does.
+  //
+  // The card is sized for the two-line title; a one-liner's spare ~22 pt is
+  // spent in the MIDDLE (see `bottom`), not reserved under the title and not
+  // pooled at the foot. Both of those have been tried and both read as a hole.
 
   // The countdown re-reads itself only while something is actually running,
   // and then at whichever comes first:
@@ -152,13 +165,16 @@ function ScheduleCard({
   const level = remainingPct(pomodoro);
   const openLive = onOpenPomodoro || onStartPomodoro;
   const key = keySurface(dark);
-  // A FAINT wash of the card's own board colour over the grey, so the two keys
-  // read as belonging to the row beside them rather than as neutral furniture
-  // parked next to it. Faint is the whole point: at the card's own 18 % they
-  // stopped being controls and became two more pieces of the card. Drawn UNDER
-  // the sheen — the gloss is light on a surface, and light sits over colour.
-  // A row with no board has no colour to borrow and simply stays grey.
-  const keyTint = tintOf(color, dark ? 0.24 : 0.16, null);
+  // The card's own board colour over the grey, so the two keys read as
+  // belonging to the row beside them rather than as neutral furniture parked
+  // next to it. Pitched just under the card's own 18 % — near enough that the
+  // three shapes are plainly one object, a shade lighter so the card is still
+  // the thing you read and the keys are still controls sitting beside it. It is
+  // the only thing over the fill now — the keys used to carry a white gloss on
+  // top (two crossed linear gradients standing in for a radial), and it read as
+  // a highlight baked into the button rather than as the flat surface the rest
+  // of the app uses. A row with no board has no colour to borrow and stays grey.
+  const keyTint = tintOf(color, dark ? 0.30 : 0.22, null);
   const pomoCount = Number(pomodoro?.count) || 0;
   // One dot per focus session, capped — see `focus` in the render.
   const focusDots = useMemo(
@@ -186,8 +202,7 @@ function ScheduleCard({
   const overflow = roster.length - shown.length;
   // EVERY card is the same height, whatever a task happens to carry. A task
   // with no board used to drop this line and come out shorter than its
-  // neighbours, so a column of cards had a ragged edge and the keys beside them
-  // (sized from the measured card) came out different sizes too. A missing
+  // neighbours, so a column of cards had a ragged edge. A missing
   // fact is drawn as a PLACEHOLDER — the row is what keeps the card uniform,
   // and "No board" is also more use than a gap.
   const rawSub = subtitle !== undefined ? subtitle : (task?.project ? boardLabel(task.project) : '');
@@ -213,6 +228,13 @@ function ScheduleCard({
           {timeText}
         </Pressable>
       ) : timeText}
+      {/* The card and the line under it are ONE column, flex: 1 between the
+          time gutter and the keys. That is what puts the focus line exactly
+          the card's width, at exactly the card's left and right edges, without
+          anyone computing either — and, more to the point, OUTSIDE the card,
+          so a task that has had focus is not a taller card than one that has
+          not. */}
+      <View style={styles.cardCol}>
       <Pressable
         onPressIn={() => tapHaptic()}
         onPress={() => onPress?.(task)}
@@ -242,8 +264,14 @@ function ScheduleCard({
             <View style={[styles.nowMarkBar, { backgroundColor: nowRed }]} />
           </View>
         )}
-        <View style={styles.top}>
-          <Text style={[styles.title, { color: c.textPrimary }, done && styles.struck]} numberOfLines={2}>{title}</Text>
+        <View style={styles.top} testID={testID ? `${testID}-top` : undefined}>
+          {/* ONE line. A wrapped title is the single thing that made card
+              heights vary, and every attempt to keep both — a taller box for
+              everyone, a reserved second line, a floor — put dead space on the
+              majority of cards to hold room the majority never used. The title
+              is also the one thing on the card you can read in full one tap
+              away, in the inspector. */}
+          <Text style={[styles.title, { color: c.textPrimary }, done && styles.struck]} numberOfLines={1}>{title}</Text>
         </View>
         <Text
           style={[styles.sub, { color: subMissing ? c.textMuted : c.textSecondary }, subMissing && styles.subMissing]}
@@ -314,50 +342,51 @@ function ScheduleCard({
             {!!range && <Text style={[styles.range, { color: c.textTertiary }]} numberOfLines={1}>{range}</Text>}
           </View>
         </View>
-        {/* FOCUS SESSIONS — how much focus this task has already had, on a line
-            of its own under the faces: the name on the card's left edge, the
-            count as DOTS on its right.
-
-            Dots rather than a number because the question this answers is "has
-            this had any, and roughly how much" — which you read off a row of
-            marks at a glance without parsing anything. It was a "⏱ 2" wedged
-            into the bottom-right corner beside the time range, where it was
-            both the smallest thing on the card and the one competing hardest
-            for room.
-            The red is the timer key's own red, so the tally and the control
-            that adds to it are visibly the same subject.
-            The line appears only once there HAS been some focus. It used to be
-            reserved on every card to keep the column level, which cost 20 pt of
-            blank space on every untouched task; now that the card's height is a
-            floor rather than a lock, an absent line costs nothing and most
-            cards stay at exactly the 120 they always were. */}
-        {pomoCount > 0 && (
-          <View style={styles.focus}>
-            <Text style={[styles.focusLabel, { color: c.textTertiary }]} numberOfLines={1}>
-              {pomoCount === 1 ? 'Focus session' : 'Focus sessions'}
-            </Text>
-            <View style={styles.focusDots} testID={testID ? `${testID}-pomo-count` : undefined}>
-              {focusDots.map((i) => (
-                <View
-                  key={i}
-                  style={[styles.focusDot, { backgroundColor: key.red }]}
-                  testID={testID ? `${testID}-focus-dot-${i}` : undefined}
-                />
-              ))}
-              {/* Past a row's worth the dots stop being countable, so the
-                  tail becomes a number — the same trick the faces use. */}
-              {focusOverflow > 0 && (
-                <Text
-                  style={[styles.focusMore, { color: key.red }]}
-                  testID={testID ? `${testID}-focus-more` : undefined}
-                >
-                  {`+${focusOverflow}`}
-                </Text>
-              )}
-            </View>
-          </View>
-        )}
       </Pressable>
+      {/* FOCUS SESSIONS — how much focus this task has already had, on a line
+          of its own UNDER the card: the name on the card's left edge, the
+          count as DOTS on its right.
+
+          Dots rather than a number because the question this answers is "has
+          this had any, and roughly how much" — which you read off a row of
+          marks at a glance without parsing anything. It was a "⏱ 2" wedged
+          into the bottom-right corner beside the time range, where it was
+          both the smallest thing on the card and the one competing hardest
+          for room.
+          The red is the timer key's own red, so the tally and the control
+          that adds to it are visibly the same subject.
+          It sits outside the card rather than in it, which is what keeps the
+          cards uniform: inside, a task with focus behind it was a taller card
+          than one without, and the keys — cut from the card — came out a
+          different size beside it. Out here it costs the card nothing and the
+          row simply carries a line under it. */}
+      {pomoCount > 0 && (
+        <View style={styles.focus}>
+          <Text style={[styles.focusLabel, { color: c.textTertiary }]} numberOfLines={1}>
+            {pomoCount === 1 ? 'Focus session' : 'Focus sessions'}
+          </Text>
+          <View style={styles.focusDots} testID={testID ? `${testID}-pomo-count` : undefined}>
+            {focusDots.map((i) => (
+              <View
+                key={i}
+                style={[styles.focusDot, { backgroundColor: key.red }]}
+                testID={testID ? `${testID}-focus-dot-${i}` : undefined}
+              />
+            ))}
+          {/* Past a row's worth the dots stop being countable, so the
+                tail becomes a number — the same trick the faces use. */}
+            {focusOverflow > 0 && (
+              <Text
+                style={[styles.focusMore, { color: key.red }]}
+                testID={testID ? `${testID}-focus-more` : undefined}
+              >
+                {`+${focusOverflow}`}
+              </Text>
+            )}
+          </View>
+        </View>
+      )}
+      </View>
       {/* The KEY COLUMN, to the right of the card rather than inside it. The
           card is flex: 1, so it narrows by exactly what this column takes.
 
@@ -380,6 +409,7 @@ function ScheduleCard({
               testID={testID ? `${testID}-done` : undefined}
               style={[
                 styles.doneKey,
+                { width: KEY, height: KEY, borderRadius: Math.round(KEY * 0.3) },
                 // Light grey under a thin outline at rest. Done INVERTS to the
                 // green — the one moment the key stops being quiet, which is
                 // the point: a finished task should read from across the row.
@@ -396,14 +426,17 @@ function ScheduleCard({
                   testID={testID ? `${testID}-done-tint` : undefined}
                 />
               )}
-              {/* The gloss belongs to a key that is WAITING to be pressed. On
-                  the green it would only wash the one colour on the row that
-                  is meant to carry. */}
-              {!done && <KeySheen colors={key.sheen} testID={testID ? `${testID}-done-sheen` : undefined} />}
               <Icon
                 name="check"
-                size={KEY_GLYPH}
-                color={done ? '#FFFFFF' : key.green}
+                size={Math.round(KEY * 0.42)}
+                // The page's INK, not the mint. Green at rest put the DONE
+                // colour on a key that was not done — the tick said "finished"
+                // and the fill said "not" — and next to a red timer glyph the
+                // two keys read as two warnings rather than two controls. Dark
+                // on the light page, light on the dark one; the mint is what
+                // you get for pressing it, and it is the only colour on the row
+                // that means anything.
+                color={done ? '#FFFFFF' : c.textPrimary}
                 testID={testID ? `${testID}-done-check` : undefined}
               />
             </TouchableOpacity>
@@ -423,6 +456,7 @@ function ScheduleCard({
               testID={testID ? `${testID}-pomodoro` : undefined}
               style={[
                 styles.pomodoroKey,
+                { width: KEY, height: KEY, borderRadius: KEY / 2 },
                 // LIVE wears the red it has been hinting at all along: the key
                 // is the block now, not the button that starts one.
                 live
@@ -443,19 +477,15 @@ function ScheduleCard({
                   testID={testID ? `${testID}-pomodoro-tint` : undefined}
                 />
               )}
-              <KeySheen
-                colors={live ? key.liveSheen : key.sheen}
-                testID={testID ? `${testID}-pomodoro-sheen` : undefined}
-              />
               {/* The RADIAL countdown: the outline itself, shortening as the
-                  block burns down. Over the sheen — it is the signal, the
-                  gloss is only light. The number says how long is left, the
-                  ring says how much of the block that is. */}
+                  block burns down. The number says how long is left, the ring
+                  says how much of the block that is. */}
               {live && level != null && (
                 <KeyRing
                   pct={level}
                   color={key.red}
                   track={key.liveTrack}
+                  size={KEY - 2}
                   testID={testID ? `${testID}-pomodoro-ring` : undefined}
                 />
               )}
@@ -465,16 +495,23 @@ function ScheduleCard({
               {live
                 ? (
                   <View style={styles.pomodoroLive}>
-                    <Text style={[styles.pomodoroCount, { color: key.red }]} numberOfLines={1}>
+                    <Text style={[styles.pomodoroCount, { fontSize: Math.round(KEY * 0.34), color: key.red }]} numberOfLines={1}>
                       {minsLeft}
                     </Text>
                     {/* The unit, quietly — without it a bare "13" in a circle
                         could be a count of blocks rather than minutes left,
                         which is the other number this card already shows. */}
-                    <Text style={[styles.pomodoroUnit, { color: key.red }]} numberOfLines={1}>m</Text>
+                    <Text style={[styles.pomodoroUnit, { fontSize: Math.round(KEY * 0.2), color: key.red }]} numberOfLines={1}>m</Text>
                   </View>
                 )
-                : <Icon name="timer-outline" size={KEY_GLYPH} color={key.red} />}
+                : (
+                  <Icon
+                    name="timer-outline"
+                    size={Math.round(KEY * 0.42)}
+                    color={c.textPrimary}
+                    testID={testID ? `${testID}-pomodoro-glyph` : undefined}
+                  />
+                )}
             </TouchableOpacity>
           )}
         </View>
@@ -491,6 +528,17 @@ export default memo(ScheduleCard);
  * to spare, and the column stops eating width the card wants.
  */
 export const TIME_COL_W = 64;
+
+// The time label's own line box — the card's first line: dropped TIME_PAD_TOP
+// from the row's top, TIME_LINE_H tall. Named (rather than written into the
+// style below as two literals) because ANYTHING that has to sit level with the
+// time needs the centre of this box, and a second hand-tuned constant
+// elsewhere drifts away from it the moment either number changes. The day
+// planner's timeline bead is exactly that: see BEAD_TOP_CARD in CalendarView.
+const TIME_PAD_TOP = 14;
+const TIME_LINE_H = 21;
+/** Centre of the time label's line box, measured from the row's top edge. */
+export const TIME_LABEL_CENTER_Y = TIME_PAD_TOP + TIME_LINE_H / 2;
 
 /**
  * ONE card height, and keys sized from it — so every card in a list is the
@@ -529,7 +577,6 @@ const keySurface = (dark) => (dark
   ? {
     fill: 'rgba(255,255,255,0.09)',
     edge: 'rgba(255,255,255,0.20)',
-    sheen: ['rgba(255,255,255,0.26)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.16)'],
     green: '#34D399',
     red: '#F87171',
     // LIVE — the same construction in the timer's own red, with the outline
@@ -540,7 +587,6 @@ const keySurface = (dark) => (dark
     // What the countdown arc eats into: the same red, faint enough that the
     // arc is what you read and the rest is only where it has been.
     liveTrack: 'rgba(248,113,113,0.22)',
-    liveSheen: ['rgba(255,255,255,0.20)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.12)'],
   }
   : {
     // Deep enough that the white off the edges is something you can SEE. At
@@ -548,48 +594,11 @@ const keySurface = (dark) => (dark
     // flat outline with nothing in it.
     fill: '#E7E9ED',
     edge: 'rgba(15,23,42,0.13)',
-    sheen: ['rgba(255,255,255,0.92)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.72)'],
     green: '#0E9F6E',
     red: '#E02424',
     liveFill: '#FCE9E9',
     liveTrack: 'rgba(224,36,36,0.18)',
-    liveSheen: ['rgba(255,255,255,0.85)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.60)'],
   });
-
-/**
- * White off the EDGES: white at both ends, transparent through the middle, ONE
- * pass down the key and one across it — so the light comes in from all four
- * sides and the grey only holds the centre. There is no radial mode in
- * expo-linear-gradient; two crossed linears are what read as one. They
- * compound at the corners, which is where an edge light is brightest anyway,
- * so the alphas are set below what one pass would want.
- */
-const SHEEN_STOPS = [0, 0.5, 1];
-const ACROSS_START = { x: 0, y: 0.5 };
-const ACROSS_END = { x: 1, y: 0.5 };
-
-function KeySheen({ colors, testID }) {
-  return (
-    <>
-      <LinearGradient
-        colors={colors}
-        locations={SHEEN_STOPS}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-        testID={testID}
-      />
-      <LinearGradient
-        colors={colors}
-        locations={SHEEN_STOPS}
-        start={ACROSS_START}
-        end={ACROSS_END}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-        testID={testID ? `${testID}-across` : undefined}
-      />
-    </>
-  );
-}
 
 /**
  * The live key's OUTLINE, as an arc that shrinks with the block: a full ring
@@ -631,13 +640,20 @@ export function KeyRingRotations(pct) {
   };
 }
 
-function KeyRing({ pct, color, track, testID }) {
+/**
+ * `size` is the key's PADDING box — the key less its 1 pt outline on each side.
+ * Passed in rather than read from a constant so the ring is stated once, beside
+ * the key it belongs to, instead of twice in two places that must agree.
+ */
+function KeyRing({ pct, color, track, size, testID }) {
   const { right, left } = KeyRingRotations(pct);
+  const full = { width: size, height: size, borderRadius: size / 2 };
   const half = (side, rotate) => (
-    <View style={[styles.ringWindow, side === 'left' ? styles.ringWindowLeft : styles.ringWindowRight]}>
+    <View style={[styles.ringWindow, { width: size / 2, height: size }, side === 'left' ? styles.ringWindowLeft : styles.ringWindowRight]}>
       <View
         style={[
           styles.ringHalf,
+          full,
           side === 'left' ? styles.ringHalfLeft : styles.ringHalfRight,
           { borderTopColor: color, borderRightColor: color, transform: [{ rotate: `${rotate}deg` }] },
         ]}
@@ -646,24 +662,24 @@ function KeyRing({ pct, color, track, testID }) {
     </View>
   );
   return (
-    <View pointerEvents="none" style={styles.ring} testID={testID}>
+    <View pointerEvents="none" style={[styles.ring, { width: size, height: size }]} testID={testID}>
       {/* What the arc is eating into. The key's own border goes transparent
           while live, so this track IS the outline — the ring does not sit
           inside a second, competing edge. */}
-      <View style={[styles.ringTrack, { borderColor: track }]} testID={testID ? `${testID}-track` : undefined} />
+      <View style={[styles.ringTrack, { borderRadius: size / 2, borderColor: track }]} testID={testID ? `${testID}-track` : undefined} />
       {half('right', right)}
       {half('left', left)}
     </View>
   );
 }
 /**
- * The FOCUS SESSIONS line: its own row across the foot of the card, the label
- * on the left edge and the dots on the right.
+ * The FOCUS SESSIONS line: its own row UNDER the card, the label on the card's
+ * left edge and the dots on its right.
  *
- * `FOCUS_ROW` is the label's line box and `FOCUS_GAP` the air above it — 20 pt
- * between them, which a card with a one-line title absorbs inside its existing
- * 120 without growing at all. Only a two-line title with sessions under it
- * makes the card taller; see CARD_H.
+ * `FOCUS_ROW` is the label's line box and `FOCUS_GAP` the air between it and
+ * the card above. Neither is part of the card any more, which is the point: the
+ * card is the same height whether the task has had focus or not, and so are the
+ * keys beside it.
  *
  * The dots are 6 pt with 4 between: small enough that eight of them and the
  * label both fit the card's ~190 pt of inner width, big enough to count.
@@ -679,28 +695,21 @@ export const MAX_FOCUS_DOTS = 8;
 const FONT_SCALE = Math.max(1, PixelRatio.getFontScale());
 const TITLE_LINE = 21;
 /**
- * The card's height — a FLOOR now, not a lock (`card.minHeight`).
+ * ONE card height, for every card in the app, and the keys cut from it.
  *
- * 120 is what it has always been, and what the keys are cut from, and the two
- * facts are the same fact: two keys and their gap ARE the card, so a card that
- * grew took the keys with it. Growing it to make room for the focus line
- * pushed them to 66, which is why this went back.
+ * 104 is the ONE-LINE case, which is the card as it actually reads: padding 14
+ * + a 21 pt title line + the board line (3 + ~16) + the bottom row (10 + the
+ * 26 pt faces/trailing band) + padding 12, with a couple of points of headroom
+ * so a hair of extra leading cannot clip it.
  *
- * A floor rather than a lock because 120 does not hold everything at once: it
- * holds a two-line title, OR a one-line title and the focus line, but not both
- * (14 + 42 + 19 + 32 + 20 + 12 = 139). Locking it at 139 would spend 19 pt of
- * dead space at the foot of every ordinary card to buy a level column; locking
- * it at 120 would mean cutting titles to one line. A floor gives the common
- * card — anything up to a two-line title, anything up to a one-line title with
- * focus sessions — exactly the 120 it always had, and lets the rare card that
- * carries both simply be taller.
- *
- * What that costs is the guarantee that every card in a column is the same
- * height; the keys stay one size regardless, because they are cut from this
- * constant and not from the card they sit beside. On a card that has grown, the
- * key column is top-aligned and stops short of the foot.
+ * It was 120 — the TWO-line case — which made every card in the app as tall as
+ * its longest possible title and every key 56 to match. That is backwards: a
+ * card should be the size of the card, and the wrapped title is the exception.
+ * Which is why the title is capped at one line (see `title`): the two facts are
+ * the same fact, and a fixed box with a wrappable title in it is a box that
+ * clips.
  */
-export const CARD_H = Math.round(120 * FONT_SCALE);
+export const CARD_H = Math.round(104 * FONT_SCALE);
 /** Air between the two keys. */
 export const KEY_GAP = 8;
 /**
@@ -708,8 +717,6 @@ export const KEY_GAP = 8;
  * column starts and ends where the card does.
  */
 export const KEY = Math.round((CARD_H - KEY_GAP) / 2);
-/** The glyph inside a key. */
-const KEY_GLYPH = Math.round(KEY * 0.42);
 /**
  * The countdown ring's diameter: the key's PADDING box, i.e. the key less its
  * 1 pt outline on each side. A child cannot paint into its parent's border, so
@@ -845,28 +852,27 @@ const styles = StyleSheet.create({
   // does, so the time reads as belonging to the card it names.
   time: {
     width: TIME_COL_W,
-    paddingTop: 14,
+    paddingTop: TIME_PAD_TOP,
     paddingRight: 10,
     textAlign: 'right',
     fontSize: 11,
-    lineHeight: 21,
+    lineHeight: TIME_LINE_H,
     fontWeight: '500',
     fontVariant: ['tabular-nums'],
     letterSpacing: 0.2,
   },
+  // The card and its focus line. flex: 1 so the pair takes what is left
+  // between the time gutter and the keys — which is what gives the line the
+  // card's exact width without measuring anything.
+  cardCol: { flex: 1 },
   card: {
-    flex: 1,
     borderRadius: 18,
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 12,
-    // A FLOOR (see CARD_H): the card is the familiar 120 whatever it carries,
-    // and grows only for the one combination that genuinely does not fit —
-    // a two-line title with focus sessions under it. It was a hard `height`,
-    // which meant a one-line title left its spare line as dead space at the
-    // foot, under the focus line, where it read as a hole rather than as
-    // padding.
-    minHeight: CARD_H,
+    // FIXED. Every card in the app is this box — see the note at the top of the
+    // component for why a card that is its own content cannot survive a column.
+    height: CARD_H,
   },
   // No reserved second line. The card's height is a floor, so a one-line title
   // simply leaves the card at 120 with its slack under the content — which is
@@ -910,9 +916,6 @@ const styles = StyleSheet.create({
   // The two keys stack, aligned to the card's top edge.
   keys: { gap: KEY_GAP },
   doneKey: {
-    width: KEY,
-    height: KEY,
-    borderRadius: Math.round(KEY * 0.3),
     alignItems: 'center',
     justifyContent: 'center',
     // A thin outline — 1, not a hairline: at 0.33 pt the rim of a 66 pt key
@@ -924,9 +927,6 @@ const styles = StyleSheet.create({
   // A CIRCLE: the same box, the radius taken all the way round. Only the
   // corner says they are different kinds of thing.
   pomodoroKey: {
-    width: KEY,
-    height: KEY,
-    borderRadius: KEY / 2,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -942,21 +942,16 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     left: 0,
-    width: RING,
-    height: RING,
   },
   ringTrack: {
     ...StyleSheet.absoluteFillObject,
     borderWidth: RING_W,
-    borderRadius: RING / 2,
   },
   // Each window clips to its own half of the circle, so the half-ring inside
   // it can be rotated right out of view.
   ringWindow: {
     position: 'absolute',
     top: 0,
-    width: RING / 2,
-    height: RING,
     overflow: 'hidden',
   },
   ringWindowLeft: { left: 0 },
@@ -967,9 +962,6 @@ const styles = StyleSheet.create({
   ringHalf: {
     position: 'absolute',
     top: 0,
-    width: RING,
-    height: RING,
-    borderRadius: RING / 2,
     borderWidth: RING_W,
     // Two sides painted, two transparent — that is what makes it a half-ring.
     borderBottomColor: 'transparent',
@@ -986,12 +978,10 @@ const styles = StyleSheet.create({
   // about as it counts down — and a touch smaller than it was alone, now that
   // the unit sits beside it and two digits plus an "m" have to fit.
   pomodoroCount: {
-    fontSize: Math.round(KEY * 0.34),
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
   pomodoroUnit: {
-    fontSize: Math.round(KEY * 0.2),
     fontWeight: '700',
     opacity: 0.75,
     marginLeft: 1,
@@ -1003,11 +993,18 @@ const styles = StyleSheet.create({
   },
   // A placeholder is a stand-in, not a fact: same room, quieter voice.
   subMissing: { fontStyle: 'italic' },
+  // Sits on the card's FOOT: `auto` takes whatever the title did not, so the
+  // faces and the time land on the same line of every card whether the title
+  // above them ran to one line or two. That is also where a short title's spare
+  // room goes — between the board name and this row, as air in the middle of
+  // the card rather than a reserved blank line under the title or a hole under
+  // everything. 10 is the floor, for the card whose content fills it.
   bottom: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 10,
+    marginTop: 'auto',
+    paddingTop: 10,
   },
   bottomRight: {
     flexDirection: 'row',
@@ -1026,6 +1023,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     height: FOCUS_ROW,
     marginTop: FOCUS_GAP,
+    // Inside the card's own text inset, so the label starts under the title
+    // rather than under the card's edge.
+    paddingHorizontal: 4,
   },
   focusLabel: {
     fontSize: 11,

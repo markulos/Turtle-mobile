@@ -217,11 +217,23 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   const unpinned = visibleBoards.filter((b) => !b.isPinned);
   // Offer "create a new board" whenever the typed name doesn't already match an
   // existing board exactly (case-insensitive) — so a brand-new topic is one tap
-  // away without leaving the share sheet. New boards are created as tags.
+  // away without leaving the share sheet.
   const exactMatch = q
     ? visibleBoards.some((b) => String(b?.name || '').toLowerCase() === q)
     : false;
   const canCreate = hasStandardContent && q.length > 0 && !exactMatch;
+  // WHICH kind of board a new one is depends on what is being filed, because
+  // the two registries are read by different screens:
+  //
+  //   photos only → 'album'. The photo vault lists albums, and only a REGISTERED
+  //     album at that (server: computeAlbumsPayload). A tag board for a photo
+  //     share tagged the photos with a name the vault would never list, so the
+  //     board you just made was nowhere to be found.
+  //   anything with words in it → 'tag'. A text or link share becomes a note
+  //     tagged with the board name, and the server only writes that note for a
+  //     tag/project board — filing a captioned share under a new album would
+  //     drop the caption on the floor.
+  const newBoardKind = (imageFiles.length > 0 && !text && !url) ? 'album' : 'tag';
   // Only block the UI on the network when we have NOTHING cached to paint. Once
   // the cache (or a fetch) has populated boards, refreshes happen silently.
   const busyEmpty = hasStandardContent && loadingBoards && boards.length === 0;
@@ -343,15 +355,18 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
 
   // ── The "create a new board" row ────────────────────────────
   // Reuses the search box as the name field: type a destination that doesn't
-  // exist, then tap this to create it (as a tag) AND send the share to it in one
-  // shot. Same trailing spinner / checkmark states as a normal board row.
+  // exist, then tap this to create it AND send the share to it in one shot. The
+  // server makes the board as part of accepting the share (`create: true`), so
+  // there is no round trip to wait on here. Photos make an ALBUM, everything
+  // else a tag — see newBoardKind for why that distinction is load-bearing.
   const renderCreateRow = (name) => {
+    const makesAlbum = newBoardKind === 'album';
     return (
       <TouchableOpacity
         key="__create_new_board__"
         activeOpacity={0.75}
         onPressIn={() => impactHaptic('medium')}
-        onPress={() => pickBoard({ kind: 'tag', name, create: true })}
+        onPress={() => pickBoard({ kind: newBoardKind, name, create: true })}
         style={[
           styles.boardRow,
           {
@@ -360,16 +375,21 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
             borderStyle: 'dashed',
           },
         ]}
+        accessibilityRole="button"
+        accessibilityLabel={`Create ${makesAlbum ? 'album' : 'board'} ${name} and send here`}
+        testID="share-create-board"
       >
         <View style={[styles.boardIcon, { backgroundColor: theme.colors.surfaceElevated || theme.colors.surface }]}>
-          <Icon name="plus" size={18} color={theme.colors.accentSuccess} />
+          <Icon name={makesAlbum ? 'image-plus' : 'plus'} size={18} color={theme.colors.accentSuccess} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.boardName, { color: theme.colors.textPrimary }]} numberOfLines={1}>
             Create “{name}”
           </Text>
           <Text style={[styles.boardKind, { color: theme.colors.textMuted }]}>
-            New board · sends here
+            {makesAlbum
+              ? `New album · ${imageFiles.length === 1 ? 'the photo lands' : 'the photos land'} here`
+              : 'New board · sends here'}
           </Text>
         </View>
         <Icon name="plus-circle-outline" size={22} color={theme.colors.accentSuccess} />

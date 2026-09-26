@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import ParticipantPicker from './TasksScreen/components/ParticipantPicker';
+import PeoplePicker from './TasksScreen/components/PeoplePicker';
 import CalendarPartners from './TasksScreen/components/CalendarPartners';
 import {
   View,
@@ -1249,7 +1249,14 @@ export default function SettingsScreen({ active = true }) {
                 </View>
               </View>
               <View style={{ paddingHorizontal: 16, paddingBottom: 14, marginTop: -6 }}>
-                <ParticipantPicker selected={defaultParticipants} onChange={handleChangeDefaults} />
+                <PeoplePicker
+                  selected={defaultParticipants}
+                  onChange={handleChangeDefaults}
+                  // No guests here: this is a standing default for every new
+                  // task, and a phone number that gets texted about all of them
+                  // is not a setting anybody means to make.
+                  allowGuests={false}
+                />
               </View>
               </SettingsItem>
               <SettingsItem terms={SETTING_TERMS.calendarPartners}>
