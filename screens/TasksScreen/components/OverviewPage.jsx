@@ -29,6 +29,18 @@ import StatsPanel from './StatsPanel';
 
 const pct = (done, total) => (total > 0 ? Math.round((done / total) * 100) : 0);
 
+/**
+ * The embedded shell: a box that simply fills its slot.
+ *
+ * It exists so the page's root can be chosen by a prop without duplicating the
+ * whole tree — and it has to be a real View, not a fragment, because the
+ * drill-downs below render as absolute-fill overlays and an absolute child
+ * needs a positioned parent to fill.
+ */
+function EmbeddedShell({ children }) {
+  return <View style={styles.embedded}>{children}</View>;
+}
+
 /** The board finder's pill — the placeholder centres itself against it. */
 const FINDER_HEIGHT = 46;
 
@@ -429,25 +441,79 @@ function OverviewPage({
   // (title, boardName) => void — the finder's create row, which is the point
   // of it: a task added from here is born on the board you are looking at.
   onAddTask,
+  // EMBEDDED: this is a tab in the Tasks pager rather than a page pushed over
+  // it. No sliding shell, no header of its own — the pager's segmented control
+  // IS the header, and the keys that would sit here (search, filters) live on
+  // the page around it. Everything BELOW the top level is unchanged: a board,
+  // a tile's list and the stats sheet are still pushed pages with a back
+  // swipe, they simply push within the tab instead of over the whole screen.
+  embedded = false,
+  // Filters the board rows. The page's own search, passed in rather than owned
+  // here because the field lives outside this component when embedded.
+  query = '',
+  // (open) => void — fires whenever a drill-down opens or closes, so the pager
+  // hosting this can stop paging under it. A left-edge back-swipe and a
+  // page-swipe are otherwise the same gesture.
+  onDrillChange,
 }) {
   const insets = useSafeAreaInsets();
+  // The safe area is this page's to pay only when it owns the whole screen.
+  // Embedded, the screen's header has already cleared the notch and the pager
+  // starts below it — paying it again is a band of dead page under a header
+  // that is already clear. Applies to the drill-downs too: they fill the tab,
+  // not the screen.
+  const pageTopInset = embedded ? 0 : insets.top;
   const pal = useMemo(() => insetCardPalette(theme), [theme]);
   const c = theme.colors;
   const todayStr = localTodayStr();
-  const { all, rows, tagRows } = useMemo(() => overviewStats(tasks, boards, todayStr), [tasks, boards, todayStr]);
+  const { all, rows: allRows, tagRows } = useMemo(() => overviewStats(tasks, boards, todayStr), [tasks, boards, todayStr]);
+  // The search narrows the BOARD list only — the tiles above it are the whole
+  // picture and stay whole, which is what makes it obvious you are filtering a
+  // list rather than looking at a smaller pond.
+  const rows = useMemo(() => {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) return allRows;
+    return allRows.filter((r) => boardLabel(r.name).toLowerCase().includes(q));
+  }, [allRows, query]);
   const [board, setBoard] = useState(null);
   // Which drill-down is up: a tile's list, or the stats page. Both are nested
   // overlays, so the back-swipe stack reads overview → here → back.
   const [scope, setScope] = useState(null);
   const [statsOpen, setStatsOpen] = useState(false);
   useEffect(() => { if (!visible) { setBoard(null); setScope(null); setStatsOpen(false); } }, [visible]);
-  const detailRow = board ? rows.find((r) => r.name === board) : null;
+  // Report the drill state up. One effect rather than a call at each open /
+  // close site: those are five places and counting, and one of them will be
+  // missed — leaving the pager locked with nothing on top of it.
+  const drilled = !!board || !!scope || statsOpen;
+  useEffect(() => { onDrillChange?.(drilled); }, [drilled, onDrillChange]);
+  useEffect(() => () => onDrillChange?.(false), [onDrillChange]);
+  // A board found by search, then dropped from the rows by a keystroke, must
+  // not strand its detail page on a row that no longer exists.
+  const detailRow = board ? (allRows.find((r) => r.name === board) || null) : null;
   const detailTasks = useMemo(() => (board ? (tasks || []).filter((t) => t && itemTypeOf(t) === 'task' && (t.project || NO_BOARD) === board) : []), [tasks, board]);
   const dayLabel = (calendarDate instanceof Date ? calendarDate : new Date()).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
+  // Embedded, the shell is nothing: a plain flex box in whatever slot the
+  // pager gave us. The nested drill-downs still need a parent to fill, which
+  // is why this is a fragment-with-a-box rather than a fragment.
+  const Shell = embedded ? EmbeddedShell : EdgeSwipePage;
+  const shellProps = embedded
+    ? {}
+    : { visible, onClose, overlay: true, swipeEnabled: !board };
+
   return (
-    <EdgeSwipePage visible={visible} onClose={onClose} overlay swipeEnabled={!board}>
-      <View style={[styles.page, { backgroundColor: c.background, paddingTop: insets.top }]}>
+    <Shell {...shellProps}>
+      <View
+        style={[
+          styles.page,
+          { backgroundColor: c.background },
+          // Embedded, the safe area is the screen's business and has already
+          // been paid for by the header above us — paying it twice is a band
+          // of dead page under a header that is already clear of the notch.
+          { paddingTop: pageTopInset },
+        ]}
+      >
+        {!embedded && (
         <PageHeader
           title="Overview"
           onBack={onClose}
@@ -484,6 +550,7 @@ function OverviewPage({
             </View>
           )}
         />
+        )}
         <ScrollView
           contentContainerStyle={[styles.body, { paddingBottom: 32 + Math.max(insets.bottom, bottomInset) }]}
           showsVerticalScrollIndicator
@@ -523,7 +590,7 @@ function OverviewPage({
       {/* A tile's list: every task in that bucket, across every board. */}
       <EdgeSwipePage overlay visible={!!scope} onClose={() => setScope(null)}>
         {!!scope && (
-          <View style={{ flex: 1, paddingTop: insets.top, backgroundColor: c.background }}>
+          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: c.background }}>
             <ScopePage
               scope={scope}
               tasks={tasks}
@@ -547,7 +614,7 @@ function OverviewPage({
             pal={pal}
             theme={theme}
             onClose={() => setStatsOpen(false)}
-            insetTop={insets.top}
+            insetTop={pageTopInset}
             bottomInset={Math.max(insets.bottom, bottomInset)}
           />
         )}
@@ -557,7 +624,7 @@ function OverviewPage({
           holds (overview → board → back). */}
       <EdgeSwipePage overlay visible={!!detailRow} onClose={() => setBoard(null)}>
         {detailRow && (
-          <View style={{ flex: 1, paddingTop: insets.top, backgroundColor: c.background }}>
+          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: c.background }}>
             <BoardDetail
               row={detailRow}
               tasks={detailTasks}
@@ -573,7 +640,7 @@ function OverviewPage({
           </View>
         )}
       </EdgeSwipePage>
-    </EdgeSwipePage>
+    </Shell>
   );
 }
 
@@ -581,6 +648,10 @@ export default memo(OverviewPage);
 
 const styles = StyleSheet.create({
   page: { flex: 1 },
+  // The embedded root. `overflow: hidden` matters: the drill-downs slide in
+  // from the right, and without it their off-screen resting position paints
+  // across the page beside this one in the pager.
+  embedded: { flex: 1, overflow: 'hidden' },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',

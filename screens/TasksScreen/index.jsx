@@ -81,16 +81,40 @@ const agendaRowDateKey = (item) => {
 };
 // Short, human date word for a YYYY-MM-DD key: Today / Tomorrow / Yesterday, or
 // "July 20" (with the year appended only when it isn't the current year).
-const agendaDateLabel = (key) => {
+const agendaDateLabelWith = (months, relative = true) => (key) => {
   const todayStr = localTodayStr();
-  if (key === todayStr) return 'Today';
+  if (relative && key === todayStr) return 'Today';
   const then = parseYMDLocal(key);
   const now = parseYMDLocal(todayStr);
   const diff = Math.round((then.getTime() - now.getTime()) / 86400000);
-  if (diff === 1) return 'Tomorrow';
-  if (diff === -1) return 'Yesterday';
-  const label = `${AGENDA_MONTHS[then.getMonth()]} ${then.getDate()}`;
+  if (relative && diff === 1) return 'Tomorrow';
+  if (relative && diff === -1) return 'Yesterday';
+  const label = `${months[then.getMonth()]} ${then.getDate()}`;
   return then.getFullYear() === now.getFullYear() ? label : `${label}, ${then.getFullYear()}`;
+};
+// The list's date dividers, which have the full width of the page to sit in.
+const agendaDateLabel = agendaDateLabelWith(AGENDA_MONTHS);
+// The pointer's readout, which does NOT. It lives in the ~74pt margin, with
+// about 64pt of text width, and TWO things follow from that.
+//
+// The months are abbreviated: "September 2" wrapped mid-WORD to "Septembe /
+// r 2".
+//
+// And it states a DATE, never a relative word — no "Today" / "Tomorrow" /
+// "Yesterday" here, though the dividers still use them. At the readout's 15pt
+// both "Yesterday" and "Tomorrow" overrun 64pt and wrap, stranding a letter on
+// a second line. The relation has its own line now (see `dayOffsetLabel` and
+// TimelinePointer's offset word), set small enough to fit and placed above or
+// below the reading according to which way it points — so nothing is lost, the
+// two say different things, and neither can wrap.
+const agendaDateLabelShort = agendaDateLabelWith(AGENDA_MONTHS.map((m) => m.slice(0, 3)), false);
+// How many days a date key is from today — negative for the past. The pointer's
+// offset word is this, put into words.
+const daysFromToday = (key) => {
+  if (!key) return null;
+  const now = parseYMDLocal(localTodayStr());
+  const then = parseYMDLocal(key);
+  return Math.round((then.getTime() - now.getTime()) / 86400000);
 };
 
 // Same stable per-owner colour as the calendar badges and the FilterMenu
@@ -131,12 +155,16 @@ import {
   RAIL_ABS_X, RAIL_W, threadColor, TimelineGutter, TimelinePointer,
   // The band's width and the card column's left edge — the agenda's own chrome
   // aligns to these so it clears the gutter and matches the rows exactly.
-  GUTTER_W, CARD_COL_X, ROW_PAD,
+  GUTTER_W, MARGIN_EDGE_X, CARD_COL_X, ROW_PAD,
+  // The gap a cell carries below its card — the magnet measures where a card's
+  // centre really is, and a cell's layout box includes it.
+  ROW_GAP,
   setScrubbing as setGutterScrubbing,
 } from './components/TimelineTaskRow';
 import { clockLabel } from './components/ScheduleCard';
 // `pointerLabel` is aliased: the screen already has state by that name.
-import { indexAtContentY, dayKeyAt, pointerLabel as pointerReadout } from './utils/timelinePointer';
+import { indexAtContentY, dayKeyAt, pointerParts, activeRowIdAt, markContentY, nearestCardCenter, magnetPull } from './utils/timelinePointer';
+import { VIEW_PAGES, DEFAULT_VIEW, VIEW_SEGMENTS, viewIndex, viewAtOffset } from './utils/viewPages';
 import { boardCardPalette } from './utils/cardPalette';
 import { boardColorAt } from './utils/boardColors';
 import FriendCard from '../TurtleScreen/components/FriendCard';
@@ -152,6 +180,10 @@ import BoardManagerSheet from './components/BoardManagerSheet';
 import TaskInspectorSheet from './components/TaskInspectorSheet';
 import SchedulePickerSheet from './components/SchedulePickerSheet';
 import OverviewPage from './components/OverviewPage';
+import FocusPage from './components/FocusPage';
+import { mergeFocusLog } from './utils/focusStats';
+// So a block started from the Focus tab still pings THIS device when it ends.
+import { getExpoPushTokenSafe } from '../../services/vaultPush';
 
 // The row's real board, or null. "None" is stored three ways — absent, empty,
 // and the legacy 'No Project' sentinel (see boardLabel) — and all three mean
@@ -172,6 +204,40 @@ const RAIL_H = 42 + 80;
 const RAIL_OPEN_MS = 280;
 const RAIL_CLOSE_MS = 240;
 const RAIL_EASE = ReEasing.bezier(0.4, 0, 0.2, 1);
+
+// The three pages, their order and the arithmetic that keeps the pager and its
+// segmented control agreeing — see utils/viewPages.
+
+// The header's side margin. The vault's, and the title row and the tab track
+// share it so the title's first letter and the first tab's slot line up.
+const HEADER_PAD_X = 16;
+
+// ── The agenda's magnet ─────────────────────────────────────────────────────
+// The MARK never moves — it is the one fixed thing on the screen and the whole
+// timeline is read against it. So the attraction acts on the other side of the
+// pair: the cards slide to the mark, never the mark to a card.
+//
+// How far they may slide under the lean, and how hard it pulls. At this
+// strength the slide peaks around 4pt of the 5 it is allowed, so the clamp is
+// a guard rather than the thing you feel.
+//
+// HISTORY, because it shipped broken twice and the cause was not the magnet:
+// the agenda grew a lead-in above its first card at the same time, and
+// FlashList's `getLayout` is PADDING-RELATIVE while a scroll offset is not
+// (see `markContentY`). Every reading — the readout, the lit row, and the
+// magnet's idea of which card was nearest — was that padding further down the
+// timeline than the mark really was. Hence "it lit the wrong card" and "it
+// pulls between items": the magnet was aiming at a card a row and a half from
+// the mark. One missing term, three symptoms.
+const MAGNET_LEAN_MAX = 5;
+const MAGNET_STRENGTH = 0.32;
+// A settle NEVER moves the list further than this. Beyond it the mark is not
+// "near" a card at all — it is sitting on a band header, or in the gap between
+// the two bands — and pulling the list to one from there would be the opposite
+// of controlled.
+const MAGNET_SETTLE_MAX = 64;
+// Under this it is already there; moving would be a twitch, not a settle.
+const MAGNET_SETTLE_MIN = 1.5;
 
 // The board palette lives in utils/boardColors — shared with the calendar,
 // which used to hash board names into a palette of its own.
@@ -499,7 +565,11 @@ export default function TasksScreen() {
   const { dispatch: dispatchCommand } = useCommandBus();
   const menuAnimation = useRef(new Animated.Value(0)).current;
   const [showFilterMenu, setShowFilterMenu] = useState(false);
-  const [showOverview, setShowOverview] = useState(false);
+  // True while the Boards page has a drill-down up (a board, a stat's list,
+  // the stats sheet). Those are absolute overlays INSIDE the pager's page, so
+  // the pager has to stop paging under them — otherwise a left-edge back-swipe
+  // and a page-swipe are the same gesture, and the wrong one wins.
+  const [boardsDrilled, setBoardsDrilled] = useState(false);
   // Mirror of the calendar's selected day (CalendarView owns it; it reports
   // up via onSelectedDateChange) so the stats panel can show that day's
   // scheduled/completed counts.
@@ -507,10 +577,17 @@ export default function TasksScreen() {
   const [showProjectManager, setShowProjectManager] = useState(false);
   // The board a long-press on the rail asked to edit; the sheet opens on it.
   const [manageBoard, setManageBoard] = useState(null);
-  // The board rail is a drawer under the header: hidden by default, the
-  // Boards key opens it, picking a board closes it. The key itself shows the
-  // selected board (dot + name) so the scope stays readable with it closed.
-  const [railOpen, setRailOpen] = useState(false);
+  // The BOARDS page's filter panel: the status keys and the board rail, folded
+  // away until its key is pressed. It used to be a tray revealed over whatever
+  // page you were reading, which is why it had to be an absolute layer with a
+  // counter-shifted page under it; on its own page it is simply a section that
+  // expands, and the page scrolls.
+  const [boardsFilterOpen, setBoardsFilterOpen] = useState(false);
+  // …and its search field, which the key beside the filter reveals. Kept apart
+  // so opening one doesn't shut the other: you filter to a board's status and
+  // then look for a board within it.
+  const [boardsSearchOpen, setBoardsSearchOpen] = useState(false);
+  const [boardQuery, setBoardQuery] = useState('');
   // The day panel's task inspector. The calendar reports the tap; the sheet is
   // mounted HERE, in a transparent Modal, so it sits over the header chrome,
   // the day panel and the tab bar — everything else in the app. Holding the id
@@ -521,21 +598,18 @@ export default function TasksScreen() {
     [inspector, tasks],
   );
   const closeInspector = useCallback(() => setInspector(null), []);
-  const railProgress = useSharedValue(0);
+  // The filter panel's reveal. Same curve and durations the tray used, on the
+  // panel's own height rather than on a transform of the whole page.
+  const boardsFilterProgress = useSharedValue(0);
   useEffect(() => {
-    railProgress.value = withTiming(railOpen ? 1 : 0, {
-      duration: railOpen ? RAIL_OPEN_MS : RAIL_CLOSE_MS,
+    boardsFilterProgress.value = withTiming(boardsFilterOpen ? 1 : 0, {
+      duration: boardsFilterOpen ? RAIL_OPEN_MS : RAIL_CLOSE_MS,
       easing: RAIL_EASE,
     });
-  }, [railOpen, railProgress]);
-  // The page below the header slides down by the rail's height as it reveals.
-  const contentShiftStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: railProgress.value * RAIL_H }],
-  }));
-  // The rail itself fades + settles into place from a touch above.
-  const railRevealStyle = useAnimatedStyle(() => ({
-    opacity: railProgress.value,
-    transform: [{ translateY: (railProgress.value - 1) * 16 }],
+  }, [boardsFilterOpen, boardsFilterProgress]);
+  const boardsFilterStyle = useAnimatedStyle(() => ({
+    height: boardsFilterProgress.value * RAIL_H,
+    opacity: boardsFilterProgress.value,
   }));
   const openBoardManager = useCallback((name = null) => {
     setManageBoard(typeof name === 'string' ? name : null);
@@ -585,6 +659,12 @@ export default function TasksScreen() {
   // plain "Boards" and stays unlit, so a lit key always means the list you are
   // looking at is not the whole list. The key is named for what it OPENS (the
   // boards), not for the abstract act of filtering.
+  // What the title's second half says. The board you are scoped to, or "All
+  // Boards" when you are not — never blank, and never the bare sentinel 'All',
+  // which reads as a truncation rather than as a scope.
+  const plannerScopeLabel = selectedProject && selectedProject !== 'All'
+    ? boardLabel(selectedProject)
+    : 'All Boards';
   const filterScoped = selectedProject !== 'All' || statusFilter !== 'todo';
   const filterKeyLabel = selectedProject !== 'All'
     ? boardLabel(selectedProject)
@@ -596,7 +676,11 @@ export default function TasksScreen() {
   // (userId/ownerName) from the server, so the option list is derived straight
   // from the loaded tasks — no extra fetch needed.
   const [selectedOwners, setSelectedOwners] = useState([]);
-  const [viewMode, setViewMode] = useState('calendar'); // 'list' or 'calendar'
+  const [viewMode, setViewMode] = useState(DEFAULT_VIEW); // see VIEW_PAGES
+  // Read by the pager's one-shot seed, which runs in an onLayout callback that
+  // must not be rebuilt every time the mode changes.
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
   // Edit vs View mode for the LIST view. Default VIEW: a clean list with no
   // add-task inputs or tag-edit affordances cluttering it — just the projects,
   // tag groups, and tasks. Edit mode reveals the inline "add task", tag
@@ -620,12 +704,17 @@ export default function TasksScreen() {
   // locking the pager so a horizontal swipe pages between DAYS. The planner
   // stops below the header instead — see SHEET_RAISED_GAP in CalendarView.
 
-  // ── List ⇄ Calendar horizontal pager ─────────────────────────────────
-  // The two views sit side by side in a paging ScrollView so the user can
-  // swipe left/right between them (like the photos viewer), in addition to the
-  // header toggle. Page order = calendar (left, the default) | list (right).
-  // The calendar's own gestures are vertical (month FlatList + the bottom-sheet
-  // drag), so a horizontal page-swipe never fights them.
+  // ── Agenda ⇄ Calendar ⇄ Boards horizontal pager ──────────────────────
+  // THREE views side by side in a paging ScrollView, swiped between exactly
+  // the way the media vault's Photos / Music / Files are — a paging scroller
+  // whose offset drives a sliding segmented control 1:1, so the pill tracks
+  // the swipe rather than snapping after it.
+  //
+  // Order: agenda | calendar | boards. The calendar keeps the middle, which is
+  // what makes it one swipe from either neighbour — it is the page you leave
+  // and come back to. The views' own gestures are vertical (the agenda's list,
+  // the calendar's month FlatList and its bottom-sheet drag), so a horizontal
+  // page-swipe never fights them.
   const { width: windowWidth } = useWindowDimensions();
   const pagerRef = useRef(null);
   // Live horizontal offset of the calendar⇄list pager, tracked on the native
@@ -637,8 +726,6 @@ export default function TasksScreen() {
   // measured (a ScrollView's children need a bounded height for the nested
   // SectionList / calendar FlatList to scroll).
   const [pagerSize, setPagerSize] = useState({ width: windowWidth, height: 0 });
-  const VIEW_PAGES = ['calendar', 'list'];
-  const viewIndex = (m) => (m === 'calendar' ? 0 : 1);
   // Tap the header toggle → set the mode AND glide the pager to that page.
   const goToView = useCallback((mode) => {
     setViewMode(mode);
@@ -647,11 +734,36 @@ export default function TasksScreen() {
   // Settle after a swipe → adopt whichever page we landed on (no re-scroll, so
   // this can't fight goToView's programmatic scroll).
   const onPagerSettle = useCallback((e) => {
-    const w = pagerSize.width || windowWidth;
-    const idx = Math.round(e.nativeEvent.contentOffset.x / w);
-    const mode = VIEW_PAGES[idx] || 'calendar';
+    const mode = viewAtOffset(e.nativeEvent.contentOffset.x, pagerSize.width || windowWidth);
     setViewMode((prev) => (prev === mode ? prev : mode));
   }, [pagerSize.width, windowWidth]);
+  // The calendar is no longer page 0, so the pager cannot simply start at its
+  // natural offset any more. It is seeded ONCE, imperatively, on the first
+  // layout that reports a width — NOT with a `contentOffset` prop: rebuilding
+  // that object each render makes RN re-apply it to the native ScrollView, and
+  // on Android that yanks the scroll back mid-swipe on any unrelated re-render
+  // (the "stuck half-way" glitch the old comment warned about). One
+  // non-animated scroll in the same frame as the layout is invisible.
+  //
+  // Gated on a MEASURED page box, not merely on a width: the width is seeded
+  // from the window so the pages have one before layout, but the height is 0
+  // until the real layout lands, and a scroll issued against content the
+  // native view has not sized yet is silently dropped — which would leave the
+  // pill on Calendar and the page on Agenda.
+  const pagerSeeded = useRef(false);
+  useEffect(() => {
+    if (pagerSeeded.current) return;
+    const { width, height } = pagerSize;
+    if (!(width > 0) || !(height > 0)) return;
+    pagerSeeded.current = true;
+    const x = viewIndex(viewModeRef.current) * width;
+    if (x <= 0) return;
+    // Next frame: the layout that gave us these numbers is still committing.
+    const raf = requestAnimationFrame(() => {
+      pagerRef.current?.scrollTo({ x, y: 0, animated: false });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [pagerSize]);
 
   // NOTE: the selected-day completion stats (dayStats / dayPct) live AFTER the
   // useTaskData() call below — they read `tasks`, and declaring them up here
@@ -838,27 +950,61 @@ export default function TasksScreen() {
   // ONE call rather than one per task; /pomodoros/active is the single running
   // block. Refetched when the screen regains focus and when a timer is started
   // from here, which is when either can have changed.
+  //
+  // THREE MORE READS, because the pond keeps focus in two stores and the Focus
+  // page has to see both (see the note on `mergeFocusLog`):
+  //   · /pomodoro/stats — the chat timer's finished sessions, which is where a
+  //     block with no task attached is the ONLY place it can be;
+  //   · /pomodoro/widget — the unified "what is live right now", task-linked or
+  //     loose, which is what lets the Focus tab's ring count down a block that
+  //     no task owns.
   const [pomoByTask, setPomoByTask] = useState({});   // taskId -> completed count
+  // Every block from both stores, joined and deduped — the Focus page's data.
+  const [pomoLog, setPomoLog] = useState([]);
+  // Tasks by id, as a ref: see boardOfTaskId.
+  const tasksByIdRef = useRef(new Map());
   // { taskId, endsAt, startedAt, durationMinutes } — the length comes along so
   // the live key can draw how much of the block is LEFT, not just when it ends.
   const [activePomo, setActivePomo] = useState(null);
+  // The LOOSE running block: the chat-style timer, when no task-linked one is
+  // live. Same shape as activePomo with a null taskId, so the Focus page's ring
+  // does not care which of the two it was handed.
+  const [looseFocus, setLooseFocus] = useState(null);
   const loadPomodoros = useCallback(async () => {
     try {
-      const [listRes, activeRes] = await Promise.allSettled([
+      const [listRes, activeRes, chatRes, widgetRes] = await Promise.allSettled([
         api.get('/pomodoros'),
         api.get('/pomodoros/active'),
+        // 200 is the endpoint's own ceiling, and the same cap /pomodoros has —
+        // the two halves of the log are read to the same depth.
+        api.get('/pomodoro/stats?limit=200'),
+        api.get('/pomodoro/widget'),
       ]);
+      const taskList = listRes.status === 'fulfilled' && Array.isArray(listRes.value?.pomodoros)
+        ? listRes.value.pomodoros
+        : [];
       if (listRes.status === 'fulfilled') {
-        const list = Array.isArray(listRes.value?.pomodoros) ? listRes.value.pomodoros : [];
         const counts = {};
-        for (const p of list) {
+        for (const p of taskList) {
           // Only blocks actually SEEN THROUGH count. A cancelled or abandoned
-          // one is not focus the task received.
+          // one is not focus the task received. Counted off the TASK list alone:
+          // a loose block has no task to tally against.
           if (p?.taskId && p.status === 'completed' && p.completedAt) {
             counts[p.taskId] = (counts[p.taskId] || 0) + 1;
           }
         }
         setPomoByTask(counts);
+      }
+      // The raw run, kept as well as reduced: the cards want a count per task,
+      // and the Focus page wants the blocks themselves (when, how long, seen
+      // through or not). Both stores, one block each. A failed chat read is an
+      // empty second half rather than a failed refresh — the task-linked half is
+      // still worth showing.
+      if (listRes.status === 'fulfilled' || chatRes.status === 'fulfilled') {
+        const chatRecent = chatRes.status === 'fulfilled' && Array.isArray(chatRes.value?.recent)
+          ? chatRes.value.recent
+          : [];
+        setPomoLog(mergeFocusLog(taskList, chatRecent));
       }
       if (activeRes.status === 'fulfilled') {
         const a = activeRes.value?.pomodoro;
@@ -869,16 +1015,43 @@ export default function TasksScreen() {
           ? { taskId: a.taskId, endsAt, startedAt, durationMinutes: mins }
           : null);
       }
+      if (widgetRes.status === 'fulfilled') {
+        const w = widgetRes.value;
+        // `source: 'task'` is a block /pomodoros/active already told us about,
+        // in more detail (it knows the taskId). Only the loose one is news.
+        // Breaks are skipped: this drives the FOCUS ring.
+        const loose = w?.active && w.source === 'server' && w.mode === 'focus'
+          && Number(w.endsAt) > Date.now()
+          ? {
+            taskId: null,
+            startedAt: Number(w.startedAt),
+            endsAt: Number(w.endsAt),
+            durationMinutes: Math.max(1, Math.round((Number(w.endsAt) - Number(w.startedAt)) / 60000)),
+          }
+          : null;
+        setLooseFocus(loose);
+      }
     } catch { /* offline — the cards simply show no tally and no countdown */ }
   }, [api]);
   useEffect(() => { loadPomodoros(); }, [loadPomodoros]);
 
+  /**
+   * The one block the Focus page's ring draws.
+   *
+   * Task-linked wins: it is the copy that knows which task the time belongs to,
+   * and it is the precedence /pomodoro/widget and the timer bar already use — so
+   * the ring, the task card's circle and the tray widget can never disagree
+   * about which timer is the timer.
+   */
+  const focusBlock = activePomo || looseFocus;
+
   // Re-read once the running block has RUN OUT. The card retires its own live
   // key off its countdown, so this is not what clears the circle — it is what
   // moves the finished block into the task's tally without waiting for the
-  // screen to be left and come back to.
+  // screen to be left and come back to. Keyed on the UNIFIED block, so a loose
+  // one lands in the Focus page's figures the same way a task-linked one does.
   useEffect(() => {
-    const endsAt = activePomo?.endsAt;
+    const endsAt = focusBlock?.endsAt;
     if (!endsAt) return undefined;
     const ms = endsAt - Date.now();
     if (ms <= 0) return undefined;
@@ -886,7 +1059,107 @@ export default function TasksScreen() {
     // asking at the exact millisecond can land on the wrong side of that.
     const id = setTimeout(() => { loadPomodoros(); }, ms + 1000);
     return () => clearTimeout(id);
-  }, [activePomo, loadPomodoros]);
+  }, [focusBlock, loadPomodoros]);
+
+  // ── What the Focus page needs on top of the log ───────────────────────────
+  // Which board a block's task belongs to. The blocks know only a taskId, and
+  // "where did the time go" is the one question the log cannot answer alone.
+  const boardOfTaskId = useCallback(
+    (taskId) => boardOf(tasksByIdRef.current?.get(taskId)) || null,
+    [],
+  );
+  /**
+   * The planned length of a fresh block, so the IDLE ring shows the length the
+   * timer will actually run rather than a number of its own.
+   *
+   * Inferred from the last block that ran. It used to ask /pomodoro/widget for a
+   * `focusMinutes`, which that endpoint has never returned — it answers about a
+   * RUNNING timer, not about the saved settings — so the ring was pinned to 25
+   * no matter what the pond was set to. The durations themselves live in the
+   * pomodoro service's memory and are only ever announced over the socket
+   * (`pomodoro-durations`); there is no REST read to ask instead.
+   *
+   * So: the length of the most recent block is the length of the next one, which
+   * is right in every case except the first block after the setting was changed
+   * somewhere else. Only the idle reading rides on this — a RUNNING ring counts
+   * the live block's own duration, which comes off the server.
+   */
+  const [focusMinutes, setFocusMinutes] = useState(25);
+  useEffect(() => {
+    // pomoLog is newest-first, so the first usable planned length is the latest.
+    const last = pomoLog.find((p) => Number(p?.durationMinutes) > 0);
+    if (last) setFocusMinutes(Math.round(Number(last.durationMinutes)));
+  }, [pomoLog]);
+
+  /**
+   * Start a focus block FROM THE FOCUS TAB, and stay on it.
+   *
+   * The task-card path (`startPomodoroFor`) routes through the chat's command
+   * bus and jumps to the Turtle tab, because a task's block is announced in the
+   * chat and its card lives there. This one must not: the ring on this page IS
+   * the timer, and being thrown into a conversation to watch a countdown was the
+   * whole complaint.
+   *
+   * So it goes straight at the REST start — the same endpoint the completion
+   * notification's "Start focus" button uses — which starts the shared timer
+   * server-side, broadcasts it to every other client over the socket, and writes
+   * the session to history when it ends. No chat line, no navigation.
+   *
+   * The push token travels with it so the pond pings THIS device when the block
+   * runs out (the same targeting the socket start uses). That is what keeps the
+   * ding working when the app is in a pocket — the in-app chime only sounds when
+   * the app is open to hear it.
+   */
+  const startFocusHere = useCallback(async () => {
+    const startedAt = Date.now();
+    // Optimistically, because a ring that waits for a round trip is a ring that
+    // does not answer the tap that started it. Corrected from the response a
+    // moment later, which is also how the true duration arrives.
+    setLooseFocus({
+      taskId: null,
+      startedAt,
+      endsAt: startedAt + focusMinutes * 60000,
+      durationMinutes: focusMinutes,
+    });
+    try {
+      const pushToken = await getExpoPushTokenSafe();
+      const r = await api.post('/pomodoro/start', { mode: 'focus', pushToken: pushToken || undefined });
+      const s = Number(r?.startedAt);
+      const e = Number(r?.endsAt);
+      if (Number.isFinite(s) && Number.isFinite(e) && e > s) {
+        setLooseFocus({
+          taskId: null,
+          startedAt: s,
+          endsAt: e,
+          durationMinutes: Math.max(1, Math.round((e - s) / 60000)),
+        });
+      }
+    } catch {
+      // The pond never took it. Put the ring back to idle rather than count down
+      // a block that does not exist anywhere but here.
+      setLooseFocus(null);
+    }
+  }, [api, focusMinutes]);
+
+  /**
+   * Stop whatever block is running, from the Focus tab.
+   *
+   * REST rather than the chat command bus: stopping a timer from the planner
+   * should not put a line in a conversation. The endpoint cancels whichever
+   * timer is live — task-linked first, the same precedence as everywhere else —
+   * and the socket bridge tells the chat and the web app about it, so the card
+   * over there goes away too.
+   */
+  const stopFocusHere = useCallback(async () => {
+    // Both, on the tap: the ring must go idle immediately, and only one of the
+    // two can have been live anyway.
+    setActivePomo(null);
+    setLooseFocus(null);
+    try {
+      await api.post('/pomodoro/stop', {});
+    } catch { /* offline — the pond still has it, and the next read will say so */ }
+    loadPomodoros();
+  }, [api, loadPomodoros]);
 
   const pomodoroFor = useCallback((taskId) => {
     if (!taskId) return null;
@@ -1136,6 +1409,10 @@ export default function TasksScreen() {
     for (const t of tasks || []) m.set(t.id, t);
     return m;
   }, [tasks]);
+  // Read by boardOfTaskId, which is declared ABOVE this (it is passed to the
+  // Focus page) and must not be rebuilt on every task edit — a new function
+  // identity there would re-aggregate every block on every keystroke.
+  tasksByIdRef.current = tasksById;
 
   // Hydrated bands: frozen order + live data, with the frozen dateKey arrays
   // kept index-ALIGNED (a deleted id drops from both in the same pass).
@@ -1227,6 +1504,11 @@ export default function TasksScreen() {
   // zone's one idle mount, exactly like the chat holds position when history
   // prepends.
   const PAST_DIVIDER_H = Math.round(46 * Math.max(1, PixelRatio.getFontScale()));
+  // A band header's own height ("Past" / "Upcoming" — icon, label, count, on
+  // theme.spacing.sm of padding). Only ever used as a LEAD-IN estimate (see
+  // agendaLeadIn), never as layout, so an approximation is honest here in a way
+  // it would not be in the history zone's arithmetic above.
+  const AGENDA_BAND_HEAD_H = Math.round(30 * Math.max(1, PixelRatio.getFontScale()));
   // Stable divider items per date-key OCCURRENCE. Keyed `date#n` (not just the
   // date): the sort stamp and the group key can disagree for legacy undated
   // tasks, letting the same date recur non-contiguously — reusing one object
@@ -1530,16 +1812,34 @@ export default function TasksScreen() {
   // clamped so it stays sane on a very short or very tall viewport.
   const [listH, setListH] = useState(0);
   const pointerTop = Math.max(110, Math.min(280, Math.round(listH * 0.3)));
+  // ── Lead-in above the first card ──────────────────────────────────────────
+  // The mark is pinned `pointerTop` into the list and the list scrolls past it,
+  // so without room above the agenda's first item the TOP of the timeline can
+  // never reach the mark: scrolled all the way up, the first card sits above
+  // it, and the one row you cannot read is the one you are looking at.
+  //
+  // The lead-in is that depth less the chrome that ALWAYS precedes the first
+  // card of a band — its header and its first date divider. So at the very top
+  // the first card's own top edge lands on the mark, and its centre is half a
+  // card below: one short scroll, rather than somewhere the list refuses to go.
+  // Deliberately measured against the chrome rather than against the card, so
+  // it holds whatever height that first card turns out to be.
+  const agendaLeadIn = Math.max(0, pointerTop - (AGENDA_BAND_HEAD_H + PAST_DIVIDER_H));
   const pointerTopRef = useRef(pointerTop);
   pointerTopRef.current = pointerTop;
   const [pointerLabel, setPointerLabel] = useState(null);
+  // The row the mark is on. State rather than a ref because the list has to
+  // re-render to move the emphasis — but it changes once per row you pass, not
+  // once per frame, and the DIMMING of the others is a shared animated value
+  // that costs no render at all (see scrubDim).
+  const [activeRowId, setActiveRowId] = useState(null);
   const [scrubbing, setScrubbing] = useState(false);
   // Bumped on each day crossing — the pointer springs on the change, so the
   // kick and the buzz land on the same frame.
   const [dayBeat, setDayBeat] = useState(0);
   // `armed` keeps the FIRST resolution silent: landing on the agenda is not a
   // day crossing, and buzzing on mount would be a phantom.
-  const pointerRef = useRef({ dateKey: null, label: null, armed: false });
+  const pointerRef = useRef({ dateKey: null, label: null, armed: false, activeId: null });
   const scrubTimer = useRef(null);
   // The scroll handler runs every frame; it reads the agenda off a ref rather
   // than closing over it so it never has to be rebuilt as the list changes.
@@ -1548,6 +1848,38 @@ export default function TasksScreen() {
   // Mirrors `scrubbing` so the handler can tell "already open" without
   // depending on state it may not have re-rendered with yet.
   const scrubbingRef = useRef(false);
+
+  // ── The magnet ────────────────────────────────────────────────────────────
+  // Two stages, both of which move the TIMELINE. The mark is fixed throughout.
+  //
+  // WHILE THE LIST MOVES the cards LEAN toward it — a few points at most,
+  // fading to nothing by the time the mark is halfway between two of them (see
+  // `magnetPull`). It is felt rather than watched. This lean is a TRANSFORM,
+  // not a scroll: the cards slide those few points without the scroller being
+  // touched, which is the whole reason it can run under a live gesture.
+  //
+  // WHEN IT STOPS the SCROLL closes the rest: a short glide bringing the
+  // nearest card's centre to rest exactly under the mark. The lean relaxes as
+  // it arrives, being recomputed from the shrinking distance every frame.
+  //
+  // The readout does NOT compensate for the lean, deliberately. The lean is
+  // zero at a card's centre and zero again at the midpoint between two — so
+  // wherever it is big enough to see, which card the mark is on is not in
+  // question, and where the answer is marginal there is nothing to correct.
+  // (An earlier version did correct for it, one frame late, which was both
+  // unnecessary and its own small source of error.)
+  const cardLean = useRef(new Animated.Value(0)).current;
+  // Last value written to it, so a frame that moves the lean by a fraction of
+  // a point doesn't pay for a bridge write.
+  const cardLeanRef = useRef(0);
+  // What the settle needs: the offset that puts the nearest card's centre on
+  // the mark, and whether there was a card in view to measure at all.
+  const magnetRef = useRef({ offset: 0, live: false });
+  // Held while a settle's own glide plays out, so the scroll it generates
+  // cannot settle again on top of itself.
+  const settlingRef = useRef(false);
+  const settleLockTimer = useRef(null);
+  const settleTimer = useRef(null);
 
   // Which item is under the pointer right now. FlashList knows the content
   // geometry (computeVisibleIndices + getLayout), so this is a scan of the
@@ -1559,24 +1891,63 @@ export default function TasksScreen() {
     let range;
     try { range = list.computeVisibleIndices(); } catch (e) { return; }
     if (!range) return;
-    const targetY = scrollY.current + pointerTopRef.current;
-    const hit = indexAtContentY(
-      targetY,
-      Math.max(0, range.startIndex),
-      Math.min(range.endIndex, items.length - 1),
-      (i) => list.getLayout(i), // bound: FlashList's ref methods want their `this`
-    );
+    // Where the mark is in the space `getLayout` answers in. The lead-in above
+    // the first card is content PADDING, and FlashList's layouts are relative
+    // to the first child — so the padding has to come back off or every
+    // reading lands that far down the timeline (see `markContentY`). Asked of
+    // the list rather than recomputed from agendaLeadIn: it is the measured
+    // truth, and it stays right if anything else is ever put above the rows.
+    const lead = list.getFirstItemOffset ? (list.getFirstItemOffset() || 0) : 0;
+    const targetY = markContentY(scrollY.current, pointerTopRef.current, lead);
+    const from = Math.max(0, range.startIndex);
+    const to = Math.min(range.endIndex, items.length - 1);
+    const getLayout = (i) => list.getLayout(i); // bound: FlashList's ref methods want their `this`
+    const hit = indexAtContentY(targetY, from, to, getLayout);
     if (hit < 0) return;
+
+    // The lean. Computed BEFORE the readout's own early exits: an undated row
+    // or a stretch of chrome has nothing to print, but the mark is still
+    // passing cards and they should still feel it.
+    const near = nearestCardCenter(items, from, to, getLayout, targetY, ROW_GAP);
+    if (near) {
+      const delta = near.center - targetY; // + = the centre is below the mark
+      // Where the settle lands. Back in SCROLL-OFFSET space (+ lead), because
+      // that is what scrollToOffset speaks — the mirror of the subtraction
+      // above, and the half of it that was missing when this last shipped.
+      magnetRef.current = { offset: near.center + lead - pointerTopRef.current, live: true };
+      // Range = half the row's pitch, so the pull is spent exactly where the
+      // nearest card changes hands.
+      const pull = magnetPull(delta, Math.max(24, near.pitch / 2), MAGNET_STRENGTH, MAGNET_LEAN_MAX);
+      // NEGATED onto the list: a centre BELOW the mark (delta > 0) has to come
+      // UP the screen to reach it. The mark itself does not move.
+      if (Math.abs(pull - cardLeanRef.current) > 0.2) {
+        cardLeanRef.current = pull;
+        cardLean.setValue(-pull);
+      }
+    } else if (magnetRef.current.live) {
+      magnetRef.current = { offset: 0, live: false };
+      cardLeanRef.current = 0;
+      cardLean.setValue(0);
+    }
 
     const dateKey = dayKeyAt(items, hit);
     if (!dateKey) return;
-    const label = pointerReadout(
+    const parts = pointerParts(
       items[hit],
       dateKey,
-      agendaDateLabel,
+      agendaDateLabelShort,
       (mins) => clockLabel(mins, timeFormat === '24h', { pad: false }),
+      (it) => itemTypeOf(it) === 'event',
     );
-    if (!label) return;
+    if (!parts) return;
+    // How far ahead of / behind today the reading is — the pointer turns this
+    // into its offset word, and puts it above or below the reading by sign.
+    const offsetDays = daysFromToday(dateKey);
+    // One string to compare against — this runs on every scroll frame, and
+    // comparing the fields by hand here is how they drift apart. The offset is
+    // IN it: two different days can print the same reading across a year
+    // boundary, and the day count is the part that changed.
+    const label = `${parts.time ? `${parts.day} · ${parts.time}` : parts.day}|${offsetDays}`;
 
     if (dateKey !== pointerRef.current.dateKey) {
       // Subtle tick on every new day the timeline crosses.
@@ -1587,11 +1958,21 @@ export default function TasksScreen() {
       pointerRef.current.dateKey = dateKey;
       pointerRef.current.armed = true;
     }
+    // Which row the mark is actually sitting on, so it can state itself while
+    // the rest settle back. Guarded the same way the label is: this runs on
+    // every scroll frame, but the id only changes as you pass a row.
+    // Chrome the mark happens to be sitting on keeps the last real row lit —
+    // see activeRowIdAt.
+    const activeId = activeRowIdAt(items, hit, pointerRef.current.activeId);
+    if (activeId !== pointerRef.current.activeId) {
+      pointerRef.current.activeId = activeId;
+      setActiveRowId(activeId);
+    }
     // Only ever setState when the printed string actually changes — this runs
     // on every scroll frame.
     if (label !== pointerRef.current.label) {
       pointerRef.current.label = label;
-      setPointerLabel(label);
+      setPointerLabel({ ...parts, offsetDays });
     }
   }, [timeFormat]);
 
@@ -1609,9 +1990,61 @@ export default function TasksScreen() {
       scrubbingRef.current = false;
       setGutterScrubbing(false);
       setScrubbing(false);
+      // Let the emphasis go with the scrub. `scrubDim` returns to 1 on its
+      // own, but the bold title would otherwise stay on whichever row the
+      // mark happened to stop over.
+      pointerRef.current.activeId = null;
+      setActiveRowId(null);
     }, 650);
     resolvePointer();
   }, [resolvePointer]);
+
+  // The settle: glide the last few points so the nearest card's centre comes
+  // to rest under the mark. A plain animated scroll — the list's own motion,
+  // not a competing animation laid over it — and only ever a SHORT one (see
+  // MAGNET_SETTLE_MAX), so it reads as the list finding its detent rather than
+  // as the screen taking the wheel.
+  const settleToNearestCard = useCallback(() => {
+    if (settlingRef.current) return;
+    const list = listRef.current;
+    const { offset, live } = magnetRef.current;
+    if (!list || !live) return;
+    // How far the list will actually travel — which is what the guards are
+    // about, and is not the same as the distance the lean was derived from.
+    const d = Math.abs(offset - scrollY.current);
+    if (d < MAGNET_SETTLE_MIN || d > MAGNET_SETTLE_MAX) return;
+    // Never into the bounce: at either end the scroller is already holding a
+    // position of its own and a settle would fight it.
+    if (offset < 0) return;
+    settlingRef.current = true;
+    try { list.scrollToOffset({ offset, animated: true }); } catch (e) { /* nothing scrollable */ }
+    clearTimeout(settleLockTimer.current);
+    settleLockTimer.current = setTimeout(() => { settlingRef.current = false; }, 420);
+  }, []);
+
+  // When a scroll has actually STOPPED. Two ways in, and they are not the same
+  // event: a flick hands off to momentum and ends with onMomentumScrollEnd,
+  // while a finger that dragged the list to a halt ends with onScrollEndDrag
+  // and no momentum at all. Waiting on the drag end alone would miss every
+  // flick; acting on it immediately would settle mid-flick, the instant before
+  // momentum takes over — so the drag end arms a short timer that momentum
+  // cancels if it begins.
+  const onAgendaScrollEndDrag = useCallback(() => {
+    clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(settleToNearestCard, 80);
+  }, [settleToNearestCard]);
+  const onAgendaMomentumBegin = useCallback(() => {
+    clearTimeout(settleTimer.current);
+  }, []);
+  const onAgendaMomentumEnd = useCallback(() => {
+    clearTimeout(settleTimer.current);
+    settleToNearestCard();
+  }, [settleToNearestCard]);
+  // A finger back on the list cancels a settle that has not started yet — you
+  // are scrolling again, and the list must not move under a touch.
+  const onAgendaTouchStart = useCallback(() => {
+    clearTimeout(settleTimer.current);
+  }, []);
 
   // Settle the readout whenever the agenda itself changes under a still
   // finger (a fill, a new task), not only when something scrolls.
@@ -1622,6 +2055,8 @@ export default function TasksScreen() {
 
   useEffect(() => () => {
     clearTimeout(scrubTimer.current);
+    clearTimeout(settleTimer.current);
+    clearTimeout(settleLockTimer.current);
     // Leaving mid-scrub would strand the rows' times faded out.
     setGutterScrubbing(false);
   }, []);
@@ -1644,6 +2079,13 @@ export default function TasksScreen() {
     // No fill may land mid-jump.
     if (olderTimerRef.current) { clearTimeout(olderTimerRef.current); olderTimerRef.current = null; }
     growReadyRef.current = false;
+    // …and no magnet either: the jump's own momentum-kill and landing would
+    // otherwise read as "a scroll stopped" and pull the list off the seam it
+    // was just asked to land on.
+    clearTimeout(settleTimer.current);
+    settlingRef.current = true;
+    clearTimeout(settleLockTimer.current);
+    settleLockTimer.current = setTimeout(() => { settlingRef.current = false; }, 700);
     // 1. Kill any in-flight momentum RIGHT NOW, on the tap.
     try {
       listRef.current?.scrollToOffset({ offset: Math.max(0, scrollY.current), animated: false });
@@ -2072,21 +2514,68 @@ export default function TasksScreen() {
 
   const styles = createStyles(theme);
 
-  // ── Photos-style sliding segmented control ──────────────────────────
-  // The active pill + the two icons' opacities are driven by the pager's
-  // scroll offset (1:1, native thread), so the toggle slides smoothly with the
-  // swipe AND on tap — exactly like the Photos tab bar's bezier indicator,
-  // instead of the old discrete active-background snap. Calendar = left page
-  // (index 0), list = right page (index 1).
-  const TOGGLE_SEG_WIDTH = 84;
+  // ── The media vault's tab picker ────────────────────────────────────
+  // No track, no pill — the labels with a short bar that slides from one to
+  // the next, 1:1 with the pager's scroll (MediaGallery's picker, to the
+  // point). Both the bar and each segment's two ink layers read the same
+  // pagerScrollX on the native thread, so the whole thing tracks the finger
+  // through a swipe rather than snapping at the end of one.
   const pagerWidth = pagerSize.width || windowWidth;
-  const toggleIndicatorX = pagerScrollX.interpolate({
-    inputRange: [0, pagerWidth],
-    outputRange: [0, TOGGLE_SEG_WIDTH],
+  // Tabs are sized to their own CONTENT and laid left to right, Pinterest's
+  // board headers rather than a segmented control: equal thirds forced every
+  // label into the same slot whatever its length, which is what kept the type
+  // small. Content-width lets them breathe, and the row scrolls when they run
+  // past the edge — which four tabs at this size do.
+  //
+  // So the bar has to move AND resize: each tab's own x and width, measured
+  // (font metrics, the icon and the user's font scale are not computable).
+  const [tabLayouts, setTabLayouts] = useState({});
+  const measureTab = useCallback((mode, x, w) => {
+    const nx = Math.round(x);
+    const nw = Math.round(w);
+    if (!nw) return;
+    // Functional update + no-op guard: onLayout fires on every re-measure
+    // (rotation, font scale), and an unconditional setState here would loop.
+    setTabLayouts((prev) => {
+      const cur = prev[mode];
+      if (cur && cur.x === nx && cur.width === nw) return prev;
+      return { ...prev, [mode]: { x: nx, width: nw } };
+    });
+  }, []);
+  // Before the first layout: something plausible, so the bar is never a
+  // zero-width speck parked at the origin on the opening frame.
+  const tabFallback = (i) => ({ x: i * 96, width: 80 });
+  const tabBoxes = VIEW_SEGMENTS.map((s, i) => tabLayouts[s.mode] || tabFallback(i));
+  // Derived from the segment list rather than written out per page — a
+  // hand-listed range is exactly what breaks, silently and by parking the bar
+  // under the wrong label, the day a tab is added.
+  const pageStops = VIEW_SEGMENTS.map((_, i) => i * pagerWidth);
+  // BOTH ends animate, and both are transforms: the native animated module
+  // handles transforms and opacity only, so `width` is out — the bar is 1pt
+  // wide and scaled, with its origin on the left so the translate places its
+  // left edge. Square ends, deliberately: scaleX on a rounded bar smears the
+  // caps into a lens, and Pinterest's rule is square anyway.
+  const tabUnderlineX = pagerScrollX.interpolate({
+    inputRange: pageStops,
+    outputRange: tabBoxes.map((b) => b.x),
     extrapolate: 'clamp',
   });
-  const calActiveOp = pagerScrollX.interpolate({ inputRange: [0, pagerWidth], outputRange: [1, 0], extrapolate: 'clamp' });
-  const listActiveOp = pagerScrollX.interpolate({ inputRange: [0, pagerWidth], outputRange: [0, 1], extrapolate: 'clamp' });
+  const tabUnderlineScale = pagerScrollX.interpolate({
+    inputRange: pageStops,
+    outputRange: tabBoxes.map((b) => b.width),
+    extrapolate: 'clamp',
+  });
+  // Keep the live tab on screen once the row is wider than the header. Only
+  // when it actually overflows, and never animated on the first settle.
+  const tabScrollRef = useRef(null);
+  useEffect(() => {
+    const box = tabLayouts[viewMode];
+    if (!box) return;
+    const visible = pagerWidth - HEADER_PAD_X * 2;
+    const right = box.x + box.width;
+    if (right <= visible) { tabScrollRef.current?.scrollTo({ x: 0, animated: true }); return; }
+    tabScrollRef.current?.scrollTo({ x: Math.max(0, right - visible + 24), animated: true });
+  }, [viewMode, tabLayouts, pagerWidth]);
 
   if (!isConnected) {
     return (
@@ -2132,106 +2621,87 @@ export default function TasksScreen() {
         pointerEvents="none"
       />
 
-      {/* Header — ONE row, and now ONE key: the view pill and Boards. Status
-          (to do / done / all), the board picker and Overview all live behind
-          that key; they used to hold a second row open permanently, and that
-          row was the difference between the day planner opening most of the way
-          and opening all the way.
+      {/* Header — the media vault's, to the point: a large two-weight title,
+          then a picker that is just labels with a bar sliding under them. No
+          track, no pill, and a hairline at the foot with a breath of room
+          above it, so the chrome ends on a line rather than trailing off.
 
-          The header stays up through everything, the day planner included: it
-          is the only way back to the list view and to the boards, and the
-          planner is a sheet over the page, not a replacement for it. */}
-      <View style={styles.header}>
-        <View style={styles.viewToggle}>
-          {/* Sliding active pill (bound to the pager scroll). */}
+          It stays up through everything, the day planner included: it is the
+          only way between the three views, and the planner is a sheet over the
+          page rather than a replacement for it. */}
+      <View style={styles.headerChrome}>
+        <View style={styles.headerTitleRow}>
+          <Text style={styles.headerTitleLarge} numberOfLines={1}>
+            {/* Two weights, the vault's exactly: the constant half hairline,
+                the half that actually varies in a regular weight. What the
+                board IS is the part worth reading. */}
+            <Text style={styles.headerTitleThin}>Planner </Text>
+            <Text style={styles.headerTitleStrong}>{`• ${plannerScopeLabel}`}</Text>
+          </Text>
+        </View>
+
+        <ScrollView
+          ref={tabScrollRef}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.tabScroll}
+          contentContainerStyle={styles.tabTrack}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* The bar. 1pt wide and SCALED to the live tab's measured width,
+              with its origin on the left so the translate places its left
+              edge — both ends of the move are transforms, which is what keeps
+              it on the native driver. See tabUnderlineScale. */}
           <Animated.View
             pointerEvents="none"
-            style={[styles.viewToggleIndicator, { transform: [{ translateX: toggleIndicatorX }] }]}
+            style={[
+              styles.tabUnderline,
+              { transform: [{ translateX: tabUnderlineX }, { scaleX: tabUnderlineScale }] },
+            ]}
           />
-          <TouchableOpacity
-            style={styles.viewBtn}
-            onPressIn={() => tapHaptic()}
-            onPress={() => goToView('calendar')}
-            activeOpacity={0.8}
-            accessibilityRole="button"
-            accessibilityLabel="Calendar view"
-          >
-            {/* Active (bright) icon fades in as this page becomes current;
-                the inactive (dim) icon underneath fades out. */}
-            <Animated.View style={[styles.viewBtnIconLayer, { opacity: calActiveOp }]}>
-              <Icon name="calendar-month" size={16} color={theme.colors.textPrimary} />
-              <Text style={[styles.viewBtnText, { color: theme.colors.textPrimary }]} numberOfLines={1}>Calendar</Text>
-            </Animated.View>
-            <Animated.View style={[styles.viewBtnRow, { opacity: listActiveOp }]}>
-              <Icon name="calendar-month" size={16} color={theme.colors.textTertiary} />
-              <Text style={[styles.viewBtnText, { color: theme.colors.textTertiary }]} numberOfLines={1}>Calendar</Text>
-            </Animated.View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.viewBtn}
-            onPressIn={() => tapHaptic()}
-            onPress={() => goToView('list')}
-            activeOpacity={0.8}
-            accessibilityRole="button"
-            accessibilityLabel="List view"
-          >
-            <Animated.View style={[styles.viewBtnIconLayer, { opacity: listActiveOp }]}>
-              <Icon name="format-list-bulleted" size={16} color={theme.colors.textPrimary} />
-              <Text style={[styles.viewBtnText, { color: theme.colors.textPrimary }]} numberOfLines={1}>Tasks</Text>
-            </Animated.View>
-            <Animated.View style={[styles.viewBtnRow, { opacity: calActiveOp }]}>
-              <Icon name="format-list-bulleted" size={16} color={theme.colors.textTertiary} />
-              <Text style={[styles.viewBtnText, { color: theme.colors.textTertiary }]} numberOfLines={1}>Tasks</Text>
-            </Animated.View>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.headerKeys}>
-          {/* The Boards key — the header's ONLY key now. It opens / closes the
-              panel holding the status keys, the board rail and the Overview
-              key, and reads what you are scoped to so the rows it replaced are
-              still answerable at a glance: the board name when one is picked,
-              otherwise the status when it isn't the default "to do".
-
-              Overview used to sit beside it. It went INTO the panel: two keys
-              competing for the header's right-hand side is what forced this one
-              to ellipsise a board name down to a single letter. */}
-          <TouchableOpacity
-            style={[styles.headerBoardKey, (railOpen || filterScoped) && styles.headerBoardKeyLit]}
-            onPressIn={() => tapHaptic()}
-            onPress={() => setRailOpen((v) => !v)}
-            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            accessibilityRole="button"
-            accessibilityState={{ expanded: railOpen }}
-            accessibilityLabel={`Boards, ${filterKeyLabel}${railOpen ? ', open' : ''}`}
-            testID="header-filter-key"
-          >
-            {selectedProject !== 'All' ? (
-              <View style={[styles.headerBoardDot, { backgroundColor: getProjectColor(selectedProject) }]} />
-            ) : (
-              /* The four-circle glyph — the same one the All Boards page wears,
-                 so the key and the page it stands for carry one mark. It keeps
-                 its colours when the key lights: they are the point of it. */
-              <FourColorBoardsIcon size={15} gap={2} />
-            )}
-            <Text
-              style={[styles.headerBoardText, (railOpen || filterScoped) && styles.headerBoardTextLit]}
-              numberOfLines={1}
-            >
-              {filterKeyLabel}
-            </Text>
-            <Icon
-              name={railOpen ? 'chevron-up' : 'chevron-down'}
-              size={16}
-              color={(railOpen || filterScoped) ? theme.colors.background : theme.colors.textTertiary}
-            />
-            {hasActiveFilters && (
-              <View style={styles.headerFilterBadge}>
-                <Text style={styles.headerFilterBadgeText}>{selectedTags.length + selectedOwners.length}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-        </View>
+          {VIEW_SEGMENTS.map((seg, i) => {
+            // 1:1 scroll physics: full strength on its own page, nothing on
+            // either neighbour, cross-faded across the swipe between.
+            const inputRange = [(i - 1) * pagerWidth, i * pagerWidth, (i + 1) * pagerWidth];
+            const activeOp = pagerScrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
+            // 0.6, not 1: an inactive tab is still legible, still the same ink, just
+            // plainly not the one you are on. The pair still cross-fades through a
+            // swipe, so the weight change rides along with the opacity.
+            const inactiveOp = pagerScrollX.interpolate({ inputRange, outputRange: [0.6, 0, 0.6], extrapolate: 'clamp' });
+            return (
+              <TouchableOpacity
+                key={seg.mode}
+                // The TAB is measured, not its label: the bar underlines the
+                // whole thing, icon included, and the row's own x is what the
+                // translate needs.
+                onLayout={(e) => measureTab(seg.mode, e.nativeEvent.layout.x, e.nativeEvent.layout.width)}
+                style={[styles.tabSeg, i === VIEW_SEGMENTS.length - 1 && styles.tabSegLast]}
+                onPressIn={() => tapHaptic()}
+                onPress={() => goToView(seg.mode)}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityState={{ selected: viewMode === seg.mode }}
+                accessibilityLabel={`${seg.label} view`}
+                testID={`view-tab-${seg.mode}`}
+              >
+                {/* Two stacked rows. Cross-fading opacities beats recolouring:
+                    an opacity rides the native driver, a colour does not. The
+                    ACTIVE row is absolute so the pair never affect each other's
+                    layout, and the INACTIVE one (the lighter weight) is what
+                    sizes the tab — so the tab's width does not jump by a point
+                    as the weight cross-fades under it. */}
+                <Animated.View style={[styles.tabSegRow, styles.tabSegRowActive, { opacity: activeOp }]}>
+                  <Icon name={seg.icon} size={13} color={theme.colors.textPrimary} />
+                  <Text style={[styles.tabSegText, styles.tabSegTextActive]} numberOfLines={1}>{seg.label}</Text>
+                </Animated.View>
+                <Animated.View style={[styles.tabSegRow, { opacity: inactiveOp }]}>
+                  <Icon name={seg.icon} size={13} color={theme.colors.textPrimary} />
+                  <Text style={[styles.tabSegText, styles.tabSegTextInactive]} numberOfLines={1}>{seg.label}</Text>
+                </Animated.View>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
       </View>
 
       {/* Project-picker overlay host. The picker (rendered at the bottom of
@@ -2243,12 +2713,29 @@ export default function TasksScreen() {
           can't spill over the tab bar / FAB. Modals inside render via RN
           portals, so the transform doesn't touch them. */}
       <View style={styles.dropdownHost}>
-      <Reanimated.View style={[styles.dropdownShiftLayer, contentShiftStyle]}>
+      <View style={styles.dropdownShiftLayer}>
 
-      {/* Active Filters */}
-      {hasActiveFilters && (
+      {/* Active Filters. The BOARD scope rides here too now: the header key
+          that used to state it is gone, and a silently-filtered agenda with
+          nothing on screen saying so is the one thing that change must not
+          cost. Tapping the chip clears the scope, the way the others do. */}
+      {(hasActiveFilters || selectedProject !== 'All') && (
         <View style={styles.activeFiltersBar}>
           <Animated.ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {selectedProject !== 'All' && (
+              <View style={[styles.filterChip, styles.tagFilterChip]}>
+                <View style={[styles.ownerFilterDot, { backgroundColor: getProjectColor(selectedProject) }]} />
+                <Text style={[styles.filterChipText, styles.tagFilterChipText]}>{boardLabel(selectedProject)}</Text>
+                <TouchableOpacity
+                  onPress={() => setSelectedProject('All')}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Clear board scope, ${boardLabel(selectedProject)}`}
+                  testID="clear-board-scope"
+                >
+                  <Icon name="close" size={14} color={theme.colors.textTertiary} />
+                </TouchableOpacity>
+              </View>
+            )}
             {selectedTags.map(tag => (
               <View key={tag} style={[styles.filterChip, styles.tagFilterChip]}>
                 <Icon name="tag" size={12} color={theme.colors.textPrimary} />
@@ -2440,7 +2927,7 @@ export default function TasksScreen() {
         // Lock the calendar⇄list pager while the day-schedule planner is open,
         // so a horizontal swipe pages between DAYS inside the planner instead
         // of switching to the list view (see CalendarView's dayPan).
-        scrollEnabled={!dayPlannerOpen}
+        scrollEnabled={!dayPlannerOpen && !boardsDrilled}
         // Match the Photos pager: no edge rubber-banding, so the clamped pill
         // never sits still while the content bounces — the slide stays 1:1.
         bounces={false}
@@ -2460,7 +2947,310 @@ export default function TasksScreen() {
         }}
         style={styles.viewPager}
       >
-        {/* Page 0 — Calendar */}
+        {/* Page 0 — Agenda (the list). */}
+        <View style={{ width: pagerSize.width, height: pagerSize.height }}>
+        {/* Board scope + the Calendar/List switch live in the global header, and
+            the View/Edit toggle moved to the All Boards page (the only surface
+            where edit mode still does anything). So the Upcoming list opens
+            straight into search + the agenda — no redundant toolbar. */}
+        <View style={styles.listClip}>
+          {/* Search bar removed — the Upcoming list opens straight into the
+              agenda (the old always-visible box read as a stray black band
+              under the header). searchQuery stays '' so agenda filtering is a
+              no-op; wire a new entry point here if search comes back. */}
+          <View
+            style={styles.listShift}
+            // The pointer sits a third of the way down the LIST, not the
+            // screen, so it has to know how tall the list actually is.
+            onLayout={(e) => {
+              const h = Math.round(e.nativeEvent.layout.height);
+              setListH((prev) => (prev === h ? prev : h));
+            }}
+          >
+          {/* The timeline's black band, behind the list and ONE piece: the
+              rows, the date dividers and the gaps between them all scroll over
+              it, so the margin is continuous instead of restarting at every
+              row. Skipped when there is nothing to scroll — a black stripe
+              beside the empty state is just a stray band. */}
+          {agenda.items.length > 0 && (
+            <TimelineGutter
+              theme={theme}
+              // The window the pointer's swerve fills. Null until the list is
+              // measured — the same condition the pointer itself mounts on, so
+              // the line is never left with a gap and nothing to bridge it.
+              notchTop={listH > 0 ? pointerTop : null}
+            />
+          )}
+          {/* The magnet's lean, on the TIMELINE — the cards slide the last few
+              points toward the mark, because the mark is fixed and it is the
+              list that comes to it. A transform, deliberately: it costs no
+              layout and no scroll write, so it can run under a live gesture
+              without the scroller ever feeling it. Only the list carries it —
+              the band, the thread and the mark behind and over it stay put,
+              which is what the lean is measured against. */}
+          <Animated.View style={{ flex: 1, transform: [{ translateY: cardLean }] }}>
+          <FlashList
+            // Remount per scope: a fresh list opens on Upcoming at offset 0
+            // (see agendaScopeKey) instead of inheriting the previous scope's
+            // offset + position-hold anchor.
+            key={agendaScopeKey}
+            ref={listRef}
+            data={agenda.items}
+            // LOAD-BEARING. `renderItem` closes over `activeRowId` to mark the
+            // row under the pointer, but the list recycles cells and will not
+            // re-run renderItem just because a closed-over value changed — so
+            // without this every row keeps the `active={false}` it was first
+            // rendered with, and the card under the mark dims along with all
+            // the others instead of standing at full strength.
+            extraData={activeRowId}
+            keyExtractor={(item, index) => (item ? `${item.__past ? 'past-' : ''}${item.__upcoming ? 'upcoming-' : ''}${item.id || index}` : `cell-${index}`)}
+            // Recycling pools by cell shape — the FlashList (chat-grade) win.
+            getItemType={(item) => {
+              if (item.__agendaHeader) return `header-${item.__agendaHeader}`;
+              if (item.__gap) return 'gap';
+              if (item.__addCard) return 'addCard';
+              if (item.__divider) return 'divider';
+              if (item.__placeholder) return 'placeholder';
+              return item.__past ? 'pastRow' : 'upcomingRow';
+            }}
+            // Chat-style position holding: FlashList's built-in
+            // maintainVisibleContentPosition stays at its v2 DEFAULT (always
+            // on — the machinery that keeps the Turtle chat rock-steady when
+            // history prepends). It absorbs the skeleton zone's one idle
+            // mount; with the agenda's order FROZEN between boundaries there
+            // is no relocation case left to toggle it off for, and FlashList
+            // pauses its own offset correction during scrollToIndex jumps.
+            // Drag-to-dismiss the keyboard (iMessage-style) when the
+            // user scrolls a task list with the search keyboard up.
+            // Without these props the keyboard sticks and the user has
+            // no obvious gesture to close it.
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            keyboardShouldPersistTaps="handled"
+            // Scrolling still carries NO fill logic — fills are
+            // visibility-driven. It tracks the offset for the keyboard-scroll
+            // helpers, and drives the timeline pointer (see resolvePointer):
+            // cheap arithmetic over the on-screen items, and it only ever
+            // setStates when the readout's text actually changes.
+            onScroll={onAgendaScroll}
+            scrollEventThrottle={16}
+            // The magnet's settle — see settleToNearestCard. These are how a
+            // scroll's END is detected; the scroll itself is untouched.
+            onScrollBeginDrag={onAgendaTouchStart}
+            onScrollEndDrag={onAgendaScrollEndDrag}
+            onMomentumScrollBegin={onAgendaMomentumBegin}
+            onMomentumScrollEnd={onAgendaMomentumEnd}
+            renderItem={({ item, index }) => {
+              if (!item) return null;
+              const items = agenda.items;
+
+              // ── Band headers (Past / Upcoming) as plain items ─────────────
+              if (item.__agendaHeader === 'past') {
+                return (
+                  <View style={styles.upcomingHeader}>
+                    <Icon name="history" size={16} color={theme.colors.textTertiary} />
+                    <Text style={styles.upcomingHeaderText}>Past</Text>
+                    <View style={styles.upcomingCountBadge}>
+                      <Text style={styles.upcomingCountText}>{pastTasks.length}</Text>
+                    </View>
+                    <Text style={styles.pastHint}>
+                      {pastAllLoaded ? 'the beginning' : 'scroll up for older'}
+                    </Text>
+                  </View>
+                );
+              }
+              if (item.__agendaHeader === 'upcoming') {
+                return (
+                  <View style={styles.upcomingHeader}>
+                    <Icon name="clock-fast" size={16} color={theme.colors.accentInfo} />
+                    <Text style={styles.upcomingHeaderText}>Upcoming</Text>
+                    <View style={styles.upcomingCountBadge}>
+                      <Text style={styles.upcomingCountText}>{upcomingTasks.length}</Text>
+                    </View>
+                    {/* Quiet "syncing" cue during a background revalidation
+                        (app resume / reconnect) — never blanks the list. */}
+                    {syncing && <SyncDot theme={theme} />}
+                  </View>
+                );
+              }
+
+              // ── Band gaps (the breathing room after each band) ───────────
+              if (item.__gap) return <View style={styles.upcomingGap} />;
+              // The add-task template: a dashed card at the head of Upcoming
+              // that creates INTO the active board (active-board inheritance).
+              if (item.__addCard) {
+                const scoped = selectedProject !== 'All';
+                return (
+                  <TouchableOpacity
+                    style={styles.addTaskCard}
+                    onPressIn={() => tapHaptic()}
+                    onPress={() => openCreateForm('task', null, scoped ? selectedProject : null)}
+                    activeOpacity={0.6}
+                    accessibilityRole="button"
+                    accessibilityLabel={scoped ? `Add task to ${boardLabel(selectedProject)}` : 'Add task'}
+                    testID="agenda-add-task"
+                  >
+                    <View style={styles.addTaskIcon}>
+                      <Icon name="plus" size={18} color={theme.colors.textPrimary} />
+                    </View>
+                    <View style={styles.addTaskTextCol}>
+                      <Text style={styles.addTaskTitle} numberOfLines={1}>Add task</Text>
+                      <Text style={styles.addTaskCaption} numberOfLines={1}>
+                        {scoped ? `to ${boardLabel(selectedProject)}` : 'to any board'}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              }
+
+              const prev = index > 0 ? items[index - 1] : null;
+              const next = index < items.length - 1 ? items[index + 1] : null;
+
+              // ── Date dividers (real labels, fixed-height in the past zone,
+              // natural in upcoming) — the rail runs through them unless they
+              // lead their band (nothing above to connect to). ──────────────
+              if (item.__divider) {
+                return (
+                  <View style={[styles.agendaDateDivider, item.__past ? { height: PAST_DIVIDER_H } : null]}>
+                    {/* No rail segment: TimelineGutter draws the thread whole,
+                        behind the list. A segment here would stack on it and
+                        composite darker — see TimelineGutter. */}
+                    <Text style={styles.agendaDateLabel}>{agendaDateLabel(item.dateKey)}</Text>
+                    <View style={styles.agendaDateLine} />
+                  </View>
+                );
+              }
+
+              // Rail endpoints: a row is "first" when only its band header —
+              // possibly with the leading divider — sits above it; "last" when
+              // the band's gap follows.
+              const isFirstRow = !!prev?.__agendaHeader
+                || (!!prev?.__divider && !!items[index - 2]?.__agendaHeader);
+              const isLastRow = !!next?.__gap;
+
+              // ── Past zone: unloaded slot with the identical footprint ────
+              if (item.__placeholder) {
+                return <PastPlaceholderRow theme={theme} isFirst={isFirstRow} isLast={isLastRow} />;
+              }
+
+              // ── Rows. Past = `uniform` (fixed footprint, swaps invisible);
+              // upcoming = natural height. ─────────────────────────────────
+              return (
+                <TimelineTaskRow
+                  uniform={!!item.__past}
+                  // The row under the mark. Only ever true for one row, and
+                  // only while a scrub is in flight — `scrubDim` rests at 1,
+                  // so a still list shows no emphasis at all.
+                  active={!!activeRowId && item.id === activeRowId}
+                  item={item}
+                  onPress={openDetail}
+                  onLongPress={openEditForm}
+                  onToggleComplete={(it) => handleToggleComplete(it.id)}
+                  // The time bubble is the row's when — tapping it reschedules.
+                  onPressTime={setReschedulingTask}
+                  isFirst={isFirstRow}
+                  isLast={isLastRow}
+                  // The left rail is the STRONG line here — black in light
+                  // mode, white in dark so it stays visible.
+                  railColor={theme.mode === 'dark' ? '#FFFFFF' : '#000000'}
+                  // The card wears its board's colour; a row with no board
+                  // gets the plain (white) card. `getProjectColor` answers
+                  // with a neutral grey for "no board", which would paint a
+                  // grey card that looks like a board — so ask only when
+                  // there IS one.
+                  boardColor={boardOf(item) ? getProjectColor(boardOf(item)) : null}
+                  // Recurring rows read ✓ while their latest ticked occurrence
+                  // is still current (done-now) and label the when-line with
+                  // THAT date — not the already-advanced next dueDate.
+                  done={isTaskDoneNow(item)}
+                  doneDate={lastCompletedDate(item)}
+                />
+              );
+            }}
+            contentContainerStyle={{
+              // FlashList accepts padding-only container styles; styles.list
+              // was paddingBottom-only, folded in here.
+              // Room for the mark to reach the very first card — see
+              // agendaLeadIn. Scrolls away like any other content; it is only
+              // ever seen at the top of the timeline.
+              paddingTop: agendaLeadIn,
+              // Clears the floating tab bar (which no longer reserves space)
+              // or the keyboard, whichever is taller.
+              paddingBottom: Math.max(tabBarHeight + 24, keyboardHeight + 20),
+            }}
+            // NO RefreshControl — the pull/scroll up is plain native motion
+            // into the preloaded skeleton zone; data still refreshes on focus,
+            // socket pushes, and the calendar page's pull-to-refresh.
+            viewabilityConfig={viewabilityConfig}
+            onViewableItemsChanged={onViewableItemsChanged}
+            ListEmptyComponent={(
+              <View style={styles.emptyState}>
+                <Icon
+                  name={searchQuery ? 'magnify-close' : 'folder-open'}
+                  size={64}
+                  color={theme.colors.textMuted}
+                />
+                <Text style={styles.emptyText}>
+                  {searchQuery
+                    ? `No matches for "${searchQuery}"`
+                    : (showIncompleteOnly && tasks.some(t => t.completed)
+                      ? 'No incomplete tasks'
+                      : 'No tasks yet')}
+                </Text>
+                {!searchQuery && (
+                  <TouchableOpacity
+                    onPressIn={() => impactHaptic('medium')}
+                    onPress={() => openCreateForm('task')}
+                    style={styles.addNewTaskBtn}
+                  >
+                    <Icon name="plus" size={20} color={theme.colors.textPrimary} />
+                    <Text style={styles.addNewTaskText}>Add new task</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          />
+          </Animated.View>
+          {/* The pointer, OVER the list (the notch stands proud of the band,
+              across the thread) but pointerEvents:none, so it marks the spot
+              without ever catching a scroll. Needs the list measured first —
+              its position is a fraction of that height. */}
+          {agenda.items.length > 0 && listH > 0 && (
+            <TimelinePointer
+              theme={theme}
+              label={pointerLabel}
+              scrubbing={scrubbing}
+              beat={dayBeat}
+              top={pointerTop}
+            />
+          )}
+          {/* Cold-load skeleton for the Upcoming agenda — a fading overlay that
+              cross-fades to the real rows the moment /tasks resolves (see
+              UpcomingSkeletonOverlay). pointerEvents none; unmounts after the
+              fade. Only ever visible on a genuine cold start (nothing cached);
+              a warm cache paints instantly and this never mounts. */}
+          <UpcomingSkeletonOverlay visible={initializing} theme={theme} />
+          {/* Floating "Scroll to today" pill — appears while you've scrolled UP
+              into the history band; tap to glide (animated) back down to today's
+              tasks at the top of Upcoming. box-none so it never blocks list taps. */}
+          {viewingPast && (
+            <View style={styles.goToLatestWrap} pointerEvents="box-none">
+              <TouchableOpacity
+                style={styles.goToLatestBtn}
+                onPressIn={() => tapHaptic()}
+                onPress={goToLatest}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Scroll to today"
+              >
+                <Icon name="arrow-down" size={16} color={theme.colors.accentInfo} />
+                <Text style={styles.goToLatestText}>Scroll to today</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          </View>
+        </View>
+        </View>
+        {/* Page 1 — Calendar. The middle, so it is one swipe from either side. */}
         <View style={{ width: pagerSize.width, height: pagerSize.height }}>
         <CalendarView
           tasks={doneTasks}
@@ -2532,319 +3322,197 @@ export default function TasksScreen() {
           onOwnerPress={(t) => { if (t?.userId) setProfileOwner({ userId: t.userId, ownerName: t.ownerName }); }}
         />
         </View>
-        {/* Page 1 — List */}
+
+        {/* Page 2 — Boards. The Overview panel, which used to be a page you
+            opened FROM a tray and left again, is simply the third view now.
+            Above it sit the two keys the tray's contents moved behind: a
+            search over the boards, and a filter that unfolds the status keys
+            and the board rail. Nothing that was in the tray was dropped — it
+            is all here, one swipe away rather than one tray over the page. */}
         <View style={{ width: pagerSize.width, height: pagerSize.height }}>
-        {/* Board scope + the Calendar/List switch live in the global header, and
-            the View/Edit toggle moved to the All Boards page (the only surface
-            where edit mode still does anything). So the Upcoming list opens
-            straight into search + the agenda — no redundant toolbar. */}
-        <View style={styles.listClip}>
-          {/* Search bar removed — the Upcoming list opens straight into the
-              agenda (the old always-visible box read as a stray black band
-              under the header). searchQuery stays '' so agenda filtering is a
-              no-op; wire a new entry point here if search comes back. */}
-          <View
-            style={styles.listShift}
-            // The pointer sits a third of the way down the LIST, not the
-            // screen, so it has to know how tall the list actually is.
-            onLayout={(e) => {
-              const h = Math.round(e.nativeEvent.layout.height);
-              setListH((prev) => (prev === h ? prev : h));
-            }}
-          >
-          {/* The timeline's black band, behind the list and ONE piece: the
-              rows, the date dividers and the gaps between them all scroll over
-              it, so the margin is continuous instead of restarting at every
-              row. Skipped when there is nothing to scroll — a black stripe
-              beside the empty state is just a stray band. */}
-          {agenda.items.length > 0 && <TimelineGutter theme={theme} />}
-          <FlashList
-            // Remount per scope: a fresh list opens on Upcoming at offset 0
-            // (see agendaScopeKey) instead of inheriting the previous scope's
-            // offset + position-hold anchor.
-            key={agendaScopeKey}
-            ref={listRef}
-            data={agenda.items}
-            keyExtractor={(item, index) => (item ? `${item.__past ? 'past-' : ''}${item.__upcoming ? 'upcoming-' : ''}${item.id || index}` : `cell-${index}`)}
-            // Recycling pools by cell shape — the FlashList (chat-grade) win.
-            getItemType={(item) => {
-              if (item.__agendaHeader) return `header-${item.__agendaHeader}`;
-              if (item.__gap) return 'gap';
-              if (item.__addCard) return 'addCard';
-              if (item.__divider) return 'divider';
-              if (item.__placeholder) return 'placeholder';
-              return item.__past ? 'pastRow' : 'upcomingRow';
-            }}
-            // Chat-style position holding: FlashList's built-in
-            // maintainVisibleContentPosition stays at its v2 DEFAULT (always
-            // on — the machinery that keeps the Turtle chat rock-steady when
-            // history prepends). It absorbs the skeleton zone's one idle
-            // mount; with the agenda's order FROZEN between boundaries there
-            // is no relocation case left to toggle it off for, and FlashList
-            // pauses its own offset correction during scrollToIndex jumps.
-            // Drag-to-dismiss the keyboard (iMessage-style) when the
-            // user scrolls a task list with the search keyboard up.
-            // Without these props the keyboard sticks and the user has
-            // no obvious gesture to close it.
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-            keyboardShouldPersistTaps="handled"
-            // Scrolling still carries NO fill logic — fills are
-            // visibility-driven. It tracks the offset for the keyboard-scroll
-            // helpers, and drives the timeline pointer (see resolvePointer):
-            // cheap arithmetic over the on-screen items, and it only ever
-            // setStates when the readout's text actually changes.
-            onScroll={onAgendaScroll}
-            scrollEventThrottle={16}
-            renderItem={({ item, index }) => {
-              if (!item) return null;
-              const items = agenda.items;
+          <View style={styles.boardsKeyRow}>
+            <Text style={styles.boardsPageTitle} numberOfLines={1}>
+              {selectedProject !== 'All' ? boardLabel(selectedProject) : 'All boards'}
+            </Text>
+            <TouchableOpacity
+              style={[styles.boardsKey, boardsSearchOpen && styles.boardsKeyLit]}
+              onPressIn={() => tapHaptic()}
+              onPress={() => setBoardsSearchOpen((v) => {
+                // Closing throws the query away: a hidden filter still
+                // filtering is the worst of both.
+                if (v) setBoardQuery('');
+                return !v;
+              })}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: boardsSearchOpen }}
+              accessibilityLabel="Search boards"
+              testID="boards-search-key"
+            >
+              <Icon name="magnify" size={18} color={boardsSearchOpen ? theme.colors.background : theme.colors.textTertiary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.boardsKey, (boardsFilterOpen || filterScoped || hasActiveFilters) && styles.boardsKeyLit]}
+              onPressIn={() => tapHaptic()}
+              onPress={() => setBoardsFilterOpen((v) => !v)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: boardsFilterOpen }}
+              accessibilityLabel={hasActiveFilters ? `Filters, ${selectedTags.length + selectedOwners.length} active` : 'Filters'}
+              testID="boards-filter-key"
+            >
+              <Icon
+                name="filter-variant"
+                size={18}
+                color={(boardsFilterOpen || filterScoped || hasActiveFilters) ? theme.colors.background : theme.colors.textTertiary}
+              />
+              {hasActiveFilters && (
+                <View style={styles.headerFilterBadge}>
+                  <Text style={styles.headerFilterBadgeText}>{selectedTags.length + selectedOwners.length}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
 
-              // ── Band headers (Past / Upcoming) as plain items ─────────────
-              if (item.__agendaHeader === 'past') {
-                return (
-                  <View style={styles.upcomingHeader}>
-                    <Icon name="history" size={16} color={theme.colors.textTertiary} />
-                    <Text style={styles.upcomingHeaderText}>Past</Text>
-                    <View style={styles.upcomingCountBadge}>
-                      <Text style={styles.upcomingCountText}>{pastTasks.length}</Text>
-                    </View>
-                    <Text style={styles.pastHint}>
-                      {pastAllLoaded ? 'the beginning' : 'scroll up for older'}
-                    </Text>
-                  </View>
-                );
-              }
-              if (item.__agendaHeader === 'upcoming') {
-                return (
-                  <View style={styles.upcomingHeader}>
-                    <Icon name="clock-fast" size={16} color={theme.colors.accentInfo} />
-                    <Text style={styles.upcomingHeaderText}>Upcoming</Text>
-                    <View style={styles.upcomingCountBadge}>
-                      <Text style={styles.upcomingCountText}>{upcomingTasks.length}</Text>
-                    </View>
-                    {/* Quiet "syncing" cue during a background revalidation
-                        (app resume / reconnect) — never blanks the list. */}
-                    {syncing && <SyncDot theme={theme} />}
-                  </View>
-                );
-              }
-
-              // ── Band gaps (the breathing room after each band) ───────────
-              if (item.__gap) return <View style={styles.upcomingGap} />;
-              // The add-task template: a dashed card at the head of Upcoming
-              // that creates INTO the active board (active-board inheritance).
-              if (item.__addCard) {
-                const scoped = selectedProject !== 'All';
-                return (
-                  <TouchableOpacity
-                    style={styles.addTaskCard}
-                    onPressIn={() => tapHaptic()}
-                    onPress={() => openCreateForm('task', null, scoped ? selectedProject : null)}
-                    activeOpacity={0.6}
-                    accessibilityRole="button"
-                    accessibilityLabel={scoped ? `Add task to ${boardLabel(selectedProject)}` : 'Add task'}
-                    testID="agenda-add-task"
-                  >
-                    <View style={styles.addTaskIcon}>
-                      <Icon name="plus" size={18} color={theme.colors.textPrimary} />
-                    </View>
-                    <View style={styles.addTaskTextCol}>
-                      <Text style={styles.addTaskTitle} numberOfLines={1}>Add task</Text>
-                      <Text style={styles.addTaskCaption} numberOfLines={1}>
-                        {scoped ? `to ${boardLabel(selectedProject)}` : 'to any board'}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              }
-
-              const prev = index > 0 ? items[index - 1] : null;
-              const next = index < items.length - 1 ? items[index + 1] : null;
-
-              // ── Date dividers (real labels, fixed-height in the past zone,
-              // natural in upcoming) — the rail runs through them unless they
-              // lead their band (nothing above to connect to). ──────────────
-              if (item.__divider) {
-                const leadsBand = !!prev?.__agendaHeader;
-                return (
-                  <View style={[styles.agendaDateDivider, item.__past ? { height: PAST_DIVIDER_H } : null]}>
-                    {!leadsBand && <View style={styles.agendaRailThrough} pointerEvents="none" />}
-                    <Text style={styles.agendaDateLabel}>{agendaDateLabel(item.dateKey)}</Text>
-                    <View style={styles.agendaDateLine} />
-                  </View>
-                );
-              }
-
-              // Rail endpoints: a row is "first" when only its band header —
-              // possibly with the leading divider — sits above it; "last" when
-              // the band's gap follows.
-              const isFirstRow = !!prev?.__agendaHeader
-                || (!!prev?.__divider && !!items[index - 2]?.__agendaHeader);
-              const isLastRow = !!next?.__gap;
-
-              // ── Past zone: unloaded slot with the identical footprint ────
-              if (item.__placeholder) {
-                return <PastPlaceholderRow theme={theme} isFirst={isFirstRow} isLast={isLastRow} />;
-              }
-
-              // ── Rows. Past = `uniform` (fixed footprint, swaps invisible);
-              // upcoming = natural height. ─────────────────────────────────
-              return (
-                <TimelineTaskRow
-                  uniform={!!item.__past}
-                  item={item}
-                  onPress={openDetail}
-                  onLongPress={openEditForm}
-                  onToggleComplete={(it) => handleToggleComplete(it.id)}
-                  // The time bubble is the row's when — tapping it reschedules.
-                  onPressTime={setReschedulingTask}
-                  isFirst={isFirstRow}
-                  isLast={isLastRow}
-                  // The left rail is the STRONG line here — black in light
-                  // mode, white in dark so it stays visible.
-                  railColor={theme.mode === 'dark' ? '#FFFFFF' : '#000000'}
-                  // The card wears its board's colour; a row with no board
-                  // gets the plain (white) card. `getProjectColor` answers
-                  // with a neutral grey for "no board", which would paint a
-                  // grey card that looks like a board — so ask only when
-                  // there IS one.
-                  boardColor={boardOf(item) ? getProjectColor(boardOf(item)) : null}
-                  // Recurring rows read ✓ while their latest ticked occurrence
-                  // is still current (done-now) and label the when-line with
-                  // THAT date — not the already-advanced next dueDate.
-                  done={isTaskDoneNow(item)}
-                  doneDate={lastCompletedDate(item)}
-                />
-              );
-            }}
-            contentContainerStyle={{
-              // FlashList accepts padding-only container styles; styles.list
-              // was paddingBottom-only, folded in here.
-              // Clears the floating tab bar (which no longer reserves space)
-              // or the keyboard, whichever is taller.
-              paddingBottom: Math.max(tabBarHeight + 24, keyboardHeight + 20),
-            }}
-            // NO RefreshControl — the pull/scroll up is plain native motion
-            // into the preloaded skeleton zone; data still refreshes on focus,
-            // socket pushes, and the calendar page's pull-to-refresh.
-            viewabilityConfig={viewabilityConfig}
-            onViewableItemsChanged={onViewableItemsChanged}
-            ListEmptyComponent={(
-              <View style={styles.emptyState}>
-                <Icon
-                  name={searchQuery ? 'magnify-close' : 'folder-open'}
-                  size={64}
-                  color={theme.colors.textMuted}
-                />
-                <Text style={styles.emptyText}>
-                  {searchQuery
-                    ? `No matches for "${searchQuery}"`
-                    : (showIncompleteOnly && tasks.some(t => t.completed)
-                      ? 'No incomplete tasks'
-                      : 'No tasks yet')}
-                </Text>
-                {!searchQuery && (
-                  <TouchableOpacity
-                    onPressIn={() => impactHaptic('medium')}
-                    onPress={() => openCreateForm('task')}
-                    style={styles.addNewTaskBtn}
-                  >
-                    <Icon name="plus" size={20} color={theme.colors.textPrimary} />
-                    <Text style={styles.addNewTaskText}>Add new task</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
-          />
-          {/* The pointer, OVER the list (the notch stands proud of the band,
-              across the thread) but pointerEvents:none, so it marks the spot
-              without ever catching a scroll. Needs the list measured first —
-              its position is a fraction of that height. */}
-          {agenda.items.length > 0 && listH > 0 && (
-            <TimelinePointer
-              theme={theme}
-              label={pointerLabel}
-              scrubbing={scrubbing}
-              beat={dayBeat}
-              top={pointerTop}
-            />
-          )}
-          {/* Cold-load skeleton for the Upcoming agenda — a fading overlay that
-              cross-fades to the real rows the moment /tasks resolves (see
-              UpcomingSkeletonOverlay). pointerEvents none; unmounts after the
-              fade. Only ever visible on a genuine cold start (nothing cached);
-              a warm cache paints instantly and this never mounts. */}
-          <UpcomingSkeletonOverlay visible={initializing} theme={theme} />
-          {/* Floating "Scroll to today" pill — appears while you've scrolled UP
-              into the history band; tap to glide (animated) back down to today's
-              tasks at the top of Upcoming. box-none so it never blocks list taps. */}
-          {viewingPast && (
-            <View style={styles.goToLatestWrap} pointerEvents="box-none">
-              <TouchableOpacity
-                style={styles.goToLatestBtn}
-                onPressIn={() => tapHaptic()}
-                onPress={goToLatest}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Scroll to today"
-              >
-                <Icon name="arrow-down" size={16} color={theme.colors.accentInfo} />
-                <Text style={styles.goToLatestText}>Scroll to today</Text>
-              </TouchableOpacity>
+          {/* The search field. Mounted only while open so it can't hold a
+              keyboard or a stale query behind a closed key. */}
+          {boardsSearchOpen && (
+            <View style={styles.boardsSearchBox}>
+              <Icon name="magnify" size={17} color={theme.colors.textTertiary} />
+              <AppTextInput
+                style={styles.boardsSearchInput}
+                placeholder="Search boards"
+                placeholderTextColor={theme.colors.textTertiary}
+                value={boardQuery}
+                onChangeText={setBoardQuery}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoFocus
+                returnKeyType="search"
+                testID="boards-search-input"
+              />
+              {boardQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setBoardQuery('')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                >
+                  <Icon name="close-circle" size={17} color={theme.colors.textTertiary} />
+                </TouchableOpacity>
+              )}
             </View>
           )}
-          </View>
+
+          {/* The old tray's contents, folded away until the filter key asks
+              for them: the status keys, then the board rail. Picking a STATUS
+              leaves the panel open (you are often flipping to do / done on the
+              same board); picking a BOARD closes it, which is the choice that
+              ends the errand. overflow:hidden so the animated height clips it
+              cleanly rather than letting it spill while it folds. */}
+          <Reanimated.View
+            style={[styles.boardsFilterPanel, boardsFilterStyle]}
+            pointerEvents={boardsFilterOpen ? 'box-none' : 'none'}
+            accessibilityElementsHidden={!boardsFilterOpen}
+            importantForAccessibility={boardsFilterOpen ? 'auto' : 'no-hide-descendants'}
+          >
+            <View style={styles.railStatusRow}>
+              <StatusSegment value={statusFilter} onChange={setStatusFilter} theme={theme} />
+              {/* Tags and people. They were never on the tray — they were on
+                  the Overview page's own header, which this row replaces. */}
+              <TouchableOpacity
+                style={[styles.headerBoardKey, styles.headerOverviewKey, hasActiveFilters && styles.headerBoardKeyLit]}
+                onPressIn={() => tapHaptic()}
+                onPress={() => setShowFilterMenu(true)}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                accessibilityRole="button"
+                accessibilityLabel="Tag and people filters"
+                testID="boards-tag-filters"
+              >
+                <Icon name="tag-multiple-outline" size={15} color={hasActiveFilters ? theme.colors.background : theme.colors.textTertiary} />
+                <Text style={[styles.headerBoardText, hasActiveFilters && styles.headerBoardTextLit]} numberOfLines={1}>Tags</Text>
+              </TouchableOpacity>
+            </View>
+            <BoardRail
+              boards={projects}
+              selected={selectedProject}
+              stats={boardStats}
+              colorOf={getProjectColor}
+              onSelect={(name) => { setSelectedProject(name); setBoardsFilterOpen(false); }}
+              onManage={openBoardManager}
+              onAddBoard={() => openBoardManager(null)}
+              theme={theme}
+            />
+          </Reanimated.View>
+
+          {/* The Overview panel itself, embedded: no page shell, no header of
+              its own — this page's keys are its header. It still owns its own
+              drill-downs (a board, a stat's list, the stats sheet), and tells
+              us when one is up so the pager stops paging under it. */}
+          <OverviewPage
+            embedded
+            query={boardQuery}
+            visible={viewMode === 'boards'}
+            tasks={tasks}
+            boards={projects}
+            colorOf={getProjectColor}
+            sharedIn={sharedInLabels}
+            selectedProject={selectedProject}
+            calendarDate={calendarDate}
+            onSelectBoard={(name) => setSelectedProject(name)}
+            onOpenFilters={() => setShowFilterMenu(true)}
+            filterCount={selectedTags.length + selectedOwners.length}
+            bottomInset={tabBarHeight}
+            theme={theme}
+            onDrillChange={setBoardsDrilled}
+            onOpenTask={openDetail}
+            // Born on the board being looked at, with no due date — the finder
+            // is a capture field, not the full form (which is one tap further
+            // in, from the task itself).
+            onAddTask={(title, project) => {
+              handleSaveTask({
+                title,
+                description: '',
+                priority: 'medium',
+                completed: false,
+                project,
+                dueDate: '',
+                tags: [],
+                subtasks: [],
+                id: Date.now().toString(),
+                createdAt: Date.now(),
+              });
+            }}
+          />
         </View>
+
+        {/* Page 3 — Focus. The countdown, what the blocks add up to, and the
+            way into one.
+            It reads the SAME /pomodoros the task cards' tallies come from, so
+            the page and the little keys on the cards can never disagree about
+            how much focus a thing has had — joined with the chat timer's own
+            history, which is the only place a block with no task attached to it
+            can live (see mergeFocusLog).
+            `active` is the UNIFIED live block, so starting from here counts down
+            HERE instead of handing you to the chat. */}
+        <View style={{ width: pagerSize.width, height: pagerSize.height }}>
+          <FocusPage
+            sessions={pomoLog}
+            active={focusBlock}
+            focusMinutes={focusMinutes}
+            boardOfTask={boardOfTaskId}
+            onStart={startFocusHere}
+            onStop={stopFocusHere}
+            theme={theme}
+            bottomInset={tabBarHeight + 24}
+          />
         </View>
       </Animated.ScrollView>
-      </Reanimated.View>
+      </View>
 
-      {/* The filter panel: absolute at the host's top, revealed by the same
-          progress that shifts the page — the page stays glued to its bottom
-          edge through the open / close. Untouchable while closed.
-
-          Status keys first, board rail under them. Both used to sit in the
-          header permanently; behind one key they cost the page nothing until
-          they're asked for. Picking a STATUS leaves the panel open (you are
-          often flipping to do / done on the same board), picking a BOARD
-          closes it, which is the choice that ends the errand. */}
-      <Reanimated.View
-        style={[styles.railLayer, railRevealStyle]}
-        pointerEvents={railOpen ? 'box-none' : 'none'}
-        accessibilityElementsHidden={!railOpen}
-        importantForAccessibility={railOpen ? 'auto' : 'no-hide-descendants'}
-      >
-        <View style={styles.railStatusRow}>
-          <StatusSegment value={statusFilter} onChange={setStatusFilter} theme={theme} />
-          {/* The Overview key: every board's numbers on a page over the
-              calendar. It lives here rather than in the header, directly under
-              the key that opens this panel and on the same right edge it used
-              to sit on — so it drops out of the header rather than moving
-              somewhere new. Opening it closes the panel; you are leaving. */}
-          <TouchableOpacity
-            style={[styles.headerBoardKey, styles.headerOverviewKey, showOverview && styles.headerBoardKeyLit]}
-            onPressIn={() => tapHaptic()}
-            onPress={() => { setRailOpen(false); setShowOverview(true); }}
-            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            accessibilityRole="button"
-            accessibilityLabel={hasActiveFilters ? `Overview, ${selectedTags.length + selectedOwners.length} filters active` : 'Overview'}
-            testID="header-overview-key"
-          >
-            <Icon name="chart-box-outline" size={15} color={showOverview ? theme.colors.background : theme.colors.textTertiary} />
-            <Text style={[styles.headerBoardText, showOverview && styles.headerBoardTextLit]} numberOfLines={1}>Overview</Text>
-          </TouchableOpacity>
-        </View>
-        <BoardRail
-          boards={projects}
-          selected={selectedProject}
-          stats={boardStats}
-          colorOf={getProjectColor}
-          onSelect={(name) => { setSelectedProject(name); setRailOpen(false); }}
-          onManage={openBoardManager}
-          onAddBoard={() => openBoardManager(null)}
-          theme={theme}
-        />
-      </Reanimated.View>
+      {/* (The board rail and the status keys used to hang here as an absolute
+          tray revealed over the page. They live on the BOARDS page now, behind
+          its filter key — see the pager below.) */}
       </View>
 
       {/* The "+" create button now lives in the day-planner header's right
@@ -3054,46 +3722,8 @@ export default function TasksScreen() {
         </View>
       </EdgeSwipePage>
 
-      {/* Overview: every board's numbers on a page that overlays the calendar
-          (in-tree EdgeSwipePage overlay). Mounted after the pager and the
-          boards page so it paints above both; the board manager sheet below
-          still outranks it. */}
-      <OverviewPage
-        visible={showOverview}
-        onClose={() => setShowOverview(false)}
-        tasks={tasks}
-        boards={projects}
-        colorOf={getProjectColor}
-        sharedIn={sharedInLabels}
-        selectedProject={selectedProject}
-        calendarDate={calendarDate}
-        onSelectBoard={(name) => { setSelectedProject(name); setShowOverview(false); }}
-        onOpenFilters={() => setShowFilterMenu(true)}
-        filterCount={selectedTags.length + selectedOwners.length}
-        bottomInset={tabBarHeight}
-        theme={theme}
-        // The overview stays up: TaskDetail is a sibling Modal and presents
-        // OVER this in-tree overlay, so closing it would only lose the place
-        // the user was reading.
-        onOpenTask={openDetail}
-        // Born on the board being looked at, with no due date — the finder is
-        // a capture field, not the full form (which is one tap further in,
-        // from the task itself).
-        onAddTask={(title, project) => {
-          handleSaveTask({
-            title,
-            description: '',
-            priority: 'medium',
-            completed: false,
-            project,
-            dueDate: '',
-            tags: [],
-            subtasks: [],
-            id: Date.now().toString(),
-            createdAt: Date.now(),
-          });
-        }}
-      />
+      {/* (Overview is no longer a page you open from here — it IS the
+          Boards tab, embedded in the pager above.) */}
 
       {/* Board manager: the app's sheet shell, mounted LAST so it draws over
           every other overlay on this screen. Rename keeps the selection on the
@@ -3228,15 +3858,101 @@ const createStyles = (theme) => StyleSheet.create({
   
   // The key row: view pill · status keys · filter · +. No bottom rule —
   // the board rail under it is the header's second line.
-  header: {
+  // ── The header, the media vault's ─────────────────────────────────────────
+  // Title row, then the picker, then a hairline. Every number here is the
+  // vault's (MediaGallery's header): a 44pt title row on HEADER_PAD_X, a 34pt
+  // track with 8 under it, a 3pt bar with 2pt caps, and 15pt labels at 700 /
+  // 500. Copied rather than approximated — two tab bars that are ALMOST the
+  // same is worse than two that are obviously different.
+  headerChrome: {
+    backgroundColor: theme.colors.background,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  headerTitleRow: {
+    height: 44,
+    paddingHorizontal: HEADER_PAD_X,
+    justifyContent: 'center',
+  },
+  headerTitleLarge: {
+    // 22 → 20. The vault's own size is 22 and this already was 22 — but its
+    // title is two short words and this one carries a board name after a
+    // bullet, so at the same size the longer string read as the bigger type.
+    // A step down puts the two at the same visual weight, which is what
+    // "match the vault" actually means here.
+    fontSize: 20,
+    // Tracking goes slack as the size drops — the vault's −0.3 was tuned at 22.
+    letterSpacing: -0.25,
+    color: theme.colors.textPrimary,
+  },
+  headerTitleThin: { fontWeight: '100' },
+  headerTitleStrong: { fontWeight: '400' },
+  // A horizontal ScrollView is flexGrow:1 by default and would swallow the
+  // column's free height; the row is exactly one tab tall.
+  tabScroll: { flexGrow: 0, marginBottom: 10 },
+  tabTrack: {
+    paddingHorizontal: HEADER_PAD_X,
+    height: 40,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    position: 'relative',
+  },
+  tabUnderline: {
+    position: 'absolute',
+    bottom: 0,
+    // ONE POINT wide, scaled to the live tab. Square, and that is not a
+    // compromise: scaleX on a rounded bar stretches the caps into a lens, and
+    // the rule this is copied from is square anyway.
+    //
+    // left:0, NOT the track's padding: a tab's measured `x` already includes
+    // the container's padding (Yoga gives a child's layout.x from the parent's
+    // border box), so adding it here again would park the bar one margin to
+    // the right of the tab it belongs under.
+    left: 0,
+    width: 1,
+    // Scaled down with the type it underlines: 3pt under a 13pt label is a
+    // rule with a label on it rather than a label with a rule under it.
+    height: 2.5,
+    transformOrigin: 'left',
+    // THE highlight, not the ink: the bar is the one thing on the header that
+    // says which page you are on, and the accent is what says 'active'
+    // everywhere else in the app.
+    backgroundColor: theme.colors.accent || theme.colors.accentInfo,
+  },
+  // Sized to its own content, with the gap AFTER it — Pinterest's board
+  // headers, not equal thirds. The gap is the ONLY thing separating two tabs,
+  // so it does all the work of telling them apart: at 24 with four tabs the
+  // row read as one long string of words, and widening it buys more legibility
+  // than any amount of extra type size would.
+  tabSeg: { justifyContent: 'center', alignItems: 'center', marginRight: 30, zIndex: 1 },
+  tabSegLast: { marginRight: 0 },
+  // Icon and word on one line. The ACTIVE row is absolute so it can sit over
+  // the inactive one without either affecting the other's layout — and so its
+  // onLayout reports the row's CONTENT width, which is what the bar is sized
+  // to.
+  tabSegRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 2,
+    // Tighter than the gap BETWEEN tabs, and by a wide margin: an icon and its
+    // word have to read as one thing, or the eye counts eight items in the row
+    // instead of four. This is the whole reason the between-gap can do its job.
+    gap: 4,
   },
+  tabSegRowActive: { position: 'absolute' },
+  // 17 → 13. The reference board headers carry a WORD each; these carry a word
+  // AND an icon, and four of them — so the same size that reads as display
+  // type there read as a crowded banner here. The room comes from the gaps
+  // now, which is the cheaper place to buy it.
+  //
+  // No negative tracking with it: −0.2 was tuned at 17 and at 13 it closes up
+  // letters that need the air.
+  tabSegText: { fontSize: 13, letterSpacing: 0 },
+  tabSegTextActive: { fontWeight: '700', color: theme.colors.textPrimary },
+  // The SAME ink as the active label — the opacity above is what separates
+  // them. A second, dimmer colour on top of a 60% opacity compounds into
+  // something closer to 40%, which is where a label stops being legible and
+  // starts being a smudge you have to lean in at.
+  tabSegTextInactive: { fontWeight: '500', color: theme.colors.textPrimary },
   // The one Boards key takes what the view pill leaves, hugging the right edge
   // where the status keys used to sit. It still SHRINKS (ellipsising a long
   // board name) rather than pushing past the edge — but with Overview moved
@@ -3250,13 +3966,64 @@ const createStyles = (theme) => StyleSheet.create({
   },
   // The filter panel's layer inside the content host: pinned to the top,
   // exactly RAIL_H tall, over the (shifted-down) page.
-  railLayer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: RAIL_H,
-    zIndex: 2,
+  // ── The Boards page's own chrome ──────────────────────────────────────────
+  // Its key row: the scope's name, then search and filter. Deliberately NOT a
+  // second header bar — the segmented control above is the header, so this is
+  // a row of keys on the page, at the page's own margin.
+  boardsKeyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
+  boardsPageTitle: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
+    color: theme.colors.textTertiary,
+  },
+  boardsKey: {
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: theme.colors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  boardsKeyLit: {
+    backgroundColor: theme.colors.textPrimary,
+    borderColor: theme.colors.textPrimary,
+  },
+  boardsSearchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
+  },
+  boardsSearchInput: {
+    flex: 1,
+    height: '100%',
+    fontSize: 15,
+    padding: 0,
+    color: theme.colors.textPrimary,
+  },
+  // The folded panel. Its HEIGHT animates, so it has to clip — the rail and
+  // the status keys are full-size children throughout the fold.
+  boardsFilterPanel: {
+    overflow: 'hidden',
   },
   // Status keys above the rail, with the Overview key on the far right — which
   // is exactly where it sat while it was in the header, one row higher. Both
@@ -3347,63 +4114,9 @@ const createStyles = (theme) => StyleSheet.create({
     fontSize: 10,
     fontWeight: 'bold',
   },
-  viewToggle: {
-    flexDirection: 'row',
-    backgroundColor: theme.colors.surface,
-    borderRadius: 8,
-    padding: 2,
-    marginRight: 0,
-    borderWidth: 0.5,
-    borderColor: theme.colors.border,
-    position: 'relative', // anchors the absolute sliding pill,
-    ...depth(theme, 'control'),
-  },
-  // The sliding active pill — its translateX is bound to the pager scroll so it
-  // glides between the two segments 1:1 with the swipe (Photos-tab style).
-  viewToggleIndicator: {
-    position: 'absolute',
-    top: 2,
-    bottom: 2,
-    left: 2,
-    width: 84, // = TOGGLE_SEG_WIDTH; matches a segment's width
-    borderRadius: 6,
-    // Match the Photos tab bar's pill exactly: a light fill (white on light,
-    // near-grey on dark) with a soft drop shadow, so it reads as a lifted
-    // iOS-style segmented-control thumb gliding over the track.
-    backgroundColor: theme.mode === 'dark' ? '#333333' : '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  viewBtn: {
-    width: 84, // = TOGGLE_SEG_WIDTH; fixed so the sliding pill aligns 1:1
-    height: 28,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  // Icon + word, both layers (the active one is absolute over the dim one).
-  viewBtnRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  viewBtnText: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  // Active (bright) icon layer, stacked over the inactive (dim) one; their
-  // opacities cross-fade as the pager scrolls.
-  viewBtnIconLayer: {
-    ...StyleSheet.absoluteFillObject,
-    flexDirection: 'row',
-    gap: 5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  // (The old segmented control — a track, a sliding pill and two 84pt
+  //  segments — is gone. The picker is the vault's now: bare labels with a
+  //  bar under them. See headerChrome / tabTrack above.)
   
   // View/Edit toggle — now hosted in the All Boards page header (edit mode
   // reveals each project's inline add-task + tag controls).
@@ -3453,8 +4166,8 @@ const createStyles = (theme) => StyleSheet.create({
     // Starting at the gutter's edge solves both at once — the header never
     // touches the band (so it stays readable and the band stays unbroken), and
     // its content lines up with the card column rather than the screen edge.
-    marginLeft: GUTTER_W,
-    paddingLeft: CARD_COL_X - GUTTER_W,
+    marginLeft: MARGIN_EDGE_X,
+    paddingLeft: CARD_COL_X - MARGIN_EDGE_X,
     paddingRight: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
     // Still opaque: it separates the two bands from the rows above it.
@@ -3679,10 +4392,15 @@ const createStyles = (theme) => StyleSheet.create({
     letterSpacing: 0.3,
   },
   // The breathing room between the upcoming agenda and the project tree below.
+  // The rule that separates the two bands. It STOPS at the gutter, like the
+  // headers do — drawn full-width it ruled a pale line straight across the
+  // black margin, which is a seam in the one element that has to read as
+  // continuous for the notch to look part of its edge.
   upcomingGap: {
     height: 14,
     marginTop: 4,
     marginBottom: 4,
+    marginLeft: MARGIN_EDGE_X,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
   },

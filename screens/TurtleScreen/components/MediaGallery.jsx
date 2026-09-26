@@ -5363,12 +5363,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             is sized to the ACTIVE label (measured via onLayout) and interpolated
             off the same pageScrollX as before, so it still tracks the pager 1:1
             through a swipe instead of snapping at the end. */}
-        <View style={{ marginHorizontal: 16, marginBottom: 8, height: 34, flexDirection: 'row', position: 'relative' }}>
+        {/* 34 → 42 with the labels at 17: the row's height is as much of the
+            breathing room as the gaps in it, and the Planner's picker is set
+            to the same numbers so the two headers read as one family — see its
+            tabSegText for why the type came back down to 13. */}
+        <View style={{ marginHorizontal: 16, marginBottom: 10, height: 40, flexDirection: 'row', position: 'relative' }}>
           {/* Animated Underline */}
           <Animated.View style={{
             position: 'absolute', bottom: 0, left: 0, height: 3,
             width: tabUnderlineWidth,
-            backgroundColor: theme.colors.textPrimary,
+            // The highlight, not the ink — same as the Planner's bar.
+            backgroundColor: theme.colors.accent || theme.colors.accentInfo,
             borderRadius: 2,
             transform: [{ translateX: tabUnderlineX }],
           }} />
@@ -5377,7 +5382,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             // Calculate exact opacity based on 1:1 scroll physics
             const inputRange = [(index - 1) * width, index * width, (index + 1) * width];
             const activeOp = pageScrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
-            const inactiveOp = pageScrollX.interpolate({ inputRange, outputRange: [1, 0, 1], extrapolate: 'clamp' });
+            // 0.6 rather than 1 — an inactive tab is the same ink, plainly not the
+            // one you are on. Matches the Planner's picker.
+            const inactiveOp = pageScrollX.interpolate({ inputRange, outputRange: [0.6, 0, 0.6], extrapolate: 'clamp' });
             
             const label = VAULT_TAB_LABELS[tab] || tab;
 
@@ -5394,7 +5401,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 <Animated.Text
                   onLayout={(e) => measureTabLabel(tab, e.nativeEvent.layout.width)}
                   style={{
-                    position: 'absolute', fontSize: 15, fontWeight: '700',
+                    position: 'absolute', fontSize: 13, letterSpacing: 0, fontWeight: '700',
                     color: theme.colors.textPrimary, opacity: activeOp,
                   }}
                 >
@@ -5403,8 +5410,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
 
                 {/* Inactive Regular Text */}
                 <Animated.Text style={{
-                  fontSize: 15, fontWeight: '500',
-                  color: theme.colors.textSecondary, opacity: inactiveOp
+                  fontSize: 13, letterSpacing: 0, fontWeight: '500',
+                  color: theme.colors.textPrimary, opacity: inactiveOp
                 }}>
                   {label}
                 </Animated.Text>

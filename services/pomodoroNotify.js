@@ -11,6 +11,8 @@
 // expo-notifications is a NATIVE module — before the dev rebuild (or in Expo
 // Go) every call here is a guarded no-op.
 
+import { recentlyChimed } from './focusChime';
+
 let Notifications = null;
 try {
   // eslint-disable-next-line global-require
@@ -35,7 +37,12 @@ export async function registerPomodoroCategories() {
           shouldShowAlert: true,
           shouldShowBanner: true,
           shouldShowList: true,
-          shouldPlaySound: isPomodoro,
+          // A pomodoro dings — UNLESS the Focus page just chimed for the same
+          // completion. The server pushes to the device that started the block
+          // and the app is often open on it, so without this one finished
+          // block makes two sounds a second apart. The banner still shows; only
+          // the duplicate sound is dropped.
+          shouldPlaySound: isPomodoro && !recentlyChimed(),
           shouldSetBadge: false,
         };
       },
