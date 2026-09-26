@@ -415,10 +415,12 @@ export const TaskForm = ({
           linkedNote: (meta.linkedNote && meta.linkedNote.id) ? meta.linkedNote : null,
         });
       } else {
-        // NEW task: pre-fill "People involved" with the partner accounts (if
-        // already loaded — otherwise the guard effect below seeds them once the
-        // /shares fetch lands, as long as the set is still untouched). Only for
-        // TASKS — events/birthdays have no "people involved".
+        // NEW task/event: pre-fill "People involved" with the partner accounts
+        // (if already loaded — otherwise the guard effect below seeds them once
+        // the /shares fetch lands, as long as the set is still untouched). For
+        // an EVENT the server adds the partners itself on save (they are full
+        // participants of every event you create); seeding them here means the
+        // form shows what will be saved. Birthdays have no "people involved".
         const newType = initialType || 'task';
         setFormData({
           ...blankForm(newType),
@@ -426,7 +428,7 @@ export const TaskForm = ({
           time: initialTime || '',
           dueDate: initialDate || '',
           project: newType === 'task' ? (initialProject || '') : '',
-          involvedUsers: newType === 'task' ? partnerIdsRef.current : [],
+          involvedUsers: (newType === 'task' || newType === 'event') ? partnerIdsRef.current : [],
         });
       }
       setTagInput('');
@@ -452,7 +454,7 @@ export const TaskForm = ({
   useEffect(() => {
     if (!visible || initialData || involvedTouched.current || partnerIds.length === 0) return;
     setFormData(prev => (
-      (prev.itemType === 'task' && Array.isArray(prev.involvedUsers) && prev.involvedUsers.length === 0)
+      ((prev.itemType === 'task' || prev.itemType === 'event') && Array.isArray(prev.involvedUsers) && prev.involvedUsers.length === 0)
         ? { ...prev, involvedUsers: partnerIds }
         : prev
     ));
@@ -1485,7 +1487,15 @@ export const TaskForm = ({
                 Always on the page for a task or an event — never behind the +
                 key (see OPTIONS). The GUEST half is what the Guests option
                 gates on an event; a task can always carry one, which is the
-                case guestReminderConfig exists for. */}
+                case guestReminderConfig exists for.
+
+                On an EVENT these people are participants, not spectators: the
+                pond lets each of them edit the event — content, timing and
+                completion — and records the change in the owner's activity log.
+                A calendar partner is added to every event you create, so taking
+                one off here is how you keep a single event to yourself. On a
+                task the same list stays view-only, and a tick by one of them is
+                personal to their calendar. */}
             {(isTask || isEvent) && (
               <FormField label={isEvent ? 'People & guests' : 'People involved'}>
                 <PeoplePicker
