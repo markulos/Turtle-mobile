@@ -235,8 +235,9 @@ export const TaskDetail = ({
     .map(v => (REMINDER_OPTIONS.find(o => o.value === v)?.label) || v);
   const yearly = kind === 'birthday' && task.meta?.yearly !== false;
 
-  // People involved (tasks only). Resolve IDs -> display name via the fetched
-  // pond members; fall back to the raw id if the member list hasn't loaded yet.
+  // People involved (tasks and events). Resolve IDs -> display name via the
+  // fetched pond members; fall back to the raw id if the member list hasn't
+  // loaded yet.
   const nameOfUser = (id) => {
     const f = friends.find((x) => x.id === id);
     return f ? (f.displayName || f.phone || 'Member') : id;
@@ -389,9 +390,10 @@ export const TaskDetail = ({
           </Section>
         )}
 
-        {/* People involved — tasks. They can see the task (view-only) and were
-            notified when added. Edit the set via the task editor. */}
-        {!isOccasion && involvedUsers.length > 0 && (
+        {/* People involved — tasks and events. On a task they can see it
+            (view-only) and were notified when added; on an event they are
+            participants who can edit it. Edit the set via the task editor. */}
+        {kind !== 'birthday' && involvedUsers.length > 0 && (
           <Section label={`People involved · ${involvedUsers.length}`} colors={colors} right={<Text style={[styles.hint, { color: colors.textMuted }]}>edit in the full editor</Text>}>
             <View style={styles.wrap}>
               {involvedUsers.map((id) => (

@@ -422,10 +422,12 @@ export const TaskForm = ({
           linkedNote: (meta.linkedNote && meta.linkedNote.id) ? meta.linkedNote : null,
         });
       } else {
-        // NEW task: pre-fill "People involved" with the partner accounts (if
-        // already loaded — otherwise the guard effect below seeds them once the
-        // /shares fetch lands, as long as the set is still untouched). Only for
-        // TASKS — events/birthdays have no "people involved".
+        // NEW task/event: pre-fill "People involved" with the partner accounts
+        // (if already loaded — otherwise the guard effect below seeds them once
+        // the /shares fetch lands, as long as the set is still untouched). For
+        // an EVENT the server adds the partners itself on save (they are full
+        // participants of every event you create); seeding them here means the
+        // form shows what will be saved. Birthdays have no "people involved".
         const newType = initialType || 'task';
         setFormData({
           ...blankForm(newType),
@@ -433,7 +435,7 @@ export const TaskForm = ({
           time: initialTime || '',
           dueDate: initialDate || '',
           project: newType === 'task' ? (initialProject || '') : '',
-          involvedUsers: newType === 'task' ? partnerIdsRef.current : [],
+          involvedUsers: (newType === 'task' || newType === 'event') ? partnerIdsRef.current : [],
         });
       }
       setTagInput('');
@@ -459,7 +461,7 @@ export const TaskForm = ({
   useEffect(() => {
     if (!visible || initialData || involvedTouched.current || partnerIds.length === 0) return;
     setFormData(prev => (
-      (prev.itemType === 'task' && Array.isArray(prev.involvedUsers) && prev.involvedUsers.length === 0)
+      ((prev.itemType === 'task' || prev.itemType === 'event') && Array.isArray(prev.involvedUsers) && prev.involvedUsers.length === 0)
         ? { ...prev, involvedUsers: partnerIds }
         : prev
     ));
@@ -1587,9 +1589,12 @@ export const TaskForm = ({
             {/* ── PEOPLE — who's attached: assignees (tasks) or guests (events). */}
             {(isTask || isEvent) && <GroupHeader theme={theme} label="People" />}
 
-            {/* People involved — Tasks only. They see the task (view-only) and
-                get an assignment notification when newly added. */}
-            {isTask && shows('people') && (
+            {/* People involved — tasks and events. On a task they see it
+                (view-only) and get an assignment notification when newly
+                added; on an EVENT they are participants who can edit it too,
+                and your calendar partners are on every event unless you take
+                them off it here. */}
+            {(isTask || isEvent) && shows('people') && (
               <FormField label="People involved">
                 <ParticipantPicker
                   selected={formData.involvedUsers || []}
