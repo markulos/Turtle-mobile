@@ -51,9 +51,10 @@ import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPass
 import { monthLayout } from '../utils/monthLayout';
 import { topFadeStops } from '../utils/topFadeStops';
 import { LinearGradient } from 'expo-linear-gradient';
-import ScheduleCard, { clockLabel, TIME_COL_W } from './ScheduleCard';
-import { buildCompactRows, gapHourMarks, gapKey, gapNowOffset, minutesToTimeString } from '../utils/compactSchedule';
+import ScheduleCard, { clockLabel, TIME_COL_W, TIME_LABEL_CENTER_Y } from './ScheduleCard';
+import { buildCompactRows, gapHourMarks, gapKey, gapNowOffset, gapNowSpans, minutesToTimeString } from '../utils/compactSchedule';
 import { insetCardPalette } from '../utils/cardPalette';
+import { BOARD_COLORS, inkOn } from '../utils/boardColors';
 import { finderDestination, KIND_SEP, FIELD_SEP } from '../utils/finderDestination';
 import TaskFinderOverlay from './TaskFinderOverlay';
 // (HatchBackdrop's import went with the task-card hatch. The month grid's
@@ -197,12 +198,44 @@ const GAP_HOUR_H = HOUR_HEIGHT;
 // The rule row at the top of each slot: the hour label and its line. Fixed so
 // the band can be placed against the line rather than against the row.
 const GAP_RULE_H = 18;
+// ── The timeline's beads ────────────────────────────────────────────────────
+// The gutter rule was already one continuous hairline down the whole schedule;
+// what it had no marker for was the TIMES themselves, so a day read as a line
+// with cards floating beside it. Every time in the day now gets a bead ON that
+// line — filled for a task, hollow for an hour that is still free — so the
+// column reads as one string threaded through every moment of the day, and a
+// free hour is visibly a stop on the same string rather than absence.
+//
+// Filled and hollow are the same diameter on purpose: different sizes would
+// make the string look like it bulges at the busy parts, and the point is that
+// the thread is even and the beads are what differ.
+export const BEAD = 11;
+// Centred ON the rule, so the hairline passes behind the bead and out the
+// other side — the thread goes THROUGH each blob rather than stopping at it.
+const BEAD_LEFT = HOUR_LABEL_WIDTH - Math.round(BEAD / 2);
+// Where a bead sits vertically inside its row: LEVEL WITH ITS OWN TIME LABEL,
+// which is on the card's first line — not the middle of the card. A card is
+// CARD_H tall whatever its duration, so centring on the card would put 9am's
+// bead level with 9:40.
+//
+// Derived from the label's line box rather than tuned by eye: it was 12, which
+// put the bead's centre at 17.5 against a label centred at 24.5, so every dot
+// floated 7 pt above the time it belonged to.
+export const BEAD_TOP_CARD = Math.round(TIME_LABEL_CENTER_Y - BEAD / 2);
+const BEAD_TOP_RULE = Math.round(GAP_RULE_H / 2) - Math.round(BEAD / 2);
 // Where the hairline actually SITS inside that row. The row is 18 tall and
 // centres its line, so the line is half way down — which is why a band drawn
 // from the row's top edge started 9 pt above the line it was supposed to begin
 // at, and ended 9 pt short of the next one. Everything that should line up
 // with the LINE is offset by this, not by 0.
 const GAP_LINE_Y = GAP_RULE_H / 2;
+/**
+ * One line of the now-line's readout. Fixed, because the block is placed by
+ * subtracting exactly one of them from the line's y — that is what puts the
+ * elapsed number above the line and the remaining one below it, whether or not
+ * both are there to draw.
+ */
+const NOW_METER_LINE = 15;
 // Quick, and the same curve both ways. What makes this read as smooth is not
 // the curve — it is that NO LAYOUT RUNS WHILE IT MOVES. The gap takes its full
 // height in ONE layout pass on the frame of the tap, and everything below is
@@ -214,6 +247,32 @@ const GAP_LINE_Y = GAP_RULE_H / 2;
 const GAP_OPEN_MS = 190;
 const GAP_CLOSE_MS = 160;
 const GAP_EASE = Easing.out(Easing.quad);
+
+/**
+ * startPatch — what starting a focus block should write onto the task, or null
+ * when it should write nothing.
+ *
+ * A task sitting under "any time" has no place on the day's timeline, so the
+ * moment you begin working on it the schedule is saying something that is no
+ * longer true. Stamping the clock moves the card out of the To-Do list and onto
+ * the timeline where the block is actually happening — which is also the answer
+ * to "what did I do this morning" tomorrow.
+ *
+ * ONLY where there is no time yet. A task you deliberately scheduled for 4 pm
+ * and started early keeps the 4 pm you gave it. That guard is also what makes
+ * this a FIRST-block behaviour without anyone counting blocks: after the first
+ * one the task is timed, so a second start finds nothing to set.
+ *
+ * `dueDate` rides along because an untimed task can be one you have not dated
+ * either — the backlog — and a time with no day is not a place on any timeline.
+ */
+export function startPatch(task, dayStr, now = new Date()) {
+  if (!task || task.time) return null;
+  const d = now instanceof Date ? now : new Date(now);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return { dueDate: dayStr, time: `${hh}:${mm}` };
+}
 
 /**
  * gapOffset — how far an opening gap's content is displaced from where it will
@@ -300,6 +359,10 @@ function GapHourSlot({ minute, label, onPick, styles, theme }) {
             <Text style={styles.hourLabel} numberOfLines={1}>{label}</Text>
             <View style={styles.compactGapHourLine} />
           </View>
+          {/* This free hour's bead. Hollow — it is a stop on the string with
+              nothing on it yet — but the same size as a task's, so the thread
+              reads as evenly beaded rather than lumpy where the day is busy. */}
+          <View pointerEvents="none" style={[styles.timelineBead, styles.timelineBeadOpen, { top: BEAD_TOP_RULE }]} />
           {/* The + is the hour's hint, so it sits in the middle of the HOUR —
               vertically centred in the slot, on the right. On the rule it read
               as belonging to the line rather than to the space under it. */}
@@ -325,6 +388,10 @@ function CompactGap({ row, open, onToggle, onPickHour, styles, theme, use24h, no
     () => (showNow ? gapNowOffset(row.from, row.to, nowMinutes, { hourHeight: GAP_HOUR_H, lineY: GAP_LINE_Y }) : null),
     [showNow, row.from, row.to, nowMinutes],
   );
+  // What the line MEASURES: how long since the task above it, how long until
+  // the one below. See `gapNowSpans` — the gap's own bounds are those two
+  // tasks, so there is nothing to look up.
+  const spans = useMemo(() => gapNowSpans(row, nowMinutes), [row, nowMinutes]);
 
   // ── The reserve lives on ONE thread ─────────────────────────────────────
   //
@@ -432,6 +499,33 @@ function CompactGap({ row, open, onToggle, onPickHour, styles, theme, use24h, no
             <View pointerEvents="none" style={[styles.gapNowLine, { top: nowY - 1 }]} testID={`gap-now-${row.from}`}>
               <View style={styles.nowDot} />
               <View style={styles.nowBar} />
+            </View>
+          )}
+          {/* What the line is MEASURING, at its right-hand end: the stretch
+              above it and the stretch below, one written over the line and one
+              under it. Placed that way round on purpose — each number sits in
+              the space it is counting, so the pair reads as a dimension on the
+              gap rather than as two readouts parked beside it.
+              The lower one is signed, because it is the only thing on the
+              schedule that runs the other way: everything else on the page is
+              time that has happened. Neither is drawn where there is no task to
+              measure to — see `gapNowSpans`. */}
+          {nowY != null && (spans.since != null || spans.until != null) && (
+            <View
+              pointerEvents="none"
+              style={[styles.gapNowMeter, { top: nowY - NOW_METER_LINE }]}
+              testID={`gap-now-meter-${row.from}`}
+            >
+              {/* An empty box rather than nothing, so the lower number still
+                  lands BELOW the line on a gap that has no task above it. */}
+              {spans.since != null
+                ? <Text style={[styles.gapNowSince, { color: theme.colors.textPrimary }]} numberOfLines={1}>{fmtDur(spans.since)}</Text>
+                : <View style={styles.gapNowBlank} />}
+              {spans.until != null && (
+                <Text style={[styles.gapNowUntil, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+                  {`-${fmtDur(spans.until)}`}
+                </Text>
+              )}
             </View>
           )}
         </Reanimated.View>
@@ -745,19 +839,17 @@ const getContributionColor = (count) => {
   return CONTRIBUTION_COLORS[4];
 };
 
-// Project colour palette — picked so distinct projects stay visually
-// distinguishable even when several appear as dots on the same day cell.
-const PROJECT_COLORS = [
-  '#4CAF50', '#2196F3', '#9C27B0', '#FF5722', '#00BCD4',
-  '#795548', '#E91E63', '#3F51B5', '#009688', '#FF9800',
-];
+// Fallback board colour, for a CalendarView mounted without the screen's
+// `boardColorOf`. Hashes the NAME into the shared palette — stable, but it
+// won't agree with the by-position assignment the rest of the app uses, so
+// the prop is what should be passed.
 const getProjectColor = (projectName) => {
-  if (!projectName) return PROJECT_COLORS[0];
+  if (!projectName) return BOARD_COLORS[0];
   let hash = 0;
   for (let i = 0; i < projectName.length; i++) {
     hash = projectName.charCodeAt(i) + ((hash << 5) - hash);
   }
-  return PROJECT_COLORS[Math.abs(hash) % PROJECT_COLORS.length];
+  return BOARD_COLORS[Math.abs(hash) % BOARD_COLORS.length];
 };
 
 const getProjectCount = (dayTasks) => {
@@ -766,13 +858,40 @@ const getProjectCount = (dayTasks) => {
   return projects.size;
 };
 
-const getPriorityColor = (priority, theme) => {
-  switch (priority) {
-    case 'high':   return theme.colors.accentError   || '#FF4444';
-    case 'medium': return theme.colors.accentWarning || '#FFAA00';
-    case 'low':    return theme.colors.accentSuccess || '#44AA44';
-    default:       return theme.colors.textTertiary;
-  }
+// (The priority→colour helper that used to live here is gone with the last
+// thing that called it: the month grid's pills. Priority is stated on the row
+// itself, where it doesn't cost the month its only colour dimension.)
+
+/**
+ * The colour of a task's pill in the month grid, in order:
+ *
+ *   1. an explicit per-item colour (`meta.color`) — someone chose it,
+ *   2. its BOARD's colour — what the month is scanned by,
+ *   3. the item-type default (events blue, birthdays pink) for the boardless
+ *      ones, which would otherwise all be the same grey,
+ *   4. a neutral.
+ *
+ * Board beats the type default deliberately: an event on the Church board is
+ * more usefully "Church" than "an event", and its card in the agenda says the
+ * same thing. Priority is no longer in this list at all — it's on the row
+ * itself, and colouring by it made most of the month one shade of orange.
+ *
+ * Exported for the tests: the precedence IS the feature.
+ */
+export const pillColor = (task, boardColor, theme) => {
+  const explicit = task?.meta?.color;
+  if (typeof explicit === 'string' && explicit) return explicit;
+  return boardTint(task, boardColor) || itemColorOf(task) || theme?.colors?.textTertiary || '#9E9E9E';
+};
+
+// The task's real board, or null: "none" is stored as absent, '', or the
+// legacy 'No Project' sentinel, and all three mean "no board colour".
+const boardOf = (t) => (t?.project && t.project !== 'No Project' ? t.project : null);
+
+/** A task's board colour, or null when it has no board. */
+export const boardTint = (task, boardColor) => {
+  const board = boardOf(task);
+  return board ? (boardColor?.(board) || null) : null;
 };
 
 // ── Shared task-matching predicates ──────────────────────────
@@ -1109,6 +1228,8 @@ const DayPane = React.memo(function DayPane({
   theme,
   styles,
   use24h,
+  // (boardName) => colour, for the beads and the cards' board tint.
+  boardColor,
   nowMinutes,
   pendingTasks,
   untimedCollapsed,
@@ -1318,6 +1439,16 @@ const DayPane = React.memo(function DayPane({
       .filter(Boolean);
   }, [memberOf, multiUser]);
 
+  // Start a focus block, and give an untimed task the minute you started it —
+  // see `startPatch` for what that means and when it applies. The clock is read
+  // HERE, at the press, rather than from `nowMinutes`, which only ticks on
+  // today's pane: "when the pomodoro started" has to be the real minute.
+  const startPomodoroNow = useCallback((task) => {
+    const patch = startPatch(task, dayStr);
+    if (patch) onUpdateTask?.(task.id, patch);
+    onStartPomodoro?.(task);
+  }, [onUpdateTask, onStartPomodoro, dayStr]);
+
   // ── The compact list is built NESTED, not mapped flat ──────────────────
   // Everything after a gap row is rendered as that gap's CHILDREN, so the one
   // transform that opens the gap carries the whole tail of the list down with
@@ -1346,15 +1477,33 @@ const DayPane = React.memo(function DayPane({
     const nowAt = (isViewingToday && span > 0 && nowMinutes >= seg.start && nowMinutes < seg.end)
       ? (nowMinutes - seg.start) / span
       : null;
+    // Wrapped so the bead can sit on the gutter rule beside the card. The
+    // wrapper adds no layout of its own (the card keeps its own margins) —
+    // it exists only to give the absolutely-positioned bead a box to be
+    // absolute WITHIN, at this row's own vertical position.
+    const beadColor = boardTint(task, boardColor);
     return (
+      <View key={task.id} style={styles.compactCardWrap}>
+        <View
+          pointerEvents="none"
+          style={[
+            styles.timelineBead,
+            { top: BEAD_TOP_CARD },
+            // A finished task's bead hollows out, the way its card fades: the
+            // string still runs through it, but it has stopped being a thing
+            // waiting to happen.
+            done
+              ? styles.timelineBeadOpen
+              : { backgroundColor: beadColor || theme.colors.accentSuccess, borderColor: beadColor || theme.colors.accentSuccess },
+          ]}
+        />
       <ScheduleCard
-        key={task.id}
         nowAt={nowAt}
         task={task}
         theme={theme}
         timeLabel={clockLabel(seg.start, use24h, { pad: false })}
         range={`${clockLabel(seg.start, use24h, { pad: false })} – ${clockLabel(seg.end, use24h, { pad: false })}`}
-        color={getProjectColor(task.project)}
+        color={beadColor}
         done={done}
         // A plain tap edits, a long press inspects — the order this list has
         // always used; the inspector is still the fastest read of a task.
@@ -1372,6 +1521,7 @@ const DayPane = React.memo(function DayPane({
         onTimePress={onTimePress}
         testID={`schedule-card-${task.id}`}
       />
+      </View>
     );
   };
 
@@ -1576,7 +1726,7 @@ const DayPane = React.memo(function DayPane({
                     theme={theme}
                     timeLabel="any time"
                     range=""
-                    color={task.project ? getProjectColor(task.project) : null}
+                    color={boardTint(task, boardColor)}
                     done={done}
                     onPress={onTaskInspect || onTaskPress}
                     onLongPress={onTaskLongPress}
@@ -1584,6 +1734,12 @@ const DayPane = React.memo(function DayPane({
                     people={rosterFor(task)}
                     onPeoplePress={onPeoplePress}
                     pomodoro={pomodoroFor?.(task.id)}
+                    // The To-Do rows get the START key too. They did not, which
+                    // made the one list you are most likely to start work FROM
+                    // the one list you could not start work from: "any time"
+                    // means you have not decided when, and beginning is the
+                    // decision.
+                    onStartPomodoro={startPomodoroNow}
                     onOpenPomodoro={onOpenPomodoro}
                     onTimePress={onTimePress}
                     testID={`todo-card-${task.id}`}
@@ -1637,7 +1793,7 @@ const DayPane = React.memo(function DayPane({
                       theme={theme}
                       timeLabel={task.dueDate ? task.dueDate.slice(5).replace('-', '/') : 'no date'}
                       range=""
-                      color={task.project ? getProjectColor(task.project) : null}
+                      color={boardTint(task, boardColor)}
                       done={done}
                       onPress={onTaskInspect || onTaskPress}
                       onLongPress={onTaskLongPress}
@@ -1645,17 +1801,25 @@ const DayPane = React.memo(function DayPane({
                       people={rosterFor(task)}
                       onPeoplePress={onPeoplePress}
                       pomodoro={pomodoroFor?.(task.id)}
+                      // Starting a block on a backlog task is the strongest
+                      // statement there is that it is not backlog any more, so
+                      // the key both dates it to the day you are looking at and
+                      // stamps the minute you began — `startPatch`. The
+                      // calendar key beside it still does the half of that you
+                      // may want on its own: file it for the day without
+                      // starting anything.
+                      onStartPomodoro={startPomodoroNow}
                       onOpenPomodoro={onOpenPomodoro}
                       trailing={!done ? (
                         <TouchableOpacity
                           onPressIn={() => tapHaptic()}
                           onPress={() => onUpdateTask?.(task.id, { dueDate: dayStr, time: null })}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          hitSlop={{ top: 9, bottom: 9, left: 9, right: 9 }}
                           accessibilityRole="button"
                           accessibilityLabel={isViewingToday ? 'Add this task to today' : 'Add this task to the selected day'}
                           style={styles.addTodayBtn}
                         >
-                          <Icon name="calendar-arrow-right" size={18} color={theme.colors.primary} />
+                          <Icon name="calendar-arrow-right" size={16} color={theme.colors.primary} />
                         </TouchableOpacity>
                       ) : undefined}
                     />
@@ -1734,6 +1898,8 @@ const MonthPage = React.memo(function MonthPage({
   theme,
   styles,
   onDatePress,
+  // (boardName) => colour, for the day-cell pills.
+  boardColor,
 }) {
   // Very faint hairline colour for the in-between grid segments (see the
   // per-cell top/left borders below). Kept low-alpha so it reads as a whisper
@@ -1851,14 +2017,17 @@ const MonthPage = React.memo(function MonthPage({
               </View>
 
               {showCalendarDayTasks ? (
-                // iOS-Calendar-style tiny list: each task on a solid color
-                // pill (the item's own color for events/birthdays, else its
-                // priority color) with white text so titles read easily
-                // against the grid on the phone.
+                // iOS-Calendar-style tiny list: each task on a solid colour
+                // pill with white text so titles read easily against the grid
+                // on the phone. The pill is its BOARD's colour — priority used
+                // to drive it, which made a month of medium-priority tasks one
+                // undifferentiated block of orange while the thing you
+                // actually scan a calendar for (which part of life is this?)
+                // went unsaid. See pillColor.
                 cell.tasks.length > 0 && (
                   <View style={styles.dayTaskList}>
                     {cell.tasks.slice(0, 3).map((t, idx) => {
-                      const c = itemColorOf(t) || getPriorityColor(t.priority, theme);
+                      const c = pillColor(t, boardColor, theme);
                       return (
                         <View
                           key={t.id || idx}
@@ -1868,7 +2037,11 @@ const MonthPage = React.memo(function MonthPage({
                             numberOfLines={1}
                             style={[
                               styles.dayTaskItem,
-                              { color: '#fff' },
+                              // Per-pill ink: white on the deep half of the
+                              // palette, near-black on the bright half. A
+                              // hardcoded white was what kept orange and cyan
+                              // out of the palette entirely.
+                              { color: inkOn(c) },
                               (t.completed || isOccurrenceCompleted(t, cell.dateStr)) && styles.dayTaskItemDone,
                             ]}
                           >
@@ -2009,6 +2182,11 @@ export const CalendarView = ({
   onDeleteTask,
   // The board names, for the inspector's board keys.
   projects = [],
+  // (boardName) => colour. The SCREEN's board palette — the one the board
+  // rail, the header key and the agenda's cards all read. Optional: without
+  // it the module's own hash-of-the-name fallback applies, which is what this
+  // file used everywhere before and is only correct in isolation.
+  boardColorOf,
   refreshing,
   onRefresh,
   onDateChange,
@@ -2069,6 +2247,14 @@ export const CalendarView = ({
   // instant a snap is committed, so a second tap mid-flight still computes the
   // right direction. true = docked.
   const dockedRef = useRef(true);
+  // The one board-colour answer this whole page uses. Stable across renders
+  // (the memoized month pages and day panes take it as a prop and compare
+  // props by identity), and falling back to the module's hash palette only
+  // when the screen didn't hand one down.
+  const boardColor = useCallback(
+    (name) => (boardColorOf ? boardColorOf(name) : getProjectColor(name)),
+    [boardColorOf],
+  );
   // Tell the parent when the planner opens/closes (raised = !docked) so it
   // can lock the calendar⇄list pager while the day schedule is up.
   //
@@ -2957,9 +3143,10 @@ export const CalendarView = ({
         theme={theme}
         styles={styles}
         onDatePress={handleDatePress}
+        boardColor={boardColor}
       />
     );
-  }, [buildCalendarDataFor, handleDatePress, theme, styles, monthH, cellH, showCalendarDayTasks, selectedStr, todayStr]);
+  }, [buildCalendarDataFor, handleDatePress, theme, styles, monthH, cellH, showCalendarDayTasks, selectedStr, todayStr, boardColor]);
 
   // Sheet-header title + subtitle for the selected date.
   const { subtitle: taskSubtitle } = useMemo(() => {
@@ -3132,6 +3319,7 @@ export const CalendarView = ({
       theme={sheetTheme}
       styles={sheetStyles}
       use24h={use24h}
+      boardColor={boardColor}
       nowMinutes={nowMinutes}
       pendingTasks={pendingTasks}
       untimedCollapsed={untimedCollapsed}
@@ -3175,7 +3363,7 @@ export const CalendarView = ({
     />
   ), [
     selectedStr, tasks, getDayTasks, todayStr,
-    multiUser, sheetTheme, sheetStyles, use24h, nowMinutes, pendingTasks, untimedCollapsed,
+    multiUser, sheetTheme, sheetStyles, use24h, boardColor, nowMinutes, pendingTasks, untimedCollapsed,
     toggleUntimedCollapsed, scheduleCollapsed, toggleScheduleCollapsed,
     onTaskPress, openInspector, onTaskLongPress, onToggleComplete, onStartPomodoro, onOpenPomodoro, onUpdateTask, openTaskTimeEditor,
     onOwnerPress, memberOf, onPeoplePress, pomodoroFor, openAddTaskAt,
@@ -4438,11 +4626,15 @@ const createStyles = (theme) => StyleSheet.create({
   // Round "add to today's To-Do" button sitting as the right accessory on a
   // Pending TimelineTaskRow card. Reads as a tappable control (bordered surface
   // disc) without competing with the card's title.
+  // Sized to the FACES beside it (PERSON is 22), not to itself: the bottom row
+  // is as tall as its tallest child, and at 34 this one key was making every
+  // Pending card taller than every other card in the app. The 44 pt target
+  // comes from hitSlop, as it does on every other small control here.
   addTodayBtn: {
     marginLeft: 10,
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.surface,
@@ -4643,8 +4835,32 @@ const createStyles = (theme) => StyleSheet.create({
     top: 0,
     bottom: 0,
     left: HOUR_LABEL_WIDTH,
-    width: StyleSheet.hairlineWidth,
+    // Thicker than a hairline now that beads are strung on it: a hairline
+    // between two 11pt blobs reads as a break in the thread rather than the
+    // thread itself. Still quiet — it is 1.5pt of border ink, not a rule.
+    width: 1.5,
+    borderRadius: 1,
     backgroundColor: theme.colors.border,
+  },
+  // A bead on that thread. Positioned per row (`top` inline), centred on the
+  // rule's x so the line passes behind it and continues out the other side.
+  compactCardWrap: { position: 'relative' },
+  timelineBead: {
+    position: 'absolute',
+    left: BEAD_LEFT,
+    width: BEAD,
+    height: BEAD,
+    borderRadius: BEAD / 2,
+    borderWidth: 2,
+    // Over the rule, never under it.
+    zIndex: 3,
+  },
+  // Still to happen, or nothing here yet: the page's own fill so the thread is
+  // hidden BEHIND the bead rather than showing through it, with the border
+  // carrying the shape.
+  timelineBeadOpen: {
+    backgroundColor: theme.colors.background,
+    borderColor: theme.colors.borderStrong || theme.colors.border,
   },
   hourLabel: {
     width: HOUR_LABEL_WIDTH,
@@ -4685,6 +4901,40 @@ const createStyles = (theme) => StyleSheet.create({
     alignItems: 'center',
     height: 2,
     zIndex: 2,
+  },
+  // The now-line's readout, pinned to its right-hand end. `top` is set per
+  // render to `nowY - NOW_METER_LINE`, which puts the first line's box directly
+  // ABOVE the line and the second's directly below it.
+  //
+  // Inset past the hour slots' own "+" (right: 12, ~14 wide) so the two never
+  // sit on top of each other, and clear of the line itself — the numbers are
+  // above and below the 2 pt band, never across it, so nothing is struck
+  // through.
+  gapNowMeter: {
+    position: 'absolute',
+    right: 34,
+    alignItems: 'flex-end',
+    zIndex: 3,
+  },
+  gapNowBlank: { height: NOW_METER_LINE },
+  gapNowSince: {
+    height: NOW_METER_LINE,
+    lineHeight: NOW_METER_LINE,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    fontVariant: ['tabular-nums'],
+  },
+  gapNowUntil: {
+    height: NOW_METER_LINE,
+    lineHeight: NOW_METER_LINE,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    fontVariant: ['tabular-nums'],
+    // Quieter than the elapsed number above it: one has happened, the other is
+    // a forecast, and the minus is doing the saying.
+    opacity: 0.55,
   },
   nowDot: {
     width: 8,

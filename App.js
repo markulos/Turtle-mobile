@@ -54,6 +54,7 @@ import { MusicPlayerProvider } from './context/MusicPlayerContext';
 import { ClaudeQueueProvider } from './context/ClaudeQueueContext';
 import { CommandBusProvider } from './context/CommandBusContext';
 import { OpenTargetProvider } from './context/OpenTargetContext';
+import { ChromeProvider, useChrome } from './context/ChromeContext';
 import { CelebrationProvider } from './context/CelebrationContext';
 import { DownloadsProvider } from './context/DownloadsContext';
 import { OfflineMediaProvider } from './context/OfflineMediaContext';
@@ -109,6 +110,10 @@ function TabNavigator() {
   // need no adjustment.
   const tabCount = hideVaultButton ? 5 : 6;
   const [consoleOpen, setConsoleOpen] = useState(false);
+  // An immersive page (the PDF reader) asks for the dock to go. `display:none`
+  // is the only thing that actually removes it — the bar is the navigator's
+  // own child and paints above every screen, so a page cannot cover it.
+  const { dockHidden } = useChrome();
 
   return (
     <>
@@ -231,6 +236,10 @@ function TabNavigator() {
           // the sliding chip reads the same geometry from tabBarLayout, so the
           // two can't disagree about where a slot sits.
           paddingHorizontal: clusterPadding(windowWidth - CARD_MARGIN_H * 2, tabCount),
+          // Last, so it wins over everything above: the whole card (blur
+          // background included) leaves while an immersive page is up, and
+          // comes back the moment that page releases its hold.
+          ...(dockHidden ? { display: 'none' } : null),
         },
         // Force each tab button to FILL the bar's inner box and centre its glyph
         // in it. Without this the icons are only as centred as v7's own item
@@ -485,6 +494,11 @@ export default function App() {
                     <ClaudeQueueProvider>
                       <CommandBusProvider>
                       <OpenTargetProvider>
+                      {/* Lets an immersive page (the PDF reader) take the
+                          floating dock away while it is up — the dock is the
+                          navigator's, drawn above every screen, so it cannot
+                          be covered from inside one. See ChromeContext. */}
+                      <ChromeProvider>
                        {/* Confetti + "+N pts" flourish on task / pomodoro
                            completion, mirroring the desktop HUD. Wraps the app
                            so the overlay floats above every screen. */}
@@ -528,6 +542,7 @@ export default function App() {
                             into a to-do carrying a ready-to-send fix prompt. */}
                         <GestureProbeOverlay />
                        </CelebrationProvider>
+                      </ChromeProvider>
                       </OpenTargetProvider>
                       </CommandBusProvider>
                     </ClaudeQueueProvider>

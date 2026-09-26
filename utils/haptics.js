@@ -40,6 +40,24 @@ export const tapHaptic = () => {
   try { Vibration.vibrate(6); } catch (e) { /* no vibrator — ignore */ }
 };
 
+// Scrub tick — the crisp, shortest SELECTION click, for crossing a boundary
+// while a finger is already moving: the agenda's day markers as the timeline
+// scrolls past the pointer. Deliberately NOT tapHaptic — a soft cushioned
+// impact is tuned to fire once per tap, and repeated every few hundred
+// milliseconds during a scroll it smears into a rumble, where the selection
+// tick stays legible as separate ticks.
+export const selectionHaptic = () => {
+  try {
+    if (_Haptics?.selectionAsync) { _Haptics.selectionAsync(); return; }
+    if (_Haptics?.impactAsync && _Haptics?.ImpactFeedbackStyle?.Light != null) {
+      _Haptics.impactAsync(_Haptics.ImpactFeedbackStyle.Light);
+      return;
+    }
+  } catch (e) { /* native module absent — fall through to Vibration */ }
+  // Shorter than tapHaptic's 6ms: this one repeats, so it has to stay light.
+  try { Vibration.vibrate(4); } catch (e) { /* no vibrator — ignore */ }
+};
+
 // Impact thump — for weightier primary actions (save, send, unlock, FAB).
 // `style` ∈ 'light' | 'medium' | 'heavy'.
 export const impactHaptic = (style = 'light') => {

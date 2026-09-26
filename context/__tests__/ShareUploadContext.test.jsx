@@ -16,6 +16,7 @@ const mockWriteAsStringAsync = jest.fn();
 const mockReadDirectoryAsync = jest.fn();
 const mockGetFreeDiskStorageAsync = jest.fn();
 const mockStreamMultipartUpload = jest.fn();
+const mockChunkedUpload = jest.fn();
 const mockNotifyHaptic = jest.fn();
 const mockImpactHaptic = jest.fn();
 const mockRandomUUID = jest.fn();
@@ -59,6 +60,12 @@ jest.mock('expo-file-system/legacy', () => ({
 jest.mock('../../services/streamMultipartUpload', () => ({
   streamMultipartUpload: (...args) => mockStreamMultipartUpload(...args),
 }), { virtual: true });
+// The real threshold, a stubbed transport: which of the two uploaders a file
+// gets is the thing under test, and the line has to be the shipped one.
+jest.mock('../../services/chunkedUpload', () => ({
+  ...jest.requireActual('../../services/chunkedUpload'),
+  chunkedUpload: (...args) => mockChunkedUpload(...args),
+}));
 jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn().mockResolvedValue(null),
   setItem: jest.fn().mockResolvedValue(undefined),
@@ -348,6 +355,106 @@ describe('ShareTargetScreen Audio destination', () => {
     await act(async () => {
       latestShareUpload.dismissJob(latestShareUpload.jobs[0].id);
     });
+  });
+});
+
+/**
+ * Creating a board from the share sheet. The name comes from the search box;
+ * WHICH KIND of board gets made depends on what is being filed, and that is the
+ * part worth pinning down:
+ *
+ *   photos  → an album, because the photo vault lists albums (and only
+ *             registered ones). A tag board tagged the photos with a name the
+ *             vault would never show, so the board vanished the moment it was
+ *             made.
+ *   words   → a tag, because the note a text/link share writes is only written
+ *             for a tag board; an album would drop the caption.
+ */
+describe('ShareTargetScreen creating a new board', () => {
+  beforeEach(() => {
+    latestShareUpload = null;
+    mockAuth = {
+      isAuthenticated: true,
+      token: 'token-7',
+      authIdentity: 'sub:account-a',
+      authGeneration: 'generation-a',
+    };
+    jest.clearAllMocks();
+    mockRandomUUID.mockReturnValue('client-import-new-board');
+    mockStreamMultipartUpload.mockReset();
+    // The image path demands the persisted-row echo, not just success.
+    mockStreamMultipartUpload.mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({ success: true, mediaIds: ['media-1'] }),
+    });
+    mockGetInfoAsync.mockResolvedValue({ exists: true });
+    mockMakeDirectoryAsync.mockResolvedValue(undefined);
+    mockCopyAsync.mockResolvedValue(undefined);
+    mockDeleteAsync.mockResolvedValue(undefined);
+    mockReadAsStringAsync.mockResolvedValue('base64-image');
+    mockWriteAsStringAsync.mockResolvedValue(undefined);
+    mockReadDirectoryAsync.mockResolvedValue([]);
+    mockGetFreeDiskStorageAsync.mockResolvedValue(10 * 1024 * 1024 * 1024);
+  });
+
+  const photo = { path: 'file:///os/wall.png', fileName: 'wall.png', mimeType: 'image/png' };
+
+  const nameANewBoard = async (view, name) => {
+    await act(async () => {
+      fireEvent.changeText(view.getByPlaceholderText('Search boards, or type a new name'), name);
+    });
+    fireEvent.press(view.getByTestId('share-create-board'));
+  };
+
+  /** The board the multipart image upload actually carried. */
+  const uploadedBoard = () => {
+    const call = mockStreamMultipartUpload.mock.calls.at(-1);
+    return JSON.parse(call[0].parameters.board);
+  };
+
+  test('a photo share makes the new board an ALBUM', async () => {
+    const view = await renderTarget({ files: [photo] });
+
+    await nameANewBoard(view, 'Cabin build');
+
+    await waitFor(() => expect(mockStreamMultipartUpload).toHaveBeenCalled());
+    expect(uploadedBoard()).toEqual({ kind: 'album', name: 'Cabin build', create: true });
+    expect(view.onDismiss).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(latestShareUpload.jobs[0]?.status).toBe('success'));
+    await act(async () => { latestShareUpload.dismissJob(latestShareUpload.jobs[0].id); });
+  });
+
+  test('the row says it is making an album, not a board', async () => {
+    const view = await renderTarget({ files: [photo] });
+
+    await act(async () => {
+      fireEvent.changeText(view.getByPlaceholderText('Search boards, or type a new name'), 'Cabin build');
+    });
+
+    expect(view.getByText('New album · the photo lands here')).toBeTruthy();
+  });
+
+  test('a photo shared WITH a caption still makes a tag, so the caption is kept', async () => {
+    const view = await renderTarget({ files: [photo], text: 'the south wall, framed' });
+
+    await nameANewBoard(view, 'Cabin build');
+
+    await waitFor(() => expect(mockStreamMultipartUpload).toHaveBeenCalled());
+    expect(uploadedBoard()).toEqual({ kind: 'tag', name: 'Cabin build', create: true });
+    await waitFor(() => expect(latestShareUpload.jobs[0]?.status).toBe('success'));
+    await act(async () => { latestShareUpload.dismissJob(latestShareUpload.jobs[0].id); });
+  });
+
+  test('a link share makes a tag', async () => {
+    mockApiPost.mockResolvedValue({ success: true });
+    const view = await renderTarget({ webUrl: 'https://example.com/an-article' });
+
+    await nameANewBoard(view, 'Winter reading');
+
+    await waitFor(() => expect(mockApiPost).toHaveBeenCalledWith('/share', expect.objectContaining({
+      board: { kind: 'tag', name: 'Winter reading', create: true },
+    })));
+    await act(async () => { latestShareUpload.dismissJob(latestShareUpload.jobs[0].id); });
   });
 });
 
@@ -736,6 +843,7 @@ describe('ShareUploadProvider file imports', () => {
     jest.clearAllMocks();
     mockRandomUUID.mockReturnValue('client-import-file');
     mockStreamMultipartUpload.mockReset();
+    mockChunkedUpload.mockReset();
     mockGetInfoAsync.mockResolvedValue({ exists: true });
     mockMakeDirectoryAsync.mockResolvedValue(undefined);
     mockCopyAsync.mockResolvedValue(undefined);
@@ -780,6 +888,76 @@ describe('ShareUploadProvider file imports', () => {
     expect(JSON.parse(manifestWrites[1][1]).media[0]).toEqual(
       expect.objectContaining({ filename: 'notes.pdf', sent: true })
     );
+    await act(async () => {
+      latestShareUpload.dismissJob(id);
+    });
+  });
+
+  /**
+   * The 2%-stall fix, on this door. A 176 MB PDF filed into a folder is what
+   * the anomaly note was about: one body that size never reaches the pond, so
+   * over the threshold the file has to go up in parts instead. Both uploaders
+   * are stubbed here, so the assertion is purely about WHICH one is chosen.
+   */
+  test('enqueueFileShare sends a document too big for one body in chunks', async () => {
+    mockGetInfoAsync.mockResolvedValue({ exists: true, size: 176 * 1024 * 1024 });
+    mockChunkedUpload.mockResolvedValueOnce({ success: true });
+    await render(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    let id;
+    await act(async () => {
+      id = await latestShareUpload.enqueueFileShare({
+        mediaFiles: [notesPdf],
+        folderId: 'fld_aaaaaaaaaaaa',
+        folderName: 'Recipes',
+      });
+    });
+
+    await waitFor(() =>
+      expect(latestShareUpload.jobs.find((job) => job.id === id)?.status).toBe('done')
+    );
+    expect(mockStreamMultipartUpload).not.toHaveBeenCalled();
+    expect(mockChunkedUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: 'https://pond.example/api',
+        fileSize: 176 * 1024 * 1024,
+        originalName: 'notes.pdf',
+        mimeType: 'application/pdf',
+        parameters: expect.objectContaining({ folderId: 'fld_aaaaaaaaaaaa' }),
+      })
+    );
+    await act(async () => {
+      latestShareUpload.dismissJob(id);
+    });
+  });
+
+  test('a document under the threshold still goes up in one request', async () => {
+    mockGetInfoAsync.mockResolvedValue({ exists: true, size: 2 * 1024 * 1024 });
+    mockStreamMultipartUpload.mockResolvedValueOnce({ status: 200 });
+    await render(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    let id;
+    await act(async () => {
+      id = await latestShareUpload.enqueueFileShare({
+        mediaFiles: [notesPdf],
+        folderId: 'fld_aaaaaaaaaaaa',
+        folderName: 'Recipes',
+      });
+    });
+
+    await waitFor(() =>
+      expect(latestShareUpload.jobs.find((job) => job.id === id)?.status).toBe('done')
+    );
+    expect(mockChunkedUpload).not.toHaveBeenCalled();
+    expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1);
     await act(async () => {
       latestShareUpload.dismissJob(id);
     });
@@ -835,6 +1013,63 @@ describe('ShareUploadProvider file imports', () => {
     expect(parameters).not.toHaveProperty('folderId');
     await act(async () => {
       latestShareUpload.dismissJob(id);
+    });
+  });
+
+  // The folder page's "Add from phone storage" row picks out of the OS file
+  // browser, where a photo sits next to a PDF. Without includeMedia the photo
+  // is dropped on the floor and the batch looks half-broken; with it, the
+  // folder gets what a folder already shows (documents + media), and audio is
+  // still left to the Music vault's own import.
+  test('enqueueFileShare with includeMedia files photos alongside documents but still refuses audio', async () => {
+    mockStreamMultipartUpload.mockResolvedValue({ status: 200 });
+    await render(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    const holidayJpg = { path: 'file:///os/holiday.jpg', fileName: 'holiday.jpg', mimeType: 'image/jpeg' };
+    const songMp3 = { path: 'file:///os/song.mp3', fileName: 'song.mp3', mimeType: 'audio/mpeg' };
+
+    let id;
+    await act(async () => {
+      id = await latestShareUpload.enqueueFileShare({
+        mediaFiles: [notesPdf, holidayJpg, songMp3],
+        folderId: 'fld_aaaaaaaaaaaa',
+        folderName: 'Recipes',
+        includeMedia: true,
+      });
+    });
+
+    await waitFor(() =>
+      expect(latestShareUpload.jobs.find((job) => job.id === id)?.status).toBe('done')
+    );
+    expect(latestShareUpload.jobs.find((job) => job.id === id)?.total).toBe(2);
+    expect(mockStreamMultipartUpload.mock.calls.map(([call]) => call.parameters.originalName))
+      .toEqual(['notes.pdf', 'holiday.jpg']);
+    await act(async () => {
+      latestShareUpload.dismissJob(id);
+    });
+  });
+
+  // Without the flag the filter is unchanged, so the share-extension path that
+  // has always meant "documents" cannot start filing images behind its back.
+  test('enqueueFileShare without includeMedia still rejects a photo-only batch', async () => {
+    await render(
+      <ShareUploadProvider>
+        <Probe />
+      </ShareUploadProvider>
+    );
+
+    await act(async () => {
+      await expect(
+        latestShareUpload.enqueueFileShare({
+          mediaFiles: [{ path: 'file:///os/holiday.jpg', fileName: 'holiday.jpg', mimeType: 'image/jpeg' }],
+          folderId: 'fld_aaaaaaaaaaaa',
+          folderName: 'Recipes',
+        })
+      ).rejects.toThrow('No document was shared.');
     });
   });
 });

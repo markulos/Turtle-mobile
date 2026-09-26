@@ -222,3 +222,65 @@ describe('the stats page', () => {
     expect(screen.getByTestId('stats-boards')).toBeTruthy();
   });
 });
+
+// ── Embedded as the Boards tab ──────────────────────────────────────────────
+// The overview stopped being a page you open from a tray and became the third
+// view in the Tasks pager. Embedded it has no shell and no header of its own —
+// the pager's segmented control IS the header, and the keys that would sit
+// here (search, filters) live on the page around it.
+describe('embedded in the pager', () => {
+  test('it drops its own header: no title, no back key', async () => {
+    await render(<OverviewPage {...baseProps({ embedded: true })} />);
+    expect(screen.queryByText('Overview')).toBeNull();
+    expect(screen.queryByTestId('overview-stats-key')).toBeNull();
+    expect(screen.queryByTestId('overview-filters')).toBeNull();
+    // …while the page itself is all still there.
+    expect(screen.getByTestId('overview-tile-todo')).toBeTruthy();
+    expect(screen.getByTestId('overview-board-Admin')).toBeTruthy();
+  });
+
+  test('it still keeps its header when it owns the whole screen', async () => {
+    await render(<OverviewPage {...baseProps()} />);
+    expect(screen.getByText('Overview')).toBeTruthy();
+    expect(screen.getByTestId('overview-filters')).toBeTruthy();
+  });
+
+  // The search narrows the BOARD list only. The tiles above are the whole
+  // picture and stay whole — which is what makes it obvious you are filtering
+  // a list rather than looking at a smaller pond.
+  test('the query narrows the boards, never the totals', async () => {
+    const props = baseProps({ embedded: true, boards: ['Admin', 'Garden'], query: 'gard' });
+    await render(<OverviewPage {...props} />);
+    expect(screen.queryByTestId('overview-board-Admin')).toBeNull();
+    expect(screen.getByTestId('overview-board-Garden')).toBeTruthy();
+    expect(screen.getByTestId('overview-tile-todo')).toBeTruthy();
+  });
+
+  test('an empty query leaves every board in place', async () => {
+    await render(<OverviewPage {...baseProps({ embedded: true, boards: ['Admin', 'Garden'], query: '   ' })} />);
+    expect(screen.getByTestId('overview-board-Admin')).toBeTruthy();
+    expect(screen.getByTestId('overview-board-Garden')).toBeTruthy();
+  });
+
+  // The pager has to stop paging while a drill-down is up, or a left-edge
+  // back-swipe and a page-swipe become the same gesture and the wrong one
+  // wins. Reported from one effect, so no open/close site can forget.
+  test('it reports when a drill-down opens and closes', async () => {
+    const onDrillChange = jest.fn();
+    await render(<OverviewPage {...baseProps({ embedded: true, onDrillChange })} />);
+    expect(onDrillChange).toHaveBeenLastCalledWith(false);
+
+    await act(async () => { fireEvent.press(screen.getByTestId('overview-tile-late')); });
+    expect(onDrillChange).toHaveBeenLastCalledWith(true);
+  });
+
+  test('it releases the pager when it unmounts mid-drill', async () => {
+    const onDrillChange = jest.fn();
+    const view = await render(<OverviewPage {...baseProps({ embedded: true, onDrillChange })} />);
+    await act(async () => { fireEvent.press(screen.getByTestId('overview-tile-late')); });
+    expect(onDrillChange).toHaveBeenLastCalledWith(true);
+    // Swiping away to another tab must not leave the pager locked forever.
+    await act(async () => { view.unmount(); });
+    expect(onDrillChange).toHaveBeenLastCalledWith(false);
+  });
+});

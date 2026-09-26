@@ -24,7 +24,7 @@
  * batches use one upload loop.
  */
 import React, { createContext, useContext, useRef, useState, useEffect, useCallback, useMemo } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
@@ -34,9 +34,11 @@ import { useServer } from './ServerContext';
 import { useAuth } from './AuthContext';
 import { notifyUploadComplete, updateUploadProgress, clearUploadProgress } from '../services/uploadNotify';
 import { streamMultipartUpload } from '../services/streamMultipartUpload';
+import { chunkedUpload, CHUNKED_UPLOAD_THRESHOLD_BYTES } from '../services/chunkedUpload';
 import { reportUploadIssue } from '../services/uploadDiagnostics';
 import { registerUploadWorker, scheduleUploadDrain, cancelUploadDrain, registerAutoUploadScanner } from '../services/backgroundUploadTask';
 import { subscribeAutoUpload, runAutoUpload } from '../services/cameraRollAutoUpload';
+import { deletionPlan, undeletableReason } from '../utils/originalDeletion';
 import { notifyHaptic } from '../utils/haptics';
 
 // Split into three contexts so a consumer only re-renders on the slice it
@@ -65,8 +67,53 @@ const VIDEO_MIME = {
   '3gp': 'video/3gpp', wmv: 'video/x-ms-wmv', flv: 'video/x-flv',
 };
 
+// The server types an upload from its Content-Type first and the extension
+// second, so a document that arrives as application/octet-stream still lands
+// correctly — but naming it properly is what gets a .md typed as text rather
+// than as an unknown blob.
+const DOC_MIME = {
+  pdf: 'application/pdf',
+  txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', tsv: 'text/tab-separated-values',
+  json: 'application/json', xml: 'application/xml', log: 'text/plain',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  rtf: 'application/rtf', zip: 'application/zip',
+  odt: 'application/vnd.oasis.opendocument.text',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  odp: 'application/vnd.oasis.opendocument.presentation',
+};
+
 // Terminal per-item states — anything here counts toward batch progress.
 const TERMINAL = new Set(['uploaded', 'duplicate', 'failed', 'missing']);
+
+/**
+ * Throw away OUR copy of a file that is now safely in the vault.
+ *
+ * The document picker never hands over the user's file — it hands over a copy,
+ * which is then staged into documentDirectory so an interrupted batch can
+ * resume (systemFilePick). Once the item is uploaded (or was a duplicate the
+ * pond already had), that copy is dead weight: documentDirectory is precisely
+ * the place iOS will NOT reclaim, so a 400 MB video would otherwise sit there
+ * until the seven-day sweep.
+ *
+ * Deliberately not part of the delete OFFER: no permission is involved and no
+ * file of the user's disappears, so there is nothing to ask about. Only
+ * called once an item is terminal-and-safe — a staged file whose upload is
+ * still pending is the thing the resume depends on.
+ *
+ * Fire-and-forget, and the path is cleared either way: a copy we failed to
+ * delete is the sweep's problem, and retrying it on every publish is not.
+ */
+function reclaimStaged(item) {
+  const path = item?.stagedPath;
+  if (!path) return;
+  item.stagedPath = null;
+  FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+}
 
 // ── Background uploads, phase 1 (docs/superpowers/plans/2026-09-09-background-uploads.md)
 // Every upload task rides an iOS background NSURLSession (expo-file-system's
@@ -215,8 +262,18 @@ export function VaultUploadProvider({ children }) {
       duplicates: c.duplicate,
       failed: c.failed + c.missing,
       // Originals we can offer to delete: everything now safely in the vault —
-      // the freshly uploaded ones AND the skipped duplicates (already there).
-      deletableCount: batch.items.filter((it) => (it.status === 'uploaded' || it.status === 'duplicate') && it.assetId).length,
+      // the freshly uploaded ones AND the skipped duplicates (already there) —
+      // that the OS will actually let us remove. Camera-roll assets always;
+      // Android SAF documents too; an iOS document never, because the picker
+      // gave us a copy rather than the user's file (utils/originalDeletion).
+      // This count is what the button says, so it must be exactly the number
+      // of the USER's files that will disappear — our own staging copies are
+      // reclaimed silently and are deliberately not in it.
+      deletableCount: deletionPlan(batch.items, { platform: Platform.OS }).count,
+      // ...and when that count is zero but there WERE device originals in the
+      // batch, why. Without this the card just ends, and "we're not allowed
+      // to offer this" is indistinguishable from "the button is broken".
+      deleteHint: undeletableReason(batch.items, { platform: Platform.OS }),
       finishedAt: batch.finishedAt || null,
     });
     driveProgressNotification();
@@ -441,6 +498,7 @@ export function VaultUploadProvider({ children }) {
             toCheck[i].status = 'duplicate';
             toCheck[i].dupOf = r.id || null;
             toCheck[i].meta = null; // terminal — release immediately
+            reclaimStaged(toCheck[i]);
           }
         });
         const dupCount = results.filter((r) => r?.duplicate).length;
@@ -471,15 +529,22 @@ export function VaultUploadProvider({ children }) {
           if (batch.folderId) parameters.folderId = batch.folderId;
 
           const originalFilename = item.fileName || String(meta.uri).split('/').pop() || 'file';
-          const isVideo = item.type === 'video' || /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|3gp)$/i.test(originalFilename);
-          const isHeic = /\.heic$/i.test(originalFilename) || /\.heif$/i.test(originalFilename);
+          const isDocument = item.type === 'document';
+          const isVideo = !isDocument && (item.type === 'video' || /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|3gp)$/i.test(originalFilename));
+          const isHeic = !isDocument && (/\.heic$/i.test(originalFilename) || /\.heif$/i.test(originalFilename));
 
           let mediaUri = meta.uri;
           let mediaName = originalFilename;
           const fileExt = (originalFilename.split('.').pop() || '').toLowerCase();
-          let mediaType = isVideo
-            ? (item.mimeType || VIDEO_MIME[fileExt] || 'video/mp4')
-            : 'image/jpeg';
+          // A document carries its OWN type. The old `: 'image/jpeg'` fallback
+          // was fine while everything here was a photo or a video; a PDF sent
+          // as image/jpeg is typed by the server from its Content-Type and
+          // lands as a broken image.
+          let mediaType = isDocument
+            ? (item.mimeType || DOC_MIME[fileExt] || 'application/octet-stream')
+            : isVideo
+              ? (item.mimeType || VIDEO_MIME[fileExt] || 'video/mp4')
+              : 'image/jpeg';
 
           if (isVideo) {
             // A streamed upload carries ONE file; the small captured-frame
@@ -533,7 +598,41 @@ export function VaultUploadProvider({ children }) {
           const onBatchAbort = () => itemAbort.abort();
           batch.abortController.signal.addEventListener('abort', onBatchAbort, { once: true });
           itemAbortRef.current.set(item.key, itemAbort);
+          // Big files go up in CHUNKS. A single large body does not survive the
+          // path between a phone on mobile data and the pond — it dies before
+          // the server ever sees the request, identically on every retry, so
+          // retrying the whole file is just three trips into the same wall.
+          // Parts get through, and an interrupted one costs a chunk instead of
+          // 86 MB. Small files keep the one-request path: it is fewer round
+          // trips and it has never been the thing that fails.
+          const useChunked = (meta.size || 0) > CHUNKED_UPLOAD_THRESHOLD_BYTES;
+          const reportAnomaly = (a) => reportUploadIssue(
+            // The attempt is part of the KIND, not just the details, because
+            // reportUploadIssue dedupes by kind for the session — without it
+            // only attempt 1 was ever filed, and "did all three die at the
+            // same byte count?" is exactly the question that separates a
+            // flaky link from something in the path refusing a body this
+            // big. Capped by the reporter's own per-session ceiling.
+            `${a.phase}-attempt-${a.attempt ?? 1}`,
+            { ...a, item: mediaName, sizeBytes: meta.size || null, chunked: useChunked },
+            diagCtx(),
+          );
           try {
+            if (useChunked) {
+              await chunkedUpload({
+                baseUrl: base,
+                fileUri: mediaUri,
+                fileSize: meta.size || 0,
+                originalName: mediaName,
+                mimeType: mediaType,
+                parameters,
+                token: batch.token,
+                label: mediaName,
+                onProgress,
+                signal: itemAbort.signal,
+                onAnomaly: reportAnomaly,
+              });
+            } else {
             await streamMultipartUpload({
               url: uploadEndpoint,
               fileUri: mediaUri,
@@ -543,8 +642,16 @@ export function VaultUploadProvider({ children }) {
               label: mediaName,
               onProgress,
               signal: itemAbort.signal,
-              onAnomaly: (a) => reportUploadIssue(`watchdog-${a.phase}`, { ...a, item: mediaName }, diagCtx()),
+              // The attempt is part of the KIND, not just the details, because
+              // reportUploadIssue dedupes by kind for the session — without it
+              // only attempt 1 was ever filed, and "did all three die at the
+              // same byte count?" is exactly the question that separates a
+              // flaky link from something in the path refusing a body this
+              // big. Three notes for a bad file, capped by the reporter's own
+              // per-session ceiling.
+              onAnomaly: (a) => reportAnomaly({ ...a, phase: `watchdog-${a.phase}` }),
             });
+            }
           } finally {
             batch.abortController.signal.removeEventListener('abort', onBatchAbort);
             itemAbortRef.current.delete(item.key);
@@ -552,6 +659,7 @@ export function VaultUploadProvider({ children }) {
           if (!isCurrentBatch()) return;
           item.status = 'uploaded';
           item.meta = null; // terminal — release the retained graph as we go
+          reclaimStaged(item);
         } catch (error) {
           if (!isCurrentBatch()) return;
           const verdict = item.reconcile;
@@ -560,12 +668,23 @@ export function VaultUploadProvider({ children }) {
             // The pond already has it; the task's completion never came back.
             item.status = 'uploaded';
             item.meta = null;
+            reclaimStaged(item);
           } else if (verdict === 'retry' && (item.retries || 0) < MAX_ITEM_RETRIES) {
             item.retries = (item.retries || 0) + 1;
             item.status = 'pending'; // the pool picks it up again
           } else {
             console.error(`[VaultUpload] Failed ${item.fileName || item.key}:`, error.message);
-            reportUploadIssue('item-failed', { item: item.fileName || item.key, error: String(error?.message || error), retries: item.retries || 0 }, diagCtx());
+            // `retries` here is BATCH-level re-queues, not the uploader's own
+            // three attempts — reading it as "it never retried" is a trap the
+            // last investigation fell into, so it is named for what it is and
+            // the size sits next to it.
+            reportUploadIssue('item-failed', {
+              item: item.fileName || item.key,
+              error: String(error?.message || error),
+              requeues: item.retries || 0,
+              sizeBytes: item.meta?.size ?? null,
+              type: item.type || null,
+            }, diagCtx());
             item.status = 'failed';
             item.meta = null; // terminal — release
           }
@@ -672,9 +791,19 @@ export function VaultUploadProvider({ children }) {
         key: `${id}-${i}`,
         assetId: a.assetId || null,
         uri: a.uri || null,
+        // What the OS handed over before we copied it, and our copy's path.
+        // Together they are what `utils/originalDeletion` reads to decide
+        // whether this item's ORIGINAL may be offered for deletion, and which
+        // leftovers are ours to reclaim without asking.
+        sourceUri: a.sourceUri || null,
+        stagedPath: a.stagedPath || null,
         fileName: a.fileName || (a.uri ? String(a.uri).split('/').pop() : `file-${i}`),
         mimeType: a.mimeType || null,
-        type: a.type === 'video' || a.mediaType === 'video' ? 'video' : 'image',
+        // Three kinds now, not two. A document reaching here as 'image' was
+        // uploaded with a Content-Type of image/jpeg (see uploadOne), which is
+        // how a PDF used to arrive at the pond claiming to be a photo.
+        type: a.type === 'document' ? 'document'
+          : (a.type === 'video' || a.mediaType === 'video' ? 'video' : 'image'),
         duration: a.duration || null,
         width: a.width || null,
         height: a.height || null,
@@ -746,18 +875,32 @@ export function VaultUploadProvider({ children }) {
   const deleteOriginals = useCallback(async () => {
     const batch = batchRef.current;
     if (!batch) return false;
-    const ids = batch.items
-      .filter((it) => (it.status === 'uploaded' || it.status === 'duplicate') && it.assetId)
-      .map((it) => it.assetId);
-    if (ids.length === 0) { clearBatch(); return false; }
-    try {
-      const ok = await MediaLibrary.deleteAssetsAsync(ids);
-      if (ok) clearBatch();
-      return !!ok;
-    } catch (e) {
-      // User cancelled the OS prompt / permission denied — keep the offer up.
-      return false;
+    const { assetIds, safUris } = deletionPlan(batch.items, { platform: Platform.OS });
+    if (assetIds.length === 0 && safUris.length === 0) { clearBatch(); return false; }
+
+    let ok = true;
+    if (assetIds.length) {
+      try {
+        // MediaLibrary shows the OS's own confirmation, so this is a two-step
+        // delete. A cancelled prompt or a denied permission throws / answers
+        // false — either way the offer stays up rather than clearing as though
+        // it had worked.
+        ok = !!(await MediaLibrary.deleteAssetsAsync(assetIds));
+      } catch (e) {
+        ok = false;
+      }
     }
+    if (ok && safUris.length) {
+      // SAF has no batch call and no confirmation of its own — each document
+      // is a separate request, and one provider refusing must not take the
+      // rest of the batch (or the camera-roll deletions above) down with it.
+      const SAF = FileSystem.StorageAccessFramework;
+      for (const uri of safUris) {
+        try { await SAF?.deleteAsync?.(uri); } catch (e) { ok = false; }
+      }
+    }
+    if (ok) clearBatch();
+    return ok;
   }, [clearBatch]);
 
   const dismiss = useCallback(() => { clearBatch(); }, [clearBatch]);
@@ -822,6 +965,13 @@ export function VaultUploadProvider({ children }) {
           clientImportId: item.clientImportId || Crypto.randomUUID(),
         }));
         batchRef.current = saved;
+        // A batch that was killed between "uploaded" and the reclaim above
+        // comes back still holding its staging copies. Take them now: the
+        // items are already safe in the vault, and documentDirectory keeps
+        // whatever it is given for the life of the install.
+        for (const item of saved.items) {
+          if (item.status === 'uploaded' || item.status === 'duplicate') reclaimStaged(item);
+        }
         if (saved.status === 'done') {
           publish();
           return;

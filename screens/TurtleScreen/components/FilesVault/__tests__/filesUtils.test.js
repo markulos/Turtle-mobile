@@ -1,5 +1,5 @@
 import {
-  folderHue, folderColor, folderTint, formatSize, documentIcon, isDocument, collapseCrumbs, sortFolderItems, messageOf,
+  folderHue, folderColor, folderTint, formatSize, documentIcon, isDocument, isPdf, collapseCrumbs, sortFolderItems, messageOf,
 } from '../filesUtils';
 
 describe('filesUtils', () => {
@@ -41,6 +41,23 @@ describe('filesUtils', () => {
     expect(isDocument({ type: 'document' })).toBe(true);
     expect(isDocument({ type: 'image' })).toBe(false);
     expect(isDocument({})).toBe(false);
+  });
+
+  // isPdf decides whether a tap stays in the app or goes out to Quick Look, so
+  // the rows the server typed badly matter as much as the ones it typed well.
+  it('isPdf trusts a real mime, and falls back to the name when there is not one', () => {
+    expect(isPdf({ mimeType: 'application/pdf' })).toBe(true);
+    expect(isPdf({ mimeType: 'APPLICATION/PDF; charset=binary' })).toBe(true);
+    // Pre-mimeType rows, and tunnelled rows the server types as octet-stream,
+    // are still PDFs and still have it in the name.
+    expect(isPdf({ originalName: 'lease.pdf' })).toBe(true);
+    expect(isPdf({ originalName: 'lease.PDF', mimeType: 'application/octet-stream' })).toBe(true);
+    expect(isPdf({ filename: 'scan.pdf?v=2' })).toBe(true);
+    // A specific, non-PDF mime wins over a misleading name.
+    expect(isPdf({ originalName: 'notes.pdf', mimeType: 'application/msword' })).toBe(false);
+    expect(isPdf({ originalName: 'pdf-notes.docx' })).toBe(false);
+    expect(isPdf({ originalName: 'report' })).toBe(false);
+    expect(isPdf(null)).toBe(false);
   });
 
   it('collapses long crumb chains to Files › … › Parent › Name', () => {

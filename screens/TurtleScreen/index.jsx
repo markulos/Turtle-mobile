@@ -68,6 +68,7 @@ import { usePomodoroSocket } from './hooks/usePomodoroSocket';
 import { useClaudeSession } from './hooks/useClaudeSession';
 import { useTerminalSession } from './hooks/useTerminalSession';
 import ClaudeConsole, { PANEL_GAP, MIN_PANEL_HEIGHT, COMPACT_MAX_HEIGHT } from './components/ClaudeConsole';
+import ClaudeSessionControls from './components/ClaudeSessionControls';
 import TerminalConsole from './components/TerminalConsole';
 import FriendCard from './components/FriendCard';
 import EdgeSwipePage from './components/EdgeSwipePage';
@@ -2134,10 +2135,10 @@ export default function TurtleScreen() {
         />
       </View>
 
-      {/* Chat header bar — Friends (left), the Turtle brand (centre) and
-          Settings (right) on one solid bar pinned to the top. Replaces the
-          old free-floating corner icons + bare safe-area tint strip: the two
-          actions now read as a proper header. It overlays the inverted
+      {/* Chat header bar — the self-chat identity (avatar + name) and Search on
+          one solid bar pinned to the top, plus a SECOND row of Claude session
+          controls while a session is open. Replaces the old free-floating
+          corner icons + bare safe-area tint strip. It overlays the inverted
           message list (WhatsApp-style — messages scroll beneath it); the list
           gets a matching top inset (CHAT_HEADER_BAR_HEIGHT) so the oldest
           visible message clears the bar. zIndex stays 101 (below the vault
@@ -2196,6 +2197,11 @@ export default function TurtleScreen() {
 
             Height is unchanged (CHAT_HEADER_BAR_HEIGHT), which the transcript's
             top padding and the history-error strip both depend on. */}
+        {/* Row 1 — identity. Row 2 (below, session only) carries the Claude
+            controls, so the title never has to share this row with them: the
+            single-row card header they used to live on truncated the title to
+            "Claude x Turtle | Ad…". */}
+        <View style={styles.headerTopRow}>
         <TouchableOpacity
           style={styles.identityBar}
           activeOpacity={0.7}
@@ -2213,10 +2219,18 @@ export default function TurtleScreen() {
         >
           {/* Avatar in an accent ring, with a live presence dot on its corner —
               the same language the Claude console's status pill uses, so the
-              chat's connection state is legible without a banner. */}
+              chat's connection state is legible without a banner. In a Claude
+              session the ring holds the robot mark instead, so the whole handle
+              (mark + name) reads as Claude rather than as you. */}
           <View style={styles.identityAvatarWrap}>
             <View style={styles.identityAvatarRing}>
-              {selfAvatarUrl ? (
+              {inClaudeSession ? (
+                <Icon
+                  name={claudeUiMode === 'login' ? 'login-variant' : 'robot-outline'}
+                  size={20}
+                  color={theme.colors.accent || theme.colors.accentInfo}
+                />
+              ) : selfAvatarUrl ? (
                 <Image
                   source={{ uri: selfAvatarUrl }}
                   style={styles.identityAvatarImg}
@@ -2236,14 +2250,29 @@ export default function TurtleScreen() {
             />
           </View>
 
-          {/* Name over a live status line. The subtitle is the one piece of
-              state worth carrying here: what the chat is doing right now, in
-              priority order — Claude working, then offline, else the self-chat
-              label. */}
+          {/* Name over a live status line. In a Claude session the handle is the
+              session itself — "Claude x Turtle", with "| Admin" appended in the
+              warning accent for an elevated session (the two-weight treatment
+              the console card used to carry). Outside a session it's you, over
+              a subtitle of whatever the chat is doing right now. */}
           <View style={styles.identityText}>
-            <Text style={styles.identityName} numberOfLines={1}>{selfName}</Text>
+            {inClaudeSession ? (
+              <Text style={styles.identityName} numberOfLines={1}>
+                {claudeUiMode === 'login' ? 'Claude sign-in' : (
+                  <>
+                    <Text style={styles.identityNameThin}>Claude x Turtle</Text>
+                    {claude.admin ? <Text style={styles.identityNameAdmin}> | Admin</Text> : null}
+                  </>
+                )}
+              </Text>
+            ) : (
+              <Text style={styles.identityName} numberOfLines={1}>{selfName}</Text>
+            )}
             <Text style={styles.identitySub} numberOfLines={1}>
-              {claudeBusy ? 'Claude is working…' : !isConnected ? 'Offline' : 'Notes to self'}
+              {!isConnected ? 'Offline'
+                : inClaudeSession
+                  ? (claudeUiMode === 'login' ? 'Signing in…' : claude.admin ? 'Admin session' : 'Claude session')
+                  : claudeBusy ? 'Claude is working…' : 'Notes to self'}
             </Text>
           </View>
 
@@ -2258,19 +2287,42 @@ export default function TurtleScreen() {
           />
         </TouchableOpacity>
         {/* Search everything — a sibling of the identity bar in the same
-            60pt row, so the header's height is untouched. */}
-        <TouchableOpacity
-          onPressIn={() => tapHaptic()}
-          onPress={() => openGlobalSearch('')}
-          activeOpacity={0.6}
-          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-          style={styles.headerSearchButton}
-          accessibilityRole="button"
-          accessibilityLabel="Search everything"
-          testID="header-search"
-        >
-          <Icon name="magnify" size={24} color={theme.colors.textPrimary} />
-        </TouchableOpacity>
+            60pt row, so the header's height is untouched. Stood down during a
+            Claude session: the session controls take this slot (their own row
+            below), and search is a tap away once the console is minimized. */}
+        {!inClaudeSession && (
+          <TouchableOpacity
+            onPressIn={() => tapHaptic()}
+            onPress={() => openGlobalSearch('')}
+            activeOpacity={0.6}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            style={styles.headerSearchButton}
+            accessibilityRole="button"
+            accessibilityLabel="Search everything"
+            testID="header-search"
+          >
+            <Icon name="magnify" size={24} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+        )}
+        </View>
+
+        {/* Row 2 — the live session's controls, on the top bar rather than on a
+            card header of their own. The header is measured (onLayout above),
+            so this extra row simply moves the console's ceiling down with it. */}
+        {inClaudeSession && (
+          <ClaudeSessionControls
+            style={styles.headerClaudeRow}
+            mode={claudeUiMode}
+            active={claudeActive}
+            busy={claudeBusy}
+            live={claude.live}
+            onToggleLive={claude.toggleLive}
+            onStop={() => { if (claudeUiMode === 'login') claudeLoginStop(); else claudeStop(); }}
+            expanded={claudeExpanded}
+            onToggleExpanded={() => setClaudeExpanded((e) => !e)}
+            onClose={claudeClose}
+          />
+        )}
       </Reanimated.View>
 
       {/* History failed to load — an inline strip under the header rather than
@@ -2954,19 +3006,18 @@ export default function TurtleScreen() {
         <ClaudeConsole
           transcript={claude.transcript}
           active={claudeActive}
-          busy={claude.busy}
           live={claude.live}
+          // Only for the paused banner's tap-to-resume — the Live toggle itself
+          // is on the chat header now (ClaudeSessionControls).
           onToggleLive={claude.toggleLive}
           mode={claudeUiMode}
-          admin={claude.admin}
           permissions={claude.permissions}
           onRespondPermission={claude.respondPermission}
           questions={claude.questions}
           onRespondQuestion={claude.respondQuestion}
-          onStop={() => { if (claudeUiMode === 'login') claudeLoginStop(); else claudeStop(); }}
-          onClose={claudeClose}
+          // Still needed for the height animation (the toggle that drives it
+          // moved to the header).
           expanded={claudeExpanded}
-          onToggleExpanded={() => setClaudeExpanded((e) => !e)}
           // Pass the SAME keyboard tracker that lifts the dock, so the console's
           // height shrink stays frame-locked to that lift (a separate
           // useAnimatedKeyboard inside the console desynced during a mid-session
@@ -3458,9 +3509,12 @@ const createStyles = (theme, insets) =>
       left: 0,
       right: 0,
       zIndex: 101,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
+      // A COLUMN of rows, not a single row: the identity row sits on top, and a
+      // Claude session adds its control row underneath (see headerTopRow /
+      // headerClaudeRow). One row could not hold the title AND the live/Stop/
+      // expand cluster without truncating the title.
+      flexDirection: 'column',
+      alignItems: 'stretch',
       paddingHorizontal: 12,
       // The bar reaches DOWN to meet its content rather than stopping short and
       // leaving black-on-black dead space above the Claude console. With the
@@ -3499,6 +3553,21 @@ const createStyles = (theme, insets) =>
     // the blur + scrim without taking layout space.
     headerGloss: {
       position: 'absolute', top: 0, left: 0, right: 0, height: '55%',
+    },
+    // The header's first row: identity (+ the search button outside a session).
+    headerTopRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    // The header's second row, session only: the Claude controls. A hairline
+    // above it separates the controls from the identity without the weight of
+    // a second bar.
+    headerClaudeRow: {
+      marginTop: 8,
+      paddingTop: 8,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.colors.border,
     },
     identityBar: {
       flex: 1,
@@ -3544,6 +3613,11 @@ const createStyles = (theme, insets) =>
       color: theme.colors.textPrimary,
       flexShrink: 1,
     },
+    // Two-weight session title: "Claude x Turtle" hairline-thin, then "| Admin"
+    // in the warning accent, so an elevated session reads at a glance without a
+    // separate badge. Nested <Text> inherits size/colour from identityName.
+    identityNameThin: { fontWeight: '200' },
+    identityNameAdmin: { fontWeight: '500', color: theme.colors.accentWarning },
     identitySub: {
       fontSize: 11,
       color: theme.colors.textTertiary,

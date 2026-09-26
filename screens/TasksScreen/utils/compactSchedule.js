@@ -147,6 +147,35 @@ export function gapNowOffset(from, to, nowMinutes, { hourHeight, lineY = 0 } = {
   return lineY + ((now - first) / 60) * h;
 }
 
+/**
+ * gapNowSpans — the two stretches the now-line divides an open gap into: how
+ * long since the task BEFORE it, and how long until the task AFTER it.
+ *
+ * The gap's own bounds are exactly those two tasks: `from` is where the last
+ * one finished and `to` is where the next one starts, which is what a gap IS.
+ * So there is nothing to search for — the answer is the row you are already
+ * standing in.
+ *
+ * Either end can be missing, and then so is its number. The day's leading gap
+ * runs back to midnight rather than to a task, its trailing one forward to
+ * midnight, and an empty day's single gap does both — "7h since" measured from
+ * nothing is a number about the clock, not about your day, and the one thing
+ * this is for is the shape of the day around you.
+ *
+ * Clamped at zero because the hours DRAWN can start before the gap does
+ * (`gapHourMarks` opens at the containing hour), so the line can legitimately
+ * sit a few minutes above `from`.
+ */
+export function gapNowSpans(row, nowMinutes) {
+  const now = Number(nowMinutes);
+  if (!row || !Number.isFinite(now)) return { since: null, until: null };
+  const openEnded = row.edge === 'day';
+  return {
+    since: (openEnded || row.edge === 'start') ? null : Math.max(0, now - Number(row.from)),
+    until: (openEnded || row.edge === 'end') ? null : Math.max(0, Number(row.to) - now),
+  };
+}
+
 /** Stable identity for a gap row, so an expanded one survives a re-render. */
 export const gapKey = (row) => `gap-${row.from}-${row.to}`;
 

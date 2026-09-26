@@ -286,3 +286,62 @@ describe('gapNowOffset', () => {
     expect(gapNowOffset(day.from, day.to, 1439, { hourHeight: 48, lineY: 9 })).not.toBeNull();
   });
 });
+
+// The now-line divides the gap it sits in, and says so at its right-hand end:
+// how long since the task above it, how long until the one below.
+describe('gapNowSpans', () => {
+  const { gapNowSpans } = require('../compactSchedule');
+  // 9:00 → 15:30, the stretch between two tasks.
+  const gap = { kind: 'gap', from: 540, to: 930, minutes: 390 };
+
+  test('measures back to the last task and forward to the next', () => {
+    expect(gapNowSpans(gap, 700)).toEqual({ since: 160, until: 230 });
+    // The two always come to the gap.
+    const { since, until } = gapNowSpans(gap, 700);
+    expect(since + until).toBe(gap.minutes);
+  });
+
+  test('is zero at the moment the last task ended, and at the next one\u2019s start', () => {
+    expect(gapNowSpans(gap, 540)).toEqual({ since: 0, until: 390 });
+    expect(gapNowSpans(gap, 930)).toEqual({ since: 390, until: 0 });
+  });
+
+  // The hours DRAWN open at the containing hour, so a gap starting at 9:05
+  // draws the 9 o'clock row and the line can legitimately sit above `from`.
+  // "-5m since" is not a thing.
+  test('clamps rather than going negative above the gap', () => {
+    expect(gapNowSpans({ from: 545, to: 720 }, 540).since).toBe(0);
+    expect(gapNowSpans({ from: 545, to: 720 }, 800).until).toBe(0);
+  });
+
+  // The day's ends run to midnight rather than to a task, and midnight is not
+  // something worth counting from — a number measured off nothing is about the
+  // clock, not about the day around you.
+  test('says nothing about an end of the day that has no task on it', () => {
+    expect(gapNowSpans({ edge: 'start', from: 0, to: 480 }, 300))
+      .toEqual({ since: null, until: 180 });
+    expect(gapNowSpans({ edge: 'end', from: 540, to: 1440 }, 600))
+      .toEqual({ since: 60, until: null });
+  });
+
+  test('and nothing at all about a day with no tasks in it', () => {
+    expect(gapNowSpans({ edge: 'day', from: 0, to: 1440 }, 700))
+      .toEqual({ since: null, until: null });
+  });
+
+  test('survives a missing row or a clock it cannot read', () => {
+    expect(gapNowSpans(null, 700)).toEqual({ since: null, until: null });
+    expect(gapNowSpans(gap, undefined)).toEqual({ since: null, until: null });
+  });
+
+  // Every gap the day model actually produces round-trips: the leading and
+  // trailing ends report one number, the middle reports two.
+  test('every gap a real day produces reports what it can', () => {
+    const rows = buildCompactRows([seg(480, 540), seg(840, 900)]);
+    const gaps = rows.filter((r) => r.kind === 'gap');
+    expect(gaps.map((g) => {
+      const { since, until } = gapNowSpans(g, 700);
+      return [since != null, until != null];
+    })).toEqual([[false, true], [true, true], [true, false]]);
+  });
+});

@@ -8,3 +8,4 @@ export { CalendarView, SHEET_SOLID } from './CalendarView';
 export { DatePickerModal } from './DatePickerModal';
 export { WheelTimePicker } from './WheelTimePicker';
 export { TimelineTaskRow, UNIFORM_ROW_H, UNIFORM_CARD_H } from './TimelineTaskRow';
+export { SchedulePickerSheet } from './SchedulePickerSheet';

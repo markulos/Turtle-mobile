@@ -125,6 +125,7 @@
         }
       ],
       "expo-live-activity",
+      "./plugins/withTurtleLiveActivity",
       [
         "expo-build-properties",
         {
@@ -134,7 +135,8 @@
         }
       ],
       "expo-asset",
-      "expo-background-task"
+      "expo-background-task",
+      "react-native-blob-util"
     ],
     "experiments": {
       "tsconfigPaths": false

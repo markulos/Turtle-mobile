@@ -6,7 +6,6 @@ import {
   ScrollView,
   StyleSheet,
   Linking,
-  ActivityIndicator,
   Platform,
   Dimensions,
   Keyboard,
@@ -69,6 +68,11 @@ export const PANEL_GAP = 8;
  * so streamed output always shows. Sits above the chat input like the
  * pomodoro timer card. Auto-scrolls to the newest line; surfaces a tappable
  * "Open sign-in page" button for the in-chat login URL.
+ *
+ * It has NO chrome of its own: the session title and its controls live on the
+ * chat header (see ClaudeSessionControls), so every point of this overlay is
+ * console log. Approval/question cards and the paused banner are the only
+ * things that ever sit above the transcript.
  */
 // ── Interactive approval card ────────────────────────────────────────────
 // One per pending `claude:permission`. Shows what Claude wants to do (a tool
@@ -220,7 +224,7 @@ function QuestionCard({ q, onRespond, theme, styles }) {
   );
 }
 
-export default function ClaudeConsole({ transcript = [], active, busy, live = true, onToggleLive, mode, admin, permissions = [], onRespondPermission, questions = [], onRespondQuestion, onStop, onClose, expanded, onToggleExpanded, keyboard, maxHeight = COMPACT_MAX_HEIGHT, dockLiftBase = 0 }) {
+export default function ClaudeConsole({ transcript = [], active, live = true, onToggleLive, mode, permissions = [], onRespondPermission, questions = [], onRespondQuestion, expanded, keyboard, maxHeight = COMPACT_MAX_HEIGHT, dockLiftBase = 0 }) {
   const { theme } = useTheme();
   const styles = createStyles(theme);
   const scrollRef = useRef(null);
@@ -286,8 +290,6 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
     return { height: Math.round(compactH + (cap - compactH) * expandProgress.value) };
   });
 
-  const toggleExpanded = () => onToggleExpanded?.();
-
   // Keep the newest line in view as output streams in. Re-runs on
   // expand too so opening the full view lands on the latest line. Skipped while
   // the live view is paused (the transcript is frozen, so there's nothing new
@@ -311,10 +313,6 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
 
   const isLogin = mode === 'login';
   const paused = active && !isLogin && !live;
-  const statusText = isLogin ? 'signing in…' : !active ? 'starting…' : paused ? 'paused' : busy ? 'working…' : 'live';
-  const dotColor = paused
-    ? theme.colors.accentWarning
-    : (active || isLogin) ? theme.colors.accentSuccess : theme.colors.accentWarning;
 
   return (
     // Glossy frosted-glass window. The height animates on THIS plain Animated.View
@@ -336,64 +334,9 @@ export default function ClaudeConsole({ transcript = [], active, busy, live = tr
         locations={[0, 0.5, 1]}
         style={styles.panelGloss}
       />
-      <View style={styles.header}>
-        {/* Admin sessions show no leading icon — the title alone carries the
-            mode. Login/standard sessions keep their icon. */}
-        {!isLogin && admin ? null : (
-          <Icon name={isLogin ? 'login-variant' : 'robot-outline'} size={16} color={theme.colors.accentInfo} />
-        )}
-        {/* Admin sessions get a two-weight title — "Claude x Turtle" hairline
-            thin, then "| Admin" in a regular weight — so the elevated mode
-            reads at a glance without a separate badge. Non-admin keeps the
-            plain session label. */}
-        {!isLogin && admin ? (
-          <Text style={styles.title} numberOfLines={1}>
-            <Text style={styles.titleThin}>Claude x Turtle </Text>
-            <Text style={styles.titleAdmin}>| Admin</Text>
-          </Text>
-        ) : (
-          <Text style={styles.title} numberOfLines={1}>{isLogin ? 'Claude sign-in' : 'Claude session'}</Text>
-        )}
-        <View style={styles.statusPill}>
-          {busy && !isLogin && !paused
-            ? <ActivityIndicator size="small" color={theme.colors.accentInfo} />
-            : <View style={[styles.dot, { backgroundColor: dotColor }]} />}
-          <Text style={styles.statusText}>{statusText}</Text>
-        </View>
-        {/* Live-view toggle. Pausing stops the per-chunk log stream (the session
-            keeps running in the background, buffered server-side); going live
-            replays the buffer to catch up. The off state is tinted so it's
-            obvious the panel isn't updating. */}
-        {active && !isLogin && onToggleLive && (
-          <TouchableOpacity
-            onPress={onToggleLive}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            style={[styles.liveBtn, !live && styles.liveBtnPaused]}
-            accessibilityRole="button"
-            accessibilityLabel={live ? 'Pause live log (Claude keeps working in the background)' : 'Resume live log and catch up'}
-          >
-            <Icon name={live ? 'pause' : 'play'} size={13} color={live ? theme.colors.accentSuccess : theme.colors.accentWarning} />
-            <Text style={[styles.liveBtnText, { color: live ? theme.colors.accentSuccess : theme.colors.accentWarning }]}>
-              {live ? 'Live' : 'Paused'}
-            </Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity onPressIn={() => notifyHaptic('warning')} onPress={onStop} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.stopBtn}>
-          <Text style={styles.stopText}>{isLogin ? 'Cancel' : 'Stop'}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={toggleExpanded}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          style={styles.iconBtn}
-          accessibilityRole="button"
-          accessibilityLabel={expanded ? 'Collapse Claude session' : 'Expand Claude session to full view'}
-        >
-          <Icon name={expanded ? 'arrow-collapse' : 'arrow-expand'} size={16} color={theme.colors.textTertiary} />
-        </TouchableOpacity>
-        <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.iconBtn}>
-          <Icon name="chevron-down" size={18} color={theme.colors.textTertiary} />
-        </TouchableOpacity>
-      </View>
+      {/* No card header. The session's title and its controls (live, Stop,
+          expand, minimize) live on the CHAT HEADER now — see
+          ClaudeSessionControls — so the entire overlay is log surface. */}
 
       {/* Pending approval + question cards — pinned above the transcript so
           they're always in view, not scrolled away. */}
@@ -536,73 +479,17 @@ const createStyles = (theme) => StyleSheet.create({
     right: 0,
     height: '45%',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderBottomWidth: 0.5,
-    borderBottomColor: theme.colors.border,
-    // Translucent so the frost shows through the header too (a fully
-    // opaque surfaceElevated would block the blur).
-    backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-  },
-  title: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '700',
-    color: theme.colors.textPrimary,
-  },
-  // Two-weight admin title: "Claude x Turtle" in a hairline-thin weight, then
-  // "| Admin" in bold. Nested <Text> inherits the base size/colour from
-  // `title`; these only override the weight (and tint Admin with the warning
-  // accent to echo the elevated mode).
-  titleThin: {
-    fontWeight: '200',
-  },
-  titleAdmin: {
-    fontWeight: '400',
-    color: theme.colors.accentWarning,
-  },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 999,
-    backgroundColor: theme.colors.surface,
-    ...depth(theme, 'control'),
-  },
-  dot: { width: 7, height: 7, borderRadius: 4 },
-  statusText: { fontSize: 11, fontWeight: '600', color: theme.colors.textSecondary },
-  stopBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: `${theme.colors.accentError}22`,
-  },
-  stopText: { fontSize: 12, fontWeight: '700', color: theme.colors.accentError },
-  iconBtn: { padding: 2 },
-  liveBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: `${theme.colors.accentSuccess}1A`,
-  },
-  liveBtnPaused: {
-    backgroundColor: `${theme.colors.accentWarning}26`,
-  },
-  liveBtnText: { fontSize: 11, fontWeight: '700' },
+  // (The card header's styles — title, status pill, live/stop buttons — moved
+  // to ClaudeSessionControls with the controls themselves. Nothing here draws a
+  // chrome row any more: the panel is log surface from its top edge down.)
   pausedBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     marginHorizontal: 12,
+    // marginTop clears the card's top curve when this banner is the panel's
+    // first child (no header above it any more).
+    marginTop: 10,
     marginBottom: 6,
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -612,13 +499,16 @@ const createStyles = (theme) => StyleSheet.create({
     borderColor: `${theme.colors.accentWarning}55`,
   },
   pausedText: { flex: 1, fontSize: 12, color: theme.colors.textSecondary, lineHeight: 16 },
-  body: { paddingHorizontal: 12 },
+  body: { paddingHorizontal: 14 },
   // The panel has a concrete (Reanimated-animated) height in BOTH states, so
   // the scroll body fills the remaining space (flex:1) in both — letting the
   // view occupy all its room even with little/no log, and keeping the body in
   // lockstep with the height during the resize. Always applied (see ScrollView).
   bodyExpanded: { flex: 1 },
-  bodyContent: { paddingVertical: 10, gap: 6 },
+  // With no header row above it, the first line would otherwise start inside
+  // the card's 28pt corner curve — the top padding stands in for the chrome
+  // that used to hold it clear.
+  bodyContent: { paddingTop: 16, paddingBottom: 12, gap: 6 },
   lineRow: {},
   bannerScroll: { marginVertical: 4 },
   bannerLine: { fontFamily: MONO, fontSize: 11, lineHeight: 14, color: theme.colors.accentInfo },
@@ -645,7 +535,9 @@ const createStyles = (theme) => StyleSheet.create({
   // Approval cards
   permList: {
     paddingHorizontal: 10,
-    paddingTop: 10,
+    // Clears the card's top curve — same reason as bodyContent's paddingTop,
+    // since an approval card can now be the panel's first child.
+    paddingTop: 14,
     gap: 8,
     borderBottomWidth: 0.5,
     borderBottomColor: theme.colors.border,

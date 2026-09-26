@@ -27,7 +27,7 @@ jest.mock('../../../../../services/offlineQueue', () => ({ sendOrQueue: jest.fn(
 jest.mock('../documentOpen', () => ({ openDocument: jest.fn(() => Promise.resolve({ uri: 'x', cached: true })) }));
 jest.mock('../../EdgeSwipePage', () => ({ visible, children }) => (visible ? children : null));
 
-import FilesVault from '../FilesVault';
+import FilesVault, { matchFolders } from '../FilesVault';
 import FolderPage from '../FolderPage';
 
 const theme = { mode: 'dark', colors: { background: '#000', surface: '#0a0a0a', surfaceElevated: '#111', textPrimary: '#fff', textSecondary: '#aaa', textMuted: '#666', primary: '#fff', border: '#222', accentError: '#f55' } };
@@ -106,5 +106,102 @@ describe('FilesVault', () => {
     // bar alone already renders "Scans" and "Taxes"), this would never
     // appear — so this pins both stack levels being mounted, not just one.
     await waitFor(() => getByText('a.pdf'));
+  });
+});
+
+// ── Finding and making are the same field ──────────────────────────────────
+//
+// The `+` used to open a modal sheet with a name box in it. Now it opens the
+// vault's own search field — the Boards tab's, shared — so the name you type is
+// also a search, and you find out you already have a "Scans" before you make a
+// second one.
+describe('FilesVault search / create', () => {
+  const draw = () => render(<Host theme={theme} getFullUrl={(p) => `http://pond${p}`} base="http://pond" onOpenMedia={jest.fn()} onBulkTag={jest.fn()} onUploadHere={jest.fn()} />);
+
+  it('filters the folders to rows as you type', async () => {
+    const { getByText, getByTestId, queryByText } = await draw();
+    await waitFor(() => getByText('Scans'));
+    // Unfiled and the tiles are the BROWSING view; typing replaces them.
+    await fireEvent.changeText(getByTestId('files-search-input'), 'sca');
+    await waitFor(() => getByTestId('files-row-fld_aaaaaaaaaaaa'));
+    expect(queryByText('Unfiled')).toBeNull();
+  });
+
+  it('offers to create a name that is not a folder yet, and not one that is', async () => {
+    const { getByText, getByTestId, queryByTestId } = await draw();
+    await waitFor(() => getByText('Scans'));
+    await fireEvent.changeText(getByTestId('files-search-input'), 'Receipts');
+    await waitFor(() => getByTestId('files-create-row'));
+    // An exact name that already exists must NOT offer to make a second one.
+    await fireEvent.changeText(getByTestId('files-search-input'), 'scans');
+    await waitFor(() => expect(queryByTestId('files-create-row')).toBeNull());
+    // ...but a name that merely PREFIXES an existing one is still creatable.
+    await fireEvent.changeText(getByTestId('files-search-input'), 'Scan');
+    await waitFor(() => getByTestId('files-create-row'));
+  });
+
+  it('creating posts the folder and leaves search', async () => {
+    const { sendOrQueue } = require('../../../../../services/offlineQueue');
+    sendOrQueue.mockResolvedValueOnce({ queued: false, result: { success: true, folder: { id: 'fld_cccccccccccc', name: 'Receipts' } } });
+    const { getByText, getByTestId, queryByTestId } = await draw();
+    await waitFor(() => getByText('Scans'));
+    await fireEvent.changeText(getByTestId('files-search-input'), 'Receipts');
+    await fireEvent.press(getByTestId('files-create-row'));
+    await waitFor(() => expect(sendOrQueue).toHaveBeenCalled());
+    // (api, request, …) — the request is the second argument.
+    expect(sendOrQueue.mock.calls[0][1]).toMatchObject({ method: 'post', path: '/folders', body: { name: 'Receipts' } });
+    // The field empties and the browsing view comes back.
+    await waitFor(() => expect(queryByTestId('files-create-row')).toBeNull());
+  });
+
+  // The one thing worth keeping from the sheet: a server rejection is reported
+  // where the name still is, so it can be edited rather than retyped.
+  it('reports a rejected name under the field', async () => {
+    const { sendOrQueue } = require('../../../../../services/offlineQueue');
+    sendOrQueue.mockRejectedValueOnce(new Error('A folder named Receipts already exists here.'));
+    const { getByText, getByTestId } = await draw();
+    await waitFor(() => getByText('Scans'));
+    await fireEvent.changeText(getByTestId('files-search-input'), 'Receipts');
+    await fireEvent.press(getByTestId('files-create-row'));
+    await waitFor(() => getByText('A folder named Receipts already exists here.'));
+  });
+
+  it('the + key opens the field rather than a sheet', async () => {
+    const { getByText, getByTestId, queryByText } = await draw();
+    await waitFor(() => getByText('Scans'));
+    await fireEvent.press(getByTestId('files-search-add'));
+    // The old sheet's chrome is gone for good.
+    expect(queryByText('New folder')).toBeNull();
+    expect(getByTestId('files-search-input')).toBeTruthy();
+  });
+});
+
+describe('matchFolders', () => {
+  const f = (name) => ({ id: name, name });
+
+  it('is everything when nothing is typed', () => {
+    const all = [f('Scans'), f('Taxes')];
+    expect(matchFolders(all, '').matches).toBe(all);
+    expect(matchFolders(all, '   ').exact).toBe(false);
+  });
+
+  it('matches anywhere in the name, ignoring case and edge spacing', () => {
+    const all = [f('Tax Returns'), f('Scans')];
+    expect(matchFolders(all, 'RETURN').matches.map((x) => x.name)).toEqual(['Tax Returns']);
+    expect(matchFolders(all, '  scans  ').matches.map((x) => x.name)).toEqual(['Scans']);
+  });
+
+  // `exact` is what suppresses the create row, and a SUBSTRING match is not
+  // enough: "Tax" must stay creatable next to "Taxes 2024", or you can never
+  // make the shorter name once the longer one exists.
+  it('is exact only on the whole name, not on a prefix of one', () => {
+    const all = [f('Taxes 2024')];
+    expect(matchFolders(all, 'Tax').exact).toBe(false);
+    expect(matchFolders(all, 'taxes 2024').exact).toBe(true);
+  });
+
+  it('survives a missing list', () => {
+    expect(matchFolders(null, 'x').matches).toEqual([]);
+    expect(matchFolders(undefined, '').matches).toEqual([]);
   });
 });

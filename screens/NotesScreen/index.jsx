@@ -77,7 +77,10 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../context/ThemeContext';
-import { useServer } from '../../context/ServerContext';
+// getApiAuthToken: the vault upload streams natively (expo-file-system's
+// upload task), which never passes through the api wrapper or the patched
+// fetch — so it has to carry the Bearer token by hand.
+import { useServer, getApiAuthToken } from '../../context/ServerContext';
 import { useOpenTarget } from '../../context/OpenTargetContext';
 import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
@@ -88,6 +91,26 @@ import { tapHaptic, impactHaptic } from '../../utils/haptics';
 import { fuzzyRank } from '../../utils/trigram';
 // Tab predicates + the feedback tag vocabulary (pure, unit-tested separately).
 import { APP_TAGS, PLATFORM_TAGS, isFeedbackNote, matchesFilter } from './feedbackFilter';
+// The note's own files — fetched from its media ids and shown in the note,
+// matching the web reading pane. Tapping an image opens AttachmentViewer, which
+// takes URLs and so never routes through the media vault.
+import NoteAttachments from './NoteAttachments';
+import AttachmentViewer from '../../components/AttachmentViewer';
+// Timeline thumbnails: which picture a row shows for its attachments, and the
+// bulk resolver that gets the whole loaded page's thumbnails in one go.
+import { rowThumb } from './attachments';
+import useNoteThumbs from './useNoteThumbs';
+// To-dos ARE tasks. The Todos tab is a view over the tasks table, not a second
+// store beside it — see taskTodos for why, and for the inbox rule.
+import {
+  inboxCountLabel, isInboxTodo, isTaskTodo, mergeNotesAndTasks, orderTodos, todoTaskPayload,
+} from './taskTodos';
+// Adding files from the phone: the two pickers, the vault upload, and the
+// rules about how many a note may carry.
+import {
+  MAX_NOTE_MEDIA, attachRoom, mergeMediaIds, pickNotePhotos, pickSystemFiles,
+  removeMediaId, uploadNoteAttachment, uploadErrorMessage, uploadedName,
+} from './noteAttach';
 import { sendOrQueue } from '../../services/offlineQueue';
 
 const FILTER_ALL = 'all';
@@ -302,14 +325,31 @@ export default function NotesScreen() {
   const insets = useSafeAreaInsets();
   const dockH = dockOccupied(insets.bottom);
   const { theme, isDark } = useTheme();
-  const { api, isConnected } = useServer();
+  const { api, isConnected, getBaseUrl, getMediaBaseUrl } = useServer();
   const { enqueueNote } = useClaudeQueue();
   const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
 
   // ── Data ────────────────────────────────────────────────
+  // Two sources, ONE list. `notes` is the notes table (plain notes now — the
+  // todo half of it moved), `tasks` is the tasks table, and `timeline` below
+  // is what every filter, count and search on this screen actually reads.
   const [notes, setNotes] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Every task, wearing the note shape the rows already render. Not paged:
+  // /tasks returns the lot, which is what lets the Todos tab count and search
+  // honestly instead of only over whatever has been scrolled into view.
+  const timeline = useMemo(() => mergeNotesAndTasks(notes, tasks), [notes, tasks]);
+
+  // Thumbnails for every attachment the loaded notes point at, resolved in a
+  // couple of batched calls rather than per row — a row that fetched its own
+  // would do it while the list is being flung. See useNoteThumbs.
+  const noteThumbs = useNoteThumbs(notes);
+  // Media bytes ride the probed HTTP/2 origin when there is one, same as the
+  // gallery, so a thumbnail cached there is a cache hit here.
+  const mediaOrigin = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '');
 
   // ── UI state ────────────────────────────────────────────
   const [filter, setFilter] = useState(FILTER_ALL);
@@ -358,7 +398,14 @@ export default function NotesScreen() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get(`/turtle/notes?limit=${NOTES_PAGE}&offset=0`);
+      // Both halves of the timeline, in parallel. The tasks call is the one
+      // that makes every calendar task a to-do here; it is unpaged and small
+      // next to the media the app moves elsewhere.
+      const [res, taskRows] = await Promise.all([
+        api.get(`/turtle/notes?limit=${NOTES_PAGE}&offset=0`),
+        api.get('/tasks').catch(() => null),
+      ]);
+      if (Array.isArray(taskRows)) setTasks(taskRows);
       if (res?.success && Array.isArray(res.notes)) {
         setNotes(res.notes);
         notesOffsetRef.current = res.notes.length;
@@ -431,9 +478,47 @@ export default function NotesScreen() {
   // reconnect / foreground by ServerContext's auto-flush) and the optimistic
   // row simply stays; nothing is reverted, no toast. Only a permanent 4xx
   // ("this will never work") reverts and alerts.
-  const createNote = async ({ content, description, type, tags }) => {
+  /**
+   * A to-do written here is a TASK, created in the tasks table.
+   *
+   * No due date: capture is the point, and deciding when is a separate act you
+   * do on the calendar. That is what puts it in the inbox.
+   */
+  const createTodo = async ({ content, description, tags, mediaIds }) => {
+    const payload = todoTaskPayload({ content, description, tags, mediaIds });
+    if (!payload.title) return false;
+    // Optimistic: the row exists on screen before the pond answers, keyed by a
+    // local id the reconcile below replaces.
+    const localId = `local_${Date.now()}`;
+    setTasks((cur) => [{
+      id: localId, title: payload.title, description: payload.description,
+      tags: payload.tags, completed: false, createdAt: Date.now(),
+      dueDate: null, itemType: 'task', meta: payload.meta || {}, pending: true,
+    }, ...cur]);
+    try {
+      const r = await sendOrQueue(api, {
+        method: 'post', path: '/tasks/single', body: payload, label: 'todo',
+      });
+      if (r.queued) return true; // parked; the local row stands until the flush
+      if (r.result?.success !== false) {
+        await refresh();
+        return true;
+      }
+      setTasks((cur) => cur.filter((t) => t.id !== localId));
+      return false;
+    } catch (e) {
+      setTasks((cur) => cur.filter((t) => t.id !== localId));
+      Alert.alert('Could not save that to-do', e.message || String(e));
+      return false;
+    }
+  };
+
+  const createNote = async ({ content, description, type, tags, mediaIds }) => {
     if (!content.trim()) return false;
     const body = {
+      // The files the composer uploaded while this note was being written.
+      // They are already in the vault; this is the link.
+      mediaIds: mediaIds || [],
       // Send BOTH field names: the server's POST handler historically reads
       // `note` (the web chat /note path), so sending only `content` made it
       // reject with "content required". `content` is kept for forward-compat
@@ -466,9 +551,35 @@ export default function NotesScreen() {
     }
   };
 
+  /** Edit a to-do — a PATCH on the task it is. */
+  const editTodo = async (id, { content, description, tags, mediaIds }, prevMeta) => {
+    const payload = todoTaskPayload({ content, description, tags, mediaIds }, prevMeta);
+    if (!payload.title) return false;
+    let before = null;
+    setTasks((cur) => cur.map((t) => {
+      if (t.id !== id) return t;
+      before = t;
+      return { ...t, title: payload.title, description: payload.description, tags: payload.tags,
+        meta: payload.meta || t.meta };
+    }));
+    try {
+      const r = await sendOrQueue(api, {
+        method: 'patch', path: `/tasks/${id}`, body: payload, key: `task:${id}`, label: 'todo edit',
+      });
+      if (r.queued) return true;
+      if (r.result?.success !== false) { await refresh(); return true; }
+      if (before) setTasks((cur) => cur.map((t) => (t.id === id ? before : t)));
+      return false;
+    } catch (e) {
+      if (before) setTasks((cur) => cur.map((t) => (t.id === id ? before : t)));
+      Alert.alert('Could not update that to-do', e.message || String(e));
+      return false;
+    }
+  };
+
   // Edit an existing note/todo via PATCH. The PATCH handler reads `content`
   // (consistent with what we send here), so no dual-field dance is needed.
-  const editNote = async (id, { content, description, type, tags }) => {
+  const editNote = async (id, { content, description, type, tags, mediaIds }) => {
     if (!content.trim()) return false;
     const body = {
       content: content.trim(),
@@ -476,6 +587,10 @@ export default function NotesScreen() {
       type: type || 'note',
       tags: tags || [],
     };
+    // Only when the composer actually knows the list. `mediaIds` REPLACES the
+    // stored one server-side, so sending [] for a caller that never tracked
+    // attachments would strip a note's files on an ordinary text edit.
+    if (Array.isArray(mediaIds)) body.mediaIds = mediaIds;
     let before = null;
     setNotes((cur) => cur.map((n) => {
       if (n.id !== id) return n;
@@ -499,12 +614,74 @@ export default function NotesScreen() {
     }
   };
 
+  /**
+   * Link (or unlink) a SAVED note's attachments, the moment they change.
+   *
+   * Not on Done, unlike every other field the composer edits. Attaching is an
+   * action with a progress bar, not a text edit: the file is already in the
+   * vault and the user has watched a thumbnail appear. Holding that link until
+   * Done would mean tapping back silently unpicks a photo that visibly landed.
+   *
+   * The optimistic list update is what makes the timeline's thumbnail follow
+   * along without waiting for a refresh.
+   */
+  const persistNoteMedia = useCallback(async (id, mediaIds) => {
+    // An optimistic local row has no id on the pond yet — its attachments ride
+    // along in the create instead (see createNote), so there is nothing to
+    // PATCH and a request here would 404.
+    if (!id || String(id).startsWith('local_')) return;
+    // A to-do's attachments live in its task's meta, not in a notes column.
+    const asTask = tasks.find((t) => t.id === id);
+    if (asTask) {
+      const meta = { ...(asTask.meta && typeof asTask.meta === 'object' ? asTask.meta : {}), mediaIds };
+      setTasks((cur) => cur.map((t) => (t.id === id ? { ...t, meta } : t)));
+      try {
+        await sendOrQueue(api, {
+          method: 'patch', path: `/tasks/${id}`, body: { meta },
+          key: `task-media:${id}`, label: 'todo attachments',
+        });
+      } catch (e) {
+        Alert.alert('Could not save the attachment', e.message || String(e));
+      }
+      return;
+    }
+    setNotes((cur) => cur.map((n) => (n.id === id ? { ...n, mediaIds } : n)));
+    try {
+      await sendOrQueue(api, {
+        method: 'patch',
+        path: `/turtle/notes/${id}`,
+        body: { mediaIds },
+        // Keyed separately from 'note:<id>' so a queued text edit and a queued
+        // attachment change don't overwrite each other in the outbox.
+        key: `note-media:${id}`,
+        label: 'note attachments',
+      });
+    } catch (e) {
+      Alert.alert('Could not save the attachment', e.message || String(e));
+    }
+  }, [api, tasks]);
+
   const toggleDone = async (note) => {
     // Optimistic flip: update local state before the network call so the
     // checkbox feels responsive. On a PERMANENT error, roll back THIS note
     // functionally (no stale `notes` closure — so a memoized NoteRow holding
     // an old handler still rolls back correctly). Offline → the flip stays and
     // the outbox replays it; repeated flips collapse to the last one.
+    // Which table this row lives in decides the endpoint. A to-do is a task,
+    // so ticking one here ticks it on the calendar — that is the whole point.
+    if (isTaskTodo(note)) {
+      setTasks((cur) => cur.map((t) => (t.id === note.id ? { ...t, completed: !note.done } : t)));
+      try {
+        await sendOrQueue(api, {
+          method: 'patch', path: `/tasks/${note.id}`, body: { completed: !note.done },
+          key: `task-done:${note.id}`, label: 'todo done',
+        });
+      } catch (e) {
+        setTasks((cur) => cur.map((t) => (t.id === note.id ? { ...t, completed: !!note.done } : t)));
+        Alert.alert('Could not update', e.message || String(e));
+      }
+      return;
+    }
     setNotes((cur) => cur.map((n) => (n.id === note.id ? { ...n, done: !n.done } : n)));
     try {
       await sendOrQueue(api, { method: 'patch', path: `/turtle/notes/${note.id}`, body: { done: !note.done }, key: `note-done:${note.id}`, label: 'note done' });
@@ -516,6 +693,20 @@ export default function NotesScreen() {
 
   // Raw delete (no confirm) — the action sheet below is the deliberate step.
   const performDelete = async (note) => {
+    if (isTaskTodo(note)) {
+      const before = tasks.find((t) => t.id === note.id);
+      setTasks((cur) => cur.filter((t) => t.id !== note.id));
+      try {
+        await sendOrQueue(api, {
+          method: 'delete', path: `/tasks/${note.id}`,
+          key: `task-delete:${note.id}`, label: 'todo delete',
+        });
+      } catch (e) {
+        if (before) setTasks((cur) => (cur.some((t) => t.id === note.id) ? cur : [before, ...cur]));
+        Alert.alert('Delete failed', e.message || String(e));
+      }
+      return;
+    }
     setNotes((cur) => cur.filter((n) => n.id !== note.id));
     try {
       const r = await sendOrQueue(api, { method: 'delete', path: `/turtle/notes/${note.id}`, key: `note-delete:${note.id}`, label: 'note delete' });
@@ -675,9 +866,11 @@ export default function NotesScreen() {
   // to whatever note objects are on hand (loaded page first, then serverMatches).
   const visibleNotes = useMemo(() => {
     const q = search.trim();
-    if (!q) return notes;
+    // `timeline`, not `notes`: a to-do is a task now, and a search that could
+    // not reach them would silently stop finding half of what this screen shows.
+    if (!q) return timeline;
     const byId = new Map();
-    for (const n of notes) if (matchesNoteSearch(n, q)) byId.set(n.id, n);
+    for (const n of timeline) if (matchesNoteSearch(n, q)) byId.set(n.id, n);
     for (const n of serverMatches) if (!byId.has(n.id)) byId.set(n.id, n);
     if (byId.size > 0) return Array.from(byId.values());
     // Tier 3 fallback. KNOWN LIMITATION: fuzzyRank ranks ids over the FULL
@@ -692,16 +885,16 @@ export default function NotesScreen() {
     const ids = new Set(fuzzyRank(q, noteIndex.current));
     if (ids.size === 0) return [];
     const pool = new Map();
-    for (const n of notes) pool.set(n.id, n);
+    for (const n of timeline) pool.set(n.id, n);
     for (const n of serverMatches) pool.set(n.id, n);
     return Array.from(ids).map((id) => pool.get(id)).filter(Boolean);
-  }, [notes, search, serverMatches]);
+  }, [timeline, search, serverMatches]);
 
   // Visible list ANDs the type filter (All/Notes/Todos) with the topic filter.
   // Topic match is "exact topic OR a sub-topic of it" (e.g. selecting `moodboard`
   // also shows `moodboard/wedding`) — same predicate as the web NotesScreen.
   const visible = useMemo(() => {
-    let list = notes;
+    let list = timeline;
     if (filter !== FILTER_ALL) list = list.filter((n) => matchesFilter(n, filter));
     if (selectedTopic === UNTAGGED) {
       list = list.filter((n) => !Array.isArray(n.tags) || n.tags.length === 0);
@@ -711,32 +904,39 @@ export default function NotesScreen() {
         && n.tags.some((t) => t === sel || String(t).startsWith(sel + '/')));
     }
     return list;
-  }, [notes, filter, selectedTopic]);
+  }, [timeline, filter, selectedTopic]);
 
   // Tab counts. The list is paged, so counting loaded rows undercounts until
   // the whole library has been scrolled — the server's grouped COUNT is the
   // authority. Loaded rows are the fallback until it lands (and if it fails),
   // so the tabs are never blank.
   const counts = useMemo(() => {
-    // Feedback is tag-shaped, so an older server's grouped-by-type COUNT can't
-    // answer it. It sends `feedback` when it knows how; until then (and on a
-    // server that predates it) the loaded rows are the fallback.
-    let localFeedback = 0;
-    for (const n of notes) if (isFeedbackNote(n)) localFeedback += 1;
-    if (serverCounts) {
-      return {
-        ...serverCounts,
-        feedback: typeof serverCounts.feedback === 'number' ? serverCounts.feedback : localFeedback,
-      };
+    // The TODO tallies are local and exact: /tasks is unpaged, so every to-do
+    // is already in hand. The server's grouped COUNT is no longer the
+    // authority for them — it counts the notes table, which is precisely the
+    // place to-dos no longer live — so only its `note` figure is used, and
+    // only because the notes list itself is still paged.
+    let todo = 0;
+    let feedback = 0;
+    let localNotes = 0;
+    for (const n of timeline) {
+      if ((n.type || 'note') === 'todo') {
+        todo += 1;
+        if (isFeedbackNote(n)) feedback += 1;
+      } else {
+        localNotes += 1;
+      }
     }
-    const c = { all: notes.length, note: 0, todo: 0, feedback: localFeedback };
-    for (const n of notes) {
-      const t = n.type || 'note';
-      if (t === 'todo') c.todo += 1;
-      else c.note += 1;
-    }
-    return c;
-  }, [notes, serverCounts]);
+    const note = typeof serverCounts?.note === 'number' ? serverCounts.note : localNotes;
+    return { all: note + todo, note, todo, feedback };
+  }, [timeline, serverCounts]);
+
+  // How many to-dos are still in the inbox — open, and not on a day yet. This
+  // is the number the Todos tab exists to drive down.
+  const inboxCount = useMemo(
+    () => timeline.reduce((n, t) => n + (isInboxTodo(t) ? 1 : 0), 0),
+    [timeline],
+  );
 
   // Unique tags already used across all notes/todos, so the composer can offer
   // them as tap-to-select chips (rather than making the user retype/remember a
@@ -806,6 +1006,11 @@ export default function NotesScreen() {
       list = list.filter((n) => Array.isArray(n.tags)
         && n.tags.some((t) => t === sel || String(t).startsWith(sel + '/')));
     }
+    // The to-do tabs lead with the INBOX. A dated task you will meet again on
+    // the calendar, on the day it matters; an undated one you will only ever
+    // meet here, so sorting it below a month of scheduled work is how an inbox
+    // becomes a place things go to be forgotten.
+    if (filterKey === FILTER_TODO || filterKey === FILTER_FEEDBACK) return orderTodos(list);
     return list;
   }, [visibleNotes, selectedTopic]);
   const renderPageBody = (filterKey) => {
@@ -842,8 +1047,14 @@ export default function NotesScreen() {
         // for itself. +28 keeps the last card a comfortable gap clear rather
         // than resting right on the dock's top edge.
         contentContainerStyle={[styles.list, { paddingBottom: dockH + 28 }, data.length === 0 && { flexGrow: 1 }]}
-        // No ListHeaderComponent: the chrome is fixed above the pager now, so
-        // it neither scrolls away with the notes nor swipes with the pages.
+        // The chrome is fixed above the pager, so the only thing that rides
+        // here is the inbox line — and only on the to-do tabs, where it names
+        // what the tab is for: the things captured but not yet given a day.
+        ListHeaderComponent={
+          (filterKey === FILTER_TODO || filterKey === FILTER_FEEDBACK) && inboxCountLabel(inboxCount)
+            ? <Text style={styles.inboxLine}>{inboxCountLabel(inboxCount)} · schedule one on the Tasks tab</Text>
+            : null
+        }
         // flexGrow still lets the empty state centre in the space below it.
         ListEmptyComponent={empty}
         ListFooterComponent={loadingMore ? (
@@ -858,31 +1069,45 @@ export default function NotesScreen() {
         // whichever page you're scrolling extends it for all three.
         onEndReached={loadMoreNotes}
         onEndReachedThreshold={0.6}
+        // The thumbnail batch lands AFTER the rows are mounted, and `data` does
+        // not change when it does — without this the pictures would wait for
+        // some unrelated re-render to appear.
+        extraData={noteThumbs}
         {...keyboardScrollProps}
-        renderItem={({ item }) => (
-          isLinkNote(item) ? (
+        renderItem={({ item }) => {
+          if (isLinkNote(item)) {
             // Shared-link / media note → the rich WhatsApp-style card. Tapping the
             // card opens the original; a pencil opens the composer to edit the
-            // (auto-unfurled) description.
-            <LinkNoteCard
-              note={item}
-              onEdit={openEditNote}
-              onLongPress={showNoteActions}
-              theme={theme}
-              isDark={isDark}
-            />
-          ) : (
+            // (auto-unfurled) description. It already shows the unfurled
+            // preview image, so it needs no attachment thumbnail of its own.
+            return (
+              <LinkNoteCard
+                note={item}
+                onEdit={openEditNote}
+                onLongPress={showNoteActions}
+                theme={theme}
+                isDark={isDark}
+              />
+            );
+          }
+          // Scalars, not the lookup: the row is memoized, and handing it a Map
+          // that is replaced on every batch would re-render every row in the
+          // list each time any one note's thumbnail arrived.
+          const attach = rowThumb(mediaOrigin, item, noteThumbs);
+          return (
             <NoteRow
               note={item}
               onPress={openEditNote}
               onToggleDone={toggleDone}
               onLongPress={showNoteActions}
               onSendToClaude={sendTodoToClaude}
+              attachThumb={attach?.uri || null}
+              attachCount={attach?.count || 0}
               theme={theme}
               isDark={isDark}
             />
-          )
-        )}
+          );
+        }}
       />
     );
   };
@@ -1150,11 +1375,22 @@ export default function NotesScreen() {
         allTags={allTags}
         onClose={() => { setComposerOpen(false); setEditingNote(null); }}
         onSubmit={async (payload) => {
-          const ok = editingNote
-            ? await editNote(editingNote.id, payload)
-            : await createNote(payload);
+          // Which store a save lands in follows the KIND the composer settled
+          // on, not which tab it was opened from: write a to-do and it is a
+          // task, on the calendar, whatever page you started from. Editing
+          // keeps the row where it already lives.
+          const isTodoKind = payload.type === 'todo';
+          let ok;
+          if (editingNote) {
+            ok = isTaskTodo(editingNote)
+              ? await editTodo(editingNote.id, payload, editingNote.__meta)
+              : await editNote(editingNote.id, payload);
+          } else {
+            ok = isTodoKind ? await createTodo(payload) : await createNote(payload);
+          }
           if (ok) { setComposerOpen(false); setEditingNote(null); }
         }}
+        onPersistMedia={persistNoteMedia}
         theme={theme}
         isDark={isDark}
       />
@@ -1452,7 +1688,7 @@ const topicSearchStyles = (theme, isDark) => StyleSheet.create({
 });
 
 // ── Note row ────────────────────────────────────────────────
-function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude, theme, isDark }) {
+function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude, attachThumb, attachCount = 0, theme, isDark }) {
   const isTodo = note.type === 'todo';
   const isDone = !!note.done;
   const styles = noteRowStyles(theme, isDark);
@@ -1528,6 +1764,40 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
         </Text>
       </View>
 
+      {/* What this note has attached, at a glance while scrolling past it.
+          A trailing square rather than a full-width strip on purpose: the row
+          heights stay even down the list, so the timeline still reads as a
+          list of notes and not as a gallery. The picture is the note's first
+          IMAGE (see rowThumb) — that's what you recognise it by.
+
+          The frame is drawn from `attachCount` alone, so it is there from the
+          first frame, before any thumbnail has resolved and for a note that
+          carries only documents. The paperclip is what it holds until a
+          picture arrives, and forever if none can. */}
+      {attachCount > 0 && (
+        <View style={styles.attachThumb}>
+          {attachThumb ? (
+            <ExpoImage
+              testID={`note-row-thumb-${note.id}`}
+              source={{ uri: attachThumb }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+              transition={140}
+              cachePolicy="memory-disk"
+            />
+          ) : (
+            <Icon name="paperclip" size={16} color={theme.colors.textMuted} />
+          )}
+          {/* How many files in all, not how many pictures — "2 more things are
+              in here" is the useful thing, and the note itself lists them. */}
+          {attachCount > 1 && (
+            <View style={styles.attachBadge}>
+              <Text style={styles.attachBadgeText}>{attachCount}</Text>
+            </View>
+          )}
+        </View>
+      )}
+
       {/* Send-to-Claude — todos only. Queues this item for the Turtle-tab
           Claude session to work through. */}
       {isTodo && onSendToClaude && (
@@ -1550,7 +1820,11 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
 // open/close, etc.). Callback props are recreated each render but behaviorally
 // identical (Notes uses functional setState, so there's no stale-closure risk).
 const NoteRow = React.memo(NoteRowImpl, (prev, next) =>
-  prev.note === next.note && prev.isDark === next.isDark,
+  prev.note === next.note && prev.isDark === next.isDark
+  // Both scalars, and both arrive LATE: the thumbnail batch resolves after the
+  // rows are already on screen. Leave them out of the comparison and the
+  // picture never appears until something else happens to invalidate the row.
+  && prev.attachThumb === next.attachThumb && prev.attachCount === next.attachCount,
 );
 
 const noteRowStyles = (theme, isDark) => StyleSheet.create({
@@ -1613,6 +1887,42 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     color: theme.colors.textSecondary,
     marginTop: 4,
     lineHeight: 18,
+  },
+  // Attached-media thumbnail, trailing edge. Aligned to the row's top like the
+  // checkbox and the send button, so a two-line note and a ten-line one hang
+  // their thumbnails on the same line.
+  attachThumb: {
+    width: 46,
+    height: 46,
+    borderRadius: 8,
+    marginLeft: 10,
+    marginTop: 2,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    ...depth(theme, 'control'),
+  },
+  // Sits ON the picture, so it needs its own contrast rather than the theme's
+  // — a light scrim would vanish against a bright photo.
+  attachBadge: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.62)',
+  },
+  attachBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#fff',
   },
   // Cached link-preview thumbnail for a shared-link note.
   linkThumb: {
@@ -1959,7 +2269,7 @@ const linkCardStyles = (theme, isDark) => StyleSheet.create({
 });
 
 // ── Composer modal ──────────────────────────────────────────
-function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic = null, allTags = [], onClose, onSubmit, theme, isDark }) {
+function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic = null, allTags = [], onClose, onSubmit, onPersistMedia, theme, isDark }) {
   const [content, setContent] = useState('');
   const [description, setDescription] = useState('');
   // Composer mode: 'note' | 'todo' | 'feedback'. To-do is the default for a new
@@ -1973,6 +2283,22 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
   const [tags, setTags] = useState([]);
   const [tagDraft, setTagDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  // The note's attachments, as vault media ids. Seeded from the note being
+  // edited and appended to as uploads land — the strip below renders whatever
+  // is in here, so a picture appears the moment the vault has it.
+  const [mediaIds, setMediaIds] = useState([]);
+  // Uploads in flight or failed: [{ key, name, pct, error }]. They live beside
+  // mediaIds rather than in it, because a file that has not landed has no id.
+  const [uploads, setUploads] = useState([]);
+  // Read by the upload loop, which runs across awaits and must see the LIVE
+  // list rather than the one captured when the picker opened.
+  const mediaIdsRef = useRef([]);
+  const uploadsRef = useRef([]);
+  uploadsRef.current = uploads;
+  // Same reason: a file picked after a tag was typed should still carry it.
+  const tagsRef = useRef(tags);
+  tagsRef.current = tags;
+  const { api, getBaseUrl } = useServer();
   const styles = composerStyles(theme, isDark);
   // The page runs edge to edge, so it owns its own status-bar clearance.
   const insets = useSafeAreaInsets();
@@ -1995,6 +2321,158 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
   // Everything that isn't the note itself — kind, feedback target, tags — lives
   // behind the gear now, so the writing surface is just paper.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // A tapped attachment → the in-note image viewer. `{ images, index }` | null.
+  // The state lives HERE rather than inside NoteAttachments because the viewer
+  // is an absolute overlay: mounted inside the scrolling paper it would be
+  // positioned against the scroll CONTENT, so it has to be a child of the page.
+  const [viewer, setViewer] = useState(null);
+  const openViewer = useCallback((images, index) => {
+    if (!images || images.length === 0) return;
+    Keyboard.dismiss();
+    setViewer({ images, index });
+  }, []);
+  const closeViewer = useCallback(() => setViewer(null), []);
+
+  // ── Attachments ───────────────────────────────────────────
+  // One place that commits a new attachment list: it moves the ref (which the
+  // loop reads), the state (which the strip renders) and, for a note that
+  // already exists on the pond, the note itself. See persistNoteMedia for why
+  // that last one does not wait for Done.
+  const commitMediaIds = useCallback((ids) => {
+    mediaIdsRef.current = ids;
+    setMediaIds(ids);
+    if (initialNote?.id) onPersistMedia?.(initialNote.id, ids);
+  }, [initialNote, onPersistMedia]);
+
+  /**
+   * Upload picked files, one at a time, attaching each as it lands.
+   *
+   * Sequential on purpose. Three photos uploading at once compete for the same
+   * uplink and all three finish later than the first would have alone — and
+   * this is a foreground action the user is watching, so the first thumbnail
+   * appearing quickly is worth more than the batch finishing marginally sooner.
+   * A failure is left ON SCREEN as a row with its reason rather than thrown:
+   * one bad file must not take the others down with it.
+   */
+  const runUploads = useCallback(async (assets) => {
+    const uploadUrl = `${getBaseUrl()}/media/upload`;
+    const token = getApiAuthToken();
+    for (let i = 0; i < assets.length; i++) {
+      const asset = assets[i];
+      const key = `${asset.uri}#${i}`;
+      setUploads((u) => [...u, { key, name: asset.fileName, pct: 0, error: null }]);
+      try {
+        const media = await uploadNoteAttachment({
+          uploadUrl,
+          token,
+          asset,
+          tags: tagsRef.current,
+          onProgress: (pct) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, pct } : x))),
+        });
+        setUploads((u) => u.filter((x) => x.key !== key));
+        const { ids } = mergeMediaIds(mediaIdsRef.current, [media.id]);
+        commitMediaIds(ids);
+        // The vault names a file after the multipart part, which is the file
+        // URI's basename — a picker UUID for a photo, a staging copy's
+        // timestamped name for a document. Neither is what the user chose, and
+        // the chip in the note shows exactly this. Best-effort, and only when
+        // it actually differs: a rename that fails costs a wrong label, not an
+        // attachment.
+        if (asset.fileName && uploadedName(asset.uri) !== asset.fileName) {
+          api.patch(`/media/${media.id}`, { originalName: asset.fileName })
+            .catch(() => { /* the file is attached; its label is cosmetic */ });
+        }
+      } catch (e) {
+        const message = uploadErrorMessage(e);
+        setUploads((u) => u.map((x) => (x.key === key ? { ...x, error: message } : x)));
+      }
+    }
+  }, [api, getBaseUrl, commitMediaIds]);
+
+  /** Room left, counting what is already in flight so two picks can't overfill. */
+  const roomLeft = () => attachRoom(mediaIdsRef.current.length + uploadsRef.current.length);
+  const noRoom = () => {
+    Alert.alert('That’s the limit', `A note can carry up to ${MAX_NOTE_MEDIA} files.`);
+  };
+
+  const addPhotos = useCallback(async () => {
+    tapHaptic();
+    const room = roomLeft();
+    if (room <= 0) { noRoom(); return; }
+    Keyboard.dismiss();
+    try {
+      const picked = await pickNotePhotos({ room });
+      if (picked.status !== 'picked') return;
+      await runUploads(picked.assets);
+    } catch (e) {
+      Alert.alert('Could not open your photos', e?.message || 'The picker did not open.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runUploads]);
+
+  const addFiles = useCallback(async () => {
+    tapHaptic();
+    const room = roomLeft();
+    if (room <= 0) { noRoom(); return; }
+    Keyboard.dismiss();
+    let picked;
+    try {
+      picked = await pickSystemFiles();
+    } catch (e) {
+      Alert.alert('Could not open your files', e?.message || 'The file browser did not open.');
+      return;
+    }
+    if (picked.status === 'canceled') return;
+    if (picked.status === 'unavailable') {
+      // The npm package is in this bundle but the native module is not — i.e.
+      // an OTA update landed on a binary built before it was added.
+      Alert.alert(
+        'Not in this build yet',
+        'Picking from phone storage needs the next app build. Until it lands, open the file in your Files app and share it to Turtle.',
+      );
+      return;
+    }
+    const skippedNames = picked.skipped.map((s) => s.fileName).join(', ');
+    if (picked.status === 'empty') {
+      Alert.alert('Nothing to add', `Turtle can’t attach ${skippedNames || 'that'} to a note.`);
+      return;
+    }
+    await runUploads(picked.files.slice(0, room).map((f) => ({
+      uri: f.path,
+      fileName: f.fileName,
+      mimeType: f.mimeType,
+    })));
+    if (picked.skipped.length > 0) {
+      Alert.alert('Some files skipped', `${skippedNames} can’t be attached to a note.`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runUploads]);
+
+  /**
+   * Unlink an attachment. The note stops carrying it; the vault keeps it.
+   *
+   * Deleting the media outright would be the wrong default — the same photo
+   * can be in an album, or attached to another note — and this is an undo for
+   * a mis-pick, not a delete button.
+   */
+  const removeAttachment = useCallback((item) => {
+    Alert.alert(
+      'Remove from note?',
+      `${item?.name || 'This file'} stays in your vault — it just won’t be attached here.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => commitMediaIds(removeMediaId(mediaIdsRef.current, item.id)),
+        },
+      ],
+    );
+  }, [commitMediaIds]);
+
+  const dismissUpload = useCallback((key) => {
+    setUploads((u) => u.filter((x) => x.key !== key));
+  }, []);
   // Imperative focus: autoFocus fires on mount (before the page has slid in),
   // which pops the keyboard early and ruins the "arrive together" feel. We focus
   // on the next frame instead so the keyboard rises in step with the slide.
@@ -2020,6 +2498,16 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
       setTagDraft('');
       setBusy(false);
       setSettingsOpen(false);
+      setViewer(null);
+      // A fresh capture starts with nothing attached; an edit starts with
+      // whatever the note already carries. The ref is seeded too — the upload
+      // loop reads it, and it runs before any re-render has happened.
+      const seeded = Array.isArray(initialNote?.mediaIds)
+        ? initialNote.mediaIds.filter(Boolean).map(String)
+        : [];
+      mediaIdsRef.current = seeded;
+      setMediaIds(seeded);
+      setUploads([]);
     }
   }, [visible, initialNote, initialMode, activeTopic]);
 
@@ -2224,7 +2712,11 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
       }
     }
     const type = mode === 'note' ? 'note' : 'todo';
-    await onSubmit({ content, description, type, tags: finalTags });
+    // mediaIds rides along for BOTH paths. An existing note has already had
+    // them persisted as they landed (see commitMediaIds), so this is a no-op
+    // there; a brand-new note has no id to persist against, so the create is
+    // the only chance to link what was uploaded while it was being written.
+    await onSubmit({ content, description, type, tags: finalTags, mediaIds: mediaIdsRef.current });
     setBusy(false);
   };
 
@@ -2233,7 +2725,10 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
   // because useAnimatedKeyboard cannot see the keyboard from inside a Modal, and
   // the toolbar's frame-for-frame lift depends on it.
   return (
-    <EdgeSwipePage overlay visible={visible} onClose={closePage} swipeEnabled={!settingsOpen}>
+    // swipeEnabled is off while the viewer is up for the reason EdgeSwipePage
+    // documents: a left-edge drag would otherwise leak through the in-tree
+    // overlay and close the whole note from under the picture.
+    <EdgeSwipePage overlay visible={visible} onClose={closePage} swipeEnabled={!settingsOpen && !viewer}>
       <View style={styles.page}>
         {/* Nav bar — iOS Notes' shape: back on the left, the note's actions on
             the right. No title: the note's own first line is the title. */}
@@ -2322,6 +2817,48 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
               scrollEnabled={false}
             />
 
+            {/* The note's files, above the body — the same order the web
+                reading pane uses, so a note opened on either surface reads the
+                same way. Renders nothing for a note that carries none (and for
+                a brand-new capture, which has no id to carry them under yet). */}
+            <NoteAttachments
+              mediaIds={mediaIds}
+              theme={theme}
+              isDark={isDark}
+              onOpenImage={openViewer}
+              onRemove={removeAttachment}
+            />
+
+            {/* Files still on their way up (and the ones that didn't make it).
+                Separate from the strip above because a file with no id yet is
+                not something the note can point at — it is an action in
+                progress, and it reads as one. */}
+            {uploads.length > 0 && (
+              <View style={styles.uploadList}>
+                {uploads.map((u) => (
+                  <View key={u.key} style={styles.uploadRow}>
+                    {u.error
+                      ? <Icon name="alert-circle-outline" size={15} color={theme.colors.accentError} />
+                      : <ActivityIndicator size="small" color={theme.colors.textTertiary} />}
+                    <Text style={styles.uploadName} numberOfLines={1}>{u.name}</Text>
+                    <Text style={[styles.uploadStatus, u.error && styles.uploadError]} numberOfLines={1}>
+                      {u.error || `${u.pct}%`}
+                    </Text>
+                    {u.error && (
+                      <TouchableOpacity
+                        onPress={() => dismissUpload(u.key)}
+                        hitSlop={{ top: 10, bottom: 10, left: 8, right: 10 }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Dismiss ${u.name}`}
+                      >
+                        <Icon name="close" size={15} color={theme.colors.textMuted} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ))}
+              </View>
+            )}
+
             <AppTextInput
               placeholder="Start writing…"
               placeholderTextColor={theme.colors.textPlaceholder}
@@ -2346,6 +2883,27 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
             hand while writing (the multiline inputs take Return as a newline,
             so there's no other way down). */}
         <Reanimated.View style={[styles.toolbar, { bottom: dockH }, toolbarLift]} pointerEvents="box-none">
+          {/* Two doors rather than one menu: a phone has exactly two places a
+              file can come from, and naming them both costs one icon and saves
+              a tap. Photos is images only — see pickNotePhotos for why — and
+              Files is everything else the vault will take. */}
+          <TouchableOpacity
+            onPress={addPhotos}
+            style={styles.toolbarBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Add photos"
+          >
+            <Icon name="image-outline" size={21} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={addFiles}
+            style={styles.toolbarBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Add files"
+          >
+            <Icon name="paperclip" size={20} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+          <View style={{ flex: 1 }} />
           <TouchableOpacity
             onPress={Keyboard.dismiss}
             style={styles.toolbarBtn}
@@ -2554,6 +3112,18 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
             </Reanimated.View>
           </View>
         )}
+
+        {/* The image viewer — last child of the PAGE, so it paints over the
+            paper, the toolbar and the settings layer alike. It takes URLs and
+            nothing else, so opening a note's screenshot never loads the vault,
+            never leaves the Notes tab, and works for media the gallery has
+            never paged in. */}
+        <AttachmentViewer
+          visible={!!viewer}
+          images={viewer?.images || []}
+          index={viewer?.index || 0}
+          onClose={closeViewer}
+        />
       </View>
     </EdgeSwipePage>
   );
@@ -2609,6 +3179,24 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     backgroundColor: theme.colors.background,
   },
   toolbarBtn: { width: 40, height: 34, alignItems: 'center', justifyContent: 'center' },
+  // Files on their way into the vault. A row per file, above the body.
+  uploadList: { gap: 6, marginBottom: 14 },
+  uploadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
+  // flexShrink + one line: a long filename ellipsizes instead of pushing the
+  // percentage off the row's right edge.
+  uploadName: { flex: 1, flexShrink: 1, fontSize: 13, color: theme.colors.textSecondary },
+  uploadStatus: { fontSize: 12, fontWeight: '600', color: theme.colors.textTertiary, flexShrink: 1 },
+  uploadError: { color: theme.colors.accentError },
   // Settings — an in-page layer, not a Modal (iOS won't present one over the
   // page's own). Scrim + a card anchored to the bottom.
   settingsLayer: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end', zIndex: 20 },
@@ -2931,6 +3519,14 @@ const createStyles = (theme, isDark) => StyleSheet.create({
   list: {
     paddingHorizontal: 16,
     paddingBottom: 100,
+  },
+  // What the Todos tab is for, said once at the top of it.
+  inboxLine: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: theme.colors.textTertiary,
+    paddingBottom: 10,
+    paddingHorizontal: 2,
   },
   // Spinner shown while the next page of notes is in flight.
   listFooter: {

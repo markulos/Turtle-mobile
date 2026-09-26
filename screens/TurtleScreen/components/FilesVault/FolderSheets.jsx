@@ -10,7 +10,7 @@ import ViewerSheet from '../PhotoViewer/ViewerSheet';
 import AppTextInput from '../../../../components/AppTextInput';
 import { tapHaptic, impactHaptic } from '../../../../utils/haptics';
 import useFolderData from './useFolderData';
-import FolderDisc from './FolderDisc';
+import FolderTile, { TILE_RADIUS } from './FolderTile';
 
 /** The sheet pill field: fixed-height View, auto-height input (STYLE-RULES).
  *  AppTextInput draws the placeholder in the app face (STYLE-RULES §5). */
@@ -85,13 +85,13 @@ export function FolderPickerSheet({ title = 'Move to', exclude = [], allowUnfile
       <View style={styles.grid}>
         {!here && allowUnfiled && (
           <Pressable onPressIn={() => tapHaptic()} onPress={() => onPick({ id: 'unfiled', name: 'Unfiled' })} accessibilityRole="button" accessibilityLabel="Choose Unfiled" style={({ pressed }) => [styles.unfiled, { opacity: pressed ? 0.6 : 1 }]}>
-            <View style={[styles.unfiledDisc, { backgroundColor: c.surface, borderColor: c.border }]}><Icon name="file-outline" size={26} color={c.textSecondary} /></View>
+            <View style={[styles.unfiledTile, { backgroundColor: c.surface, borderColor: c.border }]}><Icon name="file-outline" size={26} color={c.textSecondary} /></View>
             <Text style={[styles.discName, { color: c.textPrimary }]} numberOfLines={1}>Unfiled</Text>
             <Text style={[styles.discCount, { color: c.textMuted }]} numberOfLines={1}>{data?.unfiled?.count ?? ''}</Text>
           </Pressable>
         )}
         {(data?.folders || []).map((f) => (
-          <FolderDisc key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={excluded.has(f.id) || !!f.pending} onPress={() => setParent(f.id)} testID={`pick-${f.id}`} />
+          <FolderTile key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={excluded.has(f.id) || !!f.pending} onPress={() => setParent(f.id)} testID={`pick-${f.id}`} />
         ))}
       </View>
       {data && data.folders.length === 0 && here && <Text style={[styles.hint, { color: c.textMuted }]}>No folders inside. "Move here" files the selection in {here.name}.</Text>}
@@ -161,7 +161,7 @@ const styles = StyleSheet.create({
   backText: { fontSize: 15, fontWeight: '600', flexShrink: 1 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8 },
   unfiled: { alignItems: 'center', width: 88, paddingVertical: 6 },
-  unfiledDisc: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth },
+  unfiledTile: { width: 72, height: 72, borderRadius: TILE_RADIUS, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth },
   discName: { marginTop: 6, fontSize: 12.5, fontWeight: '600', flexShrink: 1 },
   discCount: { fontSize: 11, marginTop: 1, flexShrink: 1 },
   label: { fontSize: 10.5, letterSpacing: 0.9, fontWeight: '700', marginHorizontal: 16, marginTop: 14, marginBottom: 8 },
