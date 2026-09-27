@@ -7,9 +7,11 @@
  */
 import {
   ENDED_FRESH_MS,
+  alignedStamp,
   endedIdentity,
   liveActivityAction,
   shouldCelebrate,
+  taskSessionFromPush,
   translateServerState,
   visibleTimer,
 } from '../pomodoroState';
@@ -168,5 +170,47 @@ describe('shouldCelebrate — confetti only for a real, witnessed focus completi
 
   test('never for a stop', () => {
     expect(shouldCelebrate('active', ended({ status: 'stopped', mode: 'focus', endedAt: NOW }), NOW)).toBe(false);
+  });
+});
+
+// The task-linked block's clock rule and the `focus:changed` push. Both exist so
+// the Focus page's ring draws the same second the desktop draws, straight off
+// the server's stamps, instead of trusting this phone's idea of the time.
+const MIN = 60_000;
+const pushed = (over = {}) => ({
+  id: 'pomo-1', taskId: 't1', subtaskId: null, startedAt: NOW - 2 * MIN, durationMinutes: 25,
+  status: 'in_progress', taskTitle: 'Write the report', subtaskTitle: null, endsAt: NOW + 23 * MIN,
+  ...over,
+});
+
+describe('alignedStamp — a server stamp on this phone\'s clock', () => {
+  test('a server ten seconds behind moves the stamp ten seconds later', () => {
+    expect(alignedStamp(NOW - 2 * MIN, NOW - 10_000, NOW)).toBe(NOW - 2 * MIN + 10_000);
+  });
+  test('no serverNow leaves the stamp alone', () => {
+    expect(alignedStamp(123, undefined, NOW)).toBe(123);
+    expect(alignedStamp(123, Number.NaN, NOW)).toBe(123);
+  });
+});
+
+describe('taskSessionFromPush — what the ring should do with a push', () => {
+  test('a live block becomes the activePomo shape, on this clock', () => {
+    const r = taskSessionFromPush({ kind: 'started', session: pushed(), serverNow: NOW - 5_000 }, NOW);
+    expect(r.action).toBe('set');
+    expect(r.session).toEqual({
+      id: 'pomo-1', taskId: 't1', mode: 'focus', durationMinutes: 25, taskTitle: 'Write the report',
+      startedAt: NOW - 2 * MIN + 5_000, endsAt: NOW + 23 * MIN + 5_000,
+    });
+  });
+  test('nothing running, a finished block, or an elapsed one clears the ring', () => {
+    expect(taskSessionFromPush({ kind: 'stopped', session: null, serverNow: NOW }, NOW)).toEqual({ action: 'clear' });
+    expect(taskSessionFromPush({ kind: 'completed', session: pushed({ status: 'completed' }), serverNow: NOW }, NOW).action).toBe('clear');
+    expect(taskSessionFromPush({ kind: 'changed', session: pushed({ startedAt: NOW - 30 * MIN }), serverNow: NOW }, NOW).action).toBe('clear');
+  });
+  test('the server not saying, or an unreadable block, means re-read', () => {
+    expect(taskSessionFromPush({ kind: 'changed' }, NOW)).toEqual({ action: 'resync' });
+    expect(taskSessionFromPush(null, NOW)).toEqual({ action: 'resync' });
+    expect(taskSessionFromPush({ session: pushed({ taskId: '' }) }, NOW)).toEqual({ action: 'resync' });
+    expect(taskSessionFromPush({ session: pushed({ durationMinutes: 0 }) }, NOW)).toEqual({ action: 'resync' });
   });
 });

@@ -26,6 +26,7 @@ import { FlashList } from '@shopify/flash-list';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useServer } from '../../context/ServerContext';
 import { useSyncSignals } from '../../context/DownloadsContext';
+import { alignedStamp, taskSessionFromPush } from '../../utils/pomodoroState';
 import { useTheme } from '../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTaskData } from './hooks/useTaskData';
@@ -562,7 +563,7 @@ export default function TasksScreen() {
   // Cross-device change pings off the app-level socket (context/DownloadsContext).
   // Counters, not payloads: the server deliberately sends nothing, so the answer
   // to "what changed" is always a refetch over authenticated HTTP.
-  const { tasksVersion, focusVersion } = useSyncSignals();
+  const { tasksVersion, focusVersion, focusPush } = useSyncSignals();
   const { celebrate } = useCelebration();
   const navigation = useNavigation();
   const route = useRoute();
@@ -1048,7 +1049,10 @@ export default function TasksScreen() {
       if (activeRes.status === 'fulfilled') {
         const a = activeRes.value?.pomodoro;
         const mins = Number(a?.durationMinutes) || 25;
-        const startedAt = Number(a?.startedAt);
+        // The stamp is the pond's clock; serverNow (when the pond sends it)
+        // measures this phone against it, so the ring lands on the same second
+        // the desktop shows — the same rule the loose timer always had.
+        const startedAt = alignedStamp(Number(a?.startedAt), activeRes.value?.serverNow);
         const endsAt = a ? startedAt + mins * 60000 : null;
         setActivePomo(a?.taskId && endsAt > Date.now()
           ? { taskId: a.taskId, mode: 'focus', endsAt, startedAt, durationMinutes: mins }
@@ -1065,14 +1069,16 @@ export default function TasksScreen() {
         // still drops breaks from the STATS, because a break is time spent not
         // focusing and has no business in the totals or the streak.
         const liveMode = w?.mode === 'break' ? 'break' : 'focus';
+        const wStartedAt = alignedStamp(Number(w?.startedAt), w?.serverNow);
+        const wEndsAt = alignedStamp(Number(w?.endsAt), w?.serverNow);
         const loose = w?.active && w.source === 'server'
-          && Number(w.endsAt) > Date.now()
+          && wEndsAt > Date.now()
           ? {
             taskId: null,
             mode: liveMode,
-            startedAt: Number(w.startedAt),
-            endsAt: Number(w.endsAt),
-            durationMinutes: Math.max(1, Math.round((Number(w.endsAt) - Number(w.startedAt)) / 60000)),
+            startedAt: wStartedAt,
+            endsAt: wEndsAt,
+            durationMinutes: Math.max(1, Math.round((wEndsAt - wStartedAt) / 60000)),
           }
           : null;
         setLooseFocus(loose);
@@ -1094,6 +1100,18 @@ export default function TasksScreen() {
     if (focusVersion === 0) return;   // the mount load already covers first paint
     loadPomodorosRef.current();
   }, [focusVersion]);
+
+  // The push WITH the state: the pond's own stamps, applied the moment they
+  // land — the ring moves before the re-read above has even gone out, and it
+  // moves even when that read is slow. Undefined session = the pond could not
+  // say → re-read; null = nothing running; a live block = draw it.
+  useEffect(() => {
+    if (!focusPush) return;
+    const next = taskSessionFromPush(focusPush.payload, Date.now());
+    if (next.action === 'set') setActivePomo(next.session);
+    else if (next.action === 'clear') setActivePomo(null);
+    else loadPomodorosRef.current();
+  }, [focusPush]);
 
   // ── The task the next session is FOR ──────────────────────────────────────
   // An id rather than the task itself, so a rename or a reschedule while the

@@ -222,4 +222,33 @@ describe('DownloadsProvider pomodoro view', () => {
     });
     expect(shown(view).status).toBe('active');
   });
+
+  test('a focus:changed push is exposed raw, with the moment it arrived, and cleared when the account changes', async () => {
+    const socket = makeSocket();
+    mockIo.mockReturnValue(socket);
+    let latest;
+    function PushProbe() {
+      latest = useSyncSignals().focusPush;
+      return null;
+    }
+    const view = await render(
+      <DownloadsProvider>
+        <PushProbe />
+      </DownloadsProvider>
+    );
+    expect(latest).toBeNull();
+    const payload = { kind: 'started', session: { id: 'p1', taskId: 't1', startedAt: 1000, durationMinutes: 25, status: 'in_progress' }, serverNow: 2000 };
+    const before = Date.now();
+    await act(async () => { socket.handler('focus:changed')(payload); });
+    expect(latest.payload).toEqual(payload);
+    expect(latest.receivedAt).toBeGreaterThanOrEqual(before);
+
+    mockAuth = { isAuthenticated: false, token: null, authIdentity: null, authGeneration: 'generation-out' };
+    await view.rerender(
+      <DownloadsProvider>
+        <PushProbe />
+      </DownloadsProvider>
+    );
+    await waitFor(() => expect(latest).toBeNull());
+  });
 });

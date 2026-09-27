@@ -108,3 +108,58 @@ export function shouldCelebrate(prevStatus, view, now = Date.now()) {
   const fresh = typeof view?.endedAt !== 'number' || (now - view.endedAt < ENDED_FRESH_MS);
   return fresh;
 }
+
+/**
+ * A server stamp moved onto this device's clock. `serverNow` is the server's
+ * clock at the moment it answered (or pushed); the difference from our clock,
+ * measured on that very message, is the skew. No serverNow → trusted as is.
+ * The same rule translateServerState applies to the pond's own timer, made
+ * available to the TASK-LINKED block, whose reads never carried serverNow
+ * until the pond started sending it.
+ */
+export function alignedStamp(stamp, serverNow, now = Date.now()) {
+  const skew = typeof serverNow === 'number' && Number.isFinite(serverNow) ? now - serverNow : 0;
+  return stamp + skew;
+}
+
+/**
+ * Read a `focus:changed` push into what the Focus page's ring should show.
+ * The server sends the block it holds (the /pomodoros/active shape plus
+ * endsAt) and serverNow; the result is the TasksScreen `activePomo` shape
+ * on this device's clock.
+ *
+ *   { action: 'resync' }         the server could not say (no `session`) → re-read
+ *   { action: 'clear' }          nothing running, or a finished / elapsed block
+ *   { action: 'set', session }   a live block
+ */
+export function taskSessionFromPush(payload, now = Date.now()) {
+  if (!payload || typeof payload !== 'object') return { action: 'resync' };
+  if (!('session' in payload) || payload.session === undefined) return { action: 'resync' };
+  const s = payload.session;
+  if (s === null) return { action: 'clear' };
+  const mins = Number(s?.durationMinutes);
+  if (
+    typeof s !== 'object'
+    || typeof s.taskId !== 'string' || !s.taskId
+    || typeof s.startedAt !== 'number' || !Number.isFinite(s.startedAt)
+    || !Number.isFinite(mins) || mins <= 0
+  ) {
+    return { action: 'resync' };
+  }
+  if (s.status && s.status !== 'in_progress') return { action: 'clear' };
+  const startedAt = alignedStamp(s.startedAt, payload.serverNow, now);
+  const endsAt = startedAt + mins * 60000;
+  if (now >= endsAt) return { action: 'clear' };
+  return {
+    action: 'set',
+    session: {
+      id: s.id ?? null,
+      taskId: s.taskId,
+      mode: 'focus',
+      startedAt,
+      endsAt,
+      durationMinutes: mins,
+      taskTitle: s.taskTitle ?? null,
+    },
+  };
+}

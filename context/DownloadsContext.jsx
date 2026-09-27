@@ -78,6 +78,8 @@ const SyncContext = createContext({
   // card), and the one way to dismiss. Both the Turtle tab's card and the
   // app-level Live Activity driver read this, never the raw payload.
   pomodoroView: null, dismissEndedTimer: () => {},
+  // The last task-linked focus push ({ payload, receivedAt }) — see the listener.
+  focusPush: null,
 });
 export const useSyncSignals = () => useContext(SyncContext);
 
@@ -101,6 +103,8 @@ export function DownloadsProvider({ children }) {
   const [focusVersion, setFocusVersion] = useState(0);
   const [pomodoroState, setPomodoroState] = useState(null);
   const [pomodoroDurations, setPomodoroDurations] = useState(null);
+  // The last `focus:changed` push, raw: { payload, receivedAt }.
+  const [focusPush, setFocusPush] = useState(null);
   // Restored once from disk; a dismissal writes through. Until the read lands,
   // a replayed ended card may flash for a frame — the same race the hook had.
   const [dismissedEndedId, setDismissedEndedId] = useState(null);
@@ -136,6 +140,7 @@ export function DownloadsProvider({ children }) {
     // user's focus block for a frame.
     setPomodoroState(null);
     setPomodoroDurations(null);
+    setFocusPush(null);
     if (!serverIP || !isAuthenticated || !token || !authGeneration) return undefined;
     const generation = authGeneration;
     const accountId = String(authIdentity || '').split(':').slice(1).join(':');
@@ -225,6 +230,17 @@ export function DownloadsProvider({ children }) {
         setPomodoroDurations({ focus: d.focus, break: d.break });
       }
     });
+    // The TASK-LINKED block, WITH its state: the pond now sends the block it
+    // holds (its own start stamp, planned end, titles) and serverNow, on every
+    // start / stop / finish on any of this person's devices. The Focus page
+    // applies it straight off (utils/pomodoroState.taskSessionFromPush), no
+    // round trip; the payload-free ping above still bumps focusVersion, so the
+    // re-read that follows confirms rather than discovers. Kept raw, with the
+    // moment it arrived, so the same push is never applied twice.
+    socket.on('focus:changed', (p) => {
+      if (!accepts(p)) return;
+      setFocusPush({ payload: p && typeof p === 'object' ? p : {}, receivedAt: Date.now() });
+    });
 
     return () => { socket.removeAllListeners(); socket.disconnect(); socketRef.current = null; };
   }, [authGeneration, authIdentity, isAuthenticated, serverIP, token]);
@@ -292,8 +308,8 @@ export function DownloadsProvider({ children }) {
   }, []);
   const pomodoroView = useMemo(() => visibleTimer(pomodoroState, dismissedEndedId), [pomodoroState, dismissedEndedId]);
   const syncValue = useMemo(
-    () => ({ tasksVersion, notesVersion, focusVersion, pomodoroState, pomodoroDurations, pomodoroView, dismissEndedTimer }),
-    [tasksVersion, notesVersion, focusVersion, pomodoroState, pomodoroDurations, pomodoroView, dismissEndedTimer],
+    () => ({ tasksVersion, notesVersion, focusVersion, pomodoroState, pomodoroDurations, pomodoroView, dismissEndedTimer, focusPush }),
+    [tasksVersion, notesVersion, focusVersion, pomodoroState, pomodoroDurations, pomodoroView, dismissEndedTimer, focusPush],
   );
   return (
     <DownloadsContext.Provider value={value}>
