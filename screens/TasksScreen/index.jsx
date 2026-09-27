@@ -31,6 +31,9 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTaskData } from './hooks/useTaskData';
 import { useCollapsibleTasks } from './hooks/useCollapsibleTasks';
 import { advanceDueDate, minDate, maxDate, localTodayStr, lastCompletedDate, isTaskDoneNow, matchesRecurrence, nextOccurrenceAfter, itemTypeOf, taskPassesFilters, boardLabel } from './utils/taskHelpers';
+// What starting a focus session writes onto the task it is for — a slot on
+// today at the minute the block began, and only where there was no time yet.
+import { startPatch } from './utils/focusStart';
 import { completionChange } from './utils/completionChange';
 import { tapHaptic, impactHaptic, selectionHaptic, markGesture } from '../../utils/haptics';
 import { resolveAvatarUrl } from '../../utils/avatarUrl';
@@ -1101,6 +1104,19 @@ export default function TasksScreen() {
   // changes — it is handed to a memoised page.
   const focusTaskIdRef = useRef(focusTaskId);
   focusTaskIdRef.current = focusTaskId;
+  /**
+   * Giving the task a slot on today's timeline at the minute the block began.
+   *
+   * THE DEFINITION IS FURTHER DOWN (`stampFocusSlot`) because it needs the
+   * agenda's order-epoch bump, which is declared with the snapshot it belongs
+   * to. Held in a ref — the same shape as `loadPomodorosRef` above — so all
+   * three ways into a focus session can reach ONE definition rather than each
+   * growing its own copy of the rule. That was the bug: the calendar's start
+   * keys stamped, and the Focus tab's key, its search and a task card's key
+   * did not, so whether working on something put it on the timeline depended
+   * on which key you happened to press.
+   */
+  const stampFocusSlotRef = useRef(null);
   // The deck's own task picker. Its own query for the same reason the board
   // picker has one: three searches that inherited each other's half-typed words
   // would be one search with three names.
@@ -1200,6 +1216,10 @@ export default function TasksScreen() {
   const startFocusHere = useCallback(async () => {
     const startedAt = Date.now();
     const taskId = focusTaskIdRef.current;
+    // Working on it IS the decision about when: an untimed task gets a slot on
+    // today at this minute. Fired before the round trip, like the optimistic
+    // block below — the schedule should answer the tap, not the network.
+    if (taskId) stampFocusSlotRef.current?.(tasksByIdRef.current?.get(taskId));
     // Optimistically, because a deck that waits for a round trip is a deck that
     // does not answer the tap that started it. Corrected from the response a
     // moment later, which is also how the true duration arrives.
@@ -1454,6 +1474,41 @@ export default function TasksScreen() {
     });
     return unsub;
   }, [navigation, bumpOrderEpoch]);
+
+  /**
+   * Starting a focus session on an untimed task gives it a slot on TODAY, at the
+   * minute the block began.
+   *
+   * WHAT and WHEN live in utils/focusStart (`startPatch`, pure and tested on its
+   * own); this is the write. It is a no-op for a task that already has a time
+   * and for a loose block, which is what makes it safe to call from every start
+   * path unconditionally.
+   *
+   * One MERGING patch of this row, like a reschedule — a whole-list save is a
+   * delete-and-reinsert on the server, so it would clobber whatever another
+   * device changed meanwhile. Its own outbox key ('schedule'), because a queued
+   * stamp and a queued tick of the same task are different writes and must both
+   * survive.
+   *
+   * The clock is read HERE, at the press, rather than from any ticking minute
+   * the calendar keeps: "when the session started" has to be the real minute.
+   */
+  const stampFocusSlot = useCallback(async (task) => {
+    const patch = startPatch(task);
+    if (!patch) return;
+    const nextTasks = tasksRef.current.map((t) => (t.id === task.id ? { ...t, ...patch } : t));
+    try {
+      await saveTaskPatch(task.id, patch, nextTasks, 'schedule');
+    } catch {
+      /* saveTaskPatch has already reverted the row and told the user */
+      return;
+    }
+    // The row has moved out of the day's untimed list and onto its timeline, so
+    // it now belongs under a different heading — a frozen-order boundary, the
+    // same as a reschedule.
+    bumpOrderEpoch();
+  }, [saveTaskPatch, bumpOrderEpoch]);
+  stampFocusSlotRef.current = stampFocusSlot;
 
   // Changes ONLY when the SET of task ids changes — edits to existing tasks
   // (ticks included) leave it identical, so the snapshot below doesn't re-run.
@@ -2500,6 +2555,12 @@ export default function TasksScreen() {
    */
   const startPomodoroFor = useCallback(async (task) => {
     const label = (task?.title || '').trim();
+    // BEFORE the navigate: this is the last moment the row is still in hand, and
+    // the stamp must not wait on a chat round trip the way the task_pomodoros
+    // row below does. An untimed task gets a slot on today at this minute — the
+    // calendar's start keys used to be the only ones that did this, and they
+    // route through here (see stampFocusSlot / utils/focusStart).
+    stampFocusSlotRef.current?.(task);
     dispatchCommand(label ? `/pomodoro focus ${label}` : '/pomodoro focus');
     navigation.navigate('Turtle');
     if (!task?.id) return;
@@ -2910,6 +2971,9 @@ export default function TasksScreen() {
   const startFocusOnTask = useCallback(async (task) => {
     if (!task?.id) return;
     const startedAt = Date.now();
+    // A slot on today at this minute, if it had no time — the same rule every
+    // other way into a session follows. See stampFocusSlot.
+    stampFocusSlotRef.current?.(task);
     // Optimistic, so the ring answers the tap rather than the round trip.
     setActivePomo({
       taskId: task.id,
