@@ -20,8 +20,15 @@ import fs from 'fs';
  */
 const SRC = fs.readFileSync('screens/TasksScreen/index.jsx', 'utf8');
 
-/** The endpoint that starts a TASK-LINKED block. Every caller must stamp. */
-const START_CALL = /\/pomodoro\/start-task/g;
+/**
+ * The CALL that starts a task-linked block — every caller must stamp.
+ *
+ * `api.post(` is part of the pattern on purpose: matching the bare endpoint
+ * counted the prose about it in the handlers' own comments, which is a scan
+ * that fails when someone documents the thing it is guarding. A fresh RegExp
+ * per use, because a /g regex carries `lastIndex` between assertions.
+ */
+const startCall = () => /api\.post\('\/pomodoro\/start-task'/g;
 
 /** The three handlers, by what presses them. */
 const PATHS = [
@@ -47,14 +54,14 @@ describe('starting a focus session takes a slot on today', () => {
     const src = body(name);
     // The slice really is a start path — otherwise the assertion below would
     // pass over the wrong function and prove nothing.
-    expect(src).toMatch(START_CALL);
+    expect(src).toMatch(startCall());
     expect(src).toMatch(/stampFocusSlotRef\.current\?\.\(/);
   });
 
   test('there are no OTHER task-linked start paths', () => {
     // One per handler above. A fourth means somebody added a way to start a
     // block — check it stamps, then name it in PATHS.
-    expect(SRC.match(START_CALL)).toHaveLength(PATHS.length);
+    expect(SRC.match(startCall())).toHaveLength(PATHS.length);
   });
 
   test('the rule itself lives in one place', () => {

@@ -1172,6 +1172,19 @@ export default function TasksScreen() {
     [],
   );
   /**
+   * The task a logged block was for, or null.
+   *
+   * The same shape as boardOfTaskId and for the same reason: the log rows carry
+   * a taskId and nothing else, so naming the task — or finding out it has been
+   * deleted since — is the screen's job, not the page's. Null is a real answer
+   * here, and the one that stops the Focus page offering to resume something
+   * that no longer exists.
+   */
+  const taskOfId = useCallback(
+    (taskId) => (taskId ? tasksByIdRef.current?.get(taskId) || null : null),
+    [],
+  );
+  /**
    * The planned length of a fresh block, so the IDLE ring shows the length the
    * timer will actually run rather than a number of its own.
    *
@@ -2994,6 +3007,32 @@ export default function TasksScreen() {
   }, [api, focusMinutes, loadPomodoros]);
 
   /**
+   * Resume a block from the Focus page's recent list: start a fresh session on
+   * the task that block was for.
+   *
+   * ASKS FIRST IF SOMETHING IS ALREADY RUNNING. `/pomodoro/start-task` cancels
+   * any in-flight block for us — one live timer at a time — so without this a
+   * mis-tap on a list of history would silently end the session you are in the
+   * middle of, with nothing on screen having warned you. A block on the SAME
+   * task is not a question at all: it is already running, and the deck above is
+   * already showing it.
+   */
+  const resumeFocusBlock = useCallback((task) => {
+    if (!task?.id) return;
+    const live = focusBlock && focusBlock.endsAt > Date.now() ? focusBlock : null;
+    if (live?.taskId === task.id) return;
+    if (!live) { startFocusOnTask(task); return; }
+    Alert.alert(
+      'A block is running',
+      `Stop it and start a new ${focusMinutes}-minute block on "${(task.title || 'this task').trim()}"?`,
+      [
+        { text: 'Keep going', style: 'cancel' },
+        { text: 'Start new', style: 'destructive', onPress: () => startFocusOnTask(task) },
+      ],
+    );
+  }, [focusBlock, focusMinutes, startFocusOnTask]);
+
+  /**
    * What the search is FOR right now. The tab decides, and it is read at the
    * moment the key is pressed rather than while the panel is open — swiping
    * underneath a panel is not possible, and a mode that changed out from under
@@ -3985,6 +4024,11 @@ export default function TasksScreen() {
             active={focusBlock}
             focusMinutes={focusMinutes}
             boardOfTask={boardOfTaskId}
+            taskOfId={taskOfId}
+            // Tapping a recent block starts a fresh session on its task — and
+            // the stamp rides along, so resuming something also gives it a slot
+            // on today (see stampFocusSlot).
+            onResumeBlock={resumeFocusBlock}
             focusTask={focusTask}
             onPickTask={() => { setFocusPickQuery(''); setFocusPickOpen(true); }}
             onClearTask={() => setFocusTaskId(null)}
