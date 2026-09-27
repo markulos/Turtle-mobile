@@ -81,6 +81,7 @@ import { useTheme } from '../../context/ThemeContext';
 // upload task), which never passes through the api wrapper or the patched
 // fetch — so it has to carry the Bearer token by hand.
 import { useServer, getApiAuthToken } from '../../context/ServerContext';
+import { useSyncSignals } from '../../context/DownloadsContext';
 import { useOpenTarget } from '../../context/OpenTargetContext';
 import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
@@ -326,6 +327,9 @@ export default function NotesScreen() {
   const dockH = dockOccupied(insets.bottom);
   const { theme, isDark } = useTheme();
   const { api, isConnected, getBaseUrl, getMediaBaseUrl } = useServer();
+  // Cross-device change pings off the app-level socket (context/DownloadsContext).
+  // Both matter here: this timeline is notes AND tasks.
+  const { notesVersion, tasksVersion } = useSyncSignals();
   const { enqueueNote } = useClaudeQueue();
   const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
 
@@ -393,9 +397,13 @@ export default function NotesScreen() {
   // Server-side totals for the filter tabs; null until the first response.
   const [serverCounts, setServerCounts] = useState(null);
 
-  const refresh = useCallback(async () => {
+  // `silent` re-reads without touching `loading` — which drives the pull-to-
+  // refresh spinner and the cold skeleton. A socket ping or a return to the app
+  // must not flash the spinner: nobody pulled, and a spinner that appears by
+  // itself reads as the list reloading under you.
+  const refresh = useCallback(async ({ silent = false } = {}) => {
     if (!isConnected) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
     try {
       // Both halves of the timeline, in parallel. The tasks call is the one
@@ -413,9 +421,11 @@ export default function NotesScreen() {
         hasMoreNotesRef.current = res.notes.length === NOTES_PAGE;
       }
     } catch (e) {
-      setError(e.message || 'Failed to load notes');
+      // A silent re-read that fails changes nothing on screen, so it says
+      // nothing: the rows already painted are still the best answer we have.
+      if (!silent) setError(e.message || 'Failed to load notes');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [api, isConnected]);
 
@@ -470,6 +480,30 @@ export default function NotesScreen() {
   }, [api, isConnected]);
 
   useEffect(() => { void refresh(); void refreshCounts(); }, [refresh, refreshCounts]);
+
+  // ── CROSS-DEVICE NOTE SYNC ────────────────────────────────────────────────
+  // `notes:changed` fires whenever a note of mine (or one I am on) is written
+  // from anywhere; `tasks:changed` matters here too, because this timeline's
+  // to-dos ARE tasks and `refresh` reads both halves. Neither ping carries the
+  // row — deliberately, so it cannot go stale — so the reaction is a silent
+  // re-read of page one plus the counts. Before this there was no realtime path
+  // at all: a note captured on the desktop did not exist on the phone until the
+  // list was pulled by hand.
+  //
+  // Page one only: the paged tail is rebuilt from offset 0 by `refresh`, so a
+  // note inserted at the top cannot desynchronise the window.
+  //
+  // Keyed on the COUNTERS alone, with the loaders read through refs: putting
+  // `refresh` in the deps would fire this every time the api identity changed
+  // (a reconnect), doubling the load the effect above already does.
+  const notesSyncFirstRef = useRef(true);
+  const notesSyncRef = useRef({ refresh, refreshCounts });
+  notesSyncRef.current = { refresh, refreshCounts };
+  useEffect(() => {
+    if (notesSyncFirstRef.current) { notesSyncFirstRef.current = false; return; }
+    void notesSyncRef.current.refresh({ silent: true });
+    void notesSyncRef.current.refreshCounts();
+  }, [notesVersion, tasksVersion]);
 
   // ── Mutations ───────────────────────────────────────────
   // OFFLINE-FIRST (services/offlineQueue): every write updates the list NOW

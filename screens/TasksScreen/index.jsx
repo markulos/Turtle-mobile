@@ -15,6 +15,7 @@ import {
   ScrollView,
   useWindowDimensions,
   PixelRatio,
+  AppState,
 } from 'react-native';
 import { depth } from '../../utils/surfaceDepth';
 import AppTextInput from '../../components/AppTextInput';
@@ -29,6 +30,7 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { FlashList } from '@shopify/flash-list';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useServer } from '../../context/ServerContext';
+import { useSyncSignals } from '../../context/DownloadsContext';
 import { useTheme } from '../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTaskData } from './hooks/useTaskData';
@@ -559,6 +561,10 @@ export default function TasksScreen() {
   // The tab bar floats over the page now, so lists clear it themselves.
   const tabBarHeight = useBottomTabBarHeight();
   const { isConnected, api, getBaseUrl } = useServer();
+  // Cross-device change pings off the app-level socket (context/DownloadsContext).
+  // Counters, not payloads: the server deliberately sends nothing, so the answer
+  // to "what changed" is always a refetch over authenticated HTTP.
+  const { tasksVersion, focusVersion } = useSyncSignals();
   const { celebrate } = useCelebration();
   const navigation = useNavigation();
   const route = useRoute();
@@ -816,7 +822,7 @@ export default function TasksScreen() {
   
   const {
     tasks, setTasks, projects, allTags,
-    loadData, saveTasks, saveTaskPatch, collectTags, addProject, renameProject, deleteProject,
+    loadData, saveTasks, saveTaskPatch, createTask, collectTags, addProject, renameProject, deleteProject,
     handleAddSubtask,
     handleToggleSubtask,
     handleDeleteSubtask,
@@ -829,6 +835,37 @@ export default function TasksScreen() {
     initializing,
     syncing,
   } = useTaskData(api, isConnected, () => celebrate({ points: 10, kind: 'task' }));
+
+  // ── CROSS-DEVICE TASK SYNC ────────────────────────────────────────────────
+  // `tasks:changed` fires for every write the change concerns me — mine, and
+  // anything I am on — from any device. Until this existed the phone had no task
+  // realtime path AND no refetch on focus, so a task added, ticked, rescheduled
+  // or deleted on the desktop could sit unseen here for the whole life of the
+  // process. The ping carries nothing on purpose, so the only sane reaction is to
+  // re-read; `lazyRefresh` is silent (never blanks the list, never spins) and
+  // coalescing (a burst of pings is one fetch, and a ping that lands inside the
+  // throttle window is parked rather than dropped).
+  // Keyed on the COUNTER alone, the refresher read through a ref: `lazyRefresh`
+  // changes identity whenever the api does (a reconnect), and useTaskData
+  // already reloads on that — putting it in the deps would just double the work.
+  const lazyRefreshRef = useRef(lazyRefresh);
+  lazyRefreshRef.current = lazyRefresh;
+  useEffect(() => {
+    if (tasksVersion === 0) return;   // nothing has pinged yet; the mount load covers it
+    lazyRefreshRef.current();
+  }, [tasksVersion]);
+
+  // Returning to the app is the other catch-up: a change made elsewhere while
+  // the phone was asleep arrived at a socket that was deliberately disconnected
+  // to save battery, and there is no replay for it. Kept here as well as in the
+  // socket context so this screen's freshness never depends on that socket
+  // having come up at all (offline start, unauthenticated first run).
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') lazyRefreshRef.current();
+    });
+    return () => sub?.remove();
+  }, []);
 
   // Boards shared WITH me → { boardName: sharerDisplayName }, for the picker's
   // "shared in" badge. The board names themselves already arrive via GET
@@ -948,8 +985,13 @@ export default function TasksScreen() {
   //
   // GET /pomodoros is the whole list (server-capped at 200) so the counts are
   // ONE call rather than one per task; /pomodoros/active is the single running
-  // block. Refetched when the screen regains focus and when a timer is started
-  // from here, which is when either can have changed.
+  // block. Refetched when a timer is started from here, when the running block
+  // runs out, and — since the pond started announcing focus changes — whenever
+  // `pomodoro-task-changed` or `pomodoro-state` reaches the app-level socket,
+  // which is what makes a block started on the desktop show up here. (This note
+  // used to say "when the screen regains focus"; there has never been a
+  // focus refetch of pomodoros, and there is still none — an event says it
+  // better than a revisit can.)
   //
   // THREE MORE READS, because the pond keeps focus in two stores and the Focus
   // page has to see both (see the note on `mergeFocusLog`):
@@ -1034,6 +1076,20 @@ export default function TasksScreen() {
     } catch { /* offline — the cards simply show no tally and no countdown */ }
   }, [api]);
   useEffect(() => { loadPomodoros(); }, [loadPomodoros]);
+
+  // A focus block changing anywhere → re-read both stores. `pomodoro-task-changed`
+  // is a task-linked block starting, stopping or completing (it lives in
+  // `task_pomodoros`, which no socket used to announce, so the only surface that
+  // ever noticed was the tray HUD — because it polls); `pomodoro-state` is the
+  // pond's own timer, which is the loose block this page's ring can be drawing.
+  // Both arrive as one counter off the app-level socket. This is what the comment
+  // above USED to claim happened on screen focus, which it never did.
+  const loadPomodorosRef = useRef(loadPomodoros);
+  loadPomodorosRef.current = loadPomodoros;
+  useEffect(() => {
+    if (focusVersion === 0) return;   // the mount load already covers first paint
+    loadPomodorosRef.current();
+  }, [focusVersion]);
 
   /**
    * The one block the Focus page's ring draws.
@@ -1282,7 +1338,10 @@ export default function TasksScreen() {
   //
   // Rebuild boundaries (the snapshot's deps + explicit bumps):
   //   • membership changes — a task ADDED or DELETED (ids join/leave; covers
-  //     creations from any composer and remote adds via socket refetch),
+  //     creations from any composer, and remote adds/deletes, which now really
+  //     do arrive by socket: `tasks:changed` → lazyRefresh → a new id set. When
+  //     this note was written no task socket existed, so the only way a remote
+  //     add reached the list was the user pulling to refresh),
   //   • the active filters / search / board scope change,
   //   • the screen regains FOCUS (returning to the tab re-files ✓ rows into
   //     history — same "on the next visit" behaviour the pins had),
@@ -1300,6 +1359,11 @@ export default function TasksScreen() {
     // the next frame — same behavior, imperceptibly later.
     const unsub = navigation.addListener('focus', () => {
       requestAnimationFrame(bumpOrderEpoch);
+      // Coming back to the tab is also a catch-up. The web app has refetched on
+      // window focus all along; mobile had NO focus refetch of any kind, which is
+      // why the phone could show a days-old list. Silent and coalescing, so the
+      // re-snapshot above still paints first.
+      lazyRefreshRef.current();
     });
     return unsub;
   }, [navigation, bumpOrderEpoch]);
@@ -2199,13 +2263,19 @@ export default function TasksScreen() {
   const handleSaveTask = async (taskData) => {
     if (taskData.tags?.length > 0) await collectTags(taskData.tags);
 
-    const newTasks = taskData.id && tasks.find(t => t.id === taskData.id)
-      ? tasks.map(t => t.id === taskData.id ? taskData : t)
-      // Preserve any subtasks the caller provided (e.g. re-adding a previous
-      // task copies its subtasks); default to [] only when none were given.
-      : [...tasks, { ...taskData, subtasks: taskData.subtasks || [] }];
-
-    await saveTasks(newTasks);
+    const isEdit = taskData.id && tasksRef.current.some(t => t.id === taskData.id);
+    if (isEdit) {
+      await saveTasks(tasksRef.current.map(t => (t.id === taskData.id ? taskData : t)));
+    } else {
+      // A CREATE goes as one row, not as the whole list. POST /tasks is a
+      // delete-and-reinsert of everything I own, so adding a task from a
+      // snapshot taken before the desktop's last save deleted whatever the
+      // desktop had added since — the new task appeared and someone else's work
+      // quietly vanished. POST /tasks/single inserts this row and nothing else.
+      // (Subtasks the caller provided are preserved — re-adding a previous task
+      // copies them — and createTask defaults them to [] when none were given.)
+      await createTask(taskData);
+    }
     // An edit-form save is a FROZEN-ORDER boundary: dates/projects may have
     // changed, so the agenda re-files the row into its new group now (creates
     // already rebuild via membershipKey; this covers same-id edits).
@@ -2328,22 +2398,27 @@ export default function TasksScreen() {
     // saveTasks/tasksRef are stable refs; re-sweep whenever the task set changes.
   }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Deleting goes through `deleteTask` (DELETE /tasks/:id), not through a
+  // filtered whole-list POST. The list POST deletes and reinserts every row I
+  // own, so removing one task re-asserted my possibly-stale copy of all the
+  // others and wiped anything another device had added meanwhile — losing work
+  // as a side effect of a delete.
   const handleDelete = (id) => {
     const task = tasksRef.current.find(t => t.id === id);
     const hasSubtasks = task?.subtasks && task.subtasks.length > 0;
-    
+
     // Skip confirmation if no subtasks
     if (!hasSubtasks) {
-      saveTasks(tasksRef.current.filter(t => t.id !== id));
+      deleteTask(id);
       return;
     }
-    
+
     Alert.alert('Delete Task', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
-      { 
-        text: 'Delete', 
+      {
+        text: 'Delete',
         style: 'destructive',
-        onPress: () => saveTasks(tasksRef.current.filter(t => t.id !== id))
+        onPress: () => deleteTask(id)
       }
     ]);
   };

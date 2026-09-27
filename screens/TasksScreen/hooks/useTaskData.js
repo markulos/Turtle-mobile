@@ -51,6 +51,10 @@ const readTaskCache = async () => {
   }
 };
 
+// "That row is not there" — the api layer folds the HTTP status into the error
+// message (`API Error 404: …`), which is also how the offline outbox reads it.
+const isNotFound = (error) => /\b404\b/.test(String(error?.message || ''));
+
 const writeTaskCache = async (cache) => {
   try {
     await AsyncStorage.setItem(cacheKey(), JSON.stringify({ ...cache, savedAt: Date.now() }));
@@ -181,17 +185,47 @@ export const useTaskData = (api, isConnected, onTaskCompleted) => {
     setRefreshing(false);
   }, [loadData]);
   
-  // Lazy refresh - only refreshes if enough time has passed
+  // Background refresh — the one every AUTOMATIC trigger uses: the
+  // `tasks:changed` socket ping, returning to the tab, returning to the app.
+  //
+  // COALESCING, which is the whole point. loadData throttles to
+  // MIN_REFRESH_INTERVAL and returns silently when asked too soon; for a user
+  // gesture that is right, but for a socket ping it means a DROPPED remote
+  // change — the ping is fire-and-forget and never comes again, so a swallowed
+  // refetch leaves the other device's edit invisible until something else
+  // happens to trigger a load. When the throttle is closed we park ONE trailing
+  // call for the moment it opens instead, so a burst of pings (the server pings
+  // per write, and a bulk save is several) costs exactly one extra fetch.
+  const trailingRefreshRef = useRef(null);
   const lazyRefresh = useCallback(async () => {
+    const wait = MIN_REFRESH_INTERVAL - (Date.now() - lastRefreshRef.current);
+    if (wait > 0) {
+      if (trailingRefreshRef.current) return;   // one trailing call is enough
+      trailingRefreshRef.current = setTimeout(() => {
+        trailingRefreshRef.current = null;
+        loadData({ silent: true });
+      }, wait + 50); // clear of the boundary, not on it
+      return;
+    }
     await loadData({ silent: true });
   }, [loadData]);
+  useEffect(() => () => {
+    if (trailingRefreshRef.current) clearTimeout(trailingRefreshRef.current);
+  }, []);
 
   // Optimistic-first: paint the new state immediately so the UI feels instant,
   // then persist in the background. If the server rejects, roll back to the
-  // exact pre-mutation snapshot and tell the user. Every task mutation (toggle,
-  // recurring-advance, edit, subtask add/toggle/delete, delete task) funnels
-  // through here, so this single change makes the whole task screen snappy.
-  // Mirrors the photo-vault commitTags pattern.
+  // exact pre-mutation snapshot and tell the user.
+  //
+  // THE WHOLE-LIST WRITE, and a knowingly lossy one: POST /tasks deletes every
+  // row the caller owns and reinserts what it was handed, so a snapshot taken
+  // before another device's save silently reverts that device's work. Ticks
+  // (saveTaskPatch), creates (createTask) and deletes (deleteTask) have all been
+  // moved off it. What is LEFT on it, deliberately, is the genuinely multi-row
+  // work: an edit-form save, subtask add/toggle/delete/update, a tag rename
+  // across a section, the event auto-complete sweep, and deleting a board along
+  // with its tasks. Each wants its own per-row endpoint eventually; none of them
+  // should be converted blind.
   const saveTasks = async (newTasks) => {
     const prevTasks = tasksRef.current; // snapshot for rollback
     // Flag every row whose COMPLETION changed as a pending optimistic write, so
@@ -263,6 +297,60 @@ export const useTaskData = (api, isConnected, onTaskCompleted) => {
       setTasks(prevTasks);
       Alert.alert('Error', 'Failed to save — that change was undone');
       throw error;
+    }
+  };
+
+  /**
+   * Create ONE task, without republishing the list.
+   *
+   * Same reason as saveTaskPatch: POST /tasks replaces the caller's whole task
+   * list server-side (DELETE + reinsert), so creating a task from a snapshot
+   * taken before the desktop's last save silently deleted whatever the desktop
+   * had added since. A create is one new row and nothing else; POST
+   * /tasks/single inserts it and leaves the table alone.
+   *
+   * The server's answer is the truth about the row, not our draft: it applies
+   * the account's "always add to my tasks" participants, the calendar partners
+   * of a new event, and its own recurrence normalisation. So the optimistic row
+   * is REPLACED by what comes back, keyed on id (the server keeps the id we
+   * sent). Offline, the write is parked per task and the draft simply stands.
+   */
+  const createTask = async (task) => {
+    const draft = { ...task, subtasks: task.subtasks || [] };
+    setTasks((prev) => [...prev, draft]);
+    try {
+      const r = await sendOrQueue(api, {
+        method: 'post',
+        path: '/tasks/single',
+        body: draft,
+        // Per-task key, so two offline creates both survive. NO key without an
+        // id: entries collapse by key, and `task:undefined:create` twice would
+        // quietly throw one of the two tasks away.
+        key: draft.id ? `task:${draft.id}:create` : null,
+        label: 'task',
+      });
+      const created = r?.result?.task;
+      if (created && created.id) {
+        setTasks((prev) => {
+          const row = { ...created, subtasks: created.subtasks || [] };
+          const i = prev.findIndex((t) => t.id === draft.id || t.id === created.id);
+          if (i === -1) return [...prev, row];
+          const next = prev.slice();
+          next[i] = row;
+          return next;
+        });
+      }
+      return true;
+    } catch (error) {
+      console.error('Create task error:', error);
+      // A permanent refusal (bad payload) — the row was never stored, so it must
+      // not stay on screen pretending it was. Only OUR draft is withdrawn, not a
+      // whole pre-mutation snapshot: a socket refetch may well have landed in
+      // the meantime, and rolling that back would undo someone else's work to
+      // report our own failure.
+      setTasks((prev) => prev.filter((t) => t.id !== draft.id));
+      Alert.alert('Error', 'Failed to save — that task was not created');
+      throw error; // Re-throw so the caller knows it failed
     }
   };
 
@@ -404,13 +492,34 @@ export const useTaskData = (api, isConnected, onTaskCompleted) => {
     }
   };
 
+  /**
+   * Delete ONE task, without republishing the list.
+   *
+   * This used to post the filtered whole list — which, because POST /tasks is a
+   * delete-and-reinsert of everything the caller owns, meant deleting one task
+   * also re-asserted a possibly stale copy of every OTHER task and wiped
+   * anything another device had added in the meantime. DELETE /tasks/:id removes
+   * the one row and touches nothing else.
+   *
+   * A 404 is treated as DONE, not as a failure: it means the row is already gone
+   * (deleted on another device, or this delete replayed out of the outbox), and
+   * putting it back on screen so the next refetch can remove it again is a lie.
+   */
   const deleteTask = async (taskId) => {
+    const prevTasks = tasksRef.current;
+    setTasks((prev) => prev.filter((t) => t.id !== taskId));
     try {
-      const newTasks = tasksRef.current.filter(t => t.id !== taskId);
-      await saveTasks(newTasks);
+      await sendOrQueue(api, {
+        method: 'delete',
+        path: `/tasks/${encodeURIComponent(taskId)}`,
+        key: `task:${taskId}:delete`,
+        label: 'task delete',
+      });
       return true;
     } catch (error) {
+      if (isNotFound(error)) return true;
       console.error('Delete task error:', error);
+      setTasks(prevTasks);
       Alert.alert('Error', 'Failed to delete task');
       return false;
     }
@@ -504,7 +613,7 @@ export const useTaskData = (api, isConnected, onTaskCompleted) => {
 
   return {
     tasks, setTasks, projects, setProjects, allTags, setAllTags, loading,
-    loadData, saveTasks, saveTaskPatch, collectTags, addProject, renameProject, deleteProject, deleteTask,
+    loadData, saveTasks, saveTaskPatch, createTask, collectTags, addProject, renameProject, deleteProject, deleteTask,
     handleAddSubtask,
     handleToggleSubtask,
     handleDeleteSubtask,

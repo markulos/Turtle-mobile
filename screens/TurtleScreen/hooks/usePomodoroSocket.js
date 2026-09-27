@@ -6,6 +6,8 @@ import { serverOrigin, getApiAuthToken } from '../../../context/ServerContext';
 import { getExpoPushTokenSafe } from '../../../services/vaultPush';
 import * as liveActivity from '../../../services/liveActivity';
 import { useCelebration } from '../../../context/CelebrationContext';
+import { useSyncSignals } from '../../../context/DownloadsContext';
+import { endedIdentity, translateServerState } from '../../../utils/pomodoroState';
 
 // Shared default sessionId so web and mobile clients land in the same server
 // room out of the box. Single-user app — power users can override this in
@@ -19,10 +21,11 @@ const DEFAULT_POMODORO_SESSION_ID = 'turtle-default';
 // server-clock start/end stamps (stable across reloads, unlike our skew-
 // corrected local copies), so a genuinely NEW completion never matches.
 const POMODORO_DISMISSED_KEY = 'pomodoroDismissedEndedId';
-const endedIdentity = (data) =>
-  data && (data.status === 'completed' || data.status === 'stopped')
-    ? `${data.mode}:${data.startedAt}:${data.endedAt}`
-    : null;
+
+// Shown until the pond announces the saved pair. A module constant, not an
+// object literal in the body, so the returned `durations` identity is stable
+// while the server has not spoken yet.
+const DEFAULT_DURATIONS = { focus: 25, break: 5 };
 
 /**
  * usePomodoroSocket — server-as-source-of-truth pomodoro timer.
@@ -31,6 +34,16 @@ const endedIdentity = (data) =>
  * stop, complete) and on initial connect. We do NOT stream per-second
  * ticks; the visible countdown is computed locally by `TimerMessage` from
  * the absolute `endsAt` we set here once.
+ *
+ * That channel is NOT listened to here any more. This hook lives inside
+ * TurtleScreen and the bottom-tab navigator is LAZY, so until the user tapped
+ * the Turtle tab the process had no `pomodoro-state` listener at all and a
+ * focus block started on the desktop was invisible on the phone. The listener
+ * moved to the app-level socket in `context/DownloadsContext`, which runs from
+ * boot; this hook now READS that shared value, so the timer card and every
+ * other surface are looking at the same bytes and cannot disagree. Its own
+ * socket stays, for the start / stop / durations EMITS and for the connection
+ * indicator.
  *
  * Returns:
  *   {
@@ -50,8 +63,10 @@ const endedIdentity = (data) =>
 export function usePomodoroSocket(serverIP) {
   const [state, setState] = useState(null);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
-  const [durations, setDurations] = useState({ focus: 25, break: 5 });
   const { celebrate } = useCelebration();
+  // The app-level socket's reading of the shared timer — raw server payload.
+  const { pomodoroState: serverState, pomodoroDurations } = useSyncSignals();
+  const durations = pomodoroDurations || DEFAULT_DURATIONS;
   const socketRef = useRef(null);
   const sessionIdRef = useRef(DEFAULT_POMODORO_SESSION_ID);
   // Identity of the ended card the user has already dismissed (loaded from
@@ -85,23 +100,10 @@ export function usePomodoroSocket(serverIP) {
     socket.on('connect', () => setIsSocketConnected(true));
     socket.on('disconnect', () => setIsSocketConnected(false));
 
-    socket.on('pomodoro-state', (data) => {
-      const id = endedIdentity(data);
-      lastEndedIdRef.current = id;
-      // An ended card the user already dismissed on a prior run — the server
-      // is just replaying it. Stay hidden instead of popping back up.
-      if (id && id === dismissedEndedIdRef.current) {
-        setState(null);
-        return;
-      }
-      setState(translateServerState(data));
-    });
-
-    socket.on('pomodoro-durations', (data) => {
-      if (data && typeof data.focus === 'number' && typeof data.break === 'number') {
-        setDurations({ focus: data.focus, break: data.break });
-      }
-    });
+    // No pomodoro-state / pomodoro-durations listeners here: the app-level
+    // socket owns those (see the note on this hook). Two listeners on the same
+    // two events is how the card and the rest of the app came to hold two
+    // separately-translated copies of one timer.
 
     return () => {
       socket.removeAllListeners();
@@ -109,6 +111,20 @@ export function usePomodoroSocket(serverIP) {
       socketRef.current = null;
     };
   }, [serverIP]);
+
+  // The shared payload → what the card draws. Identical rules to the listener
+  // this replaced, just fed from the app-level socket: an ended card the user
+  // already dismissed is the server replaying it, so it stays hidden rather
+  // than popping back up on every connect.
+  useEffect(() => {
+    const id = endedIdentity(serverState);
+    lastEndedIdRef.current = id;
+    if (id && id === dismissedEndedIdRef.current) {
+      setState(null);
+      return;
+    }
+    setState(translateServerState(serverState));
+  }, [serverState]);
 
   // Restore the "already dismissed" ended-card identity. If the socket's
   // replay of that ended state raced ahead of this read, it's on screen now —
@@ -210,37 +226,6 @@ export function usePomodoroSocket(serverIP) {
     updateDurations,
     sessionId: sessionIdRef.current,
     isSocketConnected,
-  };
-}
-
-/**
- * Translate a server-clock state payload into client-clock timestamps,
- * applying a one-shot clock-skew correction from `serverNow`. Done once
- * per state event — no recurring re-anchoring per tick (which is what
- * caused the previous design to thrash effects every second).
- */
-function translateServerState(data) {
-  if (!data || data.status === 'idle') return null;
-
-  const skew =
-    typeof data.serverNow === 'number' ? Date.now() - data.serverNow : 0;
-
-  if (data.status === 'active') {
-    return {
-      status: 'active',
-      mode: data.mode,
-      totalDuration: data.totalDuration,
-      startedAt: data.startedAt + skew,
-      endsAt: data.endsAt + skew,
-    };
-  }
-  // completed | stopped
-  return {
-    status: data.status,
-    mode: data.mode,
-    totalDuration: data.totalDuration,
-    startedAt: data.startedAt + skew,
-    endedAt: data.endedAt + skew,
   };
 }
 
