@@ -497,6 +497,12 @@ function FocusPage({
   focusMinutes = 25,
   // (taskId) => board name — so the page can say where the focus went.
   boardOfTask,
+  // (taskId) => task | null — so a recent block can NAME what it was for, and
+  // so a block whose task has since been deleted stops offering to resume it.
+  // Resolved by the screen, like boardOfTask: the log rows carry only an id.
+  taskOfId,
+  // (task) => void — start a fresh session on the task a recent block was for.
+  onResumeBlock,
   // The task the next session is FOR, or null for a loose block. Resolved by
   // the screen so it follows edits and so a block started elsewhere shows the
   // task it was actually started on.
@@ -802,28 +808,83 @@ function FocusPage({
         <HourStrip byHour={stats.byHour} pal={pal} accent={accent} />
       </Animated.View>
 
+      {/* RECENT BLOCKS — the page's one piece of detail, and the only place a
+          single session is visible as itself.
+
+          IT IS A CARD, like everything else here. It used to be bare rows laid
+          straight onto the page while taking their ink from the inset-card
+          palette — whose text is WHITE IN BOTH MODES (see the note at the top of
+          this file). On the light page that is white type on cream: the whole
+          list was there and none of it could be read. The fix is the card, not a
+          second set of colours — every other surface on this page already is
+          one, and nothing on this page draws its ink straight onto the page.
+
+          And they RESUME. A block that names a task is a record of work you can
+          pick up again, so tapping it starts a fresh session on that task — the
+          shortest path back to what you were doing, which is the thing a list of
+          recent work is FOR. A block with no task (or whose task has since been
+          deleted) has nothing to resume, so it stays a plain row rather than
+          offering a key that would do nothing. */}
       {stats.recent.length > 0 && (
         <>
           <Text style={[styles.section, { color: theme.colors.textTertiary }]}>Recent blocks</Text>
-          <Animated.View style={enterAt(0.46, 0.86)}>
-            {stats.recent.map((r) => (
-              <View
-                key={r.id}
-                style={[styles.recentRow, { borderBottomColor: pal.edge }]}
-                testID={`focus-recent-${r.id}`}
-              >
-                <View style={[styles.recentDot, { backgroundColor: accent }]} />
-                <Text style={[styles.recentWhen, { color: pal.text }]} numberOfLines={1}>
-                  {new Date(r.startedAt).toLocaleDateString('en-US', { weekday: 'short' })}
-                  {' · '}
-                  {new Date(r.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                </Text>
-                <Text style={[styles.recentBoard, { color: pal.muted }]} numberOfLines={1}>
-                  {r.board ? boardLabel(r.board) : 'No Board'}
-                </Text>
-                <Text style={[styles.recentMins, { color: pal.text }]} numberOfLines={1}>{r.minutes}m</Text>
-              </View>
-            ))}
+          <Animated.View
+            style={[
+              styles.panel,
+              styles.recentPanel,
+              { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop },
+              enterAt(0.46, 0.86),
+            ]}
+            testID="focus-recent-panel"
+          >
+            {stats.recent.map((r, i) => {
+              const task = r.taskId ? (taskOfId?.(r.taskId) || null) : null;
+              // What the block was: its task if we can still name one, otherwise
+              // the board it counted towards. The task is the more useful of the
+              // two here — it is what the tap would resume — and the board has a
+              // whole section of its own below.
+              const what = (task?.title || '').trim() || (r.board ? boardLabel(r.board) : 'No Board');
+              const last = i === stats.recent.length - 1;
+              return (
+                <Pressable
+                  key={r.id}
+                  disabled={!task}
+                  onPressIn={task ? () => tapHaptic() : undefined}
+                  onPress={task ? () => onResumeBlock?.(task) : undefined}
+                  accessibilityRole={task ? 'button' : undefined}
+                  accessibilityLabel={task ? `Resume ${what}` : undefined}
+                  style={({ pressed }) => [
+                    styles.recentRow,
+                    // No rule under the last row: inside a card the divider
+                    // between rows is a divider, but one at the foot is a line
+                    // drawn across the card for no reason.
+                    !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: pal.edge },
+                    pressed && styles.pressed,
+                  ]}
+                  testID={`focus-recent-${r.id}`}
+                >
+                  <View style={[styles.recentDot, { backgroundColor: accent }]} />
+                  <Text style={[styles.recentWhen, { color: pal.text }]} numberOfLines={1}>
+                    {new Date(r.startedAt).toLocaleDateString('en-US', { weekday: 'short' })}
+                    {' · '}
+                    {new Date(r.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  </Text>
+                  <Text
+                    style={[styles.recentWhat, { color: task ? pal.sub : pal.muted }]}
+                    numberOfLines={1}
+                  >
+                    {what}
+                  </Text>
+                  <Text style={[styles.recentMins, { color: pal.text }]} numberOfLines={1}>{r.minutes}m</Text>
+                  {/* The key, and the whole signal that the row is one. The slot
+                      is held even when there is nothing to resume, so the minute
+                      figures above it stay in a column. */}
+                  <View style={styles.recentKey} testID={task ? `focus-resume-${r.id}` : undefined}>
+                    {!!task && <Icon name="replay" size={15} color={accent} />}
+                  </View>
+                </Pressable>
+              );
+            })}
           </Animated.View>
         </>
       )}
@@ -975,14 +1036,22 @@ const styles = StyleSheet.create({
   hourScale: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
   hourTick: { fontSize: 9.5, fontWeight: '700' },
 
+  // The card holds the rows, so its own padding is vertical only — each row
+  // takes the full width and carries the side inset itself, which is what lets
+  // a press highlight run edge to edge instead of floating inside a margin.
+  recentPanel: { paddingVertical: 2, paddingHorizontal: 0 },
   recentRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 9, paddingHorizontal: 14,
   },
   recentDot: { width: 6, height: 6, borderRadius: 3 },
   recentWhen: { fontSize: 12.5, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  recentBoard: { flex: 1, fontSize: 12, textAlign: 'right' },
+  // What the block was — the task, or the board it counted towards. Takes the
+  // room the fixed columns either side do not need, and ellipsizes rather than
+  // pushing the minutes off the card (STYLE-RULES §2).
+  recentWhat: { flex: 1, fontSize: 12, textAlign: 'right' },
   recentMins: { fontSize: 12.5, fontWeight: '800', fontVariant: ['tabular-nums'], minWidth: 34, textAlign: 'right' },
+  recentKey: { width: 16, alignItems: 'center', justifyContent: 'center' },
 
   row: { borderRadius: 14, borderWidth: 1, padding: 12, gap: 6 },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },

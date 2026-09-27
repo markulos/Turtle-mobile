@@ -394,6 +394,16 @@ describe('the deck is legible on the light page', () => {
     expect(key.backgroundColor).toBe('#FFFFFF');        // pal.text
     expect(StyleSheet.flatten(screen.getByText('Start session').props.style).color).toBe('#1F2024'); // pal.onText
   });
+
+  // The same bug, one section further down: the recent rows were laid straight
+  // onto the page while taking their ink from the card palette, so the whole
+  // list was white type on cream. Nothing on this page may draw onto the page.
+  test('the recent blocks sit on a card too', async () => {
+    await render(<FocusPage {...props({ theme: light })} />);
+    const panel = styleOf('focus-recent-panel');
+    expect(panel.backgroundColor).toBe('#1F2024');
+    expect(panel.backgroundColor).not.toBe(light.colors.background);
+  });
 });
 
 /** The bar replaces the ring, and reads the way the chat card's bar reads. */
@@ -571,5 +581,73 @@ describe('the way into the longer view', () => {
     await render(<FocusPage {...props({ sessions: [done({ startedAt: at(0) })] })} />);
     expect(within(screen.getByTestId('focus-stats-key-week')).getByText('1 block')).toBeTruthy();
     expect(within(screen.getByTestId('focus-stats-key-month')).getByText('1 block · September')).toBeTruthy();
+  });
+});
+
+/**
+ * RECENT BLOCKS — a record of work you can pick up again.
+ *
+ * Two things are pinned here. That a block NAMES its task rather than only the
+ * board it counted towards, because the name is what the tap resumes; and that
+ * the tap is offered exactly when there is something to resume — a loose block,
+ * or one whose task has been deleted since, has nothing to start.
+ *
+ * The contrast half of this change (the rows are inside a card now — they were
+ * bare on the page taking white ink from the inset-card palette, so in light
+ * mode the whole list was invisible) is not testable from here: it is a colour
+ * against a background, and both come from the palette. What IS testable is
+ * that the rows draw at all and say the right words.
+ */
+describe('recent blocks resume', () => {
+  const recentProps = (over = {}) => props({
+    sessions: [done({ id: 'p1', taskId: 't1' }), done({ id: 'p2', taskId: null, startedAt: at(-1) })],
+    taskOfId: (id) => (id === 't1' ? { id: 't1', title: 'Draft the brief' } : null),
+    onResumeBlock: jest.fn(),
+    ...over,
+  });
+
+  test('a block names the task it was for', async () => {
+    await render(<FocusPage {...recentProps()} />);
+    expect(within(screen.getByTestId('focus-recent-p1')).getByText('Draft the brief')).toBeTruthy();
+  });
+
+  test('a block with no task falls back to its board', async () => {
+    await render(<FocusPage {...recentProps()} />);
+    // taskId null → no board either, so the row says so rather than going blank.
+    expect(within(screen.getByTestId('focus-recent-p2')).getByText('No Board')).toBeTruthy();
+  });
+
+  test('tapping one starts a fresh session on its task', async () => {
+    const p = recentProps();
+    await render(<FocusPage {...p} />);
+    await press('focus-recent-p1');
+    expect(p.onResumeBlock).toHaveBeenCalledTimes(1);
+    expect(p.onResumeBlock).toHaveBeenCalledWith({ id: 't1', title: 'Draft the brief' });
+  });
+
+  test('a loose block is not a key — there is nothing to resume', async () => {
+    const p = recentProps();
+    await render(<FocusPage {...p} />);
+    expect(screen.queryByTestId('focus-resume-p2')).toBeNull();
+    await press('focus-recent-p2');
+    expect(p.onResumeBlock).not.toHaveBeenCalled();
+  });
+
+  // A task deleted since the block ran cannot be resumed, and a key that does
+  // nothing is worse than no key.
+  test('a block whose task is gone stops offering to resume it', async () => {
+    const p = recentProps({ taskOfId: () => null });
+    await render(<FocusPage {...p} />);
+    expect(screen.queryByTestId('focus-resume-p1')).toBeNull();
+    await press('focus-recent-p1');
+    expect(p.onResumeBlock).not.toHaveBeenCalled();
+    // It still says where the time went, from the board.
+    expect(within(screen.getByTestId('focus-recent-p1')).getByText('Deep work')).toBeTruthy();
+  });
+
+  // The key is the whole signal that the row is one.
+  test('a resumable block wears the key', async () => {
+    await render(<FocusPage {...recentProps()} />);
+    expect(screen.getByTestId('focus-resume-p1')).toBeTruthy();
   });
 });
