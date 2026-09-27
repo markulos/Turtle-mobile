@@ -25,12 +25,61 @@
  * padding further down the timeline than the mark really was: the wrong card
  * lit, and anything measuring distance to a card measured it to the wrong one.
  *
+ * ── THE VIRTUAL LEAD ───────────────────────────────────────────────────────
+ *
+ * The agenda used to DRAW that lead-in: a band of blank page above its first
+ * card, deep enough that the mark could reach it. It worked and it looked like
+ * a mistake — you open the Agenda and the first thing you see is nothing.
+ *
+ * So the padding is gone and the same depth is supplied here instead, as an
+ * offset that only exists near the top and is spent as you scroll away from it:
+ * `max(0, virtualLead - scrollOffset)`. At the very top the reading is pulled
+ * back to the first card exactly as the drawn padding used to put it there;
+ * `virtualLead` points down the list, the term reaches zero, and from there the
+ * mark tracks the scroll one for one for the rest of the timeline.
+ *
+ * It is a velocity change, not a jump: `markContentY` stays continuous in
+ * `scrollOffset`, so nothing snaps at the handover — the reading simply moves
+ * at double rate over the first `virtualLead` points and at its own rate after.
+ * That is the price of not drawing the band, and it is paid over the one stretch
+ * of the list where the alternative was blank space.
+ *
  * @param scrollOffset    contentOffset.y
  * @param pointerTop      the mark's y within the viewport
  * @param firstItemOffset list.getFirstItemOffset() — the content padding
+ * @param virtualLead     the padding NOT drawn, compensated for here
  */
-export function markContentY(scrollOffset, pointerTop, firstItemOffset = 0) {
-  return scrollOffset + pointerTop - firstItemOffset;
+export function markContentY(scrollOffset, pointerTop, firstItemOffset = 0, virtualLead = 0) {
+  const lead = Math.max(0, Number(virtualLead) || 0);
+  const compensation = Math.max(0, lead - scrollOffset);
+  return scrollOffset + pointerTop - firstItemOffset - compensation;
+}
+
+/**
+ * How much lead the pointer has to supply ITSELF, given what the page draws.
+ *
+ * The mark is pinned `pointerTop` into the list and the list scrolls past it,
+ * so the first card is only reachable if there is that much depth above it. The
+ * depth comes from three places and they must add up to `pointerTop` exactly
+ * once — double-count any of them and the first reading lands above the list:
+ *
+ *   · `chromeAbove`  — what the agenda always draws before its first card: the
+ *                      band header and the first date divider. Free depth.
+ *   · half a card    — because reaching the first card's CENTRE is the whole
+ *                      requirement. Aiming at its top edge, as the old drawn
+ *                      lead-in did, was half a card deeper than anything needed.
+ *   · `drawnPad`     — real content padding. `markContentY` already nets this
+ *                      off via the list's measured `firstItemOffset`, so it is
+ *                      SUBTRACTED here too: a lead that ignored it would count
+ *                      the same points twice.
+ *
+ * Whatever is left over is the virtual lead — the part no longer drawn, spent
+ * over the first points of scroll. Zero when the drawn chrome already covers it.
+ */
+export function virtualLeadFor({ pointerTop = 0, chromeAbove = 0, cardHeight = 0, drawnPad = 0 } = {}) {
+  const need = Number(pointerTop) || 0;
+  const have = (Number(chromeAbove) || 0) + (Number(cardHeight) || 0) / 2 + (Number(drawnPad) || 0);
+  return Math.max(0, need - have);
 }
 
 /**
@@ -64,6 +113,17 @@ export function indexAtContentY(targetY, from, to, getLayout) {
  */
 export function dayKeyAt(items, hit) {
   for (let i = hit; i >= 0; i--) {
+    const it = items[i];
+    if (!it) continue;
+    if (it.__divider && it.dateKey) return it.dateKey;
+    if (it.dueDate) return it.dueDate;
+  }
+  // Nothing above it knows a date, which at the TOP of the list is the normal
+  // case rather than an error: with the lead-in no longer drawn, the mark can
+  // sit on the band header before any dated thing. Walk forward instead of
+  // reporting nothing — the day the agenda is about to show is a better answer
+  // than a blank readout.
+  for (let i = hit + 1; i < (items?.length || 0); i++) {
     const it = items[i];
     if (!it) continue;
     if (it.__divider && it.dateKey) return it.dateKey;
@@ -138,7 +198,19 @@ const CHROME = ['__agendaHeader', '__gap', '__addCard', '__divider', '__placehol
 export function activeRowIdAt(items, index, previousId = null) {
   const it = items?.[index];
   if (!it) return previousId;
-  if (CHROME.some((flag) => it[flag])) return previousId;
+  if (CHROME.some((flag) => it[flag])) {
+    // At the TOP of the list there is no last real row to keep — the mark is on
+    // the band header before any card has been passed, and with the lead-in no
+    // longer drawn that is where it starts. Take the first row BELOW instead:
+    // one card lit is the point of the mark, and "none" is the one answer it
+    // must never give.
+    if (previousId == null) {
+      for (let i = index + 1; i < (items?.length || 0); i++) {
+        if (isCardItem(items[i]) && items[i]?.id != null) return items[i].id;
+      }
+    }
+    return previousId;
+  }
   return it.id ?? previousId;
 }
 

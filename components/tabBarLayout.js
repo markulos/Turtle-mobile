@@ -84,6 +84,37 @@ export const TAB_ICON_SLOT = PILL_SIZE - TAB_ITEM_PADDING * 2;
 export const dockOccupied = (insetsBottom = 0) =>
   BAR_CONTENT_HEIGHT + CARD_GAP_BOTTOM + insetsBottom;
 
+/**
+ * A breath between the dock and whatever the panel ends with, so the last
+ * control is clear of it rather than touching it.
+ */
+export const PANEL_BOTTOM_GAP = 12;
+
+/**
+ * THE RULE: every panel ends above the dock, not behind it.
+ *
+ * The dock FLOATS. It reserves no layout space, so a panel that simply fills
+ * the screen puts its last row underneath it — and the last row of a panel is
+ * where its verbs live. The Planner's filter panel shipped with exactly that:
+ * its "Show" key and its live count sat behind the capsule, visible as two
+ * slivers poking out either side of it.
+ *
+ * The trap this exists to close is that `useBottomTabBarHeight()` LOOKS like
+ * the answer and is not — see `dockOccupied` above. A panel using it clears
+ * some height, so the bug reads as a tuning problem rather than as the wrong
+ * source, and the next panel repeats it.
+ *
+ * `overlaid` is whether the dock is actually drawn over this surface. An
+ * in-tree overlay (EdgeSwipePage's `overlay`) is covered by it; a true
+ * full-screen Modal presents ABOVE the whole navigator, so the dock is not
+ * there and clearing it would be a band of empty page instead.
+ */
+export const panelBottomInset = (insetsBottom = 0, overlaid = true) => (
+  overlaid
+    ? dockOccupied(insetsBottom) + PANEL_BOTTOM_GAP
+    : (Number(insetsBottom) || 0) + PANEL_BOTTOM_GAP
+);
+
 // The bar is a floating card, detached from the screen edges — matching the
 // chat composer's glass card, which uses the same 10pt side margin. The bottom
 // gap sits ON TOP of the safe-area inset so the card clears the home indicator

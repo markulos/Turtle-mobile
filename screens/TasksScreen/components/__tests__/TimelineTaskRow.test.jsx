@@ -746,22 +746,38 @@ describe('TimelinePointer', () => {
     expect(Math.abs(dFil - NOTCH_FILLET_R)).toBeLessThan(0.01);
   });
 
-  // The highlight is the thread at full strength, NOT white. The line is dark
-  // ink on the light page and light ink on the dark one, so a white "shine"
-  // would wash it out in one mode and vanish in the other.
-  test('the highlight is the thread with its fade taken off', async () => {
-    const { notchRim } = require('../TimelineTaskRow');
-    // White on both pages, for the same reason the thread is: what is behind
-    // it is the band, and the band is dark in both.
+  /**
+   * The rim and the rail are ONE white on the light page.
+   *
+   * The rim has always been solid; the rail it runs out of was 72%, so the line
+   * visibly brightened as it reached the swerve and dimmed again leaving it — a
+   * seam exactly where the eye is looking. Both are full strength now, so the
+   * swerve is simply the rail's own path.
+   *
+   * The dark page still brightens the curve, and must: its band is barely
+   * lighter than the page, so a solid white rail would be the brightest thing
+   * on the screen.
+   */
+  test('on the light page the swerve and the rail are the same white', async () => {
+    const { notchRim, threadColor } = require('../TimelineTaskRow');
     expect(notchRim({ mode: 'light' })).toBe('rgba(255,255,255,1)');
+    expect(threadColor({ mode: 'light' })).toBe(notchRim({ mode: 'light' }));
+  });
+
+  test('…and on the dark page the swerve is still the brighter of the two', async () => {
+    const { notchRim, threadColor } = require('../TimelineTaskRow');
     expect(notchRim({ mode: 'dark' })).toBe('rgba(255,255,255,1)');
+    expect(threadColor({ mode: 'dark' })).not.toBe(notchRim({ mode: 'dark' }));
+  });
+
+  // Found by its PATH, not its colour: on the light page the rail now wears the
+  // same white, so colour no longer tells the two apart. The rim is still the
+  // profile — the curve — and still a stroke with nothing filled behind it.
+  test('the rim is the swerve’s own profile, stroked and unfilled', async () => {
     const view = await render(<TimelinePointer theme={theme} label="Today" top={140} />);
-    const rim = paths(view).find((p) => isPaint(p.stroke, notchRim(theme)));
+    const rim = paths(view).find((p) => p.d === notchProfileD());
     expect(rim).toBeTruthy();
     expect(rim.fill).toBeNull();
-    // Only the CURVE is brightened — a brighter straight run would show as a
-    // seam where it meets the gutter's own segments.
-    expect(rim.d).toBe(notchProfileD());
     expect(rim.d).not.toBe(notchLineD());
   });
 

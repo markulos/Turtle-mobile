@@ -1,4 +1,5 @@
 import React from 'react';
+import { markGesture } from './haptics';
 
 /**
  * What counts as a TAP, app-wide.
@@ -110,8 +111,12 @@ export function useTapOnly(onPress, { slop = TAP_SLOP } = {}) {
   }, []);
 
   const onTouchMove = React.useCallback((e) => {
-    if (movedRef.current) return;               // one flip per gesture, not per frame
     if (!movedBeyond(startRef.current, pointOf(e), slop)) return;
+    // Every frame past the slop, not just the first: the haptic gate is a
+    // decaying window, so it has to be kept alive for as long as the finger is
+    // actually moving. Cheap — it stamps one number.
+    markGesture();
+    if (movedRef.current) return;               // one STATE flip per gesture, not per frame
     movedRef.current = true;
     setSettled(false);
   }, [slop]);

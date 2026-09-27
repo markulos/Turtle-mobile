@@ -15,19 +15,67 @@
  * The tag / owner filters live here too (the funnel key in the header), since
  * the Tasks header gave its filter key to this page.
  */
-import React, { memo, useMemo, useState, useEffect } from 'react';
+import React, { memo, useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Reanimated, {
+  Easing as ReEasing, runOnJS, useAnimatedStyle, useSharedValue, withTiming,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import AppTextInput from '../../../components/AppTextInput';
 import { tapHaptic } from '../../../utils/haptics';
+// One string down the whole tab — the inbox lines, the boards, and the tasks a
+// board reveals all sit on it, so the geometry cannot live in any one of them.
+import {
+  THREAD_X, BEAD, BEAD_SMALL, ROW_PAD_LEFT, REVEAL_MS, REVEAL_OUT_MS, REVEAL_RISE,
+} from '../utils/threadGeometry';
 import { insetCardPalette } from '../utils/cardPalette';
+import { RULE_HIGHLIGHT, RULE_W } from '../../../utils/surfaceDepth';
+import { insetRule } from '../../../utils/surfaceDepth';
 import { boardLabel, isTaskDoneNow, itemTypeOf, localTodayStr } from '../utils/taskHelpers';
 import { overviewStats, NO_BOARD } from '../utils/overviewStats';
 import StatsPanel from './StatsPanel';
 
 const pct = (done, total) => (total > 0 ? Math.round((done / total) * 100) : 0);
+
+/**
+ * A colour at a fraction of its strength, as an 8-digit hex.
+ *
+ * Only for a real 6-digit hex — the boardless row's "colour" is a THEME TOKEN
+ * (`textTertiary`), which may already be an `rgba()` and would become
+ * `rgba(...)1F`: not a colour, and RN renders an invalid colour as black. It
+ * falls back to no fill, which is the honest answer for a row that has no
+ * colour of its own.
+ */
+function faint(hex, alpha) {
+  if (typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return 'transparent';
+  const a = Math.round(Math.max(0, Math.min(1, alpha)) * 255).toString(16).padStart(2, '0');
+  return `${hex}${a}`;
+}
+
+/** One shared empty list — a fresh `[]` per render busts every tile's memo. */
+const EMPTY_TASKS = [];
+
+/**
+ * The space between two boards, and therefore how far each tile's thread
+ * overhangs its own borders: half of it at each end, so consecutive segments
+ * meet exactly. Derived in one place because the two have to agree — a gap and
+ * an overhang that disagree leave either a break in the string or a double
+ * hairline at every join.
+ */
+const BOARD_GAP = 8;
+
+/**
+ * The tile's corner and the weight of its coloured edge — named because the
+ * white liner inside it is DERIVED from both: its radius is this one less the
+ * border it sits within, or the two curves run at different rates round the
+ * corner and the line pinches against the colour.
+ */
+const BD_TILE_RADIUS = 14;
+const BD_TILE_BORDER = 2;
+const BD_TILE_BORDER_ON = 3;
+
 
 /**
  * The embedded shell: a box that simply fills its slot.
@@ -87,37 +135,304 @@ function Track({ done, total, pal, color }) {
   );
 }
 
-function BoardRow({ row, dot, sharedBy, selected, pal, onPress }) {
-  const open = row.total - row.done;
-  return (
-    <Pressable
-      onPressIn={() => tapHaptic()}
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`${boardLabel(row.name)}: ${row.done} of ${row.total} done${row.overdue ? `, ${row.overdue} late` : ''}`}
-      testID={`overview-board-${row.name}`}
-      style={({ pressed }) => [
-        styles.row,
-        { backgroundColor: pal.card, borderColor: selected ? pal.text : pal.edge, borderTopColor: selected ? pal.text : pal.edgeTop },
-        pressed && styles.pressed,
-      ]}
-    >
-      <View style={styles.rowTop}>
-        <View style={[styles.dot, { backgroundColor: dot }]} />
-        <Text style={[styles.rowName, { color: pal.text }]} numberOfLines={1}>{boardLabel(row.name)}</Text>
-        <Text style={[styles.rowFigure, { color: pal.text }]} numberOfLines={1}>
-          {row.done}<Text style={[styles.rowFigureTotal, { color: pal.sub }]}>/{row.total}</Text>
-        </Text>
-        <Icon name="chevron-right" size={18} color={pal.muted} />
+/**
+ * The body rolling open and shut.
+ *
+ * ─── Why this is Reanimated and not Animated ───────────────────────────────
+ *
+ * A collapse is a LAYOUT change: everything below the board has to come up as
+ * it closes, and a transform cannot move the boards underneath. So the height
+ * is what animates — and `Animated` with `useNativeDriver: false` drives that
+ * from JAVASCRIPT, one value per frame, each one triggering a layout pass over
+ * the whole scroller: the capture block, the written lines, and twenty-six
+ * bordered tiles. That is not a slow animation, it is sixty full layouts a
+ * second queued behind everything else on the JS thread.
+ *
+ * Reanimated runs the same interpolation on the UI thread, so the per-frame
+ * work never touches JS. LayoutAnimation would also have been native, but it is
+ * GLOBAL — this screen already carries a scar from one capturing every other
+ * layout change in its frame (see CalendarView's keyboard listener).
+ *
+ * ─── IT MEASURES IN A PASS OF ITS OWN, AND THAT IS NOT OPTIONAL ────────────
+ *
+ * A height animation needs a height to animate TO, and the obvious way to get
+ * one — put the content inside the collapsing box and read its `onLayout` —
+ * cannot work: the box is clipped and starts at zero, so the thing being
+ * measured is measured inside the constraint it is supposed to escape. Shipped
+ * that way, every board simply stayed shut: the animation was waiting on a
+ * measurement that was never coming.
+ *
+ * So an unmeasured body renders ONCE, absolutely positioned and invisible. Out
+ * of flow it takes no height from the tile, so nothing moves and nothing
+ * flashes; `left: 0, right: 0` gives it the tile's width, which is all a height
+ * measurement needs. The moment it reports one, the real collapsing box takes
+ * over and the roll begins. Measured heights survive a close (the component
+ * stays mounted and only returns null), so it is one extra pass per board, ever.
+ *
+ * ─── And the two smaller stutters ──────────────────────────────────────────
+ *
+ *   · `onLayout` ONLY COUNTS ONCE PER SIZE. Setting state from a layout the
+ *     animation itself provokes is a re-render per frame, which is the JS
+ *     thread busy exactly when it must not be.
+ *   · It stays mounted until the close has finished, or there would be nothing
+ *     left to animate.
+ */
+function Collapsible({ open, children }) {
+  const [measured, setMeasured] = useState(0);
+  const [mounted, setMounted] = useState(open);
+  const p = useSharedValue(open ? 1 : 0);
+  // What the roll is already heading for, so a re-render mid-animation does not
+  // restart it from wherever it had got to.
+  const target = useRef(open ? 1 : 0);
+
+  useEffect(() => { if (open) setMounted(true); }, [open]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    // Nothing to roll against yet — the measuring pass will bring us back.
+    if (open && measured === 0) return;
+    const to = open ? 1 : 0;
+    if (target.current === to && p.value === to) return;
+    target.current = to;
+    p.value = withTiming(
+      to,
+      { duration: open ? REVEAL_MS : REVEAL_OUT_MS, easing: ReEasing.out(ReEasing.cubic) },
+      (finished) => { if (finished && !open) runOnJS(setMounted)(false); },
+    );
+  }, [open, mounted, measured, p]);
+
+  // Depends on `measured`, so a board whose task list changes while it is open
+  // simply takes the new height — no second animation, no re-measure dance.
+  const style = useAnimatedStyle(() => ({
+    height: p.value * measured,
+    opacity: p.value,
+    transform: [{ translateY: (1 - p.value) * -REVEAL_RISE }],
+  }), [measured]);
+
+  const onLayout = (e) => {
+    const h = Math.round(e.nativeEvent.layout.height);
+    // Same height, same state object: no re-render. A layout provoked by the
+    // animation must never cost one.
+    if (h > 0) setMeasured((m) => (m === h ? m : h));
+  };
+
+  if (!mounted) return null;
+
+  // The measuring pass: out of flow, invisible, and not in anyone's way.
+  if (measured === 0) {
+    return (
+      <View style={styles.bdMeasure} pointerEvents="none" onLayout={onLayout} testID="board-measuring">
+        {children}
       </View>
-      <Text style={[styles.rowCaption, { color: pal.muted }]} numberOfLines={1}>
-        {row.total === 0 ? 'Empty' : open === 0 ? 'All clear' : `${open} to do`}
-        {row.overdue > 0 ? <Text style={styles.late}> · {row.overdue} late</Text> : null}
-        {row.today > 0 ? ` · ${row.today} today` : ''}
-        {sharedBy ? ` · shared by ${sharedBy}` : ''}
-      </Text>
-      <Track done={row.done} total={row.total} pal={pal} />
-    </Pressable>
+    );
+  }
+
+  return (
+    <Reanimated.View testID="board-collapsible" style={[styles.bdCollapse, style]}>
+      <View onLayout={onLayout}>{children}</View>
+    </Reanimated.View>
+  );
+}
+
+/**
+ * A board — the coloured rectangle, and everything in it.
+ *
+ * OPENED, THE BORDER ENVELOPES THE LOT: the header row, the tasks, their beads
+ * and the length of string they hang on. A board that holds tasks should look
+ * like it holds them.
+ *
+ * ─── The string crosses the borders ────────────────────────────────────────
+ *
+ * Each tile draws its OWN segment of thread, running half a gap past its top
+ * and bottom edges. A child paints over its parent's border, so the line
+ * visibly crosses each rectangle instead of stopping at it, and consecutive
+ * segments meet exactly in the gap. Half a gap and no more: overlapping
+ * segments composite two hairlines into one darker one at every join.
+ *
+ * THE BEADS PAINT OVER THE THREAD because they come after it in the tree, and
+ * they are filled with the page's colour — so the string runs behind each bead
+ * rather than through it.
+ *
+ * ITS INK IS THE PAGE'S, not the inset palette's: those cards are charcoal in
+ * both modes, so a surface drawing the page's own fill with their text colour
+ * is white-on-white in light mode. That bug has shipped three times here.
+ */
+function BoardTile({
+  row, dot, sharedBy, selected, expanded, tasks, todayStr, c,
+  adding, addQuery, onAddQueryChange, onStartAdd, onCancelAdd, onSubmitAdd,
+  onToggle, onOpen, onOpenTask, onEdit,
+}) {
+  const open = row.total - row.done;
+  const q = String(addQuery || '').trim().toLowerCase();
+  // Typing in the add box NARROWS what is shown as well as naming what would be
+  // created — so "is this already here?" and "put it here" are one gesture
+  // rather than two, which is the whole reason it is one box.
+  const shown = adding && q
+    ? tasks.filter((t) => String(t.title || '').toLowerCase().includes(q))
+    : tasks;
+
+  return (
+    <View
+      style={[styles.bdTile, { borderColor: dot }, selected && styles.bdTileOn]}
+      testID={`overview-board-wrap-${row.name}`}
+    >
+      {/* A WHITE LINE HUGGING THE OUTLINE, and that is the whole of the depth.
+          The colour stays exactly what it was — flat, one hue, the board's own
+          — and the light sits BESIDE it rather than being mixed into it. Two
+          adjacent edges, one coloured and one lit, is what the header's rule
+          does across a page; wrapped around a rectangle it reads as the same
+          material, which is the point of borrowing its white rather than
+          picking one.
+
+          Absolutely filled, so it traces the tile's PADDING box — immediately
+          inside the coloured border, with no gap to misalign. Its radius is the
+          tile's less the border it sits within, or the two curves would run at
+          different rates round the corners and the line would pinch. */}
+      <View pointerEvents="none" style={[styles.bdTileLiner, selected && styles.bdTileLinerOn]} />
+      {/* This tile's length of the string, running past both its borders. */}
+      <View style={[styles.bdThread, { backgroundColor: c.border }]} pointerEvents="none" />
+
+      <Pressable
+        onPressIn={() => tapHaptic()}
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityState={{ selected: !!selected, expanded: !!expanded }}
+        accessibilityLabel={`${boardLabel(row.name)}: ${row.done} of ${row.total} done${row.overdue ? `, ${row.overdue} late` : ''}`}
+        testID={`overview-board-${row.name}`}
+        style={({ pressed }) => [styles.bdHead, pressed && styles.pressed]}
+      >
+        <View style={[styles.bdBead, { backgroundColor: c.background, borderColor: dot }]} />
+        <View style={styles.bdTileText}>
+          <View style={styles.bdNameRow}>
+            <Text style={[styles.bdTileName, { color: c.textPrimary }]} numberOfLines={1}>
+              {boardLabel(row.name)}
+            </Text>
+            {/* The pencil stays with the NAME, because that is what it edits.
+                Quiet by default — it is on every board, so at full strength
+                twenty-six of them would be the loudest thing on the page — and
+                it comes up to full on press. */}
+            <Pressable
+              onPressIn={() => tapHaptic()}
+              onPress={() => onEdit?.(row.name)}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel={`Edit ${boardLabel(row.name)}`}
+              testID={`overview-board-edit-${row.name}`}
+              style={({ pressed }) => [styles.bdVerb, pressed && styles.bdVerbOn]}
+            >
+              <Icon name="pencil-outline" size={15} color={c.textSecondary} />
+            </Pressable>
+          </View>
+          <Text style={[styles.bdTileCaption, { color: c.textTertiary }]} numberOfLines={1}>
+            {row.total === 0 ? 'Empty' : `${row.done}/${row.total} done`}
+            {row.overdue > 0 ? <Text style={styles.late}> · {row.overdue} late</Text> : null}
+            {row.today > 0 ? ` · ${row.today} today` : ''}
+            {sharedBy ? ` · ${sharedBy}` : ''}
+          </Text>
+        </View>
+        {/* ADD, in a FIXED SLOT. Beside the name it sat wherever that name
+            happened to end, so on a column of boards it landed in twenty-six
+            different places and there was nowhere to aim. Here it is a fixed
+            distance from the right edge on every card: the same target every
+            time, and the row's own gap keeps it clear of the count and of the
+            chevron that closes the board.
+
+            A tinted square rather than a bare glyph, in the BOARD's colour at a
+            tenth: enough to read as a key you can hit, faint enough that a page
+            of them is still a list of boards rather than a row of buttons. */}
+        <Pressable
+          onPressIn={() => tapHaptic()}
+          onPress={() => onStartAdd?.(row.name)}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={`Add a task to ${boardLabel(row.name)}`}
+          testID={`overview-board-add-${row.name}`}
+          style={({ pressed }) => [
+            styles.bdAddKey,
+            { backgroundColor: faint(dot, adding ? 0.28 : 0.12) },
+            pressed && styles.pressed,
+          ]}
+        >
+          <Icon name="plus" size={17} color={dot} />
+        </Pressable>
+        <Text style={[styles.bdTileFigure, { color: c.textPrimary }]} numberOfLines={1}>
+          {open}
+          <Text style={[styles.bdTileFigureUnit, { color: c.textTertiary }]}> to do</Text>
+        </Text>
+        <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={c.textTertiary} />
+      </Pressable>
+
+      <Collapsible open={!!expanded}>
+        <View style={styles.bdBody} testID={`overview-board-body-${row.name}`}>
+          {/* The add box, at the TOP of this board's string — where the line it
+              is about to make will appear. A field at the bottom would have the
+              new row arrive somewhere you are not looking. */}
+          {adding && (
+            <View style={styles.bdAddRow}>
+              <View style={[styles.bdOpenBead, { backgroundColor: dot }]} />
+              <AppTextInput
+                style={[styles.bdAddInput, { color: c.textPrimary }]}
+                placeholder={`Add to ${boardLabel(row.name)}…`}
+                placeholderTextColor={c.textMuted || c.textTertiary}
+                value={addQuery}
+                onChangeText={onAddQueryChange}
+                autoFocus
+                autoCapitalize="sentences"
+                returnKeyType="done"
+                blurOnSubmit={false}
+                onSubmitEditing={() => onSubmitAdd?.(row.name)}
+                accessibilityLabel={`Add a task to ${boardLabel(row.name)}`}
+                testID={`overview-board-add-input-${row.name}`}
+              />
+              <Pressable
+                onPressIn={() => tapHaptic()}
+                onPress={() => (q ? onSubmitAdd?.(row.name) : onCancelAdd?.())}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel={q ? 'Create this task' : 'Close'}
+                testID={`overview-board-add-go-${row.name}`}
+                style={({ pressed }) => [styles.bdVerb, pressed && styles.bdVerbOn]}
+              >
+                <Icon name={q ? 'arrow-down' : 'close'} size={16} color={c.textSecondary} />
+              </Pressable>
+            </View>
+          )}
+
+          {shown.length === 0 ? (
+            <Text style={[styles.bdOpenTaskEmpty, { color: c.textTertiary }]}>
+              {adding && q ? 'Nothing here matches that — the key makes it.' : 'Nothing open here.'}
+            </Text>
+          ) : shown.map((t) => {
+            const overdue = !!t.dueDate && t.dueDate < todayStr;
+            return (
+                <Pressable
+                  key={t.id}
+                  onPressIn={() => tapHaptic()}
+                  onPress={() => onOpenTask?.(t)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.title}
+                  testID={`overview-board-task-${t.id}`}
+                  style={({ pressed }) => [styles.bdOpenTask, pressed && styles.pressed]}
+                >
+                  <View style={[styles.bdOpenBead, { backgroundColor: overdue ? '#F87171' : dot }]} />
+                  <Text style={[styles.bdOpenTaskText, { color: c.textPrimary }]} numberOfLines={1}>{t.title}</Text>
+                </Pressable>
+            );
+          })}
+            <Pressable
+              onPressIn={() => tapHaptic()}
+              onPress={onOpen}
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${boardLabel(row.name)}`}
+              testID={`overview-board-open-${row.name}`}
+              style={({ pressed }) => [styles.bdOpenMore, pressed && styles.pressed]}
+            >
+              <Text style={[styles.bdOpenMoreText, { color: c.textSecondary }]}>Open board</Text>
+              <Icon name="chevron-right" size={15} color={c.textTertiary} />
+            </Pressable>
+        </View>
+      </Collapsible>
+    </View>
   );
 }
 
@@ -325,13 +640,19 @@ function ScopePage({ scope, tasks, todayStr, pal, theme, onBack, onOpenTask }) {
 function PageHeader({ title, onBack, right, theme }) {
   const c = theme.colors;
   return (
-    <View style={[styles.topBar, { borderBottomColor: c.border }]}>
-      <Pressable onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back" style={({ pressed }) => [styles.backKey, pressed && styles.pressed]}>
-        <Icon name="chevron-left" size={28} color={c.textPrimary} />
-      </Pressable>
-      <Text style={[styles.topTitle, { color: c.textPrimary }]} numberOfLines={1}>{title}</Text>
-      <View style={styles.topRight}>{right}</View>
-    </View>
+    <>
+      <View style={styles.topBar}>
+        <Pressable onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back" style={({ pressed }) => [styles.backKey, pressed && styles.pressed]}>
+          <Icon name="chevron-left" size={28} color={c.textPrimary} />
+        </Pressable>
+        <Text style={[styles.topTitle, { color: c.textPrimary }]} numberOfLines={1}>{title}</Text>
+        <View style={styles.topRight}>{right}</View>
+      </View>
+      {/* The rule is a SIBLING, never spread onto the bar: `insetRule` is two
+          borders a point apart and needs an element of its own — on the bar it
+          would draw across its top edge too. */}
+      <View style={insetRule(theme)} />
+    </>
   );
 }
 
@@ -435,7 +756,10 @@ function BoardDetail({ row, tasks, todayStr, pal, theme, onBack, onShow, isShown
 
 function OverviewPage({
   visible, onClose, tasks, boards, colorOf, sharedIn, selectedProject, calendarDate,
-  onSelectBoard, onOpenFilters, filterCount = 0, bottomInset = 0, theme,
+  onSelectBoard, onOpenFilters,
+  // (name) => void — the board's own settings sheet, from the pencil beside
+  // its name.
+  onEditBoard, filterCount = 0, bottomInset = 0, theme,
   // (task) => void — a tap on a task in a board's list opens it for editing.
   onOpenTask,
   // (title, boardName) => void — the finder's create row, which is the point
@@ -448,6 +772,12 @@ function OverviewPage({
   // a tile's list and the stats sheet are still pushed pages with a back
   // swipe, they simply push within the tab instead of over the whole screen.
   embedded = false,
+  // Rendered at the TOP OF THIS PAGE'S SCROLLER, not above it. The Inbox tab's
+  // capture field and its list live here: as siblings ABOVE this component they
+  // were outside the only scroll view on the page, so they took their height
+  // off it — and once the list had a few lines in it there was no scrollable
+  // area left at all. A fixed header that grows is a page that stops scrolling.
+  header = null,
   // Filters the board rows. The page's own search, passed in rather than owned
   // here because the field lives outside this component when embedded.
   query = '',
@@ -479,6 +809,37 @@ function OverviewPage({
   // Which drill-down is up: a tile's list, or the stats page. Both are nested
   // overlays, so the back-swipe stack reads overview → here → back.
   const [scope, setScope] = useState(null);
+  // The four figures, behind their one key. See the note at the key itself.
+  const [overviewOpen, setOverviewOpen] = useState(false);
+  /**
+   * Which board tiles are unfolded, by name.
+   *
+   * A SET, not a name: one-at-a-time made the grid close a board you were
+   * reading to show you another, so comparing two boards meant opening each in
+   * turn and remembering the first. Twenty-six of them open at once is your
+   * business, not the page's — that is what the chevrons are for.
+   */
+  const [openBoards, setOpenBoards] = useState(() => new Set());
+  const toggleBoard = useCallback((name) => setOpenBoards((prev) => {
+    const next = new Set(prev);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    return next;
+  }), []);
+
+  // Which board's add box is open, and what is in it. One at a time here, and
+  // deliberately: two focused text fields is one keyboard fighting over two
+  // places to put what you type.
+  const [addingBoard, setAddingBoard] = useState(null);
+  const [addQuery, setAddQuery] = useState('');
+
+  const startAdd = useCallback((name) => {
+    setAddQuery('');
+    setAddingBoard(name);
+    // Opening the box on a shut board would put the field somewhere you cannot
+    // see it, so asking to add is also asking to open.
+    setOpenBoards((prev) => (prev.has(name) ? prev : new Set(prev).add(name)));
+  }, []);
+  const cancelAdd = useCallback(() => { setAddingBoard(null); setAddQuery(''); }, []);
   const [statsOpen, setStatsOpen] = useState(false);
   useEffect(() => { if (!visible) { setBoard(null); setScope(null); setStatsOpen(false); } }, [visible]);
   // Report the drill state up. One effect rather than a call at each open /
@@ -496,6 +857,57 @@ function OverviewPage({
   // Embedded, the shell is nothing: a plain flex box in whatever slot the
   // pager gave us. The nested drill-downs still need a parent to fill, which
   // is why this is a fragment-with-a-box rather than a fragment.
+  /**
+   * The open tiles' tasks, board by board — open work only, a handful each.
+   *
+   * ONE PASS over the task list for however many boards are unfolded, rather
+   * than a pass per board: with twenty-six boards and several open, the
+   * per-board version is the same list walked again and again for answers that
+   * could all have come out of one walk.
+   *
+   * Capped per board because a tile is a preview: its own page is one tap
+   * further and holds the lot. An unfolded tile running to forty rows would
+   * push every other board off the screen, which is the list undoing itself.
+   */
+  const openBoardTasks = useMemo(() => {
+    const map = new Map();
+    if (openBoards.size === 0) return map;
+    for (const name of openBoards) map.set(name, []);
+    for (const t of tasks || []) {
+      if (!t || t.completed || isTaskDoneNow(t, todayStr)) continue;
+      const key = t.project || NO_BOARD;
+      const bucket = map.get(key);
+      if (!bucket || bucket.length >= 6) continue;
+      bucket.push(t);
+    }
+    return map;
+  }, [openBoards, tasks, todayStr]);
+
+  /**
+   * ONE key where four squares were, and it is handed to the HEADER so it can
+   * sit on the heading's own line, top right — above the field rather than
+   * between the field and the list it is building. The squares answered
+   * questions you only have once you already use the app; they are all still
+   * here, a tap away, and the figure that changes the shape of a day (what is
+   * LATE) rides on the key so nothing urgent hides behind it.
+   */
+  const overviewKey = (
+    <Pressable
+      onPressIn={() => tapHaptic()}
+      onPress={() => setOverviewOpen(true)}
+      accessibilityRole="button"
+      accessibilityLabel={`Overview: ${all.total - all.done} to do, ${all.overdue} late`}
+      testID="overview-key"
+      style={({ pressed }) => [styles.overviewKey, { borderColor: c.border }, pressed && styles.pressed]}
+    >
+      <Icon name="chart-box-outline" size={16} color={c.textSecondary} />
+      <Text style={[styles.overviewKeyText, { color: c.textPrimary }]} numberOfLines={1}>Overview</Text>
+      {all.overdue > 0 && (
+        <View style={styles.overviewKeyDot} testID="overview-key-late" />
+      )}
+    </Pressable>
+  );
+
   const Shell = embedded ? EmbeddedShell : EdgeSwipePage;
   const shellProps = embedded
     ? {}
@@ -556,27 +968,56 @@ function OverviewPage({
           showsVerticalScrollIndicator
           scrollIndicatorInsets={{ right: 1 }}
           indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
+          // The capture field sits in here, so a drag that starts on it has to
+          // put the keyboard away rather than fight the scroll.
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          testID="overview-scroll"
         >
-          <View style={styles.tiles}>
-            <Tile icon="checkbox-blank-circle-outline" label="To do" value={all.total - all.done} caption={`of ${all.total} tasks`} pal={pal} testID="overview-tile-todo" onPress={() => setScope('todo')} />
-            <Tile icon="check" label="Done" value={all.done} caption={`${pct(all.done, all.total)}% complete`} pal={pal} testID="overview-tile-done" onPress={() => setScope('done')} />
-            <Tile icon="alert-circle-outline" label="Late" value={all.overdue} caption={all.overdue ? 'past due' : 'nothing late'} pal={pal} accent={all.overdue ? '#F87171' : null} testID="overview-tile-late" onPress={() => setScope('late')} />
-            <Tile icon="calendar-today" label="Today" value={all.today} caption={all.today ? `${dayLabel} · ${all.todayDone} done` : dayLabel} pal={pal} testID="overview-tile-today" onPress={() => setScope('today')} />
-          </View>
+          {typeof header === 'function' ? header({ overviewKey }) : header}
+          {/* A caller that takes the key places it (the Inbox tab puts it on
+              the heading's line). One that does not still needs it, or the four
+              figures would have no way in at all. */}
+          {typeof header !== 'function' && (
+            <View style={styles.overviewKeyRow}>{overviewKey}</View>
+          )}
 
           <Text style={[styles.section, { color: c.textTertiary }]}>Boards · {rows.length}</Text>
-          {rows.length === 0 && <Text style={[styles.empty, { color: pal.muted }]}>No boards yet.</Text>}
-          {rows.map((row) => (
-            <BoardRow
-              key={row.name}
-              row={row}
-              dot={row.name === NO_BOARD ? pal.muted : colorOf(row.name)}
-              sharedBy={sharedIn?.[row.name]}
-              selected={selectedProject === row.name}
-              pal={pal}
-              onPress={() => setBoard(row.name)}
-            />
-          ))}
+          {rows.length === 0 && <Text style={[styles.empty, { color: c.textTertiary }]}>No boards yet.</Text>}
+          <View style={styles.grid}>
+            {rows.map((row) => (
+              <BoardTile
+                key={row.name}
+                row={row}
+                dot={row.name === NO_BOARD ? c.textTertiary : colorOf(row.name)}
+                sharedBy={sharedIn?.[row.name]}
+                selected={selectedProject === row.name}
+                expanded={openBoards.has(row.name)}
+                // Only ever built for the tiles that are OPEN — see the memo.
+                tasks={openBoardTasks.get(row.name) || EMPTY_TASKS}
+                todayStr={todayStr}
+                c={c}
+                adding={addingBoard === row.name}
+                addQuery={addingBoard === row.name ? addQuery : ''}
+                onAddQueryChange={setAddQuery}
+                onStartAdd={startAdd}
+                onCancelAdd={cancelAdd}
+                onSubmitAdd={(name) => {
+                  const title = addQuery.trim();
+                  if (!title) return;
+                  // NO_BOARD is a DISPLAY sentinel — a task filed under it has
+                  // no board at all, not one named for the sentinel.
+                  onAddTask?.(title, name === NO_BOARD ? '' : name);
+                  // Cleared and still focused: adding is rarely one thing.
+                  setAddQuery('');
+                }}
+                onToggle={() => toggleBoard(row.name)}
+                onEdit={onEditBoard}
+                onOpen={() => setBoard(row.name)}
+                onOpenTask={onOpenTask}
+              />
+            ))}
+          </View>
 
           {tagRows.length > 0 && (
             <>
@@ -586,6 +1027,26 @@ function OverviewPage({
           )}
         </ScrollView>
       </View>
+
+      {/* The four figures, as a page of their own. Nothing was dropped when they
+          left the tab — they moved behind one key, which is the whole
+          simplification: the page leads with what you DO and keeps what you
+          READ one tap away. Each still drills into its own list. */}
+      <EdgeSwipePage overlay visible={overviewOpen} onClose={() => setOverviewOpen(false)}>
+        {overviewOpen && (
+          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: c.background }}>
+            <PageHeader title="Overview" onBack={() => setOverviewOpen(false)} theme={theme} />
+            <ScrollView contentContainerStyle={[styles.body, { paddingBottom: 32 + Math.max(insets.bottom, bottomInset) }]}>
+              <View style={styles.tiles}>
+                <Tile icon="checkbox-blank-circle-outline" label="To do" value={all.total - all.done} caption={`of ${all.total} tasks`} pal={pal} testID="overview-tile-todo" onPress={() => setScope('todo')} />
+                <Tile icon="check" label="Done" value={all.done} caption={`${pct(all.done, all.total)}% complete`} pal={pal} testID="overview-tile-done" onPress={() => setScope('done')} />
+                <Tile icon="alert-circle-outline" label="Late" value={all.overdue} caption={all.overdue ? 'past due' : 'nothing late'} pal={pal} accent={all.overdue ? '#F87171' : null} testID="overview-tile-late" onPress={() => setScope('late')} />
+                <Tile icon="calendar-today" label="Today" value={all.today} caption={all.today ? `${dayLabel} · ${all.todayDone} done` : dayLabel} pal={pal} testID="overview-tile-today" onPress={() => setScope('today')} />
+              </View>
+            </ScrollView>
+          </View>
+        )}
+      </EdgeSwipePage>
 
       {/* A tile's list: every task in that bucket, across every board. */}
       <EdgeSwipePage overlay visible={!!scope} onClose={() => setScope(null)}>
@@ -652,12 +1113,13 @@ const styles = StyleSheet.create({
   // from the right, and without it their off-screen resting position paints
   // across the page beside this one in the pager.
   embedded: { flex: 1, overflow: 'hidden' },
+  // The app's one separator carries the bottom edge (STYLE-RULES §1), spread
+  // at the call site so it takes the live theme.
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 10,
     paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   backKey: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   topTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700' },
@@ -684,8 +1146,179 @@ const styles = StyleSheet.create({
   label: { flexShrink: 1, fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9, textTransform: 'uppercase' },
   value: { fontSize: 30, fontWeight: '800', letterSpacing: -0.8, fontVariant: ['tabular-nums'] },
   caption: { fontSize: 11, fontWeight: '600', letterSpacing: 0.2, marginTop: 2 },
-  section: { fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9, textTransform: 'uppercase', marginTop: 22, marginBottom: 10 },
+  // The page's section labels ("BOARDS · 26", "TAGS · 8"). A step up from 10.5,
+  // with the tracking eased back as the size rises — wide tracking is what makes
+  // small caps legible and what makes larger ones look stretched. Still uppercase
+  // and still quiet: they label the page, they do not lead it. That is the
+  // capture heading's job, and the gap between the two is what gives the page an
+  // order to read in.
+  section: { fontSize: 12, fontWeight: '700', letterSpacing: 0.7, textTransform: 'uppercase', marginTop: 22, marginBottom: 10 },
   empty: { fontSize: 13, paddingVertical: 8 },
+
+  // A column of rows on a string. Relative, so the thread can be absolute
+  // inside it; `gap` states the spacing once rather than a margin per tile.
+  grid: { position: 'relative', gap: BOARD_GAP },
+  // The rectangle itself. Full width from the page's own margin — the string
+  // runs INSIDE it now, not to its left — and no padding of its own: every row
+  // in it carries the same paddingLeft, which is what puts their beads and the
+  // header's on one x.
+  bdTile: {
+    borderRadius: BD_TILE_RADIUS,
+    // 2, not a hairline: the colour was a 3pt strip on one edge before, and at
+    // a hairline all the way round it read as barely there. Thin enough to be
+    // an outline, heavy enough to be the board's.
+    borderWidth: BD_TILE_BORDER,
+    paddingRight: 13,
+    // NOT hidden: the thread deliberately paints past both borders, and the
+    // beads sit in the padding gutter. Clipping here would cut the string at
+    // every rectangle, which is the one thing this arrangement exists to stop.
+    overflow: 'visible',
+  },
+  // Scoped: the same outline, drawn heavier. The board is identified once, by
+  // its colour, and the SELECTION is only ever a weight — a second colour on
+  // top would be two claims in one place.
+  bdTileOn: { borderWidth: BD_TILE_BORDER_ON },
+  // The liner: the rule's own white, traced just inside the coloured edge.
+  bdTileLiner: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: BD_TILE_RADIUS - BD_TILE_BORDER,
+    borderWidth: RULE_W,
+    borderColor: RULE_HIGHLIGHT,
+  },
+  // Follows the border it hugs, so the pair stay adjacent when one thickens.
+  bdTileLinerOn: { borderRadius: BD_TILE_RADIUS - BD_TILE_BORDER_ON },
+  // This tile's length of string. Half the grid's gap past each border, so
+  // consecutive segments MEET in the gap without overlapping — two hairlines on
+  // one line composite darker, and the join becomes a rung.
+  bdThread: {
+    position: 'absolute',
+    left: THREAD_X,
+    top: -(BOARD_GAP / 2) - 2,
+    bottom: -(BOARD_GAP / 2) - 2,
+    width: StyleSheet.hairlineWidth,
+  },
+  bdHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingLeft: ROW_PAD_LEFT,
+    paddingVertical: 11,
+  },
+  bdNameRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  // A board verb: quiet at rest, full on press. They are on every board, so at
+  // full strength a column of them would be the loudest thing on the page.
+  bdVerb: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.35,
+  },
+  bdVerbOn: { opacity: 1 },
+  // A square with a soft corner, not a circle: a circle reads as a floating
+  // action and this is a key on a row. 32 is the visible box; the hitSlop takes
+  // it past the 44 the rest of the app holds to.
+  bdAddKey: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // The body's clip, which is what a height animation needs to roll against.
+  // Only ever vertical: the beads sit inside the row's own width.
+  bdCollapse: { overflow: 'hidden' },
+  // The measuring pass. Out of flow so it adds no height to the tile, full
+  // width so the measurement is the real one, and invisible so the frame it
+  // takes cannot be seen. See the note on Collapsible.
+  bdMeasure: { position: 'absolute', left: 0, right: 0, opacity: 0 },
+  bdAddRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingLeft: ROW_PAD_LEFT,
+    paddingRight: 4,
+    paddingVertical: 4,
+  },
+  // The single-line field metrics this app uses everywhere: no height of its
+  // own inside a row, Android's reserved font padding off, its centring on.
+  bdAddInput: {
+    flex: 1,
+    fontSize: 14,
+    height: 36,
+    paddingVertical: 0,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+  },
+  // The board's own bead, on the string that now runs inside the rectangle.
+  // Painted after the thread, and filled with the page colour, so the line
+  // runs behind it rather than through it.
+  bdBead: {
+    position: 'absolute',
+    left: THREAD_X - BEAD / 2,
+    width: BEAD,
+    height: BEAD,
+    borderRadius: BEAD / 2,
+    borderWidth: 2,
+  },
+
+  bdBody: { paddingBottom: 4 },
+  // A revealed task: a line on the SAME string, inside the same rectangle.
+  bdOpenTask: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingLeft: ROW_PAD_LEFT, paddingRight: 4, paddingVertical: 9,
+  },
+  bdOpenBead: {
+    position: 'absolute',
+    left: THREAD_X - BEAD_SMALL / 2,
+    width: BEAD_SMALL,
+    height: BEAD_SMALL,
+    borderRadius: BEAD_SMALL / 2,
+  },
+  bdOpenTaskText: { flex: 1, fontSize: 14 },
+  bdOpenTaskEmpty: { fontSize: 13, paddingLeft: ROW_PAD_LEFT, paddingVertical: 9 },
+  bdOpenMore: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingLeft: ROW_PAD_LEFT, paddingVertical: 9, paddingBottom: 12,
+  },
+  bdOpenMoreText: { fontSize: 13, fontWeight: '700' },
+  // One board per row, open or closed. Two-up meant a tile had to be tall and
+  // stacked to fit anything; full width it is a line you read across.
+  bdTileHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  bdTileText: { flex: 1, gap: 2 },
+  bdTileName: { fontSize: 16, fontWeight: '700' },
+  // THIN. At 800 the count was competing with the board's own name for the
+  // row, and on a page of twenty-six boards that reads as twenty-six numbers
+  // with names attached rather than the other way round. Light and a size up:
+  // a thin face needs the extra points to keep the same presence.
+  bdTileFigure: { fontSize: 22, fontWeight: '200', letterSpacing: -0.3 },
+  bdTileFigureUnit: { fontSize: 12, fontWeight: '400', letterSpacing: 0 },
+  bdTileCaption: { fontSize: 12 },
+
+  // The one key the four squares became, sized for the heading's line: a small
+  // outline pill, not a full-width row. It opens something; it is not a
+  // statistic in its own right, and next to a 22pt heading it must not read as
+  // a second heading.
+  overviewKey: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 32,
+    paddingHorizontal: 11,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  overviewKeyText: { fontSize: 13, fontWeight: '700' },
+  // Late is the one figure that cannot wait behind a tap. It does not fit
+  // beside a heading as words, so it is a dot — present or absent, which is
+  // the only thing you need from it at a glance.
+  overviewKeyDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#F87171' },
+  // The fallback slot, for a caller that did not take the key to place itself.
+  overviewKeyRow: { flexDirection: 'row', marginBottom: 4 },
   row: {
     borderRadius: 16,
     borderWidth: 1,

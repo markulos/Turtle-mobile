@@ -45,7 +45,8 @@ import {
   Linking,
   Modal,
 } from 'react-native';
-import { depth } from '../../utils/surfaceDepth';
+import { depth, insetRule } from '../../utils/surfaceDepth';
+import { SCREEN_TITLE } from '../../utils/headerType';
 import AppTextInput from '../../components/AppTextInput';
 // expo-image for the link card's remote thumbnail (disk+memory cache + a soft
 // fade-in), aliased so it doesn't clash with the RN <Image> used by NoteRow.
@@ -120,9 +121,9 @@ const FILTER_TODO = 'todo';
 // carrying an app tag, written either by the composer's Feedback mode or by the
 // dev gesture probe. Its own tab so feedback stops hiding among real todos.
 const FILTER_FEEDBACK = 'feedback';
-// Left-to-right page order for the swipeable tabs.
+// The order the kind chips read in, widest scope first.
 const FILTER_ORDER = [FILTER_ALL, FILTER_NOTE, FILTER_TODO, FILTER_FEEDBACK];
-// Tab labels, keyed by filter so adding a page is one row here.
+// Chip labels, keyed by filter so adding a kind is one row here.
 const FILTER_LABELS = { all: 'All', note: 'Notes', todo: 'Todos', feedback: 'Feedback' };
 // Sentinel topic for notes that carry no tags (shown as its own "Untagged" chip).
 const UNTAGGED = '__untagged__';
@@ -136,10 +137,11 @@ const NOTES_PAGE = 60;
 // APP_TAGS / PLATFORM_TAGS and the two tab predicates live in feedbackFilter.js
 // so they can be unit-tested without stubbing this file's native import graph.
 
-// Which composer mode a fresh capture starts in, by the tab it was started FROM
-// — capture on the Todos tab writes a to-do, capture on Notes writes a note.
-// 'all' has no kind of its own, so it keeps the historical to-do default.
-// Keyed by filter, so capture on the Feedback tab opens straight in Feedback mode.
+// Which composer mode a fresh capture starts in, by the KIND currently filtered
+// to — capture with Todos chosen writes a to-do, with Notes chosen writes a
+// note. 'all' has no kind of its own, so it keeps the historical to-do default.
+// Keyed by filter, which is why it survived the tabs becoming chips: it always
+// read the filter, never a page index.
 const TAB_COMPOSER_MODE = { all: 'todo', note: 'note', todo: 'todo', feedback: 'feedback' };
 // Off-screen start distance for the settings sheet before its real height is
 // measured. Only has to be TALLER than the sheet — the first frames of the
@@ -953,49 +955,14 @@ export default function NotesScreen() {
     return Array.from(set).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
   }, [notes]);
 
-  // ── Swipeable tabs ──────────────────────────────────────
-  // Same mechanism as the photo vault: a horizontal paging ScrollView whose
-  // scroll offset (pageScrollX) drives BOTH the pages and the pill indicator
-  // 1:1, so swiping and the pill slide stay perfectly in sync.
-  const { width: screenW } = useWindowDimensions();
-  const pageScrollX = useRef(new Animated.Value(0)).current;
-  const pagerRef = useRef(null);
-  const segW = (screenW - 32) / FILTER_ORDER.length; // track is inset 16px each side
-
-  // Underline geometry, same approach as the vault's picker. Label widths can't
-  // be computed (font metrics + the user's font scale + a live count in the
-  // label), so they're measured via onLayout on the active copy. The bar's
-  // WIDTH is a plain style, never animated: pageScrollX is fed by an
-  // Animated.event with useNativeDriver, and the native animated module handles
-  // only transforms and opacity — animating width throws. One width sized to
-  // the widest label keeps the 2pt radius from smearing, which scaleX would.
-  const [tabLabelWidths, setTabLabelWidths] = useState({});
-  const measureTabLabel = useCallback((key, w) => {
-    const next = Math.round(w);
-    if (!next) return;
-    setTabLabelWidths((prev) => (prev[key] === next ? prev : { ...prev, [key]: next }));
-  }, []);
-  const fallbackLabelW = Math.min(segW * 0.6, 76);
-  const tabUnderlineW = Math.max(...FILTER_ORDER.map((fk) => tabLabelWidths[fk] || fallbackLabelW));
-  // Derived from FILTER_ORDER rather than written out per page — a hand-listed
-  // 3-point range is exactly what breaks (silently, by parking the bar under the
-  // wrong label) the day a tab is added.
-  const tabUnderlineX = pageScrollX.interpolate({
-    inputRange: FILTER_ORDER.map((_, i) => i * screenW),
-    outputRange: FILTER_ORDER.map((_, i) => segW * (i + 0.5) - tabUnderlineW / 2),
-    extrapolate: 'clamp',
-  });
-  const goToPage = useCallback((index) => {
-    pagerRef.current?.scrollTo({ x: index * screenW, animated: true });
-    setFilter(FILTER_ORDER[index]);
-  }, [screenW]);
-  const onPagerEnd = useCallback((e) => {
-    const idx = Math.round(e.nativeEvent.contentOffset.x / screenW);
-    const f = FILTER_ORDER[idx];
-    if (f && f !== filter) setFilter(f);
-  }, [screenW, filter]);
-  // Per-page list: search filter (Tier 1-3, see visibleNotes) + the type
-  // filter + the active topic filter. Notes are few.
+  // ── The list's two filters ───────────────────────────────────────────────
+  // `filter` is the KIND (all / notes / todos / feedback) and `selectedTopic`
+  // is the board. Both are chips over ONE list now; the four-page pager that
+  // used to carry the kind — and the underline, the label measuring and the
+  // scroll-driven interpolations that kept it in step — went with it.
+  // The list: search filter (Tier 1-3, see visibleNotes) + the kind filter +
+  // the active topic filter. Notes are few. Still takes the kind as an ARGUMENT
+  // rather than reading `filter` — the counts row calls it once per kind.
   const listFor = useCallback((filterKey) => {
     let list = visibleNotes;
     if (filterKey !== FILTER_ALL) list = list.filter((n) => matchesFilter(n, filterKey));
@@ -1120,13 +1087,16 @@ export default function NotesScreen() {
     ? ['rgba(74,222,128,0.06)', 'rgba(74,222,128,0.02)', 'transparent']
     : ['rgba(34,197,94,0.06)', 'rgba(34,197,94,0.02)', 'transparent'];
 
-  // Header chrome (title banner + type-filter pill + topic rail) rendered as the
+  // Header chrome (title banner + kind rail + topic rail) rendered as the
   // list's ListHeaderComponent so it SCROLLS AWAY with the notes instead of
   // sitting as a fixed overlay. The negative horizontal margin cancels the
   // list's contentContainer padding so the chrome spans edge-to-edge and its
-  // own paddings position exactly as they did when it was fixed. (The
-  // expandable search bar stays fixed above the pager — a single instance, so
-  // its ref/focus isn't split across the three per-page header copies.)
+  // own paddings position exactly as they did when it was fixed.
+  //
+  // It is rendered ONCE. That used to be the careful bit — with a page per kind
+  // the chrome either had to be lifted out of the pages or drawn four times,
+  // and the search bar's ref and focus could not be split across copies. With
+  // one list it is simply the list's header.
   const renderChrome = () => (
     <View style={styles.chrome}>
       <View style={styles.header}>
@@ -1153,43 +1123,36 @@ export default function NotesScreen() {
           <Icon name="magnify" size={22} color={theme.colors.textSecondary} />
         </TouchableOpacity>
       </View>
+      <View style={styles.headerRule} />
 
-      {/* Swipeable tabs — a sliding underline, matching the Media Vault's
-          picker: no track, no pill, just the labels with a bar that moves from
-          one to the next 1:1 with the pager scroll. */}
-      <View style={styles.tabTrack}>
-        <Animated.View
-          style={[
-            styles.tabUnderline,
-            { width: tabUnderlineW, backgroundColor: theme.colors.textPrimary, transform: [{ translateX: tabUnderlineX }] },
-          ]}
-        />
-        {FILTER_ORDER.map((fk, index) => {
-          const inputRange = [(index - 1) * screenW, index * screenW, (index + 1) * screenW];
-          const activeOp = pageScrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
-          const inactiveOp = pageScrollX.interpolate({ inputRange, outputRange: [1, 0, 1], extrapolate: 'clamp' });
-          const label = FILTER_LABELS[fk] || fk;
-          const count = counts[fk] || 0;
-          return (
-            <TouchableOpacity
-              key={fk}
-              style={styles.tabSeg}
-              onPress={() => goToPage(index)}
-              activeOpacity={0.8}
-            >
-              <Animated.Text
-                onLayout={(e) => measureTabLabel(fk, e.nativeEvent.layout.width)}
-                style={[styles.tabSegActive, { opacity: activeOp }]}
-              >
-                {`${label}  ${count}`}
-              </Animated.Text>
-              <Animated.Text style={[styles.tabSegInactive, { opacity: inactiveOp }]}>
-                {`${label}  ${count}`}
-              </Animated.Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      {/* KIND, as chips. These were four swipeable tabs, which made the kind of
+          a note a PLACE you had to be rather than a filter you could apply —
+          and put three of them (All, Todos, Feedback) at the same level as the
+          screen itself, so "Notes" appeared to be one quarter of Notes.
+          They are the same chip the topic rail below uses, on purpose: kind and
+          topic are two filters over one list, and a list with two filters that
+          look like different kinds of control reads as two lists. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.kindRailScroll}
+        contentContainerStyle={styles.kindRail}
+        keyboardShouldPersistTaps="handled"
+      >
+        {FILTER_ORDER.map((fk) => (
+          <TopicChip
+            key={fk}
+            label={FILTER_LABELS[fk] || fk}
+            // "All" counts the whole list, so a badge on it is the list's own
+            // length restated — noise next to the chips that actually narrow.
+            count={fk === FILTER_ALL ? undefined : (counts[fk] || undefined)}
+            active={filter === fk}
+            onPress={() => setFilter(fk)}
+            theme={theme}
+            isDark={isDark}
+          />
+        ))}
+      </ScrollView>
 
       {/* Topic rail — browse by topic (parent tag). Horizontally scrollable so a
           long tag list never crowds the type filter. Hidden when there are no
@@ -1299,7 +1262,9 @@ export default function NotesScreen() {
           notes. Rendered once here instead of three times inside the pages. */}
       {renderChrome()}
 
-      {/* Body — swipeable pager (one page per filter); the underline tracks scroll */}
+      {/* Body — ONE page. It was a four-page pager, one per kind, and the kinds
+          were tabs you swiped between; they are filter chips above now, so
+          there is one list and it shows whatever the chips say. */}
       {error ? (
         <View style={styles.center}>
           <Icon name="cloud-off-outline" size={32} color={theme.colors.textMuted} />
@@ -1313,25 +1278,7 @@ export default function NotesScreen() {
           <ActivityIndicator color={theme.colors.primary} />
         </View>
       ) : (
-        <Animated.ScrollView
-          ref={pagerRef}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          scrollEventThrottle={16}
-          onScroll={Animated.event(
-            [{ nativeEvent: { contentOffset: { x: pageScrollX } } }],
-            { useNativeDriver: true },
-          )}
-          onMomentumScrollEnd={onPagerEnd}
-          style={{ flex: 1 }}
-        >
-          {FILTER_ORDER.map((fk) => (
-            <View key={fk} style={{ width: screenW }}>
-              {renderPageBody(fk)}
-            </View>
-          ))}
-        </Animated.ScrollView>
+        renderPageBody(filter)
       )}
 
       {/* FAB */}
@@ -3432,11 +3379,15 @@ const createStyles = (theme, isDark) => StyleSheet.create({
     paddingBottom: 12,
     gap: 10,
   },
+  // The app's one separator, under every screen header (STYLE-RULES §1). Its
+  // own element because it is TWO lines — see `insetRule`.
+  headerRule: insetRule(theme),
+  // The app's screen title (utils/headerType) — Notes was the size every other
+  // header has come to match, so it reads from the token rather than being it.
   title: {
-    fontSize: 28,
+    ...SCREEN_TITLE,
     fontWeight: '700',
     color: theme.colors.textPrimary,
-    letterSpacing: 0.2,
   },
   // Selected-topic breadcrumb next to the bold "Notes" — same size, hairline-
   // thin weight, softer colour; shrinks/ellipsizes so a long topic can't shove
@@ -3458,40 +3409,25 @@ const createStyles = (theme, isDark) => StyleSheet.create({
   headerSearchBtn: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginTop: 6, marginBottom: 4, paddingHorizontal: 12, height: 40, borderRadius: 12, borderWidth: 1 },
   searchInput: { flex: 1, fontSize: 15, paddingVertical: 0 },
-  // Swipeable segmented control — same look as the photo vault's tab switcher.
-  // No track and no pill: the tabs are bare labels with a sliding underline,
-  // matching the Media Vault picker.
-  tabTrack: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-    height: 34,
-    flexDirection: 'row',
-    position: 'relative',
-  },
-  tabUnderline: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    height: 3,
-    borderRadius: 2,
-  },
-  tabSeg: { flex: 1, justifyContent: 'center', alignItems: 'center', zIndex: 1 },
-  tabSegActive: {
-    position: 'absolute',
-    fontSize: 13,
-    fontWeight: '600',
-    color: theme.colors.textPrimary,
-  },
-  tabSegInactive: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: theme.colors.textSecondary,
-  },
   // A horizontal ScrollView with no explicit style stretches to fill the
   // parent column's free vertical space — combined with the rail's
   // alignItems:'center', that floats the short chip row in a tall band with
-  // equal gaps above and below. flexGrow:0 makes the rail hug its content
-  // height so it sits snugly under the type pills.
+  // equal gaps above and below. flexGrow:0 makes each rail hug its content.
+  //
+  // The KIND rail. Same shape as the topic rail beneath it — they are two
+  // filters over one list, so they are one control repeated, not two kinds of
+  // control. Slightly less air under it than the topic rail has: the two rails
+  // belong together, and an even gap between them would read as three sections.
+  kindRailScroll: {
+    flexGrow: 0,
+  },
+  kindRail: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
   topicRailScroll: {
     flexGrow: 0,
   },

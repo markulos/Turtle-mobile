@@ -22,8 +22,27 @@ repo skill (loaded before any UI work) and by review.
   `experimentalBlurMethod="dimezisBlurView"` for Android) under an `rgba(10,10,12,.5–.6)` tint so
   white text stays legible whatever is behind it.
 
-- DEPTH, light mode only — `utils/surfaceDepth`. The light theme is a white page carrying near-white
-  surfaces (#F5F5F5 / #EEEEEE) split by a 10 %-black hairline: flat, a card and the page on one plane
+- THE LIGHT PAGE IS OFF-WHITE (#F5F3EF), not #FFFFFF. A pure-white page is a lightbox: it is the
+  brightest thing the screen can make, so every surface on it can only be darker and the eye has
+  nowhere to rest. Warm by a couple of points of red and green over blue — not a colour anyone can
+  name, but the difference between "paper" and "grey". The ramp keeps its DIRECTION (surfaces step
+  DOWN from the page, same distance between rungs, re-based warm); inverting it so cards are white
+  on a darker page is a different design system and none of the `depth()` shadows are tuned for it.
+- A SEPARATOR IS TWO LINES, a point each (`RULE_W`) — `insetRule(theme)` / `ridgeRule(theme)` from
+  `utils/surfaceDepth`, spread onto a View of its own (they bring no height; the borders ARE the
+  line). A shadow with a highlight beneath it is a GROOVE and reads as a cut; reverse the pair and
+  it is a RIDGE and reads as an edge standing proud. One line can only ever be a line drawn ON the
+  page; two are a line cut INTO it.
+  - WHICH ONE: a groove SEPARATES — two things either side of a score, which is every TAB HEADER
+    (Planner, Media Vault, Chat all carry the same one). A ridge is the TOP EDGE of something — the
+    lip a row sits on, like the Inbox's written lines. Used the wrong way round both still draw and
+    the page quietly stops making sense.
+  - NOT hairlines: at 0.33pt the pair sits a third of a point apart and most renderers resolve them
+    into one grey smudge, which is the very thing having two of them avoids.
+  - Needs the off-white page — a white highlight has nowhere to go on #FFFFFF. Dark mode gets the
+    plain single line, for the same reason `depth()` gives it nothing.
+- DEPTH, light mode only — `utils/surfaceDepth`. The light theme is an off-white page carrying
+  near-white surfaces split by a 10 %-black hairline: flat, a card and the page on one plane
   with a line between them. Every surface that paints a fill spreads `...depth(theme, LEVEL)` after it.
   Four levels — `control` (chips, pills, keys, inputs: one point of lift, barely there), `card` (the
   default: cards, panels, rows, tiles, sections), `raised` (menus, autocompletes, banners, floating
@@ -235,6 +254,25 @@ repo skill (loaded before any UI work) and by review.
 - Every tappable is ≥ 44 × 44 pt, using `hitSlop` when the glyph is smaller. Pressed state:
   opacity 0.6 (`Pressable` style function). Action buttons fire the press-in haptic from
   `utils/haptics`.
+- **NO TOUCH FEEDBACK DURING A MOVEMENT.** While a finger is scrolling, swiping, dragging,
+  panning or pinching, nothing may fire a press or touch haptic — not on press-in, not on
+  press, not on the row the finger happens to be over. A touch earns feedback only when the
+  gesture turns out to be *just a touch*: a tap. A list that ticks as it scrolls past each
+  row feels like a hundred mis-taps, and the buzz that fires the instant a finger lands is
+  the one most likely to be a scroll that has not declared itself yet.
+  - Enforced centrally, not per call site — there are ~200 press-in haptics in the app and a
+    rule remembered 200 times is a rule already broken somewhere. `tapHaptic` and
+    `impactHaptic` are GATED: they return silently while a gesture is in flight.
+  - The gate is fed by `markGesture()` (`utils/haptics`). `useTapOnly` calls it for you once a
+    touch travels past the tap slop, so every control spreading it is already covered. **A
+    scrolling surface must call it from `onScroll`** — one line, safe to call every frame.
+    It is a decaying window (150 ms), never a begin/end pair: a missed `end` would leave the
+    app silently haptic-dead, a missed stamp costs one beat.
+  - Two deliberate EXEMPTIONS. `selectionHaptic` is feedback for the *movement itself* (the
+    agenda's day ticks as the timeline scrolls past the mark), so the condition that silences
+    a tap is the condition it exists for. `notifyHaptic` reports an *outcome* — a save landed,
+    a focus block finished — which still has to announce itself mid-scroll.
+  - Pinned by `utils/__tests__/haptics.test.js`.
 - A TAP IS NOT A GESTURE — `utils/pressBehavior`, app-wide. RN enters the pressed state on finger-DOWN,
   so every scroll, swipe and drag begins by lighting (and, with a press-in haptic, buzzing) whatever is
   under it. Three things have to be true before a touch counts as a press, and the module carries all
@@ -252,6 +290,23 @@ repo skill (loaded before any UI work) and by review.
   Use it on anything inside a scrolling or paging surface. NOT on stationary controls — a composer's
   send key, a dialog button — where the press cannot be the start of a scroll and the delay only adds
   lag. Pinned by `utils/__tests__/pressBehavior.test.jsx`.
+- **EVERY PANEL ENDS ABOVE THE DOCK, NEVER BEHIND IT.** The tab bar is a FLOATING
+  capsule: it reserves no layout space, so any panel, sheet or page that simply fills the
+  screen puts its last row underneath it — and the last row of a panel is where its verbs
+  live (Apply, Show, Save, Done). The Planner's filter panel shipped exactly that: its
+  "Show" key and its live count sat behind the capsule, visible as two slivers poking out
+  either side.
+  - Use `panelBottomInset(insets.bottom, overlaid)` from `components/tabBarLayout` for the
+    bottom padding of a panel's footer, or of its scroller when the footer IS the last row.
+    Never a bare `insets.bottom`, and never a hand-tuned number.
+  - `overlaid` is whether the dock is actually drawn over this surface: an in-tree
+    `EdgeSwipePage overlay` is covered by it, a true full-screen Modal presents above the
+    whole navigator and is not — clearing the dock there would be a band of empty page.
+  - **`useBottomTabBarHeight()` IS THE TRAP, not the answer.** It reports something for a
+    margin-based floating bar, so a panel using it clears *some* height and the bug reads
+    as a tuning problem rather than as the wrong source — which is how the next panel
+    repeats it. `dockOccupied()` in the same module is the one true measurement.
+  - Pinned by `components/__tests__/tabBarLayout.test.js`.
 - Icon-only buttons carry `accessibilityRole="button"` and an `accessibilityLabel` that names the
   action AND its state ("Remove from favourites", "Pause").
 - Overlays that must not eat swipes are `pointerEvents="box-none"` while shown and `"none"` while
@@ -420,7 +475,9 @@ repo skill (loaded before any UI work) and by review.
 
 1. Which surface is it — white-on-black or black-on-white — and does every element on it contrast?
 2. Longest label, longest value, 375 pt width: nothing clipped, nothing past the edge.
-3. Every tappable ≥ 44 pt with a label; pressed state; haptic on action buttons.
+3. Every tappable ≥ 44 pt with a label; pressed state; haptic on action buttons — and NO touch
+   haptic while a finger is moving (scroll surfaces call `markGesture()` from `onScroll`).
+   Every panel's last row clears the floating dock (`panelBottomInset`).
 4. Sheets: in-tree, two detents (opens at 60 %, drag up to full screen, drag down closes), top search, keyboard lift, scroll-indicator inset.
    Keyboard anywhere: no KeyboardAvoidingView, no LayoutAnimation on the event, body pads / pinned bar lifts on a native transform.
 5. Motion on the UI thread only; swift curve for shared-element moves.
