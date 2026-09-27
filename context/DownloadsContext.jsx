@@ -41,9 +41,18 @@
  */
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { AppState } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { io } from 'socket.io-client';
 import { useServer, serverOrigin } from './ServerContext';
 import { useAuth } from './AuthContext';
+import { endedIdentity, visibleTimer } from '../utils/pomodoroState';
+
+// The ended card the user last dismissed, by its server stamps. Persisted,
+// because the server replays its last ended state to every socket on connect
+// and the card would otherwise come back after every reload. Used to live in
+// the Turtle tab's hook; it moved here with the timer, so that the app-level
+// Live Activity driver honours a dismissal the same instant the card does.
+const POMODORO_DISMISSED_KEY = 'pomodoroDismissedEndedId';
 
 const DownloadsContext = createContext({
   jobs: [], active: 0, mediaVersion: 0,
@@ -65,6 +74,10 @@ export const useMediaVersion = () => useContext(MediaVersionContext);
 const SyncContext = createContext({
   tasksVersion: 0, notesVersion: 0, focusVersion: 0,
   pomodoroState: null, pomodoroDurations: null,
+  // The timer as the user should SEE it (translated, minus a dismissed ended
+  // card), and the one way to dismiss. Both the Turtle tab's card and the
+  // app-level Live Activity driver read this, never the raw payload.
+  pomodoroView: null, dismissEndedTimer: () => {},
 });
 export const useSyncSignals = () => useContext(SyncContext);
 
@@ -88,6 +101,16 @@ export function DownloadsProvider({ children }) {
   const [focusVersion, setFocusVersion] = useState(0);
   const [pomodoroState, setPomodoroState] = useState(null);
   const [pomodoroDurations, setPomodoroDurations] = useState(null);
+  // Restored once from disk; a dismissal writes through. Until the read lands,
+  // a replayed ended card may flash for a frame — the same race the hook had.
+  const [dismissedEndedId, setDismissedEndedId] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(POMODORO_DISMISSED_KEY)
+      .then((v) => { if (alive && v) setDismissedEndedId(v); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
   const socketRef = useRef(null);
   const authGenerationRef = useRef(authGeneration);
   authGenerationRef.current = authGeneration;
@@ -256,9 +279,21 @@ export function DownloadsProvider({ children }) {
     [jobs, active, mediaVersion, control, remove, enqueue, refresh],
   );
   const mediaValue = useMemo(() => ({ mediaVersion }), [mediaVersion]);
+  // Dismiss the ended card currently on show. Remembering its identity is what
+  // keeps the server's replay of it from bringing it back after a reload;
+  // nothing to remember if what is showing is not an ended card.
+  const pomodoroStateRef = useRef(pomodoroState);
+  pomodoroStateRef.current = pomodoroState;
+  const dismissEndedTimer = useCallback(() => {
+    const id = endedIdentity(pomodoroStateRef.current);
+    if (!id) return;
+    setDismissedEndedId(id);
+    AsyncStorage.setItem(POMODORO_DISMISSED_KEY, id).catch(() => {});
+  }, []);
+  const pomodoroView = useMemo(() => visibleTimer(pomodoroState, dismissedEndedId), [pomodoroState, dismissedEndedId]);
   const syncValue = useMemo(
-    () => ({ tasksVersion, notesVersion, focusVersion, pomodoroState, pomodoroDurations }),
-    [tasksVersion, notesVersion, focusVersion, pomodoroState, pomodoroDurations],
+    () => ({ tasksVersion, notesVersion, focusVersion, pomodoroState, pomodoroDurations, pomodoroView, dismissEndedTimer }),
+    [tasksVersion, notesVersion, focusVersion, pomodoroState, pomodoroDurations, pomodoroView, dismissEndedTimer],
   );
   return (
     <DownloadsContext.Provider value={value}>

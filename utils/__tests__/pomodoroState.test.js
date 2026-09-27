@@ -5,7 +5,14 @@
  * focus block ends — which is exactly the class of bug the app-level listener
  * was added to kill.
  */
-import { endedIdentity, translateServerState } from '../pomodoroState';
+import {
+  ENDED_FRESH_MS,
+  endedIdentity,
+  liveActivityAction,
+  shouldCelebrate,
+  translateServerState,
+  visibleTimer,
+} from '../pomodoroState';
 
 describe('endedIdentity', () => {
   test('names an ended card by its SERVER stamps', () => {
@@ -86,5 +93,80 @@ describe('translateServerState', () => {
       serverNow: NOW, startedAt: NOW, endedAt: NOW,
     });
     expect(out.status).toBe('stopped');
+  });
+});
+
+// The rules below used to be private to the Turtle tab's hook, which meant the
+// lock-screen activity and the confetti only worked once that lazy tab had been
+// opened. They now drive an app-level component, so they are pinned here.
+const NOW = 1_800_000_000_000;
+const ended = (over = { status: 'completed', mode: 'focus', endedAt: NOW - 1000 }) => ({ totalDuration: 1500, startedAt: NOW - 1500, ...over });
+
+describe('visibleTimer — the card the user should see', () => {
+  test('is the translated payload for a running block', () => {
+    const view = visibleTimer({ status: 'active', mode: 'focus', totalDuration: 1500, serverNow: NOW, startedAt: NOW - 100, endsAt: NOW + 1400 }, null);
+    expect(view.status).toBe('active');
+  });
+
+  test('is NOTHING for the ended card the user already dismissed, however often the server replays it', () => {
+    const payload = { status: 'completed', mode: 'focus', totalDuration: 1500, serverNow: NOW, startedAt: NOW - 1500, endedAt: NOW };
+    const dismissed = endedIdentity(payload);
+    expect(visibleTimer(payload, dismissed)).toBeNull();
+    expect(visibleTimer(payload, null)?.status).toBe('completed');
+  });
+
+  test('a NEW completion shows even though an older one was dismissed', () => {
+    const old = { status: 'completed', mode: 'focus', totalDuration: 1500, serverNow: NOW, startedAt: NOW - 9000, endedAt: NOW - 7500 };
+    const fresh = { ...old, startedAt: NOW - 1500, endedAt: NOW };
+    expect(visibleTimer(fresh, endedIdentity(old))?.status).toBe('completed');
+  });
+});
+
+describe('liveActivityAction — what the island should be doing', () => {
+  test('a running block is a live countdown, whatever came before', () => {
+    const view = { status: 'active', mode: 'focus', endsAt: NOW + 1000 };
+    expect(liveActivityAction(null, view, NOW)).toBe('running');
+    expect(liveActivityAction('completed', view, NOW)).toBe('running');
+  });
+
+  test('a completion the driver watched run becomes the done card', () => {
+    expect(liveActivityAction('active', ended(), NOW)).toBe('completed');
+  });
+
+  test('a fresh completion the app just reconnected to also becomes the done card', () => {
+    expect(liveActivityAction(null, ended({ status: 'completed', mode: 'break', endedAt: NOW - 30_000 }), NOW)).toBe('completed');
+  });
+
+  test('a stale completion replayed on connect is cleared, not shown', () => {
+    expect(liveActivityAction(null, ended({ status: 'completed', mode: 'focus', endedAt: NOW - ENDED_FRESH_MS - 1 }), NOW)).toBe('clear');
+  });
+
+  test('a manual stop, idle, and no timer all clear', () => {
+    expect(liveActivityAction('active', ended({ status: 'stopped', mode: 'focus', endedAt: NOW }), NOW)).toBe('clear');
+    expect(liveActivityAction('active', null, NOW)).toBe('clear');
+    expect(liveActivityAction(null, undefined, NOW)).toBe('clear');
+  });
+});
+
+describe('shouldCelebrate — confetti only for a real, witnessed focus completion', () => {
+  test('fires for a focus block the driver saw run to zero', () => {
+    expect(shouldCelebrate('active', ended(), NOW)).toBe(true);
+  });
+
+  test('never for a break, even a witnessed one', () => {
+    expect(shouldCelebrate('active', ended({ status: 'completed', mode: 'break', endedAt: NOW }), NOW)).toBe(false);
+  });
+
+  test('never for a completion the driver did not see running — a cold replay on app open', () => {
+    expect(shouldCelebrate(null, ended(), NOW)).toBe(false);
+    expect(shouldCelebrate('idle', ended(), NOW)).toBe(false);
+  });
+
+  test('never for a stale completion, even if the last thing it saw was active (a warm reconnect)', () => {
+    expect(shouldCelebrate('active', ended({ status: 'completed', mode: 'focus', endedAt: NOW - ENDED_FRESH_MS - 1 }), NOW)).toBe(false);
+  });
+
+  test('never for a stop', () => {
+    expect(shouldCelebrate('active', ended({ status: 'stopped', mode: 'focus', endedAt: NOW }), NOW)).toBe(false);
   });
 });

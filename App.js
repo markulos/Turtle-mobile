@@ -70,6 +70,7 @@ import GestureProbeOverlay from './components/GestureProbeOverlay';
 import gestureProbe from './utils/gestureProbe';
 import DevProfiler from './components/DevProfiler';
 import PomodoroNotifications from './components/PomodoroNotifications';
+import PomodoroLiveEffects from './components/PomodoroLiveEffects';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
 import ErrorBoundary, { withBoundary } from './components/ErrorBoundary';
 import { withTabTiming } from './components/withTabTiming';
@@ -537,6 +538,12 @@ export default function App() {
                         {/* Interactive pomodoro end notifications (Start break /
                             Start focus buttons). Renders nothing. */}
                         <ErrorBoundary label="pomodoro notifications" fallback={null}><PomodoroNotifications /></ErrorBoundary>
+                        {/* The iOS Live Activity and the completion confetti,
+                            driven from here rather than from inside the lazy
+                            Turtle tab — so a focus block started on the desktop
+                            reaches this phone's lock screen whether or not that
+                            tab was ever opened. Renders nothing. */}
+                        <ErrorBoundary label="pomodoro live effects" fallback={null}><PomodoroLiveEffects /></ErrorBoundary>
                         {/* DEV ONLY (null in release): watches for gestures the
                             app answered late or not at all, and turns each one
                             into a to-do carrying a ready-to-send fix prompt. */}
