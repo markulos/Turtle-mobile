@@ -249,32 +249,6 @@ const GAP_CLOSE_MS = 160;
 const GAP_EASE = Easing.out(Easing.quad);
 
 /**
- * startPatch — what starting a focus block should write onto the task, or null
- * when it should write nothing.
- *
- * A task sitting under "any time" has no place on the day's timeline, so the
- * moment you begin working on it the schedule is saying something that is no
- * longer true. Stamping the clock moves the card out of the To-Do list and onto
- * the timeline where the block is actually happening — which is also the answer
- * to "what did I do this morning" tomorrow.
- *
- * ONLY where there is no time yet. A task you deliberately scheduled for 4 pm
- * and started early keeps the 4 pm you gave it. That guard is also what makes
- * this a FIRST-block behaviour without anyone counting blocks: after the first
- * one the task is timed, so a second start finds nothing to set.
- *
- * `dueDate` rides along because an untimed task can be one you have not dated
- * either — the backlog — and a time with no day is not a place on any timeline.
- */
-export function startPatch(task, dayStr, now = new Date()) {
-  if (!task || task.time) return null;
-  const d = now instanceof Date ? now : new Date(now);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return { dueDate: dayStr, time: `${hh}:${mm}` };
-}
-
-/**
  * gapOffset — how far an opening gap's content is displaced from where it will
  * sit once the gap has settled, in points. The moving half of a reserve.
  *
@@ -1439,15 +1413,12 @@ const DayPane = React.memo(function DayPane({
       .filter(Boolean);
   }, [memberOf, multiUser]);
 
-  // Start a focus block, and give an untimed task the minute you started it —
-  // see `startPatch` for what that means and when it applies. The clock is read
-  // HERE, at the press, rather than from `nowMinutes`, which only ticks on
-  // today's pane: "when the pomodoro started" has to be the real minute.
-  const startPomodoroNow = useCallback((task) => {
-    const patch = startPatch(task, dayStr);
-    if (patch) onUpdateTask?.(task.id, patch);
-    onStartPomodoro?.(task);
-  }, [onUpdateTask, onStartPomodoro, dayStr]);
+  // Giving an untimed task the minute you started it used to happen HERE, which
+  // made it a thing the calendar's start keys did and no other way into a focus
+  // session did — the Focus tab's own key, its search, and a task card's key
+  // all started the same kind of block and left the schedule saying "any time".
+  // It moved up to the screen's start handlers (see `stampFocusSlot`), so every
+  // entry point stamps and exactly one of them writes. See utils/focusStart.
 
   // ── The compact list is built NESTED, not mapped flat ──────────────────
   // Everything after a gap row is rendered as that gap's CHILDREN, so the one
@@ -1738,8 +1709,9 @@ const DayPane = React.memo(function DayPane({
                     // made the one list you are most likely to start work FROM
                     // the one list you could not start work from: "any time"
                     // means you have not decided when, and beginning is the
-                    // decision.
-                    onStartPomodoro={startPomodoroNow}
+                    // decision — which is why starting one also gives it a slot
+                    // on today at the minute you began (see utils/focusStart).
+                    onStartPomodoro={onStartPomodoro}
                     onOpenPomodoro={onOpenPomodoro}
                     onTimePress={onTimePress}
                     testID={`todo-card-${task.id}`}
@@ -1803,12 +1775,12 @@ const DayPane = React.memo(function DayPane({
                       pomodoro={pomodoroFor?.(task.id)}
                       // Starting a block on a backlog task is the strongest
                       // statement there is that it is not backlog any more, so
-                      // the key both dates it to the day you are looking at and
-                      // stamps the minute you began — `startPatch`. The
-                      // calendar key beside it still does the half of that you
-                      // may want on its own: file it for the day without
-                      // starting anything.
-                      onStartPomodoro={startPomodoroNow}
+                      // the key both dates it to TODAY and stamps the minute you
+                      // began — see utils/focusStart. The calendar key beside it
+                      // still does the half of that you may want on its own:
+                      // file it for the day you are looking at without starting
+                      // anything.
+                      onStartPomodoro={onStartPomodoro}
                       onOpenPomodoro={onOpenPomodoro}
                       trailing={!done ? (
                         <TouchableOpacity
