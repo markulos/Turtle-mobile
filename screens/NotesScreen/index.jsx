@@ -114,6 +114,10 @@ import {
   removeMediaId, uploadNoteAttachment, uploadErrorMessage, uploadedName,
 } from './noteAttach';
 import { sendOrQueue } from '../../services/offlineQueue';
+// Both of this screen's filters — kind and topic — behind the header's filter
+// key. They used to be two rails of chips under the title; see the panel's own
+// header for why they are not any more.
+import NotesFilterPanel from './NotesFilterPanel';
 
 const FILTER_ALL = 'all';
 const FILTER_NOTE = 'note';
@@ -362,8 +366,12 @@ export default function NotesScreen() {
   // Topic browsing — null = all topics. Mirrors the web Topics sidebar; ANDs with
   // the type filter above. A topic = the parent segment of a `parent/child` tag.
   const [selectedTopic, setSelectedTopic] = useState(null);
-  // Board/topic search sheet (magnify chip at the head of the topic rail).
+  // Board/topic search sheet (the Topic section's magnify key in the filter
+  // panel — it used to sit at the head of the topic rail).
   const [topicSearchOpen, setTopicSearchOpen] = useState(false);
+  // The filter panel behind the header's filter key. Both filters live in it
+  // now; the two chip rails they used to ride on are gone.
+  const [filterOpen, setFilterOpen] = useState(false);
   // Boards from the server's projects list (board = project = topic), merged
   // into the search sheet so boards with no notes yet are still selectable.
   const [boards, setBoards] = useState([]);
@@ -929,6 +937,10 @@ export default function NotesScreen() {
   // Visible list ANDs the type filter (All/Notes/Todos) with the topic filter.
   // Topic match is "exact topic OR a sub-topic of it" (e.g. selecting `moodboard`
   // also shows `moodboard/wedding`) — same predicate as the web NotesScreen.
+  //
+  // Deliberately WITHOUT the search query, unlike `listFor` below: this is the
+  // number the header and the filter panel's footer state — how much the two
+  // FILTERS leave — and a live search has its own visible feedback.
   const visible = useMemo(() => {
     let list = timeline;
     if (filter !== FILTER_ALL) list = list.filter((n) => matchesFilter(n, filter));
@@ -966,6 +978,29 @@ export default function NotesScreen() {
     const note = typeof serverCounts?.note === 'number' ? serverCounts.note : localNotes;
     return { all: note + todo, note, todo, feedback };
   }, [timeline, serverCounts]);
+
+  // ── What the header says, and what the filter key is holding ─────────────
+  // The two filters used to state themselves by being on screen: two rails of
+  // chips, one lit in each. With the rails behind a key, the TITLE has to carry
+  // the answer — a silently narrowed list with nothing saying so is the one
+  // thing this change must not cost.
+  const kindScoped = filter !== FILTER_ALL;
+  const topicScoped = !!selectedTopic;
+  const activeFilterCount = (kindScoped ? 1 : 0) + (topicScoped ? 1 : 0);
+  const kindLabel = FILTER_LABELS[filter] || filter;
+  const topicLabel = !selectedTopic
+    ? null
+    : selectedTopic === UNTAGGED ? 'Untagged' : selectedTopic;
+  // The title's second half. Never blank and never a bare sentinel: with
+  // nothing on it reads "All", which is a scope, not a truncation.
+  const scopeLabel = [kindScoped ? kindLabel : null, topicLabel].filter(Boolean).join(' · ') || 'All';
+  // The one tally on the screen, so it has to be the best number available for
+  // what is actually being shown. Without a topic that is the KIND's count,
+  // which is the server's grouped COUNT for notes and an exact local tally for
+  // to-dos — the notes list is paged, so counting loaded rows would undercount
+  // until the whole library had been scrolled. With a topic there is no server
+  // figure to ask for, so it falls back to the rows in hand.
+  const scopeCount = topicScoped ? visible.length : (counts[filter] ?? visible.length);
 
   // How many to-dos are still in the inbox — open, and not on a day yet. This
   // is the number the Todos tab exists to drive down.
@@ -1121,28 +1156,49 @@ export default function NotesScreen() {
     ? ['rgba(74,222,128,0.06)', 'rgba(74,222,128,0.02)', 'transparent']
     : ['rgba(34,197,94,0.06)', 'rgba(34,197,94,0.02)', 'transparent'];
 
-  // Header chrome (title banner + kind rail + topic rail) rendered as the
-  // list's ListHeaderComponent so it SCROLLS AWAY with the notes instead of
-  // sitting as a fixed overlay. The negative horizontal margin cancels the
-  // list's contentContainer padding so the chrome spans edge-to-edge and its
-  // own paddings position exactly as they did when it was fixed.
+  // Header chrome — one row now: the title, which STATES the active filters,
+  // and the two keys that change them. It is rendered ONCE, as a direct child
+  // of the screen (not the list's header), so it stays put while the notes
+  // scroll under it.
   //
-  // It is rendered ONCE. That used to be the careful bit — with a page per kind
-  // the chrome either had to be lifted out of the pages or drawn four times,
-  // and the search bar's ref and focus could not be split across copies. With
-  // one list it is simply the list's header.
+  // What was here: two horizontally-scrolling rails of chips, the kinds above
+  // the topics. They cost a third of the screen to show options nobody was
+  // using, and they still hid things — a topic past the right edge was as
+  // invisible as one behind a key. Both filters live in NotesFilterPanel now,
+  // the same shape the Planner's do, and the only chips left on the header are
+  // the ACTIVE ones (see the active-filters bar below).
   const renderChrome = () => (
     <View style={styles.chrome}>
       <View style={styles.header}>
-        <Text style={styles.title}>Notes</Text>
-        {selectedTopic && (
-          <Text style={styles.titleTopic} numberOfLines={1}>
-            / {selectedTopic === UNTAGGED ? 'Untagged' : selectedTopic}
+        {/* The title is also a key, exactly as the Planner's is: it names the
+            scope, so it should be a way to change it. The chevron is the only
+            mark that says so — a disclosure, not a third control competing
+            with the two on the right. */}
+        <TouchableOpacity
+          style={styles.headerTitleKey}
+          onPressIn={() => tapHaptic()}
+          onPress={() => setFilterOpen(true)}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={`Notes, ${scopeLabel}. Change the filters.`}
+          testID="notes-scope-key"
+        >
+          <Text style={styles.title} numberOfLines={1}>
+            {/* Two weights, the Planner's exactly: the constant half in bold,
+                the half that actually varies in a hairline. What you are
+                filtered TO is the part worth reading. */}
+            <Text style={styles.titleStrong}>Notes </Text>
+            <Text style={styles.titleScope}>{`• ${scopeLabel}`}</Text>
           </Text>
-        )}
-        <Text style={styles.titleCount}>{counts.all}</Text>
+          <Icon name="chevron-down" size={17} color={theme.colors.textTertiary} />
+        </TouchableOpacity>
+        {/* The count of what the filters leave, not of everything — with the
+            rails gone this number is the only tally on screen, so it has to be
+            the one that matches the rows below it. */}
+        <Text style={styles.titleCount} testID="notes-scope-count">{scopeCount}</Text>
         <View style={{ flex: 1 }} />
         <TouchableOpacity
+          onPressIn={() => tapHaptic()}
           onPress={() => {
             const next = !searchOpen;
             setSearchOpen(next);
@@ -1151,109 +1207,34 @@ export default function NotesScreen() {
           }}
           accessibilityLabel="Search notes and to-dos"
           accessibilityRole="button"
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          style={styles.headerSearchBtn}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={[styles.headerKey, searchOpen && styles.headerKeyLit]}
+          testID="notes-search-key"
         >
-          <Icon name="magnify" size={22} color={theme.colors.textSecondary} />
+          <Icon name="magnify" size={20} color={searchOpen ? theme.colors.background : theme.colors.textSecondary} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPressIn={() => tapHaptic()}
+          onPress={() => setFilterOpen(true)}
+          accessibilityLabel={activeFilterCount ? `Filters, ${activeFilterCount} active` : 'Filters'}
+          accessibilityRole="button"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={[styles.headerKey, activeFilterCount > 0 && styles.headerKeyLit]}
+          testID="notes-filter-key"
+        >
+          <Icon
+            name="filter-variant"
+            size={20}
+            color={activeFilterCount > 0 ? theme.colors.background : theme.colors.textSecondary}
+          />
+          {activeFilterCount > 0 && (
+            <View style={styles.headerFilterBadge}>
+              <Text style={styles.headerFilterBadgeText}>{activeFilterCount}</Text>
+            </View>
+          )}
         </TouchableOpacity>
       </View>
       <View style={styles.headerRule} />
-
-      {/* KIND, as chips. These were four swipeable tabs, which made the kind of
-          a note a PLACE you had to be rather than a filter you could apply —
-          and put three of them (All, Todos, Feedback) at the same level as the
-          screen itself, so "Notes" appeared to be one quarter of Notes.
-          They are the same chip the topic rail below uses, on purpose: kind and
-          topic are two filters over one list, and a list with two filters that
-          look like different kinds of control reads as two lists. */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.kindRailScroll}
-        contentContainerStyle={styles.kindRail}
-        keyboardShouldPersistTaps="handled"
-      >
-        {FILTER_ORDER.map((fk) => (
-          <TopicChip
-            key={fk}
-            label={FILTER_LABELS[fk] || fk}
-            // "All" counts the whole list, so a badge on it is the list's own
-            // length restated — noise next to the chips that actually narrow.
-            count={fk === FILTER_ALL ? undefined : (counts[fk] || undefined)}
-            active={filter === fk}
-            onPress={() => setFilter(fk)}
-            theme={theme}
-            isDark={isDark}
-          />
-        ))}
-      </ScrollView>
-
-      {/* Topic rail — browse by topic (parent tag). Horizontally scrollable so a
-          long tag list never crowds the type filter. Hidden when there are no
-          tagged or untagged notes to browse. Tapping the active chip clears it.
-          The magnify chip at the head opens the searchable board/topic picker. */}
-      {(railTopics.length > 0 || topicTree.untagged > 0) && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.topicRailScroll}
-          contentContainerStyle={styles.topicRail}
-          keyboardShouldPersistTaps="handled"
-        >
-          <TouchableOpacity
-            onPressIn={() => tapHaptic()}
-            onPress={() => setTopicSearchOpen(true)}
-            style={styles.topicSearchChip}
-            accessibilityLabel="Search boards and topics"
-            accessibilityRole="button"
-          >
-            <Icon name="magnify" size={16} color={theme.colors.accentInfo} />
-          </TouchableOpacity>
-          <TopicChip
-            label="All Topics"
-            active={selectedTopic === null}
-            onPress={() => setSelectedTopic(null)}
-            theme={theme}
-            isDark={isDark}
-          />
-          {/* A picked sub-topic ('a/b') or notes-less board isn't a rail parent —
-              surface the selection as its own clearable chip so it's never
-              invisible. Parents highlight for their sub-topics too. */}
-          {selectedTopic && selectedTopic !== UNTAGGED
-            && !railTopics.some(({ topic }) => topic === selectedTopic) && (
-            <TopicChip
-              label={selectedTopic}
-              active
-              onPress={() => setSelectedTopic(null)}
-              theme={theme}
-              isDark={isDark}
-            />
-          )}
-          {railTopics.map(({ topic, count }) => (
-            <TopicChip
-              key={topic}
-              label={topic}
-              // Hide the badge on note-less boards — the chip reads as just
-              // the board name instead of a noisy "0".
-              count={count || undefined}
-              active={selectedTopic === topic || (selectedTopic || '').startsWith(topic + '/')}
-              onPress={() => setSelectedTopic((cur) => (cur === topic ? null : topic))}
-              theme={theme}
-              isDark={isDark}
-            />
-          ))}
-          {topicTree.untagged > 0 && (
-            <TopicChip
-              label="Untagged"
-              count={topicTree.untagged}
-              active={selectedTopic === UNTAGGED}
-              onPress={() => setSelectedTopic((cur) => (cur === UNTAGGED ? null : UNTAGGED))}
-              theme={theme}
-              isDark={isDark}
-            />
-          )}
-        </ScrollView>
-      )}
     </View>
   );
 
@@ -1265,8 +1246,18 @@ export default function NotesScreen() {
         pointerEvents="none"
       />
 
+      {/* Header chrome — FIXED, exactly like the Media Vault: the title and its
+          two keys stay put while only the list below translates. It used to
+          ride as each page's ListHeaderComponent, so all three copies swiped
+          sideways with the pager and scrolled away with the notes. Rendered
+          once here instead of three times inside the pages. */}
+      {renderChrome()}
+
       {/* Expandable search bar — Everything-style live filter over the current
-          tab/topic view; see visibleNotes + matchesNoteSearch above. */}
+          kind/topic view; see visibleNotes + matchesNoteSearch above. BELOW the
+          header, not above it: it is opened by a key on the header and it
+          narrows the list under it, so a field that appeared above the title
+          belonged to neither. */}
       {searchOpen && (
         <View style={[styles.searchBar, { borderColor: theme.colors.border, backgroundColor: theme.colors.surface }]}>
           <Icon name="magnify" size={18} color={theme.colors.textMuted} />
@@ -1289,16 +1280,42 @@ export default function NotesScreen() {
         </View>
       )}
 
-      {/* Header chrome — FIXED, exactly like the Media Vault: the title, the
-          tab labels and the topic rail stay put while only the lists below
-          translate. It used to ride as each page's ListHeaderComponent, so all
-          three copies swiped sideways with the pager and scrolled away with the
-          notes. Rendered once here instead of three times inside the pages. */}
-      {renderChrome()}
+      {/* ACTIVE FILTERS — and only the active ones. This is what is left of the
+          two rails: the chips that are doing something stay on the header, the
+          dozens that are not went into the panel. Tapping one clears it, which
+          is the whole reason a lit chip beats a line of text here. */}
+      {activeFilterCount > 0 && (
+        <View style={styles.activeFiltersBar} testID="notes-active-filters">
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.activeFiltersTrack}>
+            {kindScoped && (
+              <ActiveFilterChip
+                label={kindLabel}
+                icon="shape-outline"
+                onClear={() => setFilter(FILTER_ALL)}
+                accessibilityLabel={`Clear the ${kindLabel} filter`}
+                testID="notes-clear-kind"
+                theme={theme}
+                isDark={isDark}
+              />
+            )}
+            {topicScoped && (
+              <ActiveFilterChip
+                label={topicLabel}
+                icon={selectedTopic === UNTAGGED ? 'tag-off-outline' : 'folder-outline'}
+                onClear={() => setSelectedTopic(null)}
+                accessibilityLabel={`Clear the ${topicLabel} topic`}
+                testID="notes-clear-topic"
+                theme={theme}
+                isDark={isDark}
+              />
+            )}
+          </ScrollView>
+        </View>
+      )}
 
       {/* Body — ONE page. It was a four-page pager, one per kind, and the kinds
-          were tabs you swiped between; they are filter chips above now, so
-          there is one list and it shows whatever the chips say. */}
+          were tabs you swiped between; they are one filter behind the header's
+          key now, so there is one list and it shows whatever the filters say. */}
       {error ? (
         <View style={styles.center}>
           <Icon name="cloud-off-outline" size={32} color={theme.colors.textMuted} />
@@ -1329,8 +1346,32 @@ export default function NotesScreen() {
         <Icon name="plus" size={28} color={isDark ? '#000' : '#fff'} />
       </TouchableOpacity>
 
+      {/* Both filters, in one place. The header's key and its title open it;
+          the two rails that used to state them are gone. */}
+      <NotesFilterPanel
+        visible={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        theme={theme}
+        isDark={isDark}
+        kinds={FILTER_ORDER}
+        kindLabels={FILTER_LABELS}
+        filter={filter}
+        onFilterChange={setFilter}
+        counts={counts}
+        topics={railTopics}
+        selectedTopic={selectedTopic}
+        onSelectTopic={setSelectedTopic}
+        untaggedKey={UNTAGGED}
+        untaggedCount={topicTree.untagged}
+        // The sheet is a Modal, so it renders over this panel rather than
+        // under it — the panel stays open behind, and a pick lands on it.
+        onOpenTopicSearch={() => setTopicSearchOpen(true)}
+        matchCount={scopeCount}
+        onClearAll={() => { setFilter(FILTER_ALL); setSelectedTopic(null); }}
+      />
+
       {/* Board/topic search — full-screen picker over every topic, sub-topic
-          and server board; selecting filters the list like a rail chip tap. */}
+          and server board; selecting filters the list like a filter-chip tap. */}
       <TopicSearchSheet
         visible={topicSearchOpen}
         entries={searchEntries}
@@ -1404,22 +1445,39 @@ function FilterPill({ label, active, count, onPress, theme, isDark }) {
 const pillStyles = (theme, isDark) => StyleSheet.create({
 });
 
-// ── Topic chip (horizontal rail) ────────────────────────────
-function TopicChip({ label, count, active, onPress, theme, isDark }) {
-  const s = topicChipStyles(theme, isDark);
+// ── Active-filter chip ──────────────────────────────────────
+// The ONLY chip left on the header, and it is only ever drawn for a filter that
+// is on. The rails this replaces drew every option all the time and lit the
+// chosen one; this draws the chosen one and nothing else, so the row is empty
+// whenever nothing is narrowing the list.
+//
+// It is always lit, so it has no inactive state — what a filter chip usually
+// says by being dim, this one says by not being here. The × is the whole point
+// of it being a chip rather than a line of text: the thing that tells you the
+// list is narrowed is the thing that widens it.
+function ActiveFilterChip({ label, icon, onClear, theme, isDark, testID, accessibilityLabel }) {
+  const s = activeChipStyles(theme, isDark);
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.75} style={[s.chip, active && s.chipActive]}>
-      <Text style={[s.label, active && s.labelActive]} numberOfLines={1}>{label}</Text>
-      {typeof count === 'number' && (
-        <Text style={[s.count, active && s.countActive]}>{count}</Text>
-      )}
+    <TouchableOpacity
+      onPressIn={() => tapHaptic()}
+      onPress={onClear}
+      activeOpacity={0.75}
+      style={s.chip}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel || `Clear ${label}`}
+      testID={testID}
+    >
+      {!!icon && <Icon name={icon} size={13} color={theme.colors.accentInfo} />}
+      <Text style={s.label} numberOfLines={1}>{label}</Text>
+      <Icon name="close" size={14} color={theme.colors.accentInfo} />
     </TouchableOpacity>
   );
 }
 
-const topicChipStyles = (theme, isDark) => StyleSheet.create({
-  // Active = a soft accentInfo tint (mobile has NO accentPrimary; accentInfo is
-  // the blue we use, kept distinct from the green accentSuccess on the type pills).
+const activeChipStyles = (theme, isDark) => StyleSheet.create({
+  // A soft accentInfo tint (mobile has NO accentPrimary; accentInfo is the blue
+  // we use). Same fill the lit chips in the filter panel carry, so a filter
+  // looks the same wherever you meet it.
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1427,32 +1485,16 @@ const topicChipStyles = (theme, isDark) => StyleSheet.create({
     paddingHorizontal: 12,
     height: 30,
     borderRadius: 15,
-    backgroundColor: theme.colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-    ...depth(theme, 'control'),
-  },
-  chipActive: {
     backgroundColor: theme.colors.accentInfo + (isDark ? '2E' : '1F'),
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.accentInfo + '66',
+    ...depth(theme, 'control'),
   },
   label: {
     fontSize: 13,
-    fontWeight: '500',
-    color: theme.colors.textSecondary,
-    maxWidth: 160,
-  },
-  labelActive: {
-    color: theme.colors.accentInfo,
     fontWeight: '600',
-  },
-  count: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: theme.colors.textMuted,
-  },
-  countActive: {
     color: theme.colors.accentInfo,
+    maxWidth: 200,
   },
 });
 
@@ -3404,90 +3446,99 @@ const createStyles = (theme, isDark) => StyleSheet.create({
     top: 0, left: 0, right: 0,
     height: 200,
   },
+  // ONE row: the title-as-key, its count, then the search and filter keys hard
+  // right. Centred, not baseline-aligned — the keys are 36pt boxes now, and a
+  // baseline row hangs them off the title's feet.
   header: {
     flexDirection: 'row',
-    alignItems: 'baseline',
-    // 16px matches the tab control + note rows so the title isn't over-indented.
+    alignItems: 'center',
+    // 16px matches the note rows so the title isn't over-indented.
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 12,
-    gap: 10,
+    // The keys are 36pt tall and set the row's height; 8 either side is what
+    // keeps the title clear of the rule without the band reading as a gap.
+    paddingTop: 8,
+    paddingBottom: 8,
+    gap: 6,
   },
   // The app's one separator, under every screen header (STYLE-RULES §1). Its
   // own element because it is TWO lines — see `insetRule`.
   headerRule: insetRule(theme),
+  // The title AS a key: the label and its disclosure on one line. It SHRINKS
+  // (rather than flexing) so the count stays beside the words instead of being
+  // pushed to the far edge — but a long topic still ellipsizes rather than
+  // shoving a control off the screen (STYLE-RULES §2).
+  headerTitleKey: {
+    flexShrink: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
   // The app's screen title (utils/headerType) — Notes was the size every other
   // header has come to match, so it reads from the token rather than being it.
+  // The two WEIGHTS are the Planner's: the constant half strong, the half that
+  // varies (the active filters) hairline-thin.
   title: {
+    flexShrink: 1,
     ...SCREEN_TITLE,
-    fontWeight: '700',
     color: theme.colors.textPrimary,
   },
-  // Selected-topic breadcrumb next to the bold "Notes" — same size, hairline-
-  // thin weight, softer colour; shrinks/ellipsizes so a long topic can't shove
-  // the count off-screen.
-  titleTopic: {
-    flexShrink: 1,
-    fontSize: 26,
-    fontWeight: '200',
-    color: theme.colors.textSecondary,
-    letterSpacing: 0.2,
-  },
+  titleStrong: { fontWeight: '700' },
+  titleScope: { fontWeight: '200', color: theme.colors.textSecondary },
   titleCount: {
     fontSize: 14,
     fontWeight: '500',
     color: theme.colors.textMuted,
     fontVariant: ['tabular-nums'],
   },
-  // Top-right header search toggle (magnify → expandable bar below).
-  headerSearchBtn: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginTop: 6, marginBottom: 4, paddingHorizontal: 12, height: 40, borderRadius: 12, borderWidth: 1 },
-  searchInput: { flex: 1, fontSize: 15, paddingVertical: 0 },
-  // A horizontal ScrollView with no explicit style stretches to fill the
-  // parent column's free vertical space — combined with the rail's
-  // alignItems:'center', that floats the short chip row in a tall band with
-  // equal gaps above and below. flexGrow:0 makes each rail hug its content.
-  //
-  // The KIND rail. Same shape as the topic rail beneath it — they are two
-  // filters over one list, so they are one control repeated, not two kinds of
-  // control. Slightly less air under it than the topic rail has: the two rails
-  // belong together, and an even gap between them would read as three sections.
-  kindRailScroll: {
-    flexGrow: 0,
-  },
-  kindRail: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
-  topicRailScroll: {
-    flexGrow: 0,
-  },
-  // Horizontal topic rail (a ScrollView contentContainerStyle). Shares the
-  // filter row's gutter; bottom padding separates it from the list.
-  topicRail: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  // Round magnify chip at the head of the rail — opens the board/topic search
-  // sheet. Same height as the topic chips so the rail reads as one row.
-  topicSearchChip: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+  // The two header keys — search and filter. The Planner's exactly, down to the
+  // lit state: a key that is holding something inverts rather than tinting.
+  headerKey: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.accentInfo + (isDark ? '24' : '16'),
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.accentInfo + '55',
+  },
+  headerKeyLit: {
+    backgroundColor: theme.colors.textPrimary,
+  },
+  headerFilterBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: theme.colors.accentError,
+    borderRadius: 9,
+    minWidth: 16,
+    height: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 3,
+  },
+  headerFilterBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginTop: 8, marginBottom: 2, paddingHorizontal: 12, height: 40, borderRadius: 12, borderWidth: 1 },
+  searchInput: { flex: 1, fontSize: 15, paddingVertical: 0 },
+  // The active filters, and only them. Drawn at all only when one is on, so an
+  // unfiltered list gives the whole band back to the notes — which is most of
+  // what removing the two rails was for.
+  activeFiltersBar: {
+    paddingTop: 12,
+  },
+  activeFiltersTrack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
   },
   list: {
     paddingHorizontal: 16,
+    // The gap between the chrome and the first card. It used to come from the
+    // topic rail's bottom padding; with the rails gone the list has to carry
+    // its own, or an unfiltered timeline starts flush against the rule.
+    paddingTop: 12,
     paddingBottom: 100,
   },
   // What the Todos tab is for, said once at the top of it.
