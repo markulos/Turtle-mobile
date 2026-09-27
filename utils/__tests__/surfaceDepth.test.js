@@ -4,7 +4,7 @@
  * how a soft falloff becomes a drawn edge, and dropping the mode check is how
  * dark mode gains 124 invisible shadow layers.
  */
-import { depth, DEPTH, LEVELS } from '../surfaceDepth';
+import { depth, DEPTH, LEVELS, insetRule, ridgeRule, RULE_W } from '../surfaceDepth';
 
 const light = { mode: 'light' };
 const dark = { mode: 'dark' };
@@ -71,5 +71,113 @@ describe('the values stay subtle', () => {
       expect(b).toBeGreaterThan(r);
       expect(b).toBeLessThan(0x40); // still a shadow, not a blue glow
     }
+  });
+});
+
+/**
+ * A separator that reads as a GROOVE rather than a drawn line: a shadow
+ * hairline with a highlight directly beneath it. One hairline can only ever be
+ * a line someone drew ON the page; two are a line cut INTO it.
+ */
+describe('insetRule', () => {
+  const light = { mode: 'light', colors: { border: 'rgba(0,0,0,0.1)' } };
+  const dark = { mode: 'dark', colors: { border: 'rgba(255,255,255,0.1)' } };
+
+  test('light gets TWO lines — the pair is the whole effect', () => {
+    const r = insetRule(light);
+    expect(r.borderTopWidth).toBeGreaterThan(0);
+    expect(r.borderBottomWidth).toBeGreaterThan(0);
+  });
+
+  test('a shadow above and a highlight below, in that order', () => {
+    const r = insetRule(light);
+    // Upside down it is a ridge, not a groove — the order carries the meaning.
+    expect(r.borderTopColor).toMatch(/^rgba\(0, 0, 0/);
+    expect(r.borderBottomColor).toMatch(/^rgba\(255, 255, 255/);
+  });
+
+  // Same reason `depth()` returns nothing in dark mode: a white highlight on a
+  // black page is not a groove, it is a white line.
+  test('dark gets the plain hairline it always had', () => {
+    const r = insetRule(dark);
+    expect(r.borderTopWidth).toBeUndefined();
+    expect(r.borderBottomColor).toBe(dark.colors.border);
+  });
+
+  // It must NOT set a height. The two borders already give a childless View
+  // exactly the right one — and a `height: 0` in here is a footgun: spread onto
+  // a header CONTAINER by mistake it collapses the header to nothing, which is
+  // a bug that ships looking like a missing header rather than a bad style.
+  test('it sets no height — the borders give a bare View the right one', () => {
+    expect(insetRule(light).height).toBeUndefined();
+    expect(insetRule(dark).height).toBeUndefined();
+  });
+
+  test('a missing theme degrades to the plain line rather than throwing', () => {
+    expect(() => insetRule(undefined)).not.toThrow();
+  });
+});
+
+/**
+ * The same two hairlines the other way up. `insetRule` is a cut, `ridgeRule` is
+ * an edge standing proud — the ORDER alone carries the whole meaning, which is
+ * why neither may ever be "simplified" into a single line.
+ */
+describe('ridgeRule', () => {
+  const light = { mode: 'light', colors: { border: 'rgba(0,0,0,0.1)' } };
+  const dark = { mode: 'dark', colors: { border: 'rgba(255,255,255,0.1)' } };
+
+  test('highlight on top, shadow beneath — the inverse of the groove', () => {
+    const r = ridgeRule(light);
+    expect(r.borderTopColor).toMatch(/^rgba\(255, 255, 255/);
+    expect(r.borderBottomColor).toMatch(/^rgba\(0, 0, 0/);
+  });
+
+  // If these ever agree, one of them has been flattened into the other and the
+  // page has two names for one thing.
+  test('and it is genuinely the opposite, not a copy', () => {
+    const ridge = ridgeRule(light);
+    const groove = insetRule(light);
+    expect(ridge.borderTopColor).toBe(groove.borderBottomColor);
+    expect(ridge.borderTopColor).not.toBe(groove.borderTopColor);
+  });
+
+  test('dark mode takes the plain hairline it always had', () => {
+    expect(ridgeRule(dark).borderTopWidth).toBeUndefined();
+    expect(ridgeRule(dark).borderBottomColor).toBe(dark.colors.border);
+  });
+
+  test('it sets no height either, for the same reason', () => {
+    expect(ridgeRule(light).height).toBeUndefined();
+  });
+
+  test('a missing theme degrades rather than throwing', () => {
+    expect(() => ridgeRule(undefined)).not.toThrow();
+  });
+});
+
+/**
+ * Both rules are TWO lines, and the width is what decides whether they read as
+ * two. At a hairline the pair sat a third of a point apart and most renderers
+ * resolved them into one grey smudge — the very thing having two is meant to
+ * avoid.
+ */
+describe('the rules are thick enough to be two lines', () => {
+  const light = { mode: 'light', colors: { border: 'rgba(0,0,0,0.1)' } };
+
+  test('each line is a whole point, not a hairline', () => {
+    expect(RULE_W).toBe(1);
+    expect(insetRule(light).borderTopWidth).toBe(RULE_W);
+    expect(ridgeRule(light).borderBottomWidth).toBe(RULE_W);
+  });
+
+  // Still small: the pair is a line you notice the QUALITY of, not the weight.
+  test('and the pair still reads as a line, not a bar', () => {
+    const r = insetRule(light);
+    expect(r.borderTopWidth + r.borderBottomWidth).toBeLessThanOrEqual(2);
+  });
+
+  test('both rules use the same width, so the two never disagree', () => {
+    expect(ridgeRule(light).borderTopWidth).toBe(insetRule(light).borderTopWidth);
   });
 });

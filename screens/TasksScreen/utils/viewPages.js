@@ -9,8 +9,9 @@
  */
 
 /**
- * Left to right, and the order is the navigation model: your list, the month
- * it sits in, the boards behind both, and the time you actually spend on them.
+ * Left to right, and the order is the navigation model: your list, the month it
+ * sits in, the inbox and the boards behind both, and the time you actually spend
+ * on them.
  * The calendar sits at index 1 so it is one swipe from the agenda either way.
  *
  * 'list' is the agenda's internal name and stays that way — it is the mode
@@ -27,7 +28,13 @@ export const DEFAULT_VIEW = 'calendar';
 export const VIEW_SEGMENTS = [
   { mode: 'list', label: 'Agenda', icon: 'format-list-bulleted' },
   { mode: 'calendar', label: 'Calendar', icon: 'calendar-month' },
-  { mode: 'boards', label: 'Boards', icon: 'view-dashboard-outline' },
+  // 'boards' is this page's internal name and STAYS that way, exactly as 'list'
+  // does for the Agenda: it is the mode string threaded through the screen and
+  // the value persisted for "which tab was I on", and renaming a stored value to
+  // match a label is how a saved preference stops resolving. The LABEL is
+  // "Inbox", because capture is what the page now leads with — the boards are
+  // still all there, underneath.
+  { mode: 'boards', label: 'Inbox', icon: 'inbox-arrow-down' },
   { mode: 'focus', label: 'Focus', icon: 'timer-outline' },
 ];
 

@@ -18,7 +18,7 @@ import {
   Vibration,
   useWindowDimensions,
 } from 'react-native';
-import { depth } from '../../utils/surfaceDepth';
+import { depth, insetRule } from '../../utils/surfaceDepth';
 import AppTextInput from '../../components/AppTextInput';
 import Reanimated, {
   useAnimatedKeyboard,
@@ -3539,10 +3539,16 @@ const createStyles = (theme, insets) =>
     // tints every other rule in the app. Now that the header is opaque it needs
     // a defined edge again — but a soft accent line, not the flat white rule
     // this had before the header was reworked.
+    // The same cut every other tab header carries (`insetRule`), so the three
+    // headers agree about what a separator is. The accent line it replaces was
+    // this header's alone — a soft coloured rule nothing else in the app had,
+    // which read as decoration rather than as an edge.
+    //
+    // Absolute at the header's foot, and the rule brings its own borders: no
+    // `height`, because the two lines ARE the element.
     headerEdge: {
       position: 'absolute', left: 0, right: 0, bottom: 0,
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: (theme.colors.accent || theme.colors.accentInfo) + '59',
+      ...insetRule(theme),
     },
     // The self-chat identity bar that replaced the header's control cluster:
     // avatar + name, left-aligned, filling the header row. Height comes from

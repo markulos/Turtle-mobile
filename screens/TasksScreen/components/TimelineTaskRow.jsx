@@ -97,10 +97,18 @@ export const RAIL_W = 1;
 // dark mode looked right. One white line on one dark band behaves the same on
 // both pages.
 //
-// A little stronger on the light page: its band is the lighter of the two, so
-// the same alpha would read fainter there.
+// PURE WHITE on the light page, which is what makes the mark one object. The
+// notch's rim has always been solid white; the rail it runs out of was 72%, so
+// the line visibly brightened as it reached the swerve and dimmed again
+// leaving it — a seam exactly where the eye is looking. At full strength the
+// rim and the rail are the same white and the swerve is simply the rail's own
+// path, which is what `notchLineD` draws it as.
+//
+// The dark page keeps its 60%. There the band is barely lighter than the page,
+// so a solid white line stops being a rail down a margin and becomes the
+// brightest thing on the screen.
 export const threadColor = (theme) =>
-  (theme?.mode === 'dark' ? 'rgba(255,255,255,0.60)' : 'rgba(255,255,255,0.72)');
+  (theme?.mode === 'dark' ? 'rgba(255,255,255,0.60)' : 'rgba(255,255,255,1)');
 // ── The gutter ──────────────────────────────────────────────────────────────
 // The times no longer ride in pills. The whole left column is one black band
 // instead — from the screen's edge all the way to the thread — and the times
@@ -437,16 +445,21 @@ export const pageColor = (theme) =>
 // turns. White on both pages, for the same reason `threadColor` is: the
 // surface behind it is the band, and the band is dark in both.
 export const notchRim = () => 'rgba(255,255,255,1)';
-// What sits INSIDE the swerve. Opaque white on the light page: the bay is cut
-// into a dark grey band, so filling it solid turns the mark from a hairline
-// into a shape you can see at a glance without it ever touching the page
-// beyond the line.
+// What sits INSIDE the swerve: THE PAGE'S OWN COLOUR, not white.
+//
+// The bay is material removed from the band, and what you see through a hole is
+// whatever is behind it — so the fill has to be the page. It was #FFFFFF, which
+// was the same thing back when the page was #FFFFFF; the page is a warm
+// off-white now, and a white wedge in it stopped reading as a cut and started
+// reading as a white shape parked in the margin. Taken from the theme rather
+// than written down again, so it cannot drift from the page a second time.
 //
 // Nothing on the dark page. There the band is barely lighter than the page
-// behind it, so a white wedge would not read as a notch in a margin — it would
-// read as a lamp. The stroke alone is already legible against it, which is why
-// dark mode looked right while light mode did not.
-export const notchFill = (theme) => (theme?.mode === 'dark' ? null : '#FFFFFF');
+// behind it, so a page-coloured wedge is invisible and a white one reads as a
+// lamp. The stroke alone is already legible against it, which is why dark mode
+// looked right while light mode did not.
+export const notchFill = (theme) =>
+  (theme?.mode === 'dark' ? null : (theme?.colors?.background || '#FFFFFF'));
 
 // ── The profile, as one path ────────────────────────────────────────────────
 // This used to be three overlapping circular Views inside an 8.5pt clip

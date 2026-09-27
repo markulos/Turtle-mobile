@@ -31,6 +31,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AppTextInput from '../../../components/AppTextInput';
 import EdgeSwipePage from './EdgeSwipePage';
 import { HIT_SLOP_8, ROW_KEY_W, SEARCH_HEIGHT } from './VaultSearchDock';
+import { panelBottomInset } from '../../../components/tabBarLayout';
 
 export default function VaultSearchPanel({
   visible,
@@ -56,8 +57,21 @@ export default function VaultSearchPanel({
   // The field's own testID, when a caller already has one its tests use.
   // Defaults to the dock's `<prefix>-input` convention.
   inputTestID,
+  // How much room to leave above the field. Defaults to the safe area, which is
+  // right for a caller that covers the whole screen — but an `overlay` panel
+  // opened INSIDE a page that has already cleared the status bar would then
+  // clear it twice, and the notch's worth of nothing above the field is the
+  // tell. Such a caller passes 0.
+  insetTop,
+  // Take the WHOLE screen — the Modal form of EdgeSwipePage rather than the
+  // in-tree overlay. `overlay` exists because a caller already inside a page
+  // cannot present a sibling Modal on iOS; a caller that is NOT (a tab screen
+  // opening a picker from its header) wants the real thing, so that the page it
+  // came from goes away entirely instead of being framed by it.
+  fullScreen = false,
 }) {
   const insets = useSafeAreaInsets();
+  const topPad = insetTop == null ? insets.top : insetTop;
   const inputRef = useRef(null);
   const styles = panelStyles(theme, isDark);
 
@@ -85,9 +99,9 @@ export default function VaultSearchPanel({
   }, [visible, close]);
 
   return (
-    <EdgeSwipePage overlay visible={visible} onClose={close}>
+    <EdgeSwipePage overlay={!fullScreen} visible={visible} onClose={close}>
       <View style={styles.page}>
-        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <View style={[styles.header, { paddingTop: topPad + 8 }]}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Back"
@@ -171,7 +185,10 @@ export default function VaultSearchPanel({
           keyboardDismissMode="on-drag"
           contentContainerStyle={[
             styles.listContent,
-            { paddingBottom: insets.bottom + 24 },
+            // Ends ABOVE the dock, never behind it (STYLE-RULES §3). Automatic
+            // per caller: an in-tree overlay is covered by the floating bar, a
+            // full-screen Modal presents over the whole navigator and is not.
+            { paddingBottom: panelBottomInset(insets.bottom, !fullScreen) },
             (!items || items.length === 0) && { flexGrow: 1 },
           ]}
           ListEmptyComponent={(

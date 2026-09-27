@@ -1,3 +1,5 @@
+import { StyleSheet } from 'react-native';
+
 /**
  * surfaceDepth — the app's light-mode depth, in one place.
  *
@@ -96,6 +98,112 @@ export const LEVELS = Object.keys(DEPTH);
 export function depth(theme, level = 'card') {
   if (!theme || theme.mode !== 'light') return {};
   return DEPTH[level] || DEPTH.card;
+}
+
+/**
+ * How thick each of the two lines is.
+ *
+ * A POINT, not a hairline. At 0.33pt the pair was two sub-pixel lines a
+ * third of a point apart, which on most screens the renderer resolves into one
+ * grey smudge — the very thing having two of them is supposed to avoid. At a
+ * point each they are genuinely distinct, and the shadow and the highlight read
+ * as the two sides of an edge rather than as one soft line.
+ *
+ * Still small: the pair is 2pt total, which is a line you notice the QUALITY
+ * of rather than the weight of.
+ */
+export const RULE_W = 1;
+
+/**
+ * The highlight both rules use, and the one thing anything else wanting to look
+ * like them must borrow rather than retype.
+ *
+ * It is the light on an edge. Anywhere it appears — the groove under a header,
+ * the ridge under a written line, the liner hugging a board's outline — it has
+ * to be the SAME white, or two edges that are meant to be the same material
+ * read as two different ones. A scan enforces that nobody writes it out twice.
+ */
+export const RULE_HIGHLIGHT = 'rgba(255, 255, 255, 0.92)';
+
+/** And the shade it casts on the far side of the same edge. */
+export const RULE_SHADOW = 'rgba(0, 0, 0, 0.13)';
+
+/**
+ * insetRule — a separator that reads as a GROOVE rather than a drawn line.
+ *
+ * Two hairlines, not one: a shadow line with a highlight directly beneath it.
+ * That pair is the whole trick — it is what a physical score in a surface does
+ * to light, and the eye reads it as depth without anyone deciding to. One
+ * hairline can only ever be a line someone drew ON the page; two are a line cut
+ * INTO it.
+ *
+ * It only works on an off-white page, which is why it arrived with one: a white
+ * highlight needs somewhere lighter to go, and on #FFFFFF there is nowhere. On
+ * the warm off-white the highlight is genuinely brighter than the surface and
+ * the groove appears.
+ *
+ * DARK MODE GETS ONE HAIRLINE, for the same reason `depth()` gives it nothing:
+ * a white highlight on a black page is not a groove, it is a white line. Spread
+ * this unconditionally — the dark theme takes the plain separator it always had.
+ *
+ * SPREAD ONTO A VIEW OF ITS OWN, never onto a container. The two borders are
+ * the whole element — a View with no children is already exactly their height —
+ * and on a container they would draw a line across its TOP as well, because
+ * that is where a top border goes. The groove only exists between two edges a
+ * point apart, which means an element whose only job is to be those edges.
+ *
+ * It no longer sets `height: 0` for that reason. It did, and spread onto a
+ * header container that silently collapsed the header to nothing — a footgun
+ * with no upside, since the borders give the right height on their own.
+ */
+export function insetRule(theme) {
+  const hairline = RULE_W;
+  if (theme?.mode === 'dark') {
+    return { borderBottomWidth: hairline, borderBottomColor: theme.colors.border };
+  }
+  return {
+    // The score itself, a touch stronger than the theme's plain border — it has
+    // a highlight under it to hold its own against.
+    borderTopWidth: hairline,
+    borderTopColor: RULE_SHADOW,
+    // The light catching the lower lip of the cut.
+    borderBottomWidth: hairline,
+    borderBottomColor: RULE_HIGHLIGHT,
+  };
+}
+
+/**
+ * ridgeRule — the same trick the other way up: a line that stands PROUD.
+ *
+ * `insetRule` is a shadow with a highlight under it and reads as a cut.
+ * Reverse the pair — highlight on top, shadow beneath — and the same two
+ * hairlines read as an edge standing up off the page. Nothing else changes;
+ * the order alone carries the whole meaning, which is why the two live
+ * together and why neither may be "simplified" into one line.
+ *
+ * WHERE EACH BELONGS. A groove SEPARATES — it is the score between a header and
+ * the page under it, two things on either side of a cut. A ridge is the top
+ * edge of something: the lip of a list, the line a row sits on. Used the wrong
+ * way round they both still draw, and the page quietly stops making sense —
+ * every surface reading as if it were the one behind it.
+ *
+ * Off-white page only, same as the groove: a white highlight needs somewhere
+ * lighter to go and on #FFFFFF there is nowhere. Dark mode takes the plain
+ * hairline it always had.
+ */
+export function ridgeRule(theme) {
+  const hairline = RULE_W;
+  if (theme?.mode === 'dark') {
+    return { borderBottomWidth: hairline, borderBottomColor: theme.colors.border };
+  }
+  return {
+    // The light on the crest.
+    borderTopWidth: hairline,
+    borderTopColor: RULE_HIGHLIGHT,
+    // And what it casts on the far side.
+    borderBottomWidth: hairline,
+    borderBottomColor: RULE_SHADOW,
+  };
 }
 
 export default depth;

@@ -167,14 +167,46 @@ export const DARK_THEME = {
   },
 };
 
-// Light theme - Black text on white (inverse)
+/**
+ * Light theme — black text on an OFF-WHITE page.
+ *
+ * Not #FFFFFF. A pure-white page is a lightbox: it is the brightest thing the
+ * screen can make, so every surface on it can only ever be darker, and the eye
+ * has nowhere to rest. A warm off-white is paper — it sits below the whites it
+ * carries, which is what lets a card read as a card rather than as a rectangle
+ * of hairline.
+ *
+ * WARM, and by a little: the hue is a couple of points of red and green over
+ * blue, which is not a colour anyone can name but is the difference between
+ * "paper" and "grey". Push it further and the page reads as a tint someone
+ * chose rather than as the absence of one.
+ *
+ * HOW MUCH WARM IS A BLUE DEFICIT, and it is the only number that matters
+ * here: the gap between blue and the red/green above it IS the yellow. At six
+ * points it read as cream; at four it reads as paper.
+ *
+ * ONE RULE FOR THE WHOLE RAMP — green two below red, blue five below it — so
+ * every rung carries the SAME deficit as the tone descends. Tuned rung by rung
+ * it drifted (3, 4, 5, 7 from the page down), which is a ramp changing hue as
+ * it gets deeper, and the eye reads that as two different papers rather than
+ * as one with shadows on it. A test pins the spread, because that drift is
+ * invisible in any single screenshot.
+ *
+ * THE RAMP KEEPS ITS DIRECTION. Surfaces still step DOWN from the page, the
+ * same relationship the whole light theme is built on (docs/STYLE-RULES.md §1,
+ * and every `depth()` shadow tuned against it) — re-based warm, and with the
+ * same distance between the rungs. Inverting it, so the page is the darkest
+ * thing and cards are white, is a different design system; it would land on
+ * every surface in the app at once and none of the shadows would be right for
+ * it any more.
+ */
 const LIGHT_THEME = {
   mode: 'light',
   colors: {
-    background: '#FFFFFF',
-    surface: '#F5F5F5',
-    surfaceElevated: '#EEEEEE',
-    surfaceHighlight: '#E0E0E0',
+    background: '#F5F3F0',
+    surface: '#EEECE9',
+    surfaceElevated: '#E7E5E2',
+    surfaceHighlight: '#DCDAD7',
     
     primary: '#000000',
     primaryLight: '#333333',
@@ -198,7 +230,7 @@ const LIGHT_THEME = {
     overlay: 'rgba(0, 0, 0, 0.5)',
     overlayLight: 'rgba(0, 0, 0, 0.3)',
     
-    inputBackground: '#F5F5F5',
+    inputBackground: '#EEECE9',
     inputText: '#000000',
   },
   spacing: SPACING,
@@ -234,6 +266,12 @@ const LIGHT_THEME = {
     },
   },
 };
+
+/**
+ * The light palette on its own, so its relationships can be tested without
+ * rendering a tree: the warmth, and that each rung steps down from the last.
+ */
+export const LIGHT_THEME_COLORS = LIGHT_THEME.colors;
 
 const ThemeContext = createContext({
   theme: DARK_THEME,

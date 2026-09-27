@@ -1,6 +1,6 @@
 import {
   indexAtContentY, dayKeyAt, pointerLabel, pointerParts, splitDay, splitTime, activeRowIdAt,
-  markContentY, isCardItem, nearestCardCenter, magnetPull, dayOffsetLabel,
+  markContentY, virtualLeadFor, isCardItem, nearestCardCenter, magnetPull, dayOffsetLabel,
 } from '../timelinePointer';
 
 // A stand-in for FlashList's geometry: items stacked from y=0, each its own
@@ -76,9 +76,17 @@ describe('dayKeyAt', () => {
     expect(dayKeyAt(items, 6)).toBe('2026-10-01'); // the gap after the last row
   });
 
-  test('null above the first dated thing, rather than a wrong day', () => {
-    expect(dayKeyAt(items, 0)).toBeNull();
-    expect(dayKeyAt(items, 1)).toBeNull();
+  // Above the first dated thing is the TOP OF THE LIST, which stopped being an
+  // edge case the moment the agenda's drawn lead-in went away: the mark now
+  // starts on the band header, before any dated row. The day the agenda is
+  // about to show is a better answer than a blank readout.
+  test('above the first dated thing it looks DOWN instead of going blank', () => {
+    expect(dayKeyAt(items, 0)).toBe('2026-09-28');
+    expect(dayKeyAt(items, 1)).toBe('2026-09-28');
+  });
+
+  test('…and still null when there is no date anywhere to find', () => {
+    expect(dayKeyAt([{ __agendaHeader: 'upcoming' }, { __gap: true }], 0)).toBeNull();
   });
 });
 
@@ -142,8 +150,24 @@ describe('activeRowIdAt', () => {
     expect(activeRowIdAt(undefined, 0, 'b')).toBe('b');
   });
 
-  test('with nothing lit yet, chrome still lights nothing', () => {
-    expect(activeRowIdAt(rows, 0, null)).toBeNull();
+  // With nothing lit YET — the top of the list, where the mark now starts since
+  // the lead-in is no longer drawn — there is no last row to keep, so it takes
+  // the first one below. One card lit is the point of the mark; "none" is the
+  // answer it must never give.
+  test('with nothing lit yet, chrome takes the first row BELOW it', () => {
+    expect(activeRowIdAt(rows, 0, null)).toBe('a');
+    expect(activeRowIdAt(rows, 1, null)).toBe('a');
+  });
+
+  test('…and still nothing when there is no row below either', () => {
+    expect(activeRowIdAt([{ __agendaHeader: 'upcoming' }, { __gap: true }], 0, null)).toBeNull();
+  });
+
+  // Looking down is the TOP-of-list rule only. Once a row has been passed, the
+  // last real one keeps it — otherwise the emphasis would jump forward every
+  // time the mark crossed a divider.
+  test('looking down never overrides a row already lit', () => {
+    expect(activeRowIdAt(rows, 3, 'a')).toBe('a');
   });
 });
 
@@ -243,6 +267,51 @@ describe('pointerParts', () => {
 // spaces coincide — which is exactly why the omission went unnoticed for the
 // whole life of the pointer, and surfaced the moment the agenda grew a lead-in
 // above its first card.
+// The depth above the first card comes from three places and has to add up to
+// `pointerTop` exactly ONCE. Counting any of it twice puts the first reading
+// above the list; missing some makes the first card unreachable.
+describe('virtualLeadFor', () => {
+  const base = { pointerTop: 200, chromeAbove: 76, cardHeight: 74, drawnPad: 0 };
+
+  test('it asks for what the drawn chrome does not already cover', () => {
+    // 200 needed, 76 of header+divider and 37 of half a card already there.
+    expect(virtualLeadFor(base)).toBe(87);
+  });
+
+  // The whole point of the padding coming back above the Past header: the page
+  // draws it, `markContentY` nets it off the measured firstItemOffset, so the
+  // virtual term has to shrink by the same amount or the two double-count.
+  test('padding the page DOES draw comes straight off it', () => {
+    expect(virtualLeadFor({ ...base, drawnPad: 12 })).toBe(75);
+    expect(virtualLeadFor({ ...base, drawnPad: 12 })).toBe(virtualLeadFor(base) - 12);
+  });
+
+  // Drawn or virtual, the mark must land in the same place — that is what
+  // "compensated" means, and it is the property worth pinning.
+  test('drawn and virtual are interchangeable: the reading does not move', () => {
+    const allVirtual = markContentY(0, 200, 0, virtualLeadFor(base));
+    const someDrawn = markContentY(0, 200, 12, virtualLeadFor({ ...base, drawnPad: 12 }));
+    expect(someDrawn).toBe(allVirtual);
+  });
+
+  // Half, because reaching the first card's CENTRE is the requirement. Aiming
+  // at its top edge was half a card deeper than anything ever needed.
+  test('a card counts for half its height, not all of it', () => {
+    expect(virtualLeadFor({ ...base, cardHeight: 100 })).toBe(74);
+  });
+
+  test('chrome deeper than the mark needs asks for nothing, never a negative', () => {
+    expect(virtualLeadFor({ ...base, chromeAbove: 400 })).toBe(0);
+    expect(virtualLeadFor({ ...base, drawnPad: 999 })).toBe(0);
+  });
+
+  test('junk in is zero out rather than NaN down the whole pipeline', () => {
+    expect(virtualLeadFor({})).toBe(0);
+    expect(virtualLeadFor()).toBe(0);
+    expect(virtualLeadFor({ pointerTop: 200, chromeAbove: undefined, cardHeight: NaN })).toBe(200);
+  });
+});
+
 describe('markContentY', () => {
   test('with no padding, it is just the scroll offset plus the mark', () => {
     expect(markContentY(0, 220)).toBe(220);
@@ -252,6 +321,60 @@ describe('markContentY', () => {
   // The sign is the whole test. Adding instead of subtracting — or dropping
   // the term — puts every reading a padding's worth DOWN the timeline: the
   // wrong card lit, and any distance-to-a-card measured to the wrong card.
+  // ── The virtual lead ──────────────────────────────────────────────────────
+  // The agenda used to DRAW the depth the mark needs above its first card, and
+  // it looked like what it was: you opened the Agenda and saw a band of
+  // nothing. The padding is gone; the same depth is supplied here and spent
+  // over the first few points of scroll.
+  describe('the lead the page no longer draws', () => {
+    test('at the very top it pulls the reading back by the whole lead', () => {
+      expect(markContentY(0, 220, 0, 90)).toBe(130);
+    });
+
+    test('and is spent as you scroll away from the top', () => {
+      expect(markContentY(30, 220, 0, 90)).toBe(190);   // 60 of it left
+      expect(markContentY(90, 220, 0, 90)).toBe(310);   // spent exactly
+    });
+
+    test('past it, the mark tracks the scroll one for one again', () => {
+      expect(markContentY(200, 220, 0, 90)).toBe(420);
+      expect(markContentY(200, 220, 0, 0)).toBe(420);
+    });
+
+    // A jump would snap the readout and the lit card to a different row mid
+    // scroll. The rate changes at the handover; the value must not.
+    test('it is continuous across the handover — a velocity change, not a jump', () => {
+      const justBefore = markContentY(89.9, 220, 0, 90);
+      const at = markContentY(90, 220, 0, 90);
+      expect(Math.abs(at - justBefore)).toBeLessThan(0.5);
+    });
+
+    test('it never runs backwards as the list moves forward', () => {
+      let last = -Infinity;
+      for (let y = 0; y <= 300; y += 5) {
+        const v = markContentY(y, 220, 0, 90);
+        expect(v).toBeGreaterThanOrEqual(last);
+        last = v;
+      }
+    });
+
+    // Rubber-banding above the top hands us a negative offset; the term must
+    // not grow without bound and drag the reading off the front of the list.
+    test('a bounced-past-the-top offset does not amplify it', () => {
+      expect(markContentY(-40, 220, 0, 90)).toBe(markContentY(-40, 220, 0, 90));
+      expect(markContentY(-40, 220, 0, 90)).toBeLessThan(markContentY(0, 220, 0, 90));
+    });
+
+    test('no lead is the old behaviour exactly', () => {
+      expect(markContentY(500, 220, 140, 0)).toBe(markContentY(500, 220, 140));
+    });
+
+    test('a junk lead is ignored rather than poisoning the reading', () => {
+      expect(markContentY(100, 220, 0, NaN)).toBe(320);
+      expect(markContentY(100, 220, 0, -50)).toBe(320);
+    });
+  });
+
   test('the content padding comes OFF, not on', () => {
     expect(markContentY(0, 220, 140)).toBe(80);
     expect(markContentY(1000, 220, 140)).toBe(1080);

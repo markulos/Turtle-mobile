@@ -25,7 +25,8 @@ import {
   // link is meant to avoid.
   Share as RNShareSheet,
 } from 'react-native';
-import { depth } from '../../../utils/surfaceDepth';
+import { depth, insetRule } from '../../../utils/surfaceDepth';
+import { SCREEN_TITLE, SCREEN_TITLE_ROW_H } from '../../../utils/headerType';
 import AppTextInput from '../../../components/AppTextInput';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 // The full-screen viewer: one gesture tree, flat chrome, the tags and details
@@ -3888,7 +3889,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // status-bar inset (the iOS card already starts below the status bar).
     <Modal visible={localPickerVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setLocalPickerVisible(false)}>
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-        <View style={[styles.header, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border, paddingTop: Platform.OS === 'android' ? insets.top : 0, paddingBottom: 12 }]}>
+        {/* The vault's header takes the Planner's groove: the same cut under
+            every tab header in the app, rather than three tabs each with their
+            own idea of what a separator is. The rule is the SIBLING below —
+            `insetRule` is two borders a point apart and needs an element of its
+            own; on the header itself it would draw across its top edge too. */}
+        <View style={[styles.header, { paddingTop: Platform.OS === 'android' ? insets.top : 0, paddingBottom: 12 }]}>
           <TouchableOpacity onPress={() => setLocalPickerVisible(false)} style={styles.closeButton}>
             <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
           </TouchableOpacity>
@@ -3903,6 +3909,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             </Text>
           </TouchableOpacity>
         </View>
+        <View style={insetRule(theme)} />
 
         <FlatList
           data={localAssets}
@@ -4769,7 +4776,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             ]}
           >
           {/* Top Row: Title & Actions (Compact) */}
-          <View style={[styles.header, { height: 44, paddingHorizontal: 16 }]}>
+          <View style={[styles.header, { height: SCREEN_TITLE_ROW_H, paddingHorizontal: 16 }]}>
             {/* Back out of the pushed page — the tap equivalent of the
                 left-edge swipe EdgeSwipePage provides. Deliberately NOT in the
                 fixed 70pt headerLeft slot: that slot exists to keep a centred
@@ -5324,18 +5331,22 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
             // legible. The tab bar keeps its blur; that one sits over far less
             // content and reads as chrome.
             backgroundColor: theme.colors.background,
-            borderBottomWidth: StyleSheet.hairlineWidth,
-            borderBottomColor: theme.colors.border,
             zIndex: 20,
           }
         ]}
       >
+        {/* The vault's own edge, and the app's one separator (STYLE-RULES §1).
+            An absolute child pinned to this header's foot rather than a border
+            on it: `insetRule` is TWO borders a point apart — a shadow with a
+            highlight under it — and a border pair on the header itself would
+            draw across its top edge too. Same arrangement the chat header uses. */}
+        <View pointerEvents="none" style={[styles.vaultHeaderRule, insetRule(theme)]} />
         {/* Upload progress bar relocated to the bottom (just above the navbar) —
             see the root-level bar near the end of this render. */}
 
         {/* Top Row: the vault title. The board title, its edit menu and the
             photo actions live on the pushed photos page now, not here. */}
-        <View style={[styles.header, { height: 44, paddingHorizontal: 16 }]}>
+        <View style={[styles.header, { height: SCREEN_TITLE_ROW_H, paddingHorizontal: 16 }]}>
           {/* Only when the vault was opened as an overlay (from the Turtle
               chat), which passes onClose. As a tab there is nothing to go back
               to, so the title sits flush against the padding instead. */}
@@ -5662,6 +5673,8 @@ const createStyles = (theme) =>
       flex: 1,
       backgroundColor: theme.colors.background,
     },
+    // The floating header's own foot, where `insetRule` draws.
+    vaultHeaderRule: { position: 'absolute', left: 0, right: 0, bottom: 0 },
     header: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -5720,14 +5733,12 @@ const createStyles = (theme) =>
     // Root vault heading — larger, hairline display weight to read as a
     // chapter heading rather than UI chrome. Per-word weights are applied
     // inline (Photos = 100, Vault = 400).
+    // The app's screen title (utils/headerType). It was tuned alone at 22 and
+    // read well alone — but the Planner sat at 20 and Notes at 28, and three
+    // tabs at three sizes is the set looking like three apps. The two WEIGHTS
+    // stay this header's own: hairline "Media", regular "Vault".
     headerTitleLarge: {
-      // 26 → 22. At 26 the hairline "Media" and the regular "Vault" were doing
-      // display-type work at the top of a screen that is otherwise all content;
-      // smaller lets the contrast between the two weights read as the detail it
-      // is rather than as a banner. Tighter tracking with it — the negative
-      // letterspacing was tuned for the larger size and goes slack below it.
-      fontSize: 22,
-      letterSpacing: -0.3,
+      ...SCREEN_TITLE,
     },
     headerTitleContainer: {
       flexDirection: 'row',

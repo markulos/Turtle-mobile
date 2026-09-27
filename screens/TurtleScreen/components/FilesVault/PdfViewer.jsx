@@ -31,6 +31,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { insetRule } from '../../../../utils/surfaceDepth';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import EdgeSwipePage from '../EdgeSwipePage';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../../utils/haptics';
@@ -214,7 +215,7 @@ export default function PdfViewer({ visible, item, onClose, getFullUrl, theme })
     // the drawer would close the whole reader behind it.
     <EdgeSwipePage overlay visible={visible} onClose={onClose} swipeEnabled={!indexOpen}>
       <View style={[styles.page, { backgroundColor: c.background }]}>
-        <View style={[styles.header, { paddingTop: insets.top + 6, borderBottomColor: c.border }]}>
+        <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
           <Pressable onPress={onClose} onPressIn={tapHaptic} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back" style={({ pressed }) => [styles.iconBtn, { opacity: pressed ? 0.6 : 1 }]}>
             <Icon name="chevron-left" size={28} color={c.textPrimary} />
           </Pressable>
@@ -223,6 +224,7 @@ export default function PdfViewer({ visible, item, onClose, getFullUrl, theme })
             <Icon name="export-variant" size={22} color={c.textPrimary} />
           </Pressable>
         </View>
+        <View style={insetRule(theme)} />
 
         <View style={styles.body}>
           {error ? (
@@ -342,7 +344,8 @@ export default function PdfViewer({ visible, item, onClose, getFullUrl, theme })
 
 const styles = StyleSheet.create({
   page: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingBottom: 8, minHeight: 44, borderBottomWidth: StyleSheet.hairlineWidth },
+  // The bottom edge comes from `insetRule` at the call site (STYLE-RULES §1).
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingBottom: 8, minHeight: 44 },
   iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   title: { flex: 1, minWidth: 0, fontSize: 15, fontWeight: '700', flexShrink: 1, textAlign: 'center' },
   body: { flex: 1 },
