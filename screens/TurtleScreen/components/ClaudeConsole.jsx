@@ -24,6 +24,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../../context/ThemeContext';
+import { inkOn } from '../../../utils/accentColor';
 import { blurProps, frostOverlayColor } from '../../../utils/frostedChat';
 import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
 
@@ -530,7 +531,7 @@ const createStyles = (theme) => StyleSheet.create({
     borderRadius: 8,
     backgroundColor: theme.colors.accentInfo,
   },
-  linkBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  linkBtnText: { color: inkOn(theme.colors.accentInfo), fontSize: 13, fontWeight: '700' },
 
   // Approval cards
   permList: {

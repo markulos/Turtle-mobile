@@ -64,6 +64,7 @@ import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
 import { avatarAnimal } from './utils/avatar';
+import { inkOn } from './utils/accentColor';
 import ProfileScreen from './screens/ProfileScreen';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import GestureProbeOverlay from './components/GestureProbeOverlay';
@@ -191,10 +192,13 @@ function TabNavigator() {
             </TabBarIcon>
           );
         },
-        // Active sits on the accent chip, so white. Inactive follows the DOCK,
-        // not the app theme — the capsule is ghosted black in both themes now
-        // (see TabBarPill), so a dark light-mode tint would vanish into it.
-        tabBarActiveTintColor: '#FFFFFF',
+        // Active sits ON the accent chip, so its ink is derived from the chosen
+        // highlight colour: white was right for every saturated preset and
+        // invisible the moment the accent could be a pale pink. Inactive follows
+        // the DOCK, not the app theme — the capsule is ghosted black in both
+        // themes now (see TabBarPill), so a dark light-mode tint would vanish
+        // into it.
+        tabBarActiveTintColor: inkOn(theme.colors.accent),
         tabBarInactiveTintColor: 'rgba(255,255,255,0.55)',
         // Icons only — no text labels. Cleaner look and lets the
         // larger turtle icon breathe without crowding from a label

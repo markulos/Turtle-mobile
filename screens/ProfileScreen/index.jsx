@@ -11,6 +11,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../context/ThemeContext';
+import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
@@ -397,7 +398,7 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityLabel="Change your picture"
             >
-              <Icon name="camera-outline" size={15} color={c.background} />
+              <Icon name="camera-outline" size={15} color={inkOn(c.accent || c.accentInfo)} />
             </TouchableOpacity>
           </View>
 

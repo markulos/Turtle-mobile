@@ -106,16 +106,34 @@ export function contrastRatio(a, b) {
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
+// The two inks anything drawn ON a colour can use. The dark one is NOT pure
+// black: against a mid-tone fill, black technically out-contrasts white (a
+// violet at L≈0.2 scores 4.96 to white's 4.24) and would win every tie-break,
+// putting black type on colours the eye expects white on. A near-black at
+// L≈0.014 moves the crossover to where it belongs.
+export const INK_LIGHT = '#FFFFFF';
+export const INK_DARK = '#1F2024';
+
 /**
- * Black or white — whichever can be read on top of `input`.
+ * The text colour to draw ON `input` — whichever of the two inks is actually
+ * more readable against it.
  *
- * For the picker's preview swatch and for any label drawn on a fill of the
- * user's own colour, which can land anywhere from near-black to near-white.
+ * ONE definition for the whole app: the board palette established this (it is
+ * what lets a board colour stay orange instead of being darkened until white
+ * type fits), the highlight colour needs the same answer now that an accent can
+ * be a pale pink as easily as a deep violet, and two copies of a contrast
+ * threshold would drift. `screens/TasksScreen/utils/boardColors` re-exports this
+ * one rather than keeping its own.
+ *
+ * White wins ties, and anything unparseable gets white — the old behaviour, and
+ * the safer default over an unknown fill.
  */
 export function inkOn(input) {
   const l = luminance(input);
-  if (l == null) return '#FFFFFF';
-  return l > 0.45 ? '#000000' : '#FFFFFF';
+  if (l == null) return INK_LIGHT;
+  const onWhite = 1.05 / (l + 0.05);
+  const onDark = (l + 0.05) / (luminance(INK_DARK) + 0.05);
+  return onWhite >= onDark ? INK_LIGHT : INK_DARK;
 }
 
 /**

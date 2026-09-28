@@ -13,6 +13,8 @@ import {
   hexToRgb,
   hslToHex,
   inkOn,
+  INK_DARK,
+  INK_LIGHT,
   isHex,
   legibilityNote,
   luminance,
@@ -151,16 +153,30 @@ describe('luminance and contrast', () => {
 });
 
 describe('inkOn', () => {
-  test('black on a pale fill, white on a deep one', () => {
-    expect(inkOn('#F9A8D4')).toBe('#000000');
-    expect(inkOn('#FFFF00')).toBe('#000000');
-    expect(inkOn('#8B5CF6')).toBe('#FFFFFF');
-    expect(inkOn('#000000')).toBe('#FFFFFF');
+  test('near-black on a pale fill, white on a deep one', () => {
+    expect(inkOn('#F9A8D4')).toBe(INK_DARK);
+    expect(inkOn('#FFFF00')).toBe(INK_DARK);
+    expect(inkOn('#8B5CF6')).toBe(INK_LIGHT);
+    expect(inkOn('#000000')).toBe(INK_LIGHT);
+  });
+
+  // The reason the dark ink is #1F2024 and not #000000: against a mid-tone
+  // fill, pure black out-contrasts white on paper and would take every
+  // tie-break, so a violet accent would carry black type.
+  test('it picks whichever ink actually reads better on the colour', () => {
+    for (const c of ['#F97316', '#3B82F6', '#22C55E', '#8B5CF6', '#EC4899', '#F9A8D4', '#14B8A6', '#FFFFFF', '#000000']) {
+      const picked = inkOn(c);
+      const other = picked === INK_LIGHT ? INK_DARK : INK_LIGHT;
+      expect(contrastRatio(c, picked)).toBeGreaterThanOrEqual(contrastRatio(c, other));
+    }
   });
 
   test('a non-colour still gets readable ink rather than undefined', () => {
     // An undefined colour renders black on black (STYLE-RULES §1).
-    expect(inkOn('nope')).toBe('#FFFFFF');
+    expect(inkOn('nope')).toBe(INK_LIGHT);
+    expect(inkOn(undefined)).toBe(INK_LIGHT);
+    // rgba() tokens reach this too — the palette is a mix of both forms.
+    expect(inkOn('rgba(0,0,0,0.5)')).toBe(INK_LIGHT);
   });
 });
 

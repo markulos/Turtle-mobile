@@ -39,6 +39,8 @@
  * a hurry can't quietly break the set. Add to the END: the assignment is by
  * position, so inserting in the middle recolours everybody's boards.
  */
+import { luminance } from '../../../utils/accentColor';
+
 export const BOARD_COLORS = [
   '#1976D2', // Blue
   '#BF4A1F', // Rust
@@ -60,27 +62,8 @@ export const BOARD_COLORS = [
 export const boardColorAt = (index) =>
   BOARD_COLORS[((index % BOARD_COLORS.length) + BOARD_COLORS.length) % BOARD_COLORS.length];
 
-// Ink candidates for text drawn ON a board colour.
-const LIGHT_INK = '#FFFFFF';
-const DARK_INK = '#1F2024';
-
-const channels = (hex) => {
-  const h = String(hex || '').trim().replace('#', '');
-  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
-  if (!/^[0-9a-fA-F]{6}$/.test(full)) return null;
-  return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16));
-};
-
 /** WCAG relative luminance. Exported so the palette's rules can be checked. */
-export const luminanceOf = (hex) => {
-  const rgb = channels(hex);
-  if (!rgb) return 0;
-  const [r, g, b] = rgb.map((c) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-};
+export const luminanceOf = (hex) => luminance(hex) ?? 0;
 
 /**
  * The text colour to draw ON `hex` — white for the deep half of the palette,
@@ -91,14 +74,11 @@ export const luminanceOf = (hex) => {
  * darkened until it wasn't cheerful any more. Choosing per colour means
  * orange and cyan can stay orange and cyan.
  *
- * The threshold is the luminance where the two inks are equally readable;
- * white wins ties, and anything unparseable gets white (the old behaviour).
+ * THE IMPLEMENTATION MOVED to `utils/accentColor`, unchanged — the highlight
+ * colour needs exactly this decision (an accent can be a pale pink as easily as
+ * a deep violet) and a second copy of a contrast threshold in another file is a
+ * drift waiting to happen. Still re-exported from here because the board palette
+ * is where the rule is DOCUMENTED, and because this is the import every board
+ * surface already reaches for.
  */
-export const inkOn = (hex) => {
-  const rgb = channels(hex);
-  if (!rgb) return LIGHT_INK;
-  const l = luminanceOf(hex);
-  const onLight = (l + 0.05) / (luminanceOf(DARK_INK) + 0.05);
-  const onWhite = 1.05 / (l + 0.05);
-  return onWhite >= onLight ? LIGHT_INK : DARK_INK;
-};
+export { inkOn } from '../../../utils/accentColor';

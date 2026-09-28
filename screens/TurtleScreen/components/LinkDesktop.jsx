@@ -10,6 +10,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { useServer, getApiAuthToken } from '../../../context/ServerContext';
 import { notifyHaptic, tapHaptic } from '../../../utils/haptics';
+import { inkOn } from '../../../utils/accentColor';
 
 // "Link a desktop": scan the QR shown by the Turtle DESKTOP app's sign-in
 // screen and approve it — the desktop then signs in as you (WhatsApp-Web style).
@@ -124,7 +125,7 @@ export default function LinkDesktop({ visible, onClose }) {
             <Text style={{ fontSize: 17, fontWeight: '700', color: c.textPrimary }}>Desktop signed in</Text>
             <Text style={{ fontSize: 14, color: c.textSecondary, textAlign: 'center' }}>Your Turtle desktop app is now signed in as you.</Text>
             <TouchableOpacity onPress={onClose} style={{ marginTop: 10, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 12, backgroundColor: c.accentInfo }}>
-              <Text style={{ color: '#fff', fontWeight: '700' }}>Done</Text>
+              <Text style={{ color: inkOn(c.accentInfo), fontWeight: '700' }}>Done</Text>
             </TouchableOpacity>
           </>,
         ) : available === null ? centre(
@@ -143,7 +144,7 @@ export default function LinkDesktop({ visible, onClose }) {
             <Text style={{ fontSize: 16, fontWeight: '700', color: c.textPrimary }}>Camera permission needed</Text>
             <Text style={{ fontSize: 14, color: c.textSecondary, textAlign: 'center' }}>Allow camera access to scan the desktop&rsquo;s sign-in QR code.</Text>
             <TouchableOpacity onPress={probe} style={{ marginTop: 6, paddingHorizontal: 20, paddingVertical: 11, borderRadius: 12, backgroundColor: c.accentInfo }}>
-              <Text style={{ color: '#fff', fontWeight: '700' }}>Allow camera</Text>
+              <Text style={{ color: inkOn(c.accentInfo), fontWeight: '700' }}>Allow camera</Text>
             </TouchableOpacity>
           </>,
         ) : (

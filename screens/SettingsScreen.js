@@ -952,8 +952,8 @@ export default function SettingsScreen({ active = true }) {
                 <Switch
                   value={isDark}
                   onValueChange={toggleTheme}
-                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
-                  thumbColor={isDark ? theme.colors.textPrimary : theme.colors.textTertiary}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accent }}
+                  thumbColor={isDark ? inkOn(theme.colors.accent) : theme.colors.textTertiary}
                 />
               </View>
               </SettingsItem>
@@ -1064,8 +1064,8 @@ export default function SettingsScreen({ active = true }) {
                 <Switch
                   value={!!autoUpload.enabled}
                   onValueChange={toggleAutoUpload}
-                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
-                  thumbColor={autoUpload.enabled ? theme.colors.textPrimary : theme.colors.textTertiary}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accent }}
+                  thumbColor={autoUpload.enabled ? inkOn(theme.colors.accent) : theme.colors.textTertiary}
                   accessibilityLabel={autoUpload.enabled ? 'Auto-upload new photos, on' : 'Auto-upload new photos, off'}
                 />
               </View>
@@ -1086,8 +1086,8 @@ export default function SettingsScreen({ active = true }) {
                 <Switch
                   value={hideVaultButton}
                   onValueChange={setHideVaultButton}
-                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
-                  thumbColor={hideVaultButton ? theme.colors.textPrimary : theme.colors.textTertiary}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accent }}
+                  thumbColor={hideVaultButton ? inkOn(theme.colors.accent) : theme.colors.textTertiary}
                 />
               </View>
               </SettingsItem>
@@ -1232,8 +1232,8 @@ export default function SettingsScreen({ active = true }) {
                 <Switch
                   value={gestureProbeOn}
                   onValueChange={(v) => { setGestureProbeOn(v); setGestureProbeEnabled(v); }}
-                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
-                  thumbColor={gestureProbeOn ? theme.colors.textPrimary : theme.colors.textTertiary}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accent }}
+                  thumbColor={gestureProbeOn ? inkOn(theme.colors.accent) : theme.colors.textTertiary}
                 />
               </View>
               </SettingsItem>
@@ -1252,8 +1252,8 @@ export default function SettingsScreen({ active = true }) {
                 <Switch
                   value={timeFormat === '24h'}
                   onValueChange={(v) => setTimeFormat(v ? '24h' : '12h')}
-                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
-                  thumbColor={timeFormat === '24h' ? theme.colors.textPrimary : theme.colors.textTertiary}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accent }}
+                  thumbColor={timeFormat === '24h' ? inkOn(theme.colors.accent) : theme.colors.textTertiary}
                 />
               </View>
               </SettingsItem>
@@ -1268,8 +1268,8 @@ export default function SettingsScreen({ active = true }) {
                 <Switch
                   value={showCalendarDayTasks}
                   onValueChange={(v) => setShowCalendarDayTasks(v)}
-                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
-                  thumbColor={showCalendarDayTasks ? theme.colors.textPrimary : theme.colors.textTertiary}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accent }}
+                  thumbColor={showCalendarDayTasks ? inkOn(theme.colors.accent) : theme.colors.textTertiary}
                 />
               </View>
               </SettingsItem>
@@ -1284,8 +1284,8 @@ export default function SettingsScreen({ active = true }) {
                 <Switch
                   value={calendarFreeScroll}
                   onValueChange={(v) => setCalendarFreeScroll(v)}
-                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.surfaceHighlight }}
-                  thumbColor={calendarFreeScroll ? theme.colors.textPrimary : theme.colors.textTertiary}
+                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accent }}
+                  thumbColor={calendarFreeScroll ? inkOn(theme.colors.accent) : theme.colors.textTertiary}
                 />
               </View>
               </SettingsItem>

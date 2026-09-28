@@ -16,6 +16,7 @@ import ChatComposer, { ComposerAction } from '../../../components/ChatComposer';
 import MediaLightbox from '../../../components/MediaLightbox';
 import { TaskForm } from '../../TasksScreen/components/TaskForm';
 import { sendOrQueue } from '../../../services/offlineQueue';
+import { inkOn } from '../../../utils/accentColor';
 
 // One board's CONVERSATION (conversation-boards Phase 3): the merged feed of
 // everything on the board — tasks, events, notes, media (rendered as compact
@@ -326,7 +327,10 @@ export default function BoardTimeline({ visible, board, onClose }) {
     bubbleSending: { opacity: 0.65 },
     fromUser: { fontSize: 11, fontWeight: '700', color: '#ffffffB0', marginBottom: 2 },
     fromAI: { fontSize: 11, fontWeight: '700', color: c.accentSuccess, marginBottom: 2 },
-    bodyUser: { fontSize: 15, lineHeight: 20, color: '#fff' },
+    // Your own bubble is filled with the accent, so its words are inked
+    // against that colour — white was fine on every saturated preset and gone
+    // on a pale one.
+    bodyUser: { fontSize: 15, lineHeight: 20, color: inkOn(c.accentInfo) },
     bodyAI: { fontSize: 15, lineHeight: 20, color: c.textPrimary },
     stampUser: { fontSize: 10, marginTop: 3, alignSelf: 'flex-end', color: '#ffffff99' },
     stampAI: { fontSize: 10, marginTop: 3, alignSelf: 'flex-end', color: c.textTertiary },

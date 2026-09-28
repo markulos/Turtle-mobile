@@ -18,6 +18,25 @@ repo skill (loaded before any UI work) and by review.
   and carries a text shadow. Never bare white on an unknown picture.
 - The mobile theme has no `accentPrimary`; use `primary`, `accentInfo`, `accentSuccess`. An undefined
   token renders black on black.
+- THE HIGHLIGHT COLOUR IS THE USER'S (Settings → Appearance: nine presets, plus a custom colour mixed
+  in `components/AccentColorPicker`). Anything that says **active / selected / today / the app's own
+  key** takes `theme.colors.accent` — the week strip's day pill, the calendar's today hatch, the date
+  picker's selected day, a switch that is ON, a ticked option, the Notes compose key, a filter panel's
+  Done key. Never a literal hex standing in for it: the week pill was `WEEK_SELECT_BG = '#F5A623'`, so
+  the planner stayed amber whatever had been chosen, and that one mark is what made the whole setting
+  feel like a decoration. STATE colours are NOT the accent and must not follow it — `accentSuccess` for
+  done / online, `accentError` for late, the focus timer's red, a board's own colour.
+  - ANYTHING DRAWN ON AN ACCENT FILL IS INKED AGAINST IT: `inkOn(color)` from `utils/accentColor`,
+    never `'#fff'` and never `theme.colors.background` (the page is near-white in light mode). A fixed
+    white is correct for every saturated preset and invisible on the light pink — five buttons, two
+    Done keys, a chat bubble and the dock's own glyph shipped exactly that. `inkOn` is ONE definition,
+    shared with the board palette (`boardColors` re-exports it): white, or the near-black `#1F2024`,
+    whichever actually contrasts. The dark ink is not `#000000` on purpose — pure black
+    out-contrasts white on a mid-tone fill and would put black type on a violet.
+  - A TINT is not a fill: `accentInfo + '2E'` under ordinary ink is how an active chip works, and it
+    needs no derived ink.
+  - Pinned by `utils/__tests__/accentReach.scan.test.js` (no literal hex named as a selection colour;
+    no accent fill paired with a fixed white ink) and `screens/TasksScreen/components/__tests__/weekSelectAccent.test.js`.
 - Frosted surfaces over media: `expo-blur` `BlurView` (`tint="dark"`, `intensity` 45–60,
   `experimentalBlurMethod="dimezisBlurView"` for Android) under an `rgba(10,10,12,.5–.6)` tint so
   white text stays legible whatever is behind it.

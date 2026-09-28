@@ -40,6 +40,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
 import { tapHaptic } from '../utils/haptics';
 import { describeBuild, describeUpdateError, formatWhen, messageFor, shortId, updateLog } from '../utils/updatesSummary';
+import { inkOn } from '../utils/accentColor';
 
 /** How many log rows show before "More info" — enough to see the last few
  *  publishes without the history swamping the answer above it. */
@@ -262,7 +263,7 @@ export default function UpdatesPanel() {
               accessibilityRole="button"
               accessibilityLabel="Download the update and restart"
             >
-              {busy ? <ActivityIndicator size="small" color="#fff" /> : <Icon name="download" size={14} color="#fff" />}
+              {busy ? <ActivityIndicator size="small" color={inkOn(c.accentInfo)} /> : <Icon name="download" size={14} color={inkOn(c.accentInfo)} />}
               <Text style={styles.primaryBtnText}>{busy ? 'Working…' : 'Download & restart'}</Text>
             </TouchableOpacity>
           ) : null}
@@ -308,7 +309,7 @@ export default function UpdatesPanel() {
               accessibilityRole="button"
               accessibilityLabel="Promote the preview update to production"
             >
-              {releaseBusy ? <ActivityIndicator size="small" color="#fff" /> : <Icon name="rocket-launch-outline" size={14} color="#fff" />}
+              {releaseBusy ? <ActivityIndicator size="small" color={inkOn(c.accentInfo)} /> : <Icon name="rocket-launch-outline" size={14} color={inkOn(c.accentInfo)} />}
               <Text style={styles.primaryBtnText} numberOfLines={1}>Promote to production</Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -440,7 +441,9 @@ const makeStyles = (theme) => {
       flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1, maxWidth: '100%',
       paddingHorizontal: 14, height: 36, borderRadius: 8,
     },
-    primaryBtnText: { color: '#fff', fontSize: 13, fontWeight: '600', flexShrink: 1 },
+    // The key is filled with the accent, so its label and its glyph take the
+    // ink that reads on that colour.
+    primaryBtnText: { color: inkOn(c.accentInfo), fontSize: 13, fontWeight: '600', flexShrink: 1 },
     secondaryBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1, maxWidth: '100%',
       paddingHorizontal: 12, height: 36, borderRadius: 8,

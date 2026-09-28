@@ -89,6 +89,7 @@ import { keyboardScrollProps } from '../../components/KeyboardSafeView';
 import { TAP_ONLY } from '../../utils/pressBehavior';
 import { resolveAvatarUrl } from '../../utils/avatarUrl';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
+import { inkOn } from '../../utils/accentColor';
 // Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
 import { fuzzyRank } from '../../utils/trigram';
 // Tab predicates + the feedback tag vocabulary (pure, unit-tested separately).
@@ -1343,7 +1344,7 @@ export default function NotesScreen() {
         onPress={() => { setEditingNote(null); setComposerOpen(true); }}
         activeOpacity={0.85}
       >
-        <Icon name="plus" size={28} color={isDark ? '#000' : '#fff'} />
+        <Icon name="plus" size={28} color={inkOn(theme.colors.accent)} />
       </TouchableOpacity>
 
       {/* Both filters, in one place. The header's key and its title open it;
@@ -1742,7 +1743,10 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           style={[styles.checkbox, isDone && styles.checkboxDone]}
         >
-          {isDone && <Icon name="check" size={14} color={isDark ? '#0a0a0a' : '#fff'} />}
+          {/* A ticked todo stays GREEN — that box is a done state, not a
+              selection, so it keeps its own colour whatever the accent is; the
+              tick is inked against THAT fill. */}
+          {isDone && <Icon name="check" size={14} color={inkOn(theme.colors.accentSuccess)} />}
         </TouchableOpacity>
       ) : (
         <View style={styles.noteIcon}>
@@ -2989,7 +2993,7 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
                   onPress={() => setMode(opt.key)}
                   style={[styles.typeOpt, active && styles.typeOptActive]}
                 >
-                  <Icon name={opt.icon} size={14} color={active ? (isDark ? '#0a0a0a' : '#fff') : theme.colors.textSecondary} />
+                  <Icon name={opt.icon} size={14} color={active ? (inkOn(theme.colors.accent)) : theme.colors.textSecondary} />
                   <Text style={[styles.typeOptText, active && styles.typeOptTextActive]}>
                     {opt.label}
                   </Text>
@@ -3013,7 +3017,7 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
                     onPress={() => setApp(opt.key)}
                     style={[styles.typeOpt, active && styles.typeOptActive]}
                   >
-                    <Icon name={opt.icon} size={14} color={active ? (isDark ? '#0a0a0a' : '#fff') : theme.colors.textSecondary} />
+                    <Icon name={opt.icon} size={14} color={active ? (inkOn(theme.colors.accent)) : theme.colors.textSecondary} />
                     <Text style={[styles.typeOptText, active && styles.typeOptTextActive]}>
                       {opt.label}
                     </Text>
@@ -3037,7 +3041,7 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
                     onPress={() => setPlatform(opt.key)}
                     style={[styles.typeOpt, active && styles.typeOptActive]}
                   >
-                    <Icon name={opt.icon} size={14} color={active ? (isDark ? '#0a0a0a' : '#fff') : theme.colors.textSecondary} />
+                    <Icon name={opt.icon} size={14} color={active ? (inkOn(theme.colors.accent)) : theme.colors.textSecondary} />
                     <Text style={[styles.typeOptText, active && styles.typeOptTextActive]}>
                       {opt.label}
                     </Text>
@@ -3249,7 +3253,7 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     paddingVertical: 13, borderRadius: 14,
     backgroundColor: theme.colors.accent || theme.colors.accentInfo,
   },
-  settingsDoneText: { fontSize: 15, fontWeight: '800', color: isDark ? '#0a0a0a' : '#fff' },
+  settingsDoneText: { fontSize: 15, fontWeight: '800', color: inkOn(theme.colors.accent) },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3279,8 +3283,8 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     ...depth(theme, 'control'),
   },
   typeOptActive: {
-    backgroundColor: theme.colors.accentSuccess,
-    borderColor: theme.colors.accentSuccess,
+    backgroundColor: theme.colors.accent,
+    borderColor: theme.colors.accent,
   },
   typeOptText: {
     fontSize: 13,
@@ -3288,7 +3292,7 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     color: theme.colors.textSecondary,
   },
   typeOptTextActive: {
-    color: isDark ? '#0a0a0a' : '#fff',
+    color: inkOn(theme.colors.accent),
     fontWeight: '600',
   },
   input: {
@@ -3404,17 +3408,20 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
   },
+  // The composer's Save key and the compose FAB below are the app's own action
+  // colour, not a success state — they take the highlight colour, and their ink
+  // is derived from it so a pale accent still carries a legible label.
   submit: {
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 100,
-    backgroundColor: theme.colors.accentSuccess,
+    backgroundColor: theme.colors.accent,
   },
   submitDisabled: {
     opacity: 0.4,
   },
   submitText: {
-    color: isDark ? '#0a0a0a' : '#fff',
+    color: inkOn(theme.colors.accent),
     fontSize: 14,
     fontWeight: '700',
     letterSpacing: 0.2,
@@ -3607,7 +3614,9 @@ const createStyles = (theme, isDark) => StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: theme.colors.accentSuccess,
+    // The one big round key on the page: the app's own colour, not a green that
+    // reads as "done" on a button that CREATES something.
+    backgroundColor: theme.colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
