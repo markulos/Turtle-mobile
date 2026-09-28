@@ -20,6 +20,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useKeyboardHeight from '../../../utils/useKeyboardHeight';
 import { useTheme } from '../../../context/ThemeContext';
+import { inkOn } from '../../../utils/accentColor';
 import { useServer } from '../../../context/ServerContext';
 import { FormField } from './FormField';
 // The "Linked note" field, and the search PAGE behind it: three-tier search
@@ -1407,13 +1408,13 @@ export const TaskForm = ({
                     activeOpacity={0.7}
                   >
                     <View style={[styles.checkbox, formData.yearly && styles.checkboxChecked]}>
-                      {formData.yearly && <Icon name="check" size={14} color="#fff" />}
+                      {formData.yearly && <Icon name="check" size={14} color={inkOn(theme.colors.accent)} />}
                     </View>
                     <Text style={styles.appointmentText}>Repeats every year</Text>
                     <Icon
                       name="calendar-refresh"
                       size={16}
-                      color={formData.yearly ? theme.colors.accentSuccess : theme.colors.textTertiary}
+                      color={formData.yearly ? theme.colors.accent : theme.colors.textTertiary}
                       style={styles.appointmentIcon}
                     />
                   </TouchableOpacity>
@@ -1462,14 +1463,14 @@ export const TaskForm = ({
                     formData.isAppointment && styles.checkboxChecked
                   ]}>
                     {formData.isAppointment && (
-                      <Icon name="check" size={14} color="#fff" />
+                      <Icon name="check" size={14} color={inkOn(theme.colors.accent)} />
                     )}
                   </View>
                   <Text style={styles.appointmentText}>Single event (appointment)</Text>
                   <Icon
                     name="calendar-clock"
                     size={16}
-                    color={formData.isAppointment ? theme.colors.accentSuccess : theme.colors.textTertiary}
+                    color={formData.isAppointment ? theme.colors.accent : theme.colors.textTertiary}
                     style={styles.appointmentIcon}
                   />
                 </TouchableOpacity>
@@ -2128,7 +2129,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
   },
   reminderChipActive: {
     backgroundColor: theme.colors.surfaceElevated,
-    borderColor: theme.colors.accentPrimary || theme.colors.accentSuccess,
+    borderColor: theme.colors.accent,
   },
   reminderText: {
     fontSize: 13,
@@ -2385,11 +2386,13 @@ const createStyles = (theme, insets) => StyleSheet.create({
   switchOn: {
     backgroundColor: theme.colors.accentInfo || '#4ADE80',
   },
+  // The knob rides the track, and the track turns the accent when it is ON, so
+  // the knob takes the ink that reads against it.
   knob: {
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: '#fff',
+    backgroundColor: inkOn(theme.colors.accentInfo),
   },
   knobOn: {
     alignSelf: 'flex-end',
@@ -2499,9 +2502,11 @@ const createStyles = (theme, insets) => StyleSheet.create({
     alignItems: 'center',
     marginRight: 10,
   },
+  // A ticked option is a CHOICE, not a success: it takes the highlight colour,
+  // and the tick is inked against that colour rather than a fixed white.
   checkboxChecked: {
-    backgroundColor: theme.colors.accentSuccess,
-    borderColor: theme.colors.accentSuccess,
+    backgroundColor: theme.colors.accent,
+    borderColor: theme.colors.accent,
   },
   appointmentText: {
     flex: 1,

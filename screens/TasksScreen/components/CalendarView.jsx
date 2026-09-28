@@ -606,12 +606,31 @@ const toDateString = (date) => {
 // sits INSIDE the highlight pill, above the date.
 const WEEKDAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-// Selected-day highlight in the week strip — a soft rounded SQUARE (not a full
-// circle) in a yellow-orange. Fixed hex (not a theme token) so the same warm
-// highlight reads identically on BOTH the dark and light surface; the number on
-// top uses a fixed dark ink so it stays legible on the orange in either mode.
-const WEEK_SELECT_BG = '#F5A623';
-const WEEK_SELECT_FG = '#1A1A1A';
+/**
+ * Selected-day highlight in the week strip — a soft rounded SQUARE (not a full
+ * circle), and the hatch that marks today in the month grid.
+ *
+ * THE USER'S HIGHLIGHT COLOUR (Settings → Appearance). These are the loudest
+ * "this is the day you are looking at" marks in the app, and they were a fixed
+ * yellow-orange (#F5A623) — so the planner kept its own amber no matter what
+ * colour had been chosen, which is precisely the thing that made the choice feel
+ * skin-deep.
+ *
+ * THE INK HAS TO BE DERIVED, not fixed. The old near-black was tuned for amber;
+ * on a deep violet or a mid blue it is a number you cannot read, and on a pale
+ * pink white would be. `inkOn` picks whichever of the two survives, so every
+ * accent — including one the user mixed — lands with legible type on it.
+ *
+ * Functions of `theme` rather than constants because the day panel renders
+ * through `sheetThemeFrom` (a different palette carrying the same accent), and a
+ * module constant cannot follow either.
+ *
+ * Exported so the pair can be tested without rendering a month: what matters is
+ * that the fill follows the chosen colour and that the ink follows the FILL,
+ * which is a two-line relationship a screenshot cannot pin.
+ */
+export const weekSelectBg = (theme) => theme?.colors?.accent || '#F5A623';
+export const weekSelectInk = (theme) => inkOn(weekSelectBg(theme));
 
 // ── The TO-DO List sheet takes the PAGE's side ──────────────────────────────
 // It used to be its own dark room in both app themes — a white-on-black pane
@@ -1465,7 +1484,10 @@ const DayPane = React.memo(function DayPane({
             // waiting to happen.
             done
               ? styles.timelineBeadOpen
-              : { backgroundColor: beadColor || theme.colors.accentSuccess, borderColor: beadColor || theme.colors.accentSuccess },
+              // No board on the task means no board colour to take, so the bead
+              // falls back to the app's own highlight colour rather than a green
+              // that reads as "done" on a row that isn't.
+              : { backgroundColor: beadColor || theme.colors.accent, borderColor: beadColor || theme.colors.accent },
           ]}
         />
       <ScheduleCard
@@ -1544,8 +1566,8 @@ const DayPane = React.memo(function DayPane({
           <RefreshControl
             refreshing={refreshing || false}
             onRefresh={onRefresh}
-            tintColor={theme.colors.accentSuccess}
-            colors={[theme.colors.accentSuccess]}
+            tintColor={theme.colors.accent}
+            colors={[theme.colors.accent]}
           />
         }
       >
@@ -1953,7 +1975,7 @@ const MonthPage = React.memo(function MonthPage({
                   ]}
                 >
                   <DiagonalHatch
-                    color={isToday ? WEEK_SELECT_BG : (theme.mode === 'dark' ? '#FFFFFF' : '#000000')}
+                    color={isToday ? weekSelectBg(theme) : (theme.mode === 'dark' ? '#FFFFFF' : '#000000')}
                   />
                 </View>
               )}
@@ -1962,7 +1984,7 @@ const MonthPage = React.memo(function MonthPage({
                   and bolds the number. Hidden once today is tapped. */}
               {isToday && !isSelected && (
                 <View pointerEvents="none" style={styles.todayHatchBackdrop}>
-                  <DiagonalHatch color={WEEK_SELECT_BG} />
+                  <DiagonalHatch color={weekSelectBg(theme)} />
                 </View>
               )}
               {/* Day number in a fixed box. The SELECTED day fills the whole
@@ -3489,7 +3511,7 @@ export const CalendarView = ({
               accessibilityRole="button"
               accessibilityLabel="Jump to today"
             >
-              <Icon name="calendar-today" size={15} color={theme.colors.accentSuccess} />
+              <Icon name="calendar-today" size={15} color={theme.colors.accent} />
               <Text style={styles.todayJumpText}>Today</Text>
             </TouchableOpacity>
           )}
@@ -3965,10 +3987,12 @@ const createStyles = (theme) => StyleSheet.create({
     elevation: 4,
     zIndex: 6,
   },
+  // "Jump to today" — a navigation key, not a success state, so it takes the
+  // highlight colour rather than the green it was borrowing.
   todayJumpText: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.colors.accentSuccess,
+    color: theme.colors.accent,
   },
   // Day-of-week labels — lives inside each FlatList page now (below
   // the title block's hairline divider, above the grid). Fixed height
@@ -4127,9 +4151,10 @@ const createStyles = (theme) => StyleSheet.create({
     overflow: 'hidden',
   },
   // Base tint UNDER the hatch — a whisper of the accent so the hatched region
-  // reads as a filled selection. ORANGE for today; neutral ink for other days.
+  // reads as a filled selection. The HIGHLIGHT COLOUR for today; neutral ink for
+  // other days.
   daySelectedToday: {
-    backgroundColor: hexToRgba(WEEK_SELECT_BG, 0.12),
+    backgroundColor: hexToRgba(weekSelectBg(theme), 0.12),
   },
   daySelectedOther: {
     backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
@@ -4306,7 +4331,7 @@ const createStyles = (theme) => StyleSheet.create({
   },
   calendarHint: {
     fontSize: 11,
-    color: theme.colors.accentSuccess,
+    color: theme.colors.accent,
     marginTop: 2,
     fontStyle: 'italic',
   },
@@ -4444,7 +4469,7 @@ const createStyles = (theme) => StyleSheet.create({
     position: 'absolute',
     left: 0,
     borderRadius: 14,
-    backgroundColor: WEEK_SELECT_BG,
+    backgroundColor: weekSelectBg(theme),
   },
   // The sliding track holding the day cells. A normal flow child (so it still
   // gives the strip its height) whose cells are absolutely positioned by day
@@ -4493,14 +4518,14 @@ const createStyles = (theme) => StyleSheet.create({
     lineHeight: 15,
     color: theme.colors.textTertiary,
   },
-  // On-pill abbreviation (dark ink, legible on the yellow-orange fill).
+  // On-pill abbreviation — whichever ink survives on the chosen highlight colour.
   weekDowOnPill: {
     position: 'absolute',
     left: 0,
     right: 0,
     textAlign: 'center',
     lineHeight: 15,
-    color: WEEK_SELECT_FG,
+    color: weekSelectInk(theme),
     fontWeight: '700',
   },
   weekNumRow: {
@@ -4515,8 +4540,8 @@ const createStyles = (theme) => StyleSheet.create({
     lineHeight: 22,
     color: theme.colors.textPrimary,
   },
-  // Dark-ink date drawn on top of the pill; absolutely fills the number row so
-  // it sits exactly over the resting number and cross-fades in with the pill.
+  // On-pill date; absolutely fills the number row so it sits exactly over the
+  // resting number and cross-fades in with the pill.
   weekDayNumOnPill: {
     position: 'absolute',
     left: 0,
@@ -4525,7 +4550,7 @@ const createStyles = (theme) => StyleSheet.create({
     bottom: 0,
     textAlign: 'center',
     lineHeight: 22,
-    color: WEEK_SELECT_FG,
+    color: weekSelectInk(theme),
     fontWeight: '700',
   },
   // ── Events & Birthdays strip ────────────────────────────────

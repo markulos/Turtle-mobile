@@ -47,6 +47,7 @@ import { tapHaptic, impactHaptic, notifyHaptic } from '../../utils/haptics';
 import { dockOccupied } from '../../components/tabBarLayout';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
+import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
@@ -3694,7 +3695,7 @@ const createStyles = (theme, insets) =>
     inviteContactsText: {
       fontSize: 14,
       fontWeight: '700',
-      color: '#fff',
+      color: inkOn(theme.colors.accentInfo),
     },
     inviteManualBtn: {
       width: 44,
@@ -3718,7 +3719,7 @@ const createStyles = (theme, insets) =>
     inviteSendText: {
       fontSize: 14,
       fontWeight: '700',
-      color: '#fff',
+      color: inkOn(theme.colors.accentInfo),
     },
     inviteNote: {
       flexDirection: 'row',

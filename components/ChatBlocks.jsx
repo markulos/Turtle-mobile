@@ -42,6 +42,7 @@ import { depth } from '../utils/surfaceDepth';
 import AppTextInput from './AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
+import { inkOn } from '../utils/accentColor';
 import {
   drawableBlocks,
   mergeFormBody,
@@ -324,7 +325,7 @@ export default function ChatBlocks({ blocks, theme, api, onAsk, onNavigate }) {
                       {busy
                         ? <ActivityIndicator size="small" color={c.accent || c.accentInfo} />
                         : isChecked
-                          ? <Icon name="check" size={12} color={c.onPrimary || '#000'} />
+                          ? <Icon name="check" size={12} color={inkOn(c.accent || c.accentInfo)} />
                           : null}
                     </View>
                     <Text style={[styles.checkLabel, isChecked && styles.checkLabelDone]} numberOfLines={3}>

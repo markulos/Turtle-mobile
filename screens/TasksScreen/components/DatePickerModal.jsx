@@ -11,6 +11,7 @@ import {
 import { depth } from '../../../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
+import { inkOn } from '../../../utils/accentColor';
 
 const { width } = Dimensions.get('window');
 const DAY_WIDTH = (width - 80) / 7;
@@ -191,7 +192,7 @@ export const DatePickerModal = ({
           
           {/* Today Button */}
           <TouchableOpacity style={styles.todayButton} onPress={goToToday}>
-            <Icon name="calendar-today" size={16} color={theme.colors.accentSuccess} />
+            <Icon name="calendar-today" size={16} color={theme.colors.accent} />
             <Text style={styles.todayText}>Today</Text>
           </TouchableOpacity>
           
@@ -312,12 +313,12 @@ const createStyles = (theme) => StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 8,
     marginBottom: 12,
-    backgroundColor: `${theme.colors.accentSuccess}15`,
+    backgroundColor: `${theme.colors.accent}15`,
     borderRadius: 8,
   },
   todayText: {
     fontSize: 14,
-    color: theme.colors.accentSuccess,
+    color: theme.colors.accent,
     marginLeft: 6,
     fontWeight: '600',
   },
@@ -351,12 +352,12 @@ const createStyles = (theme) => StyleSheet.create({
     marginBottom: 4,
   },
   todayCell: {
-    backgroundColor: `${theme.colors.accentSuccess}20`,
+    backgroundColor: `${theme.colors.accent}20`,
     borderWidth: 1,
-    borderColor: theme.colors.accentSuccess,
+    borderColor: theme.colors.accent,
   },
   selectedCell: {
-    backgroundColor: theme.colors.accentSuccess,
+    backgroundColor: theme.colors.accent,
   },
   dayText: {
     fontSize: 14,
@@ -364,11 +365,14 @@ const createStyles = (theme) => StyleSheet.create({
   },
   todayText: {
     fontWeight: 'bold',
-    color: theme.colors.accentSuccess,
+    color: theme.colors.accent,
   },
+  // The date you picked sits on a solid fill of the highlight colour, so its ink
+  // is derived from that colour — a fixed white vanished the moment the accent
+  // could be a pale pink.
   selectedText: {
     fontWeight: 'bold',
-    color: '#FFFFFF',
+    color: inkOn(theme.colors.accent),
   },
   relativeLabel: {
     fontSize: 8,

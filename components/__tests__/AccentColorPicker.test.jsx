@@ -9,7 +9,7 @@
  * the finger.
  */
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
@@ -103,13 +103,13 @@ describe('AccentColorPicker', () => {
     const field = screen.getByLabelText('Highlight colour hex code');
     // Lower case and no hash, the way a paste arrives.
     await act(async () => { fireEvent.changeText(field, 'f9a8d4'); });
-    // It slides out BEFORE it reports, so the exit animation has to run down
-    // inside the act — awaiting one is what lets the Animated callback land.
+    // It slides out BEFORE it reports, so the Animated callback lands a couple
+    // of hundred ms later. Waited for rather than slept through: a fixed sleep
+    // long enough on an idle machine is a flake on a loaded one.
     await act(async () => {
       fireEvent.press(screen.getByLabelText('Use this colour as the highlight colour'));
     });
-    await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
-    expect(onSelect).toHaveBeenCalledWith('#F9A8D4');
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith('#F9A8D4'));
     expect(onClose).toHaveBeenCalled();
   });
 

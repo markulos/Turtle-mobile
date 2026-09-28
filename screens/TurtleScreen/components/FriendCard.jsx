@@ -12,6 +12,7 @@ import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
+import { inkOn } from '../../../utils/accentColor';
 import { formatDueDate } from '../../TasksScreen/utils/taskHelpers';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import EdgeSwipePage from './EdgeSwipePage';
@@ -499,7 +500,7 @@ const makeStyles = (theme) =>
     devBtnText: {
       fontSize: 15,
       fontWeight: '700',
-      color: '#fff',
+      color: inkOn(theme.colors.accentInfo),
     },
     devRevokeBtn: {
       flexDirection: 'row',

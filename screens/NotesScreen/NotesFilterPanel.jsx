@@ -33,6 +33,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import { tapHaptic } from '../../utils/haptics';
+import { inkOn } from '../../utils/accentColor';
 import { panelBottomInset } from '../../components/tabBarLayout';
 
 /** The kind chips, in the order they read — widest scope first. */
@@ -359,5 +360,7 @@ const panelStyles = (theme, isDark) => StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: theme.colors.accentInfo || theme.colors.textPrimary,
   },
-  doneText: { fontSize: 14, fontWeight: '800', color: theme.colors.background },
+  // Inked against the key's own fill: `background` is the PAGE colour, which on
+  // a light theme is near-white — invisible once the accent is a pale one.
+  doneText: { fontSize: 14, fontWeight: '800', color: inkOn(theme.colors.accentInfo) },
 });

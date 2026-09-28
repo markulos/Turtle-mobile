@@ -30,6 +30,7 @@ import {
 import { depth } from '../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
+import { inkOn } from '../utils/accentColor';
 import { useServer } from '../context/ServerContext';
 import { tapHaptic, impactHaptic } from '../utils/haptics';
 
@@ -532,7 +533,7 @@ const createStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.accentInfo,
   },
   runBtnText: {
-    color: '#fff',
+    color: inkOn(theme.colors.accentInfo),
     fontSize: 12,
     fontWeight: '700',
   },

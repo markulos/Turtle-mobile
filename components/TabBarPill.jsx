@@ -48,10 +48,12 @@ const SLIDE_SPRING = { damping: 20, stiffness: 220, mass: 0.7 };
 //             a soft shadow of one. 0.12 was tuned against a WHITE light-mode
 //             dock and disappeared once the surface went black;
 //   chip    — the theme accent, the one saturated element and therefore what the
-//             eye tracks as it slides. It carries a WHITE glyph, which is why
-//             the inactive glyphs are white-on-dark in both themes too (see
-//             tabBarInactiveTintColor in App.js — a dark inactive tint would
-//             vanish into this surface).
+//             eye tracks as it slides. Its glyph is INKED AGAINST the accent
+//             (`inkOn`, see tabBarActiveTintColor in App.js): white for every
+//             saturated colour, near-black once the accent is pale enough that
+//             white would disappear. The INACTIVE glyphs stay white-on-dark in
+//             both themes regardless — they sit on the capsule, not the chip,
+//             and a dark tint would vanish into it.
 const DOCK_SURFACE = 'rgba(18,18,20,0.52)';
 const DOCK_EDGE = 'rgba(255,255,255,0.30)';
 
