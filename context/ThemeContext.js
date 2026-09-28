@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { normalizeHex } from '../utils/accentColor';
 
 const THEME_STORAGE_KEY = '@connected_pass_theme';
 const TIME_FORMAT_STORAGE_KEY = '@connected_pass_time_format';
@@ -7,6 +8,7 @@ const HIDE_VAULT_BUTTON_KEY = '@connected_pass_hide_vault_button';
 const CALENDAR_DAY_TASKS_KEY = '@connected_pass_calendar_day_tasks';
 const CALENDAR_FREE_SCROLL_KEY = '@connected_pass_calendar_free_scroll';
 const ACCENT_KEY = '@connected_pass_accent';
+const CUSTOM_ACCENT_KEY = '@connected_pass_accent_custom';
 
 /**
  * The app-wide highlight colour, chosen in Settings.
@@ -27,13 +29,27 @@ export const ACCENTS = [
   { key: 'green', label: 'Green', color: '#22C55E' },
   { key: 'violet', label: 'Violet', color: '#8B5CF6' },
   { key: 'pink', label: 'Pink', color: '#EC4899' },
+  { key: 'lightPink', label: 'Light pink', color: '#F9A8D4' },
   { key: 'amber', label: 'Amber', color: '#F59E0B' },
   { key: 'teal', label: 'Teal', color: '#14B8A6' },
   { key: 'red', label: 'Red', color: '#EF4444' },
 ];
 export const DEFAULT_ACCENT = 'orange';
-const accentColorFor = (key) =>
-  (ACCENTS.find((a) => a.key === key) || ACCENTS[0]).color;
+
+/**
+ * The tenth swatch: whatever the user mixed for themselves.
+ *
+ * Kept OUT of ACCENTS rather than pushed onto it as a tenth entry, because that
+ * list is a constant — every screen that maps over it would then have to know
+ * that one of its colours is state, and the swatch row's "pick this" would
+ * become "pick this, unless it's the last one, in which case open a sheet".
+ */
+export const CUSTOM_ACCENT = 'custom';
+
+const accentColorFor = (key, customColor) => {
+  if (key === CUSTOM_ACCENT) return customColor || ACCENTS[0].color;
+  return (ACCENTS.find((a) => a.key === key) || ACCENTS[0]).color;
+};
 
 /**
  * '#F97316' + alpha → 'rgba(249, 115, 22, a)'.
@@ -293,6 +309,13 @@ const ThemeContext = createContext({
   // style) where months flow past without snapping to a boundary.
   calendarFreeScroll: false,
   setCalendarFreeScroll: () => {},
+  // The highlight colour: one of ACCENTS' keys, or CUSTOM_ACCENT for a colour
+  // the user mixed themselves (`customAccent`, a '#RRGGBB').
+  accent: DEFAULT_ACCENT,
+  setAccent: () => {},
+  accentColor: ACCENTS[0].color,
+  customAccent: null,
+  setCustomAccent: () => {},
 });
 
 export const ThemeProvider = ({ children }) => {
@@ -307,6 +330,10 @@ export const ThemeProvider = ({ children }) => {
   const [showCalendarDayTasks, setShowCalendarDayTasksState] = useState(false);
   const [calendarFreeScroll, setCalendarFreeScrollState] = useState(false);
   const [accent, setAccentState] = useState(DEFAULT_ACCENT);
+  // The user's own colour, '#RRGGBB', or null if they have never mixed one.
+  // Remembered even while a preset is selected, so the custom swatch still
+  // shows what it was the last time they opened it.
+  const [customAccent, setCustomAccentState] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -331,8 +358,19 @@ export const ThemeProvider = ({ children }) => {
       if (savedDayTasks !== null) {
         setShowCalendarDayTasksState(savedDayTasks === 'true');
       }
+      // The custom colour is read FIRST: 'custom' is only a legal accent if
+      // there is actually a colour behind it, and a stored key with no colour
+      // (a half-written pair, an older install) has to fall back to a preset
+      // rather than to whatever accentColorFor guesses.
+      const savedCustom = normalizeHex(await AsyncStorage.getItem(CUSTOM_ACCENT_KEY));
+      if (savedCustom) {
+        setCustomAccentState(savedCustom);
+      }
       const savedAccent = await AsyncStorage.getItem(ACCENT_KEY);
-      if (savedAccent && ACCENTS.some((a) => a.key === savedAccent)) {
+      const accentIsReal = savedAccent === CUSTOM_ACCENT
+        ? !!savedCustom
+        : ACCENTS.some((a) => a.key === savedAccent);
+      if (savedAccent && accentIsReal) {
         setAccentState(savedAccent);
       }
       const savedFreeScroll = await AsyncStorage.getItem(CALENDAR_FREE_SCROLL_KEY);
@@ -387,13 +425,44 @@ export const ThemeProvider = ({ children }) => {
   };
 
   const setAccent = async (key) => {
-    const next = ACCENTS.some((a) => a.key === key) ? key : DEFAULT_ACCENT;
+    // 'custom' only holds if there is a colour behind it; asked for without
+    // one, it falls back rather than leaving the app on a phantom accent.
+    const legal = key === CUSTOM_ACCENT
+      ? !!customAccent
+      : ACCENTS.some((a) => a.key === key);
+    const next = legal ? key : DEFAULT_ACCENT;
     setAccentState(next);
     try {
       await AsyncStorage.setItem(ACCENT_KEY, next);
     } catch (error) {
       console.error('Error saving accent:', error);
     }
+  };
+
+  /**
+   * Take a colour the user mixed and select it in one move.
+   *
+   * One call, not "save the colour" + "now switch to it": nobody picks a colour
+   * in order to not use it, and two calls means two await points where a crash
+   * or a backgrounded app can leave the pair disagreeing.
+   *
+   * The COLOUR is written before the KEY, for the same reason — a failure
+   * between them leaves the accent pointing at a preset, which is a wrong
+   * colour, rather than at a 'custom' with nothing behind it, which is no
+   * colour at all.
+   */
+  const setCustomAccent = async (hex) => {
+    const next = normalizeHex(hex);
+    if (!next) return null;
+    setCustomAccentState(next);
+    setAccentState(CUSTOM_ACCENT);
+    try {
+      await AsyncStorage.setItem(CUSTOM_ACCENT_KEY, next);
+      await AsyncStorage.setItem(ACCENT_KEY, CUSTOM_ACCENT);
+    } catch (error) {
+      console.error('Error saving custom accent:', error);
+    }
+    return next;
   };
 
   const toggleTheme = async () => {
@@ -408,7 +477,7 @@ export const ThemeProvider = ({ children }) => {
 
   // The chosen accent is folded into the palette here, once, so every consumer
   // of useTheme() picks it up with no change at the call site.
-  const accentColor = accentColorFor(accent);
+  const accentColor = accentColorFor(accent, customAccent);
   const baseTheme = isDark ? DARK_THEME : LIGHT_THEME;
   const theme = useMemo(() => ({
     ...baseTheme,
@@ -439,12 +508,12 @@ export const ThemeProvider = ({ children }) => {
   const value = useMemo(
     () => ({
       theme, isDark, toggleTheme, timeFormat, setTimeFormat,
-      accent, setAccent, accentColor,
+      accent, setAccent, accentColor, customAccent, setCustomAccent,
       hideVaultButton, setHideVaultButton,
       showCalendarDayTasks, setShowCalendarDayTasks,
       calendarFreeScroll, setCalendarFreeScroll,
     }),
-    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, accent, accentColor],
+    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, accent, accentColor, customAccent],
   );
 
   if (isLoading) {
