@@ -186,10 +186,12 @@ export default function LoginScreen() {
   const applyInviteLink = useCallback(({ code, server }) => {
     if (server) {
       // URL-shaped server (tunnel) → keep verbatim minus trailing slash;
-      // bare host → strip any path / typed :3000 (the port is implied).
+      // bare host → strip any path. A typed port is KEPT: serverOrigin() reads
+      // a bare public name as https on 443, so `host:3000` is the only way to
+      // say "the plain pond port on this name".
       const host = /^https?:\/\//i.test(server)
         ? server.replace(/\/+$/, '')
-        : server.replace(/\/.*$/, '').replace(/:3000$/, '');
+        : server.replace(/\/.*$/, '');
       if (host) {
         saveIP(host);
         rememberFunnel(host); // self-guards: only https funnels persist
@@ -249,11 +251,13 @@ export default function LoginScreen() {
     await login(password);
   };
 
-  // Save + test a server address. Lenient input: a bare host gets http:// and
-  // :3000 implied (any typed :3000 or path is stripped); a FULL URL
-  // (https://… — a tunnel-style server like Tailscale Funnel) is kept
-  // verbatim minus trailing slash, because its scheme and port ARE the
-  // address — the old version stripped the scheme and appended :3000, which
+  // Save + test a server address. Lenient input: a bare IP or local name gets
+  // http:// and :3000 implied; a bare PUBLIC name (app.t3d.ca) is a tunnel and
+  // gets https://; a typed port is kept as the user's word (the old version
+  // stripped :3000, which made `name:3000` unsayable once a bare name meant
+  // 443); a FULL URL (https://… — a tunnel-style server like Tailscale Funnel)
+  // is kept verbatim minus trailing slash, because its scheme and port ARE the
+  // address — an older version stripped the scheme and appended :3000, which
   // destroyed every URL the user typed. `hostOverride` (a string) is used by
   // the pond-suggestion taps; button/submit events fall back to the input.
   const handleSaveServer = async (hostOverride) => {
@@ -261,7 +265,7 @@ export default function LoginScreen() {
     if (/^https?:\/\//i.test(v)) {
       v = v.replace(/\/+$/, '');
     } else {
-      v = v.replace(/\/.*$/, '').replace(/:3000$/, '');
+      v = v.replace(/\/.*$/, '');
     }
     if (!v) return;
     setServerBusy(true);

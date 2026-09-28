@@ -9,30 +9,18 @@ const ServerContext = createContext();
 //
 // This used to be a hardcoded Tailscale IP, so every install of the app, on
 // anyone's phone, pointed at one particular person's private tailnet address.
-// A default host is an answer to "which pond?", and no client can ship one.
-//
-// Release builds resolve a pond from: a remembered pond → discovery (LAN sweep
-// + funnel walk, see services/pondDiscovery.js) → an invite link, which carries
-// its own server. Set EXPO_PUBLIC_TURTLE_DEV_HOST in mobile-app/.env for a
-// local shortcut.
-const DEFAULT_SERVER_HOST = (__DEV__ && process.env.EXPO_PUBLIC_TURTLE_DEV_HOST) || '';
-
-// Normalize whatever the user saved into a server ORIGIN. Accepted forms:
-//   '100.64.0.1'             → http://100.64.0.1:3000   (bare host — classic)
-//   '192.168.1.50:3000'         → http://192.168.1.50:3000    (host:port)
-//   'https://pc.tail123.ts.net' → https://pc.tail123.ts.net   (tunnel-style URL —
-//                                  its scheme + port ARE the address; nothing appended)
-// Every base-URL builder (the api wrapper, the health check, the three
-// socket.io hooks, the login screen's invite preview) goes through this.
-// The old code glued `http://` + ip + `:3000` in seven separate places,
-// which made URL-shaped servers (Tailscale Funnel / ngrok-style tunnels)
-// impossible to enter at all.
-export const serverOrigin = (raw) => {
-  const s = String(raw || '').trim().replace(/\/+$/, '');
-  if (!s) return '';
-  if (/^https?:\/\//i.test(s)) return s;
-  return s.includes(':') ? `http://${s}` : `http://${s}:3000`;
-};
+// The pond every install starts on, and the pond DIRECTORY: signing in by phone
+// asks it which ponds know the number, so nobody types a pond address. The
+// desktop app starts on the same one (DEFAULT_POND in the tray). A full origin
+// on purpose — serverOrigin() keeps it exactly as written. A dev build can
+// point at its own server with EXPO_PUBLIC_TURTLE_DEV_HOST in mobile-app/.env.
+// A remembered pond, discovery (LAN sweep + funnel walk, services/pondDiscovery)
+// and an invite link (which carries its own server) all still override it.
+// The rule itself lives in utils/serverOrigin (pure, tested); re-exported here
+// so every existing importer keeps its path.
+import { DEFAULT_POND, isLocalHost, serverOrigin } from '../utils/serverOrigin';
+export { DEFAULT_POND, isLocalHost, serverOrigin };
+const DEFAULT_SERVER_HOST = (__DEV__ && process.env.EXPO_PUBLIC_TURTLE_DEV_HOST) || DEFAULT_POND;
 
 // Candidate HTTP/2 origin for MEDIA bytes (thumbnails, photos), served by the TLS
 // listener on :3443 (server.js). A grid fires ~150 tiny WebP GETs per page; over
