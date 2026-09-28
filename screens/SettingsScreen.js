@@ -31,7 +31,10 @@ import PerfFindingsPanel from '../components/PerfFindingsPanel';
 import ShareUploadLimitCard from '../components/ShareUploadLimitCard';
 import TranscriptionPanel from '../components/TranscriptionPanel';
 import { useServer } from '../context/ServerContext';
-import { useTheme, ACCENTS } from '../context/ThemeContext';
+import { useTheme, ACCENTS, CUSTOM_ACCENT } from '../context/ThemeContext';
+import AccentColorPicker from '../components/AccentColorPicker';
+import { inkOn } from '../utils/accentColor';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../context/AuthContext';
 import * as SecureStore from 'expo-secure-store';
 import { clearAllCaches, getCacheSizeBytes, formatBytes } from '../utils/cacheManager';
@@ -66,7 +69,7 @@ const SEARCH_PAGE = { key: '__search__', label: 'Results', icon: 'magnify' };
 const SETTING_TERMS = {
   profile: 'profile display name avatar photo picture alias points stats tasks pomodoros',
   darkMode: 'dark mode theme appearance night light colour color',
-  accent: 'highlight colour color accent theme appearance swatch',
+  accent: 'highlight colour color accent theme appearance swatch pink light pink custom own pick picker hex shade hue rainbow',
   hideVault: 'hide vault button navbar tab bar navigation photos',
   autoUpload: 'auto upload camera roll new photos videos background sync vault automatic icloud',
   cache: 'cache size storage space photos clear free disk measure',
@@ -177,7 +180,9 @@ async function pollHealToCompletion(api, onProgress, { intervalMs = 2000, maxMs 
 }
 
 export default function SettingsScreen({ active = true }) {
-  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll, accent, setAccent } = useTheme();
+  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll, accent, setAccent, accentColor, customAccent, setCustomAccent } = useTheme();
+  // The custom-colour sheet, opened by the last swatch in the Appearance row.
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
   const { serverIP, isConnected, pondEnv, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
   // Auto-upload (background uploads Phase 5): the switch + its last-scan line.
   const vaultActions = useVaultUploadActions();
@@ -985,13 +990,57 @@ export default function SettingsScreen({ active = true }) {
                           backgroundColor: option.color,
                           // The ring, not a tick, carries selection: a check
                           // mark on a saturated swatch is hard to read across
-                          // eight different hues.
+                          // nine different hues.
                           borderColor: selected ? theme.colors.textPrimary : 'transparent',
                         },
                       ]}
                     />
                   );
                 })}
+
+                {/* The user's own colour, last in the row. It wears the colour
+                    they mixed once they have one, and a spectrum until then —
+                    a swatch that is every colour is the one honest way to say
+                    "any colour", and the pencil says it is a thing you make
+                    rather than a tenth preset. A press always opens the sheet,
+                    including when it is already selected: tapping your own
+                    colour is how you go back and adjust it. */}
+                <TouchableOpacity
+                  onPress={() => setColorPickerOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: accent === CUSTOM_ACCENT }}
+                  accessibilityLabel={
+                    customAccent
+                      ? `Custom highlight colour ${customAccent}. Opens the colour picker`
+                      : 'Pick a custom highlight colour'
+                  }
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={[
+                    styles.accentSwatch,
+                    styles.accentCustom,
+                    {
+                      backgroundColor: customAccent || 'transparent',
+                      borderColor: accent === CUSTOM_ACCENT ? theme.colors.textPrimary : 'transparent',
+                    },
+                  ]}
+                >
+                  {!customAccent && (
+                    <LinearGradient
+                      colors={['#F97316', '#EC4899', '#8B5CF6', '#3B82F6', '#22C55E']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={StyleSheet.absoluteFill}
+                    />
+                  )}
+                  <Icon
+                    name="pencil"
+                    size={14}
+                    // Over the spectrum the glyph is always white; over their own
+                    // colour it has to flip, or a pale pink swatch carries a
+                    // white pencil nobody can see.
+                    color={customAccent ? inkOn(customAccent) : '#FFFFFF'}
+                  />
+                </TouchableOpacity>
               </View>
               </SettingsItem>
             </SettingsSection>
@@ -1615,6 +1664,17 @@ export default function SettingsScreen({ active = true }) {
           );
         })}
       </Animated.ScrollView>
+
+      {/* Mounted LAST, at the screen root: a sheet raised from inside the pager
+          would be clipped by it. It opens on the LIVE accent — whatever colour
+          the app is wearing right now — so "custom" starts from what is on
+          screen rather than from a colour nobody chose. */}
+      <AccentColorPicker
+        visible={colorPickerOpen}
+        initialColor={customAccent || accentColor}
+        onSelect={setCustomAccent}
+        onClose={() => setColorPickerOpen(false)}
+      />
     </View>
   );
 }
@@ -1770,6 +1830,13 @@ const createStyles = (theme) => StyleSheet.create({
     height: 30,
     borderRadius: 15,
     borderWidth: 2.5,
+  },
+  // The custom swatch carries a glyph, and a spectrum under it while no colour
+  // has been mixed yet — so it centres its contents and clips them to the disc.
+  accentCustom: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
   },
   settingRow: {
     flexDirection: 'row',
