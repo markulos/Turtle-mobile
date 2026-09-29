@@ -298,9 +298,9 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
         <View style={s.grabber} />
         <View style={s.headerRow}>
           <View style={{ flex: 1 }}>
-            <Text style={s.title} numberOfLines={1}>Share “{albumName}”</Text>
+            <Text style={s.title} numberOfLines={1}>Sharing “{albumName}”</Text>
             <Text style={s.subtitle}>
-              Anyone with the link can view this album in a browser — no account needed.
+              Everything about who can see this board, in one place.
             </Text>
           </View>
           <Pressable onPress={onClose} hitSlop={10} style={s.closeBtn}>
@@ -320,6 +320,17 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
           scrollIndicatorInsets={{ right: 1 }}
           {...scrollProps}
         >
+          {/* ONE CARD, SECTIONED. This is the only place a board's sharing is
+              changed now — the cog on its caption in the boards grid and the
+              board menu's Share entry both land here, so the settings are not
+              split across two entry points that drift apart. */}
+          <View style={s.sectionHead}>
+            <MaterialCommunityIcons name="earth" size={13} color={theme.colors.textSecondary} />
+            <Text style={s.sectionTitle}>PUBLIC LINK</Text>
+          </View>
+          <Text style={s.sectionNote}>
+            Anyone with the link can view this board in a browser — no account needed.
+          </Text>
           {loading ? (
             <ActivityIndicator style={{ marginVertical: 22 }} color={theme.colors.textSecondary} />
           ) : shares.length === 0 ? (
@@ -498,6 +509,12 @@ const makeStyles = (theme) => StyleSheet.create({
   },
   errorText: { color: '#ff6b6b', fontSize: 12.5 },
   scroll: { marginTop: 14 },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2, marginBottom: 2 },
+  sectionTitle: {
+    fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9,
+    color: theme.colors.textSecondary,
+  },
+  sectionNote: { fontSize: 12, color: theme.colors.textTertiary, marginBottom: 10, lineHeight: 16 },
   empty: { color: theme.colors.textMuted, fontSize: 13, paddingVertical: 6 },
   linkCard: {
     borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,

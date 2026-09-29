@@ -168,6 +168,77 @@ describe('PhotoVaultBoardCard', () => {
     expect(view.queryByText('SHARED')).toBeNull();
   });
 
+  // ── The caption's right end: who it is shared with, and the way in ────────
+  //
+  // The overflow arithmetic is pinned in utils/__tests__/faceStack.test.js;
+  // these are about the CARD — that the cog is on every real board and nothing
+  // else, that it reaches the sharing card, and that faces appear only when
+  // there are people to draw.
+  const people = (n) => Array.from({ length: n }, (_, i) => ({ userId: `u${i}`, name: `Person ${i}` }));
+  const drawCard = (over = {}, props = {}) => render(
+    <PhotoVaultBoardCard
+      board={{ ...board, ...over }}
+      width={186}
+      theme={theme}
+      resolveCoverUrl={(path) => path}
+      onPress={jest.fn()}
+      onLongPress={jest.fn()}
+      onPressShareSettings={jest.fn()}
+      {...props}
+    />,
+  );
+
+  test('every real board carries a sharing cog, and it opens that board’s card', async () => {
+    const onPressShareSettings = jest.fn();
+    const view = await drawCard({}, { onPressShareSettings });
+    await fireEvent.press(view.getByTestId('board-share-settings'));
+    expect(onPressShareSettings).toHaveBeenCalledWith('Warm interiors');
+  });
+
+  test('All Photos has none — the whole library is not a thing you share', async () => {
+    const view = await drawCard({ name: 'All Photos' }, { onPressShareSettings: undefined });
+    expect(view.queryByTestId('board-share-settings')).toBeNull();
+  });
+
+  test('the cog is quiet at rest: a column of them must not compete with the covers', async () => {
+    const view = await drawCard();
+    const style = view.getByTestId('board-share-settings').props.style;
+    const flat = StyleSheet.flatten(typeof style === 'function' ? style({ pressed: false }) : style);
+    expect(flat.opacity).toBeLessThan(0.5);
+  });
+
+  test('its label counts the people', async () => {
+    const view = await drawCard({ sharedWith: people(2) });
+    expect(view.getByLabelText('Sharing for Warm interiors: 2 people')).toBeTruthy();
+  });
+
+  test('and counts one of them properly', async () => {
+    const view = await drawCard({ sharedWith: people(1) });
+    expect(view.getByLabelText('Sharing for Warm interiors: 1 person')).toBeTruthy();
+  });
+
+  test('a board shared with nobody draws no faces at all', async () => {
+    const view = await drawCard();
+    expect(view.getByLabelText('Sharing for Warm interiors')).toBeTruthy();
+    expect(view.queryByText(/^\+\d+$/)).toBeNull();
+  });
+
+  test('more people than the caption can spare become a +n', async () => {
+    const view = await drawCard({ sharedWith: people(6) });
+    expect(view.getByText(/^\+\d+$/)).toBeTruthy();
+  });
+
+  test('a SHARED board keeps both its badge and its cog', async () => {
+    // Both are pinned to the same end of one caption row; the stack is handed
+    // less room when the badge is there rather than either being dropped.
+    const view = await drawCard(
+      { isLive: true, sharedWith: people(6) },
+      { theme: { ...theme, colors: { ...theme.colors, accentInfo: '#38BDF8' } } },
+    );
+    expect(view.getByTestId('board-shared-badge')).toBeTruthy();
+    expect(view.getByTestId('board-share-settings')).toBeTruthy();
+  });
+
   test('renders a single quiet empty-board placeholder when covers are absent', async () => {
     const view = await render(
       <PhotoVaultBoardCard

@@ -2697,6 +2697,37 @@ export default function TasksScreen() {
     ]);
   };
 
+  /**
+   * Make a task from what was typed into a Focus picker, and hand it back.
+   *
+   * UNDATED ON PURPOSE. Creating here is naming the thing you are about to work
+   * on, and STARTING the session is what puts it on today (utils/focusStart) —
+   * so a task created and then not started stays in the backlog rather than
+   * cluttering today with something nobody worked on. It lands on whatever
+   * board the Planner is scoped to, which is the one the picker was searching.
+   *
+   * Returns the task so the caller can assign or start it without going back to
+   * the list to find what it just made.
+   */
+  const createFocusTask = useCallback(async (title) => {
+    const clean = String(title || '').trim();
+    if (!clean) return null;
+    const task = {
+      title: clean,
+      description: '',
+      priority: 'medium',
+      completed: false,
+      project: !selectedProject || selectedProject === 'All' ? '' : selectedProject,
+      dueDate: '',
+      tags: [],
+      subtasks: [],
+      id: Date.now().toString(),
+      createdAt: Date.now(),
+    };
+    await handleSaveTask(task);
+    return task;
+  }, [selectedProject]);
+
   const handleInlineAdd = (project, tags, title) => {
     const actualProject = project === 'No Project' ? '' : project;
     
@@ -3338,6 +3369,13 @@ export default function TasksScreen() {
         boardColor={getProjectColor}
         onOpenTask={(task) => { setSearchOpen(false); openDetail(task); }}
         onFocusTask={(task) => { setSearchOpen(false); startFocusOnTask(task); }}
+        // The Focus tab's search STARTS what you pick, so creating from it
+        // starts a block on the new task — which is also what puts it on today.
+        onCreateTask={async (title) => {
+          setSearchOpen(false);
+          const made = await createFocusTask(title);
+          if (made) startFocusOnTask(made);
+        }}
         // Picking a board scopes the whole Planner to it — the title says so,
         // and every tab is already looking at that scope.
         onPickBoard={(name) => { setSearchOpen(false); setSelectedProject(name); }}
@@ -3382,6 +3420,14 @@ export default function TasksScreen() {
         taskIndex={taskIndex}
         selectedProject={selectedProject}
         onAssignTask={(task) => { setFocusPickOpen(false); setFocusTaskId(task?.id || null); }}
+        // Nothing carries that title, so make it and name it as the session's
+        // task in one press — creating and then hunting for it in the list
+        // would be two steps for one intention.
+        onCreateTask={async (title) => {
+          setFocusPickOpen(false);
+          const made = await createFocusTask(title);
+          if (made) setFocusTaskId(made.id);
+        }}
         theme={theme}
         isDark={theme.mode === 'dark'}
       />

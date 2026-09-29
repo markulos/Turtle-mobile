@@ -325,9 +325,11 @@ describe('a break is the same deck, unmistakably', () => {
 describe('the task the session is for', () => {
   const TASK = { id: 't9', title: 'Rewire the porch light' };
 
-  test('with none picked, the row invites you to', async () => {
+  // PICK OR CREATE, because the panel it opens does both: anything typed that
+  // is not already a task heads the list as a create row.
+  test('with none picked, the row invites you to pick or create one', async () => {
     await render(<FocusPage {...props()} />);
-    expect(screen.getByTestId('focus-assign-label')).toHaveTextContent('Pick a task…');
+    expect(screen.getByTestId('focus-assign-label')).toHaveTextContent('Pick or create a task…');
   });
 
   test('picked, it names it — and the Start key says what it will do', async () => {

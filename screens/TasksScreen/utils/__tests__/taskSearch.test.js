@@ -1,5 +1,6 @@
 import {
   buildQuery, buildTaskIndex, indexTask, scoreTask, rankTasks, taskSearchMeta, startOfToday,
+  needsCreateRow,
 } from '../taskSearch';
 
 const NOW = new Date(2026, 8, 26, 12, 0, 0).getTime();
@@ -214,5 +215,49 @@ describe('startOfToday', () => {
     const t = new Date(startOfToday(NOW));
     expect(t.getHours()).toBe(0);
     expect(t.getDate()).toBe(26);
+  });
+});
+
+/**
+ * The create row's rule. Two finders ask it — the Planner's day finder and the
+ * Focus picker — so it is tested once, here, rather than twice in their
+ * component tests.
+ */
+describe('needsCreateRow', () => {
+  const rows = [{ title: 'Call Omar' }, { title: 'Book the ferry' }];
+
+  test('an empty field offers nothing — there is no task to make yet', () => {
+    expect(needsCreateRow('', rows)).toBe(false);
+    expect(needsCreateRow('   ', rows)).toBe(false);
+    expect(needsCreateRow(null, rows)).toBe(false);
+  });
+
+  test('something nobody carries can be made', () => {
+    expect(needsCreateRow('Wash the car', rows)).toBe(true);
+  });
+
+  // A partial match is still a new task: "Call" is not "Call Omar", and the
+  // person typing it may well want both.
+  test('a query that only PREFIXES an answer can still be made', () => {
+    expect(needsCreateRow('Call', rows)).toBe(true);
+  });
+
+  // The whole point of the rule: this is how a list ends up with two of
+  // everything, one of them lowercase.
+  test('an exact title is the one that exists, whatever the case or padding', () => {
+    expect(needsCreateRow('Call Omar', rows)).toBe(false);
+    expect(needsCreateRow('call omar', rows)).toBe(false);
+    expect(needsCreateRow('  CALL OMAR  ', rows)).toBe(false);
+  });
+
+  test('answers with no title at all do not block a create', () => {
+    expect(needsCreateRow('Wash the car', [{}, { title: null }])).toBe(true);
+  });
+
+  // Nothing matched is the case that MOST needs the row: an empty list used to
+  // be a dead end that said "no task matches that".
+  test('no answers at all still offers the create', () => {
+    expect(needsCreateRow('Wash the car')).toBe(true);
+    expect(needsCreateRow('Wash the car', [])).toBe(true);
   });
 });

@@ -8,7 +8,10 @@
  * and paints black text on it.
  */
 import {
+  accentFrostInk,
   contrastRatio,
+  frostSurface,
+  mixHex,
   hexToHsl,
   hexToRgb,
   hslToHex,
@@ -177,6 +180,80 @@ describe('inkOn', () => {
     expect(inkOn(undefined)).toBe(INK_LIGHT);
     // rgba() tokens reach this too — the palette is a mix of both forms.
     expect(inkOn('rgba(0,0,0,0.5)')).toBe(INK_LIGHT);
+  });
+});
+
+describe('mixHex / frostSurface', () => {
+  test('the ends of the mix are the colours themselves', () => {
+    expect(mixHex('#000000', '#FFFFFF', 0)).toBe('#000000');
+    expect(mixHex('#000000', '#FFFFFF', 1)).toBe('#FFFFFF');
+    expect(mixHex('#000000', '#FFFFFF', 0.5)).toBe('#808080');
+  });
+
+  test('a wash of accent on a page lands between the two', () => {
+    const surface = frostSurface('#F9A8D4', '#F5F3F0');
+    expect(luminance(surface)).toBeLessThan(luminance('#F5F3F0'));
+    expect(luminance(surface)).toBeGreaterThan(luminance('#F9A8D4'));
+  });
+
+  test('nonsense in still yields a colour, never undefined', () => {
+    expect(mixHex('nope', '#F97316', 0.5)).toBe('#F97316');
+    expect(mixHex('#F97316', 'nope', 0.5)).toBe('#F97316');
+  });
+});
+
+describe('accentFrostInk', () => {
+  const DARK_PAGE = '#000000';
+  const LIGHT_PAGE = '#F5F3F0';
+
+  test('a deep accent carries plain white', () => {
+    for (const accent of ['#8B5CF6', '#3B82F6', '#EF4444', '#F97316', '#14B8A6']) {
+      expect(accentFrostInk(accent, { page: DARK_PAGE })).toBe(INK_LIGHT);
+    }
+  });
+
+  // The rule Mark asked for: not a neutral near-black — the SAME colour, much
+  // darker. A pink key reads as one object with deep pink type on it; the same
+  // key with grey type on it looks disabled.
+  test('a pale accent keeps its own hue and drops its lightness', () => {
+    const accent = '#F9A8D4';
+    const ink = accentFrostInk(accent, { page: LIGHT_PAGE });
+    expect(ink).not.toBe(INK_LIGHT);
+    expect(ink).not.toBe(INK_DARK);
+    const a = hexToHsl(accent);
+    const i = hexToHsl(ink);
+    // Same colour…
+    expect(Math.abs(i.h - a.h)).toBeLessThanOrEqual(2);
+    expect(i.s).toBeGreaterThan(30);
+    // …much darker.
+    expect(i.l).toBeLessThan(a.l / 2);
+  });
+
+  test('and it is actually readable on the pill it sits on', () => {
+    for (const accent of ['#F9A8D4', '#FFFF00', '#FDE68A', '#FFFFFF', '#F59E0B']) {
+      const ink = accentFrostInk(accent, { page: LIGHT_PAGE });
+      const surface = frostSurface(accent, LIGHT_PAGE);
+      expect(contrastRatio(ink, surface)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  // The same accent is a deep chip on a black page and a pastel one on cream,
+  // so the decision has to be made about the SURFACE, not the accent.
+  test('the page decides too — one accent, two answers', () => {
+    const amber = '#F59E0B';
+    expect(accentFrostInk(amber, { page: DARK_PAGE })).toBe(INK_LIGHT);
+    expect(accentFrostInk(amber, { page: LIGHT_PAGE })).not.toBe(INK_LIGHT);
+  });
+
+  test('white text never lands on a pale pill', () => {
+    for (const accent of ['#F9A8D4', '#FFFF00', '#FFFFFF', '#FDE68A']) {
+      expect(accentFrostInk(accent, { page: LIGHT_PAGE })).not.toBe(INK_LIGHT);
+    }
+  });
+
+  test('a non-colour falls back to white rather than to nothing', () => {
+    expect(accentFrostInk('nope', { page: LIGHT_PAGE })).toBe(INK_LIGHT);
+    expect(accentFrostInk(undefined)).toBe(INK_LIGHT);
   });
 });
 

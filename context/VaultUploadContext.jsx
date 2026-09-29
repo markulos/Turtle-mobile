@@ -25,6 +25,17 @@
  */
 import React, { createContext, useContext, useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { AppState, Platform } from 'react-native';
+
+// The platform, read ONCE at module load.
+//
+// It cannot change at runtime, and the three places below that want it run
+// inside async continuations — a throttled notification tick, a deletion plan
+// built after an upload settles. Reaching into the react-native module from
+// THERE is how a timer that outlives a jest module registry dereferences an
+// undefined `Platform`: it threw `Cannot read properties of undefined
+// (reading 'OS')` from a dead teardown and took the whole test RUN down with
+// it, landing on a different innocent suite each time.
+const PLATFORM = Platform.OS;
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
@@ -269,11 +280,11 @@ export function VaultUploadProvider({ children }) {
       // This count is what the button says, so it must be exactly the number
       // of the USER's files that will disappear — our own staging copies are
       // reclaimed silently and are deliberately not in it.
-      deletableCount: deletionPlan(batch.items, { platform: Platform.OS }).count,
+      deletableCount: deletionPlan(batch.items, { platform: PLATFORM }).count,
       // ...and when that count is zero but there WERE device originals in the
       // batch, why. Without this the card just ends, and "we're not allowed
       // to offer this" is indistinguishable from "the button is broken".
-      deleteHint: undeletableReason(batch.items, { platform: Platform.OS }),
+      deleteHint: undeletableReason(batch.items, { platform: PLATFORM }),
       finishedAt: batch.finishedAt || null,
     });
     driveProgressNotification();
@@ -875,7 +886,7 @@ export function VaultUploadProvider({ children }) {
   const deleteOriginals = useCallback(async () => {
     const batch = batchRef.current;
     if (!batch) return false;
-    const { assetIds, safUris } = deletionPlan(batch.items, { platform: Platform.OS });
+    const { assetIds, safUris } = deletionPlan(batch.items, { platform: PLATFORM });
     if (assetIds.length === 0 && safUris.length === 0) { clearBatch(); return false; }
 
     let ok = true;

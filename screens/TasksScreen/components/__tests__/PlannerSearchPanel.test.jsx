@@ -106,7 +106,7 @@ describe('the same field, a different errand per tab', () => {
 
   test('the field says which errand it is on', async () => {
     await render(<PlannerSearchPanel {...props({ mode: 'focus' })} />);
-    expect(screen.getByTestId('planner-search-input').props.placeholder).toBe('Find a task to focus on');
+    expect(screen.getByTestId('planner-search-input').props.placeholder).toBe('Pick or create a task to focus on');
   });
 });
 
@@ -123,23 +123,134 @@ describe('assigning a task to the next session', () => {
     expect(p.onOpenTask).not.toHaveBeenCalled();
   });
 
-  test('the field asks the question this errand is', async () => {
+  // The field names BOTH things it does: the panel is a picker and a composer,
+  // and a field that only says "which task" hides half of itself.
+  test('the field says you can make one as readily as find one', async () => {
     await render(<PlannerSearchPanel {...props({ mode: 'assign' })} />);
     expect(screen.getByTestId('planner-search-input').props.placeholder)
-      .toBe('Which task is this session for?');
+      .toBe('Pick or create a task');
   });
 
   // The two modes must not read identically — picking in one starts a timer and
-  // picking in the other does not, which is the whole difference.
-  test('the hint says a press is not a start', async () => {
+  // picking in the other does not, which is the whole difference. The hint also
+  // has to carry the create affordance now, without losing that.
+  test('the hint says a press is not a start, and that typing makes one', async () => {
     await render(<PlannerSearchPanel {...props({ mode: 'assign', query: '' })} />);
-    expect(screen.getByTestId('planner-search-focus-hint'))
-      .toHaveTextContent(/pick one, then press Start session/);
+    const hint = screen.getByTestId('planner-search-focus-hint');
+    expect(hint).toHaveTextContent(/press Start session/);
+    expect(hint).toHaveTextContent(/type a new one/);
   });
 
   test('it still lists what is next before you type', async () => {
     await render(<PlannerSearchPanel {...props({ mode: 'assign', query: '' })} />);
     expect(screen.getByTestId('planner-search-task-t1')).toBeTruthy();
+  });
+});
+
+/**
+ * Picking a task for a session used to require that the task already existed:
+ * "no task matches that" was a dead end, and the way out of it was to leave the
+ * panel, go to the Planner, make the task, come back, and search again. Now the
+ * field composes as well as it finds.
+ */
+describe('making the task you were looking for', () => {
+  const creating = (over = {}) => props({ mode: 'assign', onCreateTask: jest.fn(), ...over });
+
+  /** Where each row sits in the rendered tree, so "leads the list" is testable. */
+  const orderOf = (testID) => {
+    const seen = [];
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      if (node.props?.testID) seen.push(node.props.testID);
+      (node.children || []).forEach(walk);
+    };
+    walk(screen.toJSON());
+    return seen.indexOf(testID);
+  };
+
+  test('a title nobody carries can be made from the field', async () => {
+    const p = creating({ query: 'Wash the car' });
+    await render(<PlannerSearchPanel {...p} />);
+    await press('planner-search-create');
+    expect(p.onCreateTask).toHaveBeenCalledWith('Wash the car');
+  });
+
+  // Nothing matching is the case that most needs the row, and it is exactly the
+  // case the old empty state turned into a wall.
+  test('a query with no answers at all is no longer a dead end', async () => {
+    await render(<PlannerSearchPanel {...creating({ query: 'zzzz nothing' })} />);
+    expect(screen.getByTestId('planner-search-create')).toBeTruthy();
+  });
+
+  // It heads the list because Return takes the top row: if the create sat at the
+  // bottom, Return on a query with one loose match would open that match.
+  test('it leads the answers rather than trailing them', async () => {
+    await render(<PlannerSearchPanel {...creating({ query: 'Book' })} />);
+    expect(screen.getByTestId('planner-search-task-t2')).toBeTruthy();
+    // …greater than -1 first: a MISSING row would also sort "before" the task.
+    expect(orderOf('planner-search-create')).toBeGreaterThan(-1);
+    expect(orderOf('planner-search-create')).toBeLessThan(orderOf('planner-search-task-t2'));
+  });
+
+  test('Return makes it, without a press on the row', async () => {
+    const p = creating({ query: 'Wash the car' });
+    await render(<PlannerSearchPanel {...p} />);
+    await act(async () => {
+      fireEvent(screen.getByTestId('planner-search-input'), 'submitEditing');
+    });
+    expect(p.onCreateTask).toHaveBeenCalledWith('Wash the car');
+    expect(p.onAssignTask).not.toHaveBeenCalled();
+  });
+
+  // …and Return still takes a real answer when there is an exact one, rather
+  // than making a second task with the same name.
+  test('Return takes the existing task when the title is already one', async () => {
+    const p = creating({ query: 'Book the ferry' });
+    await render(<PlannerSearchPanel {...p} />);
+    await act(async () => {
+      fireEvent(screen.getByTestId('planner-search-input'), 'submitEditing');
+    });
+    expect(p.onCreateTask).not.toHaveBeenCalled();
+    expect(p.onAssignTask).toHaveBeenCalledWith(expect.objectContaining({ id: 't2' }));
+  });
+
+  // How a list ends up with two of everything, one of them lowercase.
+  test('a title that already exists is offered as itself, not as a second one', async () => {
+    await render(<PlannerSearchPanel {...creating({ query: 'book the ferry' })} />);
+    expect(screen.queryByTestId('planner-search-create')).toBeNull();
+    expect(screen.getByTestId('planner-search-task-t2')).toBeTruthy();
+  });
+
+  test('an empty field offers nothing — there is no title to make yet', async () => {
+    await render(<PlannerSearchPanel {...creating({ query: '   ' })} />);
+    expect(screen.queryByTestId('planner-search-create')).toBeNull();
+  });
+
+  // The row says what pressing it will DO, and the two entry points do different
+  // things with what they make — one names the next session's task, the other
+  // starts a block there and then.
+  test('on the picker, the row says it names the next session', async () => {
+    await render(<PlannerSearchPanel {...creating({ query: 'Wash the car' })} />);
+    expect(screen.getByTestId('planner-search-create')).toHaveTextContent(/for this session/);
+  });
+
+  test('on the Focus search, it says it starts one there and then', async () => {
+    await render(<PlannerSearchPanel {...creating({ mode: 'focus', query: 'Wash the car' })} />);
+    expect(screen.getByTestId('planner-search-create')).toHaveTextContent(/starts a block on it/);
+  });
+
+  // Searching the agenda, the calendar or the boards is a LOOKUP. Offering to
+  // make a task from a field whose press opens one would be a different verb on
+  // the same row.
+  test.each(['list', 'calendar', 'boards'])('%s is a lookup, and never composes', async (mode) => {
+    await render(<PlannerSearchPanel {...creating({ mode, query: 'Wash the car' })} />);
+    expect(screen.queryByTestId('planner-search-create')).toBeNull();
+  });
+
+  test('a panel given no way to create does not offer to', async () => {
+    await render(<PlannerSearchPanel {...props({ mode: 'assign', query: 'Wash the car' })} />);
+    expect(screen.queryByTestId('planner-search-create')).toBeNull();
   });
 });
 

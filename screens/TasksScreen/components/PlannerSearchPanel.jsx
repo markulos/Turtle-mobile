@@ -37,7 +37,7 @@ import VaultSearchPanel from '../../TurtleScreen/components/VaultSearchPanel';
 import { VaultResultRow } from '../../TurtleScreen/components/VaultSearchDock';
 import { tapHaptic } from '../../../utils/haptics';
 import { boardLabel } from '../utils/taskHelpers';
-import { rankTasks, taskSearchMeta } from '../utils/taskSearch';
+import { needsCreateRow, rankTasks, taskSearchMeta } from '../utils/taskSearch';
 
 /** How many answers a query gets. Far past what fits — the list scrolls. */
 const LIMIT = 60;
@@ -59,8 +59,8 @@ const ALL = 'All';
 
 /** What the field says it will do, per tab. The verb is the whole difference. */
 const PLACEHOLDER = {
-  assign: 'Which task is this session for?',
-  focus: 'Find a task to focus on',
+  assign: 'Pick or create a task',
+  focus: 'Pick or create a task to focus on',
   boards: 'Search boards',
   list: 'Search your tasks',
   calendar: 'Search your tasks',
@@ -84,6 +84,8 @@ function boardMetaLine(stat) {
 
 /** And what an empty result means, which is not the same sentence either. */
 const EMPTY = {
+  // Only ever seen with an EMPTY field now: type anything and the create row
+  // heads the list, so "nothing matches" is never a dead end.
   assign: 'No task matches that. A session with no task still counts.',
   focus: 'No task matches that. Start a block without one from the Focus tab.',
   boards: 'No board matches that.',
@@ -120,6 +122,10 @@ export default function PlannerSearchPanel({
   // (task) => void — name the task the NEXT session is for, without starting
   // it. The Focus deck's own picker.
   onAssignTask,
+  // (title) => void — nothing carries that title, so make it. Given only where
+  // creating is part of the job (assign / focus); without it the row never
+  // appears and the panel stays a pure search.
+  onCreateTask,
   // (name) => void — scope the Planner to a board. Boards.
   onPickBoard,
   theme,
@@ -148,9 +154,25 @@ export default function PlannerSearchPanel({
     [isBoards, taskIndex, query, scope, nowMs],
   );
 
+  /**
+   * "Create X" heads the list whenever what you typed is not already the exact
+   * title of one of the answers — the same rule the Planner's finder uses
+   * (CalendarView's `showCreate`), kept in one place so the two cannot drift.
+   *
+   * Only where a create makes sense: picking a task for a session, or starting
+   * one. Searching the list or the boards is a lookup, not a composer.
+   */
+  const canCreate = (isAssign || isFocus) && !!onCreateTask;
+  const showCreate = canCreate && needsCreateRow(query, taskRows);
+
   const items = useMemo(
     () => {
-      if (!isBoards) return taskRows.map((t) => ({ key: `task-${t.id}`, task: t }));
+      if (!isBoards) {
+        return [
+          ...(showCreate ? [{ key: 'create', createTitle: q }] : []),
+          ...taskRows.map((t) => ({ key: `task-${t.id}`, task: t })),
+        ];
+      }
       // "All boards" FIRST, and as a row rather than as a separate Clear key:
       // widening the scope back out is the same kind of choice as narrowing it,
       // so it belongs in the same list, at the top where the unfiltered state
@@ -161,13 +183,25 @@ export default function PlannerSearchPanel({
         ...boardRows.map((name) => ({ key: `board-${name}`, name })),
       ];
     },
-    [isBoards, boardRows, taskRows, q],
+    [isBoards, boardRows, taskRows, q, showCreate],
   );
 
   const pickBoard = useCallback((name) => {
     tapHaptic();
     onPickBoard?.(name);
   }, [onPickBoard]);
+
+  /**
+   * Make the task the field is describing, then do with it what this panel was
+   * opened to do — assign it to the next session, or start one on it. Creating
+   * and then having to find it again would be two steps for one intention.
+   */
+  const createTask = useCallback(() => {
+    const title = String(query || '').trim();
+    if (!title) return;
+    tapHaptic();
+    onCreateTask?.(title);
+  }, [onCreateTask, query]);
 
   const pickTask = useCallback((task) => {
     tapHaptic();
@@ -177,6 +211,26 @@ export default function PlannerSearchPanel({
   }, [isAssign, isFocus, onAssignTask, onFocusTask, onOpenTask]);
 
   const renderRow = useCallback(({ item }) => {
+    if (item.createTitle !== undefined) {
+      return (
+        <VaultResultRow
+          theme={theme}
+          name={item.createTitle}
+          // What pressing it will DO, said on the row itself: it does not just
+          // make a task, it makes the one this session is about.
+          meta={isFocus ? 'New task · starts a block on it' : 'New task · for this session'}
+          accessibilityLabel={`Create task ${item.createTitle}`}
+          testID="planner-search-create"
+          onPress={createTask}
+          leading={<Icon name="plus" size={20} color={theme.colors.accentInfo} />}
+          trailing={(
+            <View style={styles.playKey}>
+              <Icon name={isFocus ? 'play' : 'target'} size={16} color={theme.colors.accentInfo} />
+            </View>
+          )}
+        />
+      );
+    }
     if (item.name !== undefined) {
       const isAll = !!item.isAll;
       const active = isAll
@@ -234,7 +288,7 @@ export default function PlannerSearchPanel({
         ) : null}
       />
     );
-  }, [theme, styles, selectedProject, isFocus, isAssign, pickBoard, pickTask, nowMs, boardStats, boardColor]);
+  }, [theme, styles, selectedProject, isFocus, isAssign, pickBoard, pickTask, createTask, nowMs, boardStats, boardColor]);
 
   return (
     <VaultSearchPanel
@@ -250,6 +304,9 @@ export default function PlannerSearchPanel({
       // ranking already put there.
       onSubmitEditing={() => {
         if (isBoards) { if (boardRows.length) pickBoard(boardRows[0]); return; }  // a NAMED board, never "all"
+        // RETURN CREATES when nothing carries that exact title — the create row
+        // is what heads the list, so Return takes the top answer either way.
+        if (showCreate) { createTask(); return; }
         if (taskRows.length) pickTask(taskRows[0]);
       }}
       // Boards have no to-do / done / overdue, so they get no chips rather than
@@ -273,7 +330,7 @@ export default function PlannerSearchPanel({
       ListHeaderComponent={(isFocus || isAssign) && !q ? (
         <Text style={styles.hint} testID="planner-search-focus-hint">
           {isAssign
-            ? 'Up next — pick one, then press Start session.'
+            ? 'Up next — pick one, or type a new one. You still press Start session.'
             : 'Up next — pick one to start a focus block on it.'}
         </Text>
       ) : null}

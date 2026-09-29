@@ -239,12 +239,14 @@ function FocusDeck({
       ) : (
         /* Idle, it is the picker: a search field in SHAPE — rounded, a
            magnifier, muted placeholder — and not in behaviour, because it opens
-           the picker rather than taking the keyboard here. */
+           the picker rather than taking the keyboard here. It says PICK OR
+           CREATE because the panel it opens does both: anything you type that
+           is not already a task heads the list as a create row. */
         <Pressable
           onPressIn={() => tapHaptic()}
           onPress={onPickTask}
           accessibilityRole="button"
-          accessibilityLabel={task ? `Focusing on ${task.title}. Change the task.` : 'Pick a task for this session'}
+          accessibilityLabel={task ? `Focusing on ${task.title}. Change the task.` : 'Pick or create a task for this session'}
           testID="focus-assign"
           style={({ pressed }) => [
             styles.assign,
@@ -258,7 +260,7 @@ function FocusDeck({
             numberOfLines={1}
             testID="focus-assign-label"
           >
-            {task ? task.title : 'Pick a task…'}
+            {task ? task.title : 'Pick or create a task…'}
           </Text>
           {task ? (
             /* Clearing is its own target, not a second meaning for the row: the
