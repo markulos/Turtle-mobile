@@ -17,6 +17,10 @@ import Reanimated, {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 import { useSheetDismiss } from '../../../utils/useSheetDismiss';
+import { usePondAccess } from '../../../utils/usePondAccess';
+import AnimalAvatar from '../../../components/AnimalAvatar';
+import { resolveAvatarUrl } from '../../../utils/avatarUrl';
+import { Image } from 'expo-image';
 
 // Sheet-presentation curve — the same weighted ease-out the vault's other
 // bottom-anchored surfaces use, so this card enters like the rest of the app.
@@ -62,6 +66,12 @@ export default function TrackActionsSheet({
   onClose,
   bottomInset = 0,
   colors,
+  // Giving this ONE track to someone in the pond — the fourth page. `api` is
+  // what switches it on: a surface with no client (a test, the share target)
+  // simply doesn't get the row.
+  api,
+  baseUrl,
+  onPondChanged,
 }) {
   const c = colors;
   // Same highlight tint the player itself uses (MusicVault's MUSIC_TINT): the
@@ -109,6 +119,17 @@ export default function TrackActionsSheet({
   // Kept mounted through the closing animation so the card slides out instead
   // of vanishing; unmounts once it's off-screen.
   const [mounted, setMounted] = useState(visible);
+
+  // Who in the pond has this track. The SAME exchange a photo board's sharing
+  // card holds (utils/usePondAccess) — the rendering differs, the rules must
+  // not. Read while the sheet is open and this track is a real row; a shut
+  // sheet holds no subscription to the pond directory.
+  const pond = usePondAccess(api, {
+    kind: 'track',
+    id: track?.id,
+    enabled: !!api && visible && !!track?.id,
+    onChanged: onPondChanged,
+  });
 
   useEffect(() => {
     if (visible) {
@@ -234,6 +255,26 @@ export default function TrackActionsSheet({
               disabled={busy}
               onPress={run(onShare)}
             />
+            {/* Giving the track to a person, as against handing the FILE to
+                whatever the OS offers above. Directly under Share because it
+                is the other answer to the same question, and the one that
+                keeps the track inside the pond. */}
+            {api ? (
+              <ActionRow
+                testID="track-pond-open"
+                icon="account-multiple-plus-outline"
+                label={pond.people.length
+                  ? `In your pond · ${pond.people.length}`
+                  : 'Share in your pond…'}
+                color={c.textPrimary}
+                style={rowBorder}
+                chevron
+                onPress={() => {
+                  tapHaptic();
+                  setPage('pond');
+                }}
+              />
+            ) : null}
             <ActionRow
               icon="pencil-outline"
               label="Rename track…"
@@ -332,6 +373,101 @@ export default function TrackActionsSheet({
               ) : null}
             </View>
           </>
+        ) : page === 'pond' ? (
+          <>
+            <View style={styles.headerRow}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Back to track options"
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                onPress={() => {
+                  tapHaptic();
+                  setPage('actions');
+                }}
+              >
+                <Icon name="chevron-left" size={26} color={c.textPrimary} />
+              </TouchableOpacity>
+              <View style={styles.headerText}>
+                <Text style={[styles.title, { color: c.textPrimary }]} numberOfLines={1}>
+                  Share in your pond
+                </Text>
+                <Text style={[styles.subtitle, { color: c.textTertiary }]} numberOfLines={1}>
+                  {title}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={[styles.pondNote, { color: c.textTertiary }]}>
+              The track turns up in their music. Nothing to send — their access is their login.
+            </Text>
+
+            {pond.error ? (
+              <TouchableOpacity onPress={() => pond.setError(null)}>
+                <Text style={[styles.pondError, { color: c.accentError || '#F87171' }]}>
+                  {pond.error}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
+            <ScrollView
+              style={styles.playlistScroll}
+              keyboardShouldPersistTaps="handled"
+              scrollIndicatorInsets={{ right: 1 }}
+              {...scrollProps}
+            >
+              {pond.loading ? (
+                <Text style={[styles.empty, { color: c.textTertiary }]}>Loading…</Text>
+              ) : (
+                <>
+                  {pond.people.map((person) => (
+                    <View key={person.shareId} style={[styles.row, rowBorder]}>
+                      <PersonDisc person={person} baseUrl={baseUrl} />
+                      <Text style={[styles.rowLabel, { color: c.textPrimary }]} numberOfLines={1}>
+                        {person.name}
+                      </Text>
+                      <TouchableOpacity
+                        testID={`track-pond-remove-${person.userId}`}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Stop sharing ${title} with ${person.name}`}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        disabled={pond.busyId === person.userId}
+                        onPress={async () => {
+                          notifyHaptic('warning');
+                          notifyHaptic(await pond.revoke(person) ? 'success' : 'error');
+                        }}
+                      >
+                        <Text style={[styles.createText, { color: c.textSecondary }]}>Remove</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+
+                  {pond.addable.length === 0 ? (
+                    <Text style={[styles.empty, { color: c.textTertiary }]}>
+                      {pond.people.length
+                        ? 'Everyone in your pond has this track.'
+                        : 'Nobody else is in your pond yet.'}
+                    </Text>
+                  ) : (
+                    pond.addable.map((member) => (
+                      <ActionRow
+                        key={member.id}
+                        testID={`track-pond-add-${member.id}`}
+                        icon="plus"
+                        label={member.name}
+                        color={c.textPrimary}
+                        style={rowBorder}
+                        disabled={!!pond.busyId}
+                        onPress={async () => {
+                          impactHaptic('medium');
+                          notifyHaptic(await pond.grant(member) ? 'success' : 'error');
+                        }}
+                      />
+                    ))
+                  )}
+                </>
+              )}
+            </ScrollView>
+          </>
         ) : (
           <>
             <View style={styles.headerRow}>
@@ -426,9 +562,32 @@ export default function TrackActionsSheet({
   );
 }
 
-function ActionRow({ icon, label, color, onPress, style, disabled, chevron }) {
+/**
+ * One person's disc — their picture where they have set one, the generated
+ * animal underneath as the fallback rather than instead of it (STYLE-RULES §5).
+ */
+function PersonDisc({ person, size = 24, baseUrl }) {
+  const uri = resolveAvatarUrl(person.avatarUrl, baseUrl);
+  return (
+    <View style={{ width: size, height: size, borderRadius: size / 2, overflow: 'hidden' }}>
+      <AnimalAvatar id={person.userId || person.id} size={size} fallbackLabel={person.name} />
+      {uri ? (
+        <Image
+          source={{ uri }}
+          style={StyleSheet.absoluteFillObject}
+          contentFit="cover"
+          transition={120}
+          recyclingKey={`disc:${uri}`}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function ActionRow({ icon, label, color, onPress, style, disabled, chevron, testID }) {
   return (
     <TouchableOpacity
+      testID={testID}
       accessibilityRole="button"
       accessibilityLabel={label}
       activeOpacity={0.7}
@@ -503,4 +662,6 @@ const styles = StyleSheet.create({
   createText: { fontSize: 14, fontWeight: '700' },
   playlistScroll: { maxHeight: 260 },
   empty: { fontSize: 13, paddingHorizontal: 18, paddingVertical: 18, lineHeight: 18 },
+  pondNote: { fontSize: 12.5, paddingHorizontal: 18, paddingBottom: 12, lineHeight: 17 },
+  pondError: { fontSize: 12.5, paddingHorizontal: 18, paddingBottom: 10 },
 });

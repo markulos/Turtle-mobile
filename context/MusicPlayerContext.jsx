@@ -245,6 +245,26 @@ export function MusicPlayerProvider({ children }) {
     [mediaBase, runCommand, tracks]
   );
 
+  /**
+   * Play from a list the context does not own.
+   *
+   * `playMedia` builds its queue out of `tracks` — MY library — so a row that
+   * isn't in it (a track someone in the pond shared with me) makes
+   * buildMusicQueue throw "Selected track is not playable". The rows carry the
+   * same media shape, so the only thing missing was somewhere to pass them.
+   * The queue becomes that list, which is what makes skip walk the shared
+   * tracks rather than jumping back into mine.
+   */
+  const playRows = useCallback(
+    async (rows, mediaId) => {
+      return runCommand(async () => {
+        const { items, startIndex } = buildMusicQueue(rows, mediaId, mediaBase);
+        await musicPlayerService.playQueue(items, startIndex);
+      });
+    },
+    [mediaBase, runCommand]
+  );
+
   const togglePlayback = useCallback(
     () => runCommand(() => musicPlayerService.togglePlayback(isPlaying)),
     [isPlaying, runCommand]
@@ -291,6 +311,7 @@ export function MusicPlayerProvider({ children }) {
       refreshLibrary,
       retrySetup,
       playMedia,
+      playRows,
       togglePlayback,
       pause,
       previous,
@@ -311,6 +332,7 @@ export function MusicPlayerProvider({ children }) {
       refreshLibrary,
       retrySetup,
       playMedia,
+      playRows,
       togglePlayback,
       pause,
       previous,

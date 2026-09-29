@@ -20,6 +20,7 @@ import TrackActionsSheet from './TrackActionsSheet';
 import EdgeSwipePage from './EdgeSwipePage';
 import TimelineScrubber from './TimelineScrubber';
 import TranscriptionPanel from '../../../components/TranscriptionPanel';
+import FaceStack from '../../../components/FaceStack';
 import FollowAlongTranscript from '../../../components/FollowAlongTranscript';
 import { getResult, statusOfError } from '../../../services/transcriptions';
 import { getRecordings, loadRecordings, subscribeRecordings } from '../../../services/transcriptionStore';
@@ -94,6 +95,7 @@ export default function MusicVault({
     position,
     duration,
     playMedia,
+    playRows,
     togglePlayback,
     previous,
     next,
@@ -326,6 +328,29 @@ export default function MusicVault({
   // songs — the same back gesture every other pushed page in the app uses.
   // `openPlaylist` is the second level: null = the list of playlists, a name =
   // that playlist's tracks.
+  // ── Sharing a track inside the pond ──────────────────────────────────────
+  // Two reads, both one-per-library rather than one-per-row: who has each of
+  // MY tracks (keyed by track id, for the face stacks), and the tracks other
+  // people have given ME.
+  const [trackAccess, setTrackAccess] = useState(() => ({}));
+  const [pondTracks, setPondTracks] = useState([]);
+  const [sharedOpen, setSharedOpen] = useState(false);
+  const refreshPondTracks = useCallback(async () => {
+    const [mine, theirs] = await Promise.allSettled([
+      api.get('/track-access/mine'),
+      api.get('/shared-tracks'),
+    ]);
+    // Each half stands on its own: a failure must leave what was already drawn
+    // rather than claim a track is shared with nobody.
+    if (mine.status === 'fulfilled' && mine.value?.tracks && typeof mine.value.tracks === 'object') {
+      setTrackAccess(mine.value.tracks);
+    }
+    if (theirs.status === 'fulfilled' && Array.isArray(theirs.value?.tracks)) {
+      setPondTracks(theirs.value.tracks);
+    }
+  }, [api]);
+  useEffect(() => { refreshPondTracks(); }, [refreshPondTracks]);
+
   const [playlistsOpen, setPlaylistsOpen] = useState(false);
   const [openPlaylist, setOpenPlaylist] = useState(null);
   const closePlaylists = useCallback(() => {
@@ -366,11 +391,46 @@ export default function MusicVault({
   // library and a playlist, and an index only means something in the list it
   // came from.
   const playTrack = useCallback(
-    (item) => {
-      if (item?.id != null) playMedia(String(item.id));
+    // `queue` is only passed for rows the player's own library does not hold —
+    // the tracks other people have shared. Left out, playMedia builds the queue
+    // from my library exactly as before.
+    (item, queue) => {
+      if (item?.id == null) return;
+      if (queue) playRows(queue, String(item.id));
+      else playMedia(String(item.id));
     },
-    [playMedia]
+    [playMedia, playRows]
   );
+
+  /**
+   * Hand a shared track back. The recipient's half of DELETE /track-access/:id
+   * — the same endpoint, the same id, that the owner revokes with.
+   */
+  const leaveSharedTrack = useCallback((item) => {
+    Alert.alert(
+      `Leave “${titleOf(item)}”?`,
+      `It will disappear from your music. ${item.ownerName || 'The owner'} can always share it again.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            // Optimistic, with revert — the row goes on the tap.
+            const before = pondTracks;
+            setPondTracks((prev) => prev.filter((t) => t.shareId !== item.shareId));
+            try {
+              const res = await api.delete(`/track-access/${item.shareId}`);
+              if (!res?.success) throw new Error(res?.error || 'Could not leave');
+            } catch (e) {
+              setPondTracks(before);
+              Alert.alert('Could not leave', e?.message || 'Please try again.');
+            }
+          },
+        },
+      ],
+    );
+  }, [api, pondTracks]);
 
   // ── Track actions (the ⋯ sheet) ────────────────────────────────────────────
 
@@ -688,6 +748,19 @@ export default function MusicVault({
             accessibilityLabel="Has a transcript"
           />
         ) : null}
+        {/* Who this track is shared with, inside the pond. Same treatment as a
+            photo board's caption — a stack that says "this left your library"
+            without opening anything. Sized to a fixed slot so a long title
+            cannot push it off the row. */}
+        {(trackAccess[String(item.id)] || []).length ? (
+          <FaceStack
+            people={trackAccess[String(item.id)]}
+            available={56}
+            size={16}
+            theme={theme}
+            baseUrl={getBaseUrl?.()}
+          />
+        ) : null}
         {item.duration ? <Text style={trackStyles.duration}>{fmtTime(item.duration)}</Text> : null}
         {/* Per-track options. Its own touchable so it doesn't start playback —
             hitSlop widens the 24pt glyph to a comfortable target without
@@ -703,7 +776,7 @@ export default function MusicVault({
         </TouchableOpacity>
       </TouchableOpacity>
     );
-  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready, transcribedIds]);
+  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready, transcribedIds, trackAccess, theme, getBaseUrl]);
 
   /**
    * One search result, in the vault's shared row.
@@ -778,6 +851,33 @@ export default function MusicVault({
         <Icon name="chevron-right" size={22} color={c.textTertiary} />
       </TouchableOpacity>
 
+      {/* Tracks other people gave me. A destination row like Playlists above,
+          and ABSENT entirely when nobody has shared anything — an empty
+          "Shared with you" on a pond where this has never happened is a
+          promise of a feature rather than a place to go. */}
+      {pondTracks.length ? (
+        <TouchableOpacity
+          {...TAP_ONLY}
+          testID="music-shared-with-you"
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={`Shared with you, ${pondTracks.length} ${pondTracks.length === 1 ? 'track' : 'tracks'}`}
+          onPress={() => { tapHaptic(); setSharedOpen(true); }}
+          style={styles.row}
+        >
+          <View style={[styles.art, trackStyles.artTint]}>
+            <Icon name="account-music" size={22} color={MUSIC_TINT(c)} />
+          </View>
+          <View style={trackStyles.body}>
+            <Text style={trackStyles.titleIdle} numberOfLines={1}>Shared with you</Text>
+            <Text style={trackStyles.source} numberOfLines={1}>
+              {`${pondTracks.length} track${pondTracks.length === 1 ? '' : 's'} from your pond`}
+            </Text>
+          </View>
+          <Icon name="chevron-right" size={22} color={c.textTertiary} />
+        </TouchableOpacity>
+      ) : null}
+
       {/* Transcribe — the same panel Settings has, in the tab where the audio
           actually is. Its subtitle is the one thing worth saying about the
           jobs from out here: whether anything is running. */}
@@ -809,7 +909,7 @@ export default function MusicVault({
         <Icon name="chevron-right" size={22} color={c.textTertiary} />
       </TouchableOpacity>
     </>
-  ), [c, trackStyles, playlists.length, openTranscribe, transcribeSubtitle]);
+  ), [c, trackStyles, playlists.length, openTranscribe, transcribeSubtitle, pondTracks.length]);
 
   const renderPlaylistRow = useCallback(({ item }) => {
     // Through the same accessor the page below uses, so a playlist's count and
@@ -1054,6 +1154,87 @@ export default function MusicVault({
         />
       )}
 
+      {/* Tracks other people gave me, pushed over the library like Playlists.
+          Read-only: a track share is 'view', so the row plays and that is all
+          — no rename, no playlist filing, no delete. Leave is the recipient's
+          half of the same revoke the owner has. */}
+      <EdgeSwipePage visible={sharedOpen} onClose={() => setSharedOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
+          <View style={styles.pageHeader}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Back to all songs"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              onPress={() => { tapHaptic(); setSharedOpen(false); }}
+              style={styles.pageBackBtn}
+            >
+              <Icon name="chevron-left" size={28} color={c.textPrimary} />
+            </TouchableOpacity>
+            <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>
+              Shared with you
+            </Text>
+          </View>
+
+          <FlatList
+            data={pondTracks}
+            keyExtractor={(t) => String(t.shareId)}
+            contentContainerStyle={{ paddingBottom: (nowBarH || 150) + 16 }}
+            ItemSeparatorComponent={() => <View style={styles.trackSep} />}
+            extraData={`${current}:${isPlaying}:${ready}`}
+            ListEmptyComponent={(
+              <View style={styles.pageEmpty}>
+                <Icon name="account-music-outline" size={40} color={c.textTertiary} />
+                <Text style={{ color: c.textSecondary, marginTop: 12, textAlign: 'center' }}>
+                  Nothing yet. A track someone in your pond shares with you lands here.
+                </Text>
+              </View>
+            )}
+            renderItem={({ item }) => {
+              const active = String(item.id) === String(activeTrack?.mediaId);
+              return (
+                <TouchableOpacity
+                  {...TAP_ONLY}
+                  testID={`shared-track-${item.shareId}`}
+                  activeOpacity={0.7}
+                  disabled={!ready}
+                  // The whole list is the queue, so skip moves through the
+                  // other shared tracks rather than jumping back into mine.
+                  onPress={() => playTrack(item, pondTracks)}
+                  style={styles.row}
+                >
+                  <View style={[styles.art, trackStyles.artTint]}>
+                    <Icon
+                      name={active && isPlaying ? 'pause' : 'music-note'}
+                      size={20}
+                      color={active ? MUSIC_TINT(c) : c.textSecondary}
+                    />
+                  </View>
+                  <View style={trackStyles.body}>
+                    <Text style={active ? trackStyles.titleActive : trackStyles.titleIdle} numberOfLines={1}>
+                      {titleOf(item)}
+                    </Text>
+                    <Text style={trackStyles.source} numberOfLines={1}>
+                      {`From ${item.ownerName}`}
+                    </Text>
+                  </View>
+                  {item.duration ? <Text style={trackStyles.duration}>{fmtTime(item.duration)}</Text> : null}
+                  <TouchableOpacity
+                    testID={`shared-track-leave-${item.shareId}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Leave ${titleOf(item)}`}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
+                    onPress={() => leaveSharedTrack(item)}
+                    style={styles.moreBtn}
+                  >
+                    <Icon name="exit-to-app" size={20} color={c.textTertiary} />
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              );
+            }}
+          />
+        </View>
+      </EdgeSwipePage>
+
       {/* Playlists, pushed over the library. Level 1 lists the playlists; level
           2 lists one playlist's tracks. A left-edge swipe backs out — from a
           playlist to the playlist list, and from there to all songs — matching
@@ -1233,6 +1414,12 @@ export default function MusicVault({
         onClose={closeSheet}
         bottomInset={Math.max(insets.bottom, bottomInset)}
         colors={c}
+        api={api}
+        baseUrl={getBaseUrl?.()}
+        // A grant or a revoke changes the face count on the row behind — and
+        // the strip of tracks OTHER people have shared, if that just changed
+        // hands too.
+        onPondChanged={refreshPondTracks}
       />
     </View>
   );

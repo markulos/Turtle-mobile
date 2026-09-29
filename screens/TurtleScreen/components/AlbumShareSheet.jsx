@@ -25,6 +25,7 @@ import { depth } from '../../../utils/surfaceDepth';
 import AppTextInput from '../../../components/AppTextInput';
 import AnimalAvatar from '../../../components/AnimalAvatar';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
+import { usePondAccess } from '../../../utils/usePondAccess';
 import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -165,57 +166,20 @@ function PersonDisc({ person, size = 28, baseUrl }) {
  * unreachable would read as "shared with nobody", which is a different claim.
  */
 function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
-  const [people, setPeople] = useState([]);
-  const [members, setMembers] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // The exchange with the server lives in utils/usePondAccess — the music
+  // track sheet holds the same conversation and must not drift from this one.
+  const {
+    people, addable, loading, busyId, error, setError, grant: grantAccess, revoke: revokeAccess,
+  } = usePondAccess(api, { kind: 'album', id: albumName, enabled: !!albumName, onChanged });
   const [picking, setPicking] = useState(false);
-  const [busyId, setBusyId] = useState(null);
-  const [error, setError] = useState(null);
 
-  useEffect(() => {
-    if (!albumName) return undefined;
-    let cancelled = false;
-    setLoading(true);
-    setPicking(false);
-    setError(null);
-    (async () => {
-      const [roster, directory] = await Promise.allSettled([
-        api.get(`/album-access?album=${encodeURIComponent(albumName)}`),
-        api.get('/friends'),
-      ]);
-      if (cancelled) return;
-      if (roster.status === 'fulfilled') setPeople(roster.value?.people || []);
-      else setError('Could not load who has this board');
-      if (directory.status === 'fulfilled') setMembers(directory.value?.friends || []);
-      setLoading(false);
-    })();
-    return () => { cancelled = true; };
-  }, [albumName, api]);
-
-  // Everyone in the pond who does NOT already have it. `/friends` already
-  // excludes me, so there is no self to filter out here.
-  const held = new Set(people.map((p) => p.userId));
-  const addable = members.filter((m) => !held.has(m.id));
+  // A picker left open on one board must not be open on the next.
+  useEffect(() => { setPicking(false); }, [albumName]);
 
   const grant = useCallback(async (member) => {
     impactHaptic('medium');
-    setBusyId(member.id);
-    setError(null);
-    try {
-      const res = await api.post('/album-access', { album: albumName, withUserId: member.id });
-      if (!res?.success) throw new Error(res?.error || 'Could not share the board');
-      // The server re-reads and returns the whole roster, so a second grant to
-      // the same person cannot draw them twice.
-      setPeople(res.people || []);
-      notifyHaptic('success');
-      onChanged?.();
-    } catch (e) {
-      setError(e?.message || 'Could not share the board');
-      notifyHaptic('error');
-    } finally {
-      setBusyId(null);
-    }
-  }, [albumName, api, onChanged]);
+    notifyHaptic(await grantAccess(member) ? 'success' : 'error');
+  }, [grantAccess]);
 
   const revoke = useCallback((person) => {
     Alert.alert(
@@ -226,28 +190,11 @@ function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
         {
           text: 'Remove',
           style: 'destructive',
-          onPress: async () => {
-            setBusyId(person.userId);
-            // Optimistic — the row goes now, and comes back if the server says no.
-            const before = people;
-            setPeople((prev) => prev.filter((p) => p.shareId !== person.shareId));
-            try {
-              const res = await api.delete(`/album-access/${person.shareId}`);
-              if (!res?.success) throw new Error(res?.error || 'Could not stop sharing');
-              notifyHaptic('success');
-              onChanged?.();
-            } catch (e) {
-              setPeople(before);
-              setError(e?.message || 'Could not stop sharing');
-              notifyHaptic('error');
-            } finally {
-              setBusyId(null);
-            }
-          },
+          onPress: async () => { notifyHaptic(await revokeAccess(person) ? 'success' : 'error'); },
         },
       ],
     );
-  }, [albumName, api, onChanged, people]);
+  }, [albumName, revokeAccess]);
 
   return (
     <View style={s.pondBlock}>
