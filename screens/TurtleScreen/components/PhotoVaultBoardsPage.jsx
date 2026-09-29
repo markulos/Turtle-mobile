@@ -12,6 +12,7 @@ import {
 import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PhotoVaultBoardCard from './PhotoVaultBoardCard';
+import SharedWithYouStrip from './SharedWithYouStrip';
 import {
   HIT_SLOP_8,
   PICKER_GAP,
@@ -114,6 +115,10 @@ const PhotoVaultBoardsPage = forwardRef(({
   onOpenShareSettings,
   // Origin for relative avatar paths on the shared-with faces.
   baseUrl,
+  // Boards OTHER people have given me (GET /api/shared-albums). Pinned above
+  // my own; absent entirely when there are none.
+  sharedBoards,
+  onOpenSharedBoard,
   onScroll,
   onContentSizeChange,
   onLayout,
@@ -294,6 +299,20 @@ const PhotoVaultBoardsPage = forwardRef(({
             onLongPress={NOOP}
           />
         </View>
+      ) : null}
+
+      {/* Boards other people gave me. Hidden while SEARCHING for the same
+          reason All Photos is — the search filters my own boards, so leaving
+          an unfiltered strip above the results would put things on screen that
+          do not match what was typed. */}
+      {!displayQuery ? (
+        <SharedWithYouStrip
+          boards={sharedBoards}
+          theme={theme}
+          resolveCoverUrl={resolveCoverUrl}
+          baseUrl={baseUrl}
+          onOpen={onOpenSharedBoard}
+        />
       ) : null}
     </View>
   );

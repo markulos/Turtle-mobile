@@ -51,6 +51,9 @@ describe('photoVaultBoards', () => {
       recency: '2d',
       metadata: '47 items · 2d',
       isLive: false,
+      // Always present, always an array — the card's face stack never has to
+      // guard, and an absent board means "shared with nobody".
+      sharedWith: [],
     }]);
   });
 
@@ -121,6 +124,49 @@ describe('photoVaultBoards', () => {
       coversByName: {},
       countsByName: {},
       latestDatesByName: {},
+    });
+  });
+
+  // The pond half of sharing: GET /api/album-access/mine answers one map for
+  // the whole grid, keyed lower-case, and these boards draw it as a face stack.
+  describe('sharedByName', () => {
+    const bea = { shareId: 's1', userId: 'u_bea', name: 'Bea', permission: 'view' };
+    const cal = { shareId: 's2', userId: 'u_cal', name: 'Cal', permission: 'view' };
+
+    test('hangs the people on the board they were given, matching case-insensitively', () => {
+      const [priv, trip] = buildPhotoVaultBoards({
+        names: ['Trip', 'Private'],
+        sortMode: 'alphabetical',
+        sharedByName: { trip: [bea, cal] },
+        now: NOW,
+      });
+      expect(priv.name).toBe('Private');
+      expect(priv.sharedWith).toEqual([]);
+      expect(trip.name).toBe('Trip');
+      expect(trip.sharedWith.map((p) => p.userId)).toEqual(['u_bea', 'u_cal']);
+    });
+
+    test('a board nobody has gets an empty array, never undefined', () => {
+      const [board] = buildPhotoVaultBoards({ names: ['Alone'], sharedByName: {}, now: NOW });
+      expect(board.sharedWith).toEqual([]);
+      const [none] = buildPhotoVaultBoards({ names: ['Alone'], now: NOW });
+      expect(none.sharedWith).toEqual([]);
+    });
+
+    test('a junk payload is treated as nobody rather than thrown on', () => {
+      // The endpoint is allowed to fail; what it must never do is take the grid
+      // down with it.
+      for (const junk of [null, 'nope', [], { trip: 'not-an-array' }]) {
+        const [board] = buildPhotoVaultBoards({ names: ['Trip'], sharedByName: junk, now: NOW });
+        expect(board.sharedWith).toEqual([]);
+      }
+    });
+
+    test('the board does not alias the caller’s map', () => {
+      const map = { trip: [bea] };
+      const [board] = buildPhotoVaultBoards({ names: ['Trip'], sharedByName: map, now: NOW });
+      board.sharedWith.push(cal);
+      expect(map.trip).toHaveLength(1);
     });
   });
 });

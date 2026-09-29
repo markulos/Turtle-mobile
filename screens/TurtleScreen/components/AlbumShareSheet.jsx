@@ -20,8 +20,11 @@ import {
   ActivityIndicator, Alert, Animated, Platform, Pressable, ScrollView, Share, StyleSheet,
   Switch, Text, View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { depth } from '../../../utils/surfaceDepth';
 import AppTextInput from '../../../components/AppTextInput';
+import AnimalAvatar from '../../../components/AnimalAvatar';
+import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -125,7 +128,218 @@ function ShareActivity({ shareId, api, theme, styles }) {
   );
 }
 
-export default function AlbumShareSheet({ visible, albumName, api, theme, onClose, bottomInset = 0 }) {
+/**
+ * One person's disc — their picture where they have set one, the generated
+ * animal underneath as the FALLBACK rather than instead of it (STYLE-RULES §5,
+ * the same rule FaceStack keeps for the grid).
+ */
+function PersonDisc({ person, size = 28, baseUrl }) {
+  const uri = resolveAvatarUrl(person.avatarUrl, baseUrl);
+  return (
+    <View style={{ width: size, height: size, borderRadius: size / 2, overflow: 'hidden' }}>
+      <AnimalAvatar id={person.userId || person.id} size={size} fallbackLabel={person.name} />
+      {uri ? (
+        <Image
+          source={{ uri }}
+          style={StyleSheet.absoluteFillObject}
+          contentFit="cover"
+          transition={120}
+          recyclingKey={`disc:${uri}`}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The pond half of a board's sharing — giving it to someone who already has an
+ * account, as opposed to minting a link for someone who doesn't.
+ *
+ * Deliberately FIRST in the card, above the public link. Handing a board to the
+ * person next to you is the common, safe case; a URL that is its own credential
+ * is the one that deserves to be further down and read more carefully.
+ *
+ * Two reads on open: the roster for this board, and the pond's members so there
+ * is something to pick from. They are independent, so a failure to list members
+ * still shows who already has it — losing the roster because the directory is
+ * unreachable would read as "shared with nobody", which is a different claim.
+ */
+function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
+  const [people, setPeople] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [picking, setPicking] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!albumName) return undefined;
+    let cancelled = false;
+    setLoading(true);
+    setPicking(false);
+    setError(null);
+    (async () => {
+      const [roster, directory] = await Promise.allSettled([
+        api.get(`/album-access?album=${encodeURIComponent(albumName)}`),
+        api.get('/friends'),
+      ]);
+      if (cancelled) return;
+      if (roster.status === 'fulfilled') setPeople(roster.value?.people || []);
+      else setError('Could not load who has this board');
+      if (directory.status === 'fulfilled') setMembers(directory.value?.friends || []);
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [albumName, api]);
+
+  // Everyone in the pond who does NOT already have it. `/friends` already
+  // excludes me, so there is no self to filter out here.
+  const held = new Set(people.map((p) => p.userId));
+  const addable = members.filter((m) => !held.has(m.id));
+
+  const grant = useCallback(async (member) => {
+    impactHaptic('medium');
+    setBusyId(member.id);
+    setError(null);
+    try {
+      const res = await api.post('/album-access', { album: albumName, withUserId: member.id });
+      if (!res?.success) throw new Error(res?.error || 'Could not share the board');
+      // The server re-reads and returns the whole roster, so a second grant to
+      // the same person cannot draw them twice.
+      setPeople(res.people || []);
+      notifyHaptic('success');
+      onChanged?.();
+    } catch (e) {
+      setError(e?.message || 'Could not share the board');
+      notifyHaptic('error');
+    } finally {
+      setBusyId(null);
+    }
+  }, [albumName, api, onChanged]);
+
+  const revoke = useCallback((person) => {
+    Alert.alert(
+      `Stop sharing with ${person.name}?`,
+      `“${albumName}” will disappear from their vault.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            setBusyId(person.userId);
+            // Optimistic — the row goes now, and comes back if the server says no.
+            const before = people;
+            setPeople((prev) => prev.filter((p) => p.shareId !== person.shareId));
+            try {
+              const res = await api.delete(`/album-access/${person.shareId}`);
+              if (!res?.success) throw new Error(res?.error || 'Could not stop sharing');
+              notifyHaptic('success');
+              onChanged?.();
+            } catch (e) {
+              setPeople(before);
+              setError(e?.message || 'Could not stop sharing');
+              notifyHaptic('error');
+            } finally {
+              setBusyId(null);
+            }
+          },
+        },
+      ],
+    );
+  }, [albumName, api, onChanged, people]);
+
+  return (
+    <View style={s.pondBlock}>
+      <View style={s.sectionHead}>
+        <MaterialCommunityIcons name="account-multiple" size={13} color={theme.colors.textSecondary} />
+        <Text style={s.sectionTitle}>IN YOUR POND</Text>
+      </View>
+      <Text style={s.sectionNote}>
+        The board appears in their own vault. Nothing to send, nothing to leak — their access is their login.
+      </Text>
+
+      {!!error && (
+        <Pressable onPress={() => setError(null)} style={s.errorBox}>
+          <Text style={s.errorText}>{error}</Text>
+        </Pressable>
+      )}
+
+      {loading ? (
+        <ActivityIndicator style={{ marginVertical: 18 }} color={theme.colors.textSecondary} />
+      ) : (
+        <>
+          {people.length === 0 ? (
+            <Text style={s.empty}>Not shared with anyone yet.</Text>
+          ) : (
+            people.map((person) => (
+              <View key={person.shareId} style={s.personRow}>
+                <PersonDisc person={person} baseUrl={baseUrl} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={s.personName} numberOfLines={1}>{person.name}</Text>
+                  <Text style={s.personMeta}>Can view</Text>
+                </View>
+                <Pressable
+                  testID={`album-access-remove-${person.userId}`}
+                  onPress={() => revoke(person)}
+                  disabled={busyId === person.userId}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Stop sharing ${albumName} with ${person.name}`}
+                  style={s.removeBtn}
+                >
+                  <Text style={s.removeText}>Remove</Text>
+                </Pressable>
+              </View>
+            ))
+          )}
+
+          {/* The picker stays folded until asked for: on a board already shared
+              with several people the roster is the answer, and a permanent list
+              of everyone else would bury it. */}
+          {picking ? (
+            addable.length === 0 ? (
+              <Text style={s.empty}>Everyone in your pond already has this board.</Text>
+            ) : (
+              <View style={s.pickList}>
+                {addable.map((member) => (
+                  <Pressable
+                    key={member.id}
+                    testID={`album-access-add-${member.id}`}
+                    onPress={() => grant(member)}
+                    disabled={!!busyId}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Share ${albumName} with ${member.name}`}
+                    style={({ pressed }) => [s.pickRow, pressed && { opacity: 0.6 }]}
+                  >
+                    <PersonDisc person={{ ...member, userId: member.id }} size={24} baseUrl={baseUrl} />
+                    <Text style={s.pickName} numberOfLines={1}>{member.name}</Text>
+                    {busyId === member.id
+                      ? <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                      : <MaterialCommunityIcons name="plus" size={15} color={theme.colors.textSecondary} />}
+                  </Pressable>
+                ))}
+              </View>
+            )
+          ) : (
+            <Pressable
+              testID="album-access-open-picker"
+              onPress={() => { tapHaptic(); setPicking(true); }}
+              accessibilityRole="button"
+              accessibilityLabel={`Share ${albumName} with someone in your pond`}
+              style={s.addBtn}
+            >
+              <MaterialCommunityIcons name="account-plus-outline" size={15} color={theme.colors.textPrimary} />
+              <Text style={s.addText}>Share with someone</Text>
+            </Pressable>
+          )}
+        </>
+      )}
+    </View>
+  );
+}
+
+export default function AlbumShareSheet({ visible, albumName, api, theme, onClose, bottomInset = 0, baseUrl }) {
   const insets = useSafeAreaInsets();
   // Clearance the card rests on: the floating dock when there is one, the
   // home-indicator inset when there isn't (share target / chat's vault page).
@@ -324,6 +538,14 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
               changed now — the cog on its caption in the boards grid and the
               board menu's Share entry both land here, so the settings are not
               split across two entry points that drift apart. */}
+          <PondAccess
+            albumName={albumName}
+            api={api}
+            theme={theme}
+            styles={s}
+            baseUrl={baseUrl}
+          />
+
           <View style={s.sectionHead}>
             <MaterialCommunityIcons name="earth" size={13} color={theme.colors.textSecondary} />
             <Text style={s.sectionTitle}>PUBLIC LINK</Text>
@@ -516,6 +738,35 @@ const makeStyles = (theme) => StyleSheet.create({
   },
   sectionNote: { fontSize: 12, color: theme.colors.textTertiary, marginBottom: 10, lineHeight: 16 },
   empty: { color: theme.colors.textMuted, fontSize: 13, paddingVertical: 6 },
+  // The pond section and the public-link section are peers in one card; the
+  // rule between them is what says "different kind of access", not a gap.
+  pondBlock: {
+    paddingBottom: 14,
+    marginBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  personRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 7 },
+  personName: { fontSize: 14, fontWeight: '600', color: theme.colors.textPrimary },
+  personMeta: { fontSize: 11.5, color: theme.colors.textTertiary, marginTop: 1 },
+  removeBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: theme.colors.surfaceHighlight },
+  removeText: { fontSize: 12, fontWeight: '600', color: theme.colors.textSecondary },
+  addBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    marginTop: 8, paddingVertical: 10, borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.borderStrong,
+  },
+  addText: { fontSize: 13, fontWeight: '600', color: theme.colors.textPrimary },
+  pickList: {
+    marginTop: 8, borderRadius: 10, overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
+  },
+  pickRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 9, paddingHorizontal: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border,
+  },
+  pickName: { flex: 1, fontSize: 13.5, color: theme.colors.textPrimary, minWidth: 0 },
   linkCard: {
     borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
     borderRadius: 12, padding: 12, marginBottom: 8, backgroundColor: theme.colors.surfaceElevated,

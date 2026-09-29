@@ -122,6 +122,7 @@ import PhotoVaultBoardsPage, { SEARCH_ENTER, SEARCH_EXIT } from './PhotoVaultBoa
 import AlbumShareSheet from './AlbumShareSheet';
 import AlbumActionsSheet from './AlbumActionsSheet';
 import ShareInsightsPage from './ShareInsightsPage';
+import SharedBoardPage from './SharedBoardPage';
 import {
   buildPhotoVaultBoards,
   formatBoardMetadata,
@@ -775,6 +776,38 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
   }, [api]);
   useEffect(() => { refreshLiveAlbums(); }, [refreshLiveAlbums]);
+
+  // Who each of my boards is shared with INSIDE the pond, keyed by lower-cased
+  // board name. ONE request for the whole grid — the per-board endpoint would
+  // be N requests on a page that scrolls. Refreshed alongside the public-link
+  // state, since the same sheet is where both are changed.
+  const [albumAccess, setAlbumAccess] = useState(() => ({}));
+  const refreshAlbumAccess = useCallback(async () => {
+    try {
+      const res = await api.get('/album-access/mine');
+      setAlbumAccess(res?.albums && typeof res.albums === 'object' ? res.albums : {});
+    } catch {
+      // A failed lookup must not erase the faces already on screen — an empty
+      // stack reads as "shared with nobody", which is a different claim.
+    }
+  }, [api]);
+  useEffect(() => { refreshAlbumAccess(); }, [refreshAlbumAccess]);
+
+  // Boards OTHER people have given me. One request answers the whole strip —
+  // owner, count and covers ride along on each row.
+  const [sharedBoards, setSharedBoards] = useState([]);
+  // Which one is open as a full page (null = none).
+  const [openSharedBoard, setOpenSharedBoard] = useState(null);
+  const refreshSharedBoards = useCallback(async () => {
+    try {
+      const res = await api.get('/shared-albums');
+      setSharedBoards(Array.isArray(res?.albums) ? res.albums : []);
+    } catch {
+      // Keep what we had — a failed read is not evidence that a board you were
+      // given has gone away.
+    }
+  }, [api]);
+  useEffect(() => { refreshSharedBoards(); }, [refreshSharedBoards]);
 
   // === BULK SELECTION STATE ===
   const [isSelectMode, setIsSelectMode] = useState(false);
@@ -1609,6 +1642,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // Boards published to the web wear a LIVE badge in the grid, so you can
     // see what is public without opening a single board menu.
     liveAlbumNames: liveAlbums,
+    // …and the faces of the people inside the pond who have it. A public link
+    // and a member grant are different things and the card shows both.
+    sharedByName: albumAccess,
   }), [
     albumIndex,
     albumCovers,
@@ -1618,6 +1654,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     boardSortMode,
     pagerTab,
     liveAlbums,
+    albumAccess,
   ]);
 
   // "All Photos" — the whole library presented as a board, pinned above the
@@ -4619,6 +4656,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               // Share entry does, so there is a single place for those settings
               // rather than one per entry point.
               onOpenShareSettings={setShareAlbumName}
+              sharedBoards={sharedBoards}
+              onOpenSharedBoard={setOpenSharedBoard}
               baseUrl={getBaseUrl?.()}
               onSearchActiveChange={setBoardSearchActive}
               onScroll={handleAlbumsScrollEvent}
@@ -5453,6 +5492,25 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           pager and under the two sheets, which are later siblings), and
           box-none so a closed page never eats taps meant for the grid. */}
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 45 }]} pointerEvents="box-none">
+        {/* A board somebody gave me, opened. Read-only — an album share is
+            'view', so there is no select mode, no tagging and no upload. */}
+        <SharedBoardPage
+          visible={!!openSharedBoard}
+          board={openSharedBoard}
+          api={api}
+          theme={theme}
+          getFullUrl={getFullUrl}
+          topInset={insets.top + 6}
+          bottomInset={tabBarH}
+          onLeft={(shareId) => setSharedBoards((prev) => prev.filter((b) => b.shareId !== shareId))}
+          onClose={() => {
+            setOpenSharedBoard(null);
+            // The owner may have revoked it while it was open, and leaving is
+            // offered from inside the page — re-read so the strip agrees.
+            refreshSharedBoards();
+          }}
+        />
+
         <ShareInsightsPage
           visible={!!insightsAlbumName}
           albumName={insightsAlbumName}
@@ -5508,12 +5566,16 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         albumName={shareAlbumName}
         api={api}
         theme={theme}
+        baseUrl={getBaseUrl?.()}
         bottomInset={tabBarH}
         onClose={() => {
           setShareAlbumName(null);
           // Creating or revoking a link happens only in here — re-read so the
-          // board header's published cue matches what just changed.
+          // board header's published cue matches what just changed. Giving a
+          // board to a member happens in the same card, so the face stacks are
+          // re-read on the same close.
           refreshLiveAlbums();
+          refreshAlbumAccess();
         }}
       />
 

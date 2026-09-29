@@ -60,12 +60,19 @@ export const buildPhotoVaultBoards = ({
   // matched case-insensitively). Published state is otherwise invisible from
   // the grid — you would have to open each board's menu to find out.
   liveAlbumNames = null,
+  // Who each board is shared with INSIDE the pond, keyed by lower-cased board
+  // name — the shape GET /api/album-access/mine answers in, so the whole grid
+  // costs one request rather than one per card. A board nobody has is simply
+  // absent from the map, which is why the lookup falls back to [] rather than
+  // treating a missing key as unknown.
+  sharedByName = null,
 } = {}) => {
   const seen = new Set();
   const normalizedQuery = normalizeBoardSearch(query);
   const liveNames = new Set(
     Array.from(liveAlbumNames || []).map((name) => String(name).toLowerCase()),
   );
+  const sharedMap = objectMap(sharedByName);
 
   const boards = names
     .filter((name) => typeof name === 'string' && name.trim())
@@ -91,6 +98,11 @@ export const buildPhotoVaultBoards = ({
         recency: formatBoardRecency(latestDate, now),
         metadata: formatBoardMetadata(count, latestDate, now),
         isLive: liveNames.has(name.toLowerCase()),
+        // The card draws these as a face stack. Always an array so the card
+        // never has to guard, and never shared with the caller's map.
+        sharedWith: Array.isArray(sharedMap[name.toLowerCase()])
+          ? sharedMap[name.toLowerCase()].slice()
+          : [],
       };
     })
     .filter((board) => !normalizedQuery || board.normalizedName.includes(normalizedQuery));
