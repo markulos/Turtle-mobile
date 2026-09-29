@@ -4614,6 +4614,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               onOpenBoard={openPhotosPage}
               onLongPressBoard={showAlbumOptions}
               onOpenShareInsights={setInsightsAlbumName}
+              // The cog on each board's caption. ONE card for everything about
+              // how a board is shared — it opens the same sheet the board menu's
+              // Share entry does, so there is a single place for those settings
+              // rather than one per entry point.
+              onOpenShareSettings={setShareAlbumName}
+              baseUrl={getBaseUrl?.()}
               onSearchActiveChange={setBoardSearchActive}
               onScroll={handleAlbumsScrollEvent}
               onContentSizeChange={(w, h) => {

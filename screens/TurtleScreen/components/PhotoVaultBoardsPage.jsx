@@ -109,6 +109,11 @@ const PhotoVaultBoardsPage = forwardRef(({
   onLongPressBoard,
   onCardPressIn,
   onOpenShareInsights,
+  // The cog at the right of every board's caption — opens that board's sharing
+  // card (people + the public link, in one place).
+  onOpenShareSettings,
+  // Origin for relative avatar paths on the shared-with faces.
+  baseUrl,
   onScroll,
   onContentSizeChange,
   onLayout,
@@ -399,6 +404,8 @@ const PhotoVaultBoardsPage = forwardRef(({
             onLongPress={onLongPressBoard}
             onPressIn={onCardPressIn}
             onPressShared={onOpenShareInsights}
+            onPressShareSettings={onOpenShareSettings}
+            baseUrl={baseUrl}
           />
         ))}
         // Elements, NOT functions. VirtualizedList renders a function-valued

@@ -137,6 +137,71 @@ export function inkOn(input) {
 }
 
 /**
+ * `over` laid on `base` at `alpha`, as an opaque hex.
+ *
+ * For reasoning about a TRANSLUCENT surface: a frosted pill is a wash of the
+ * accent over whatever page it floats on, and the colour the eye actually sees
+ * is this mix — which is the thing a contrast check has to be run against, not
+ * the accent in the abstract.
+ */
+export function mixHex(base, over, alpha = 0.5) {
+  const a = hexToRgb(base);
+  const b = hexToRgb(over);
+  if (!a || !b) return normalizeHex(base) || normalizeHex(over);
+  const t = clamp(Number(alpha) || 0, 0, 1);
+  const ch = (x, y) => Math.round(x + (y - x) * t);
+  const byte = (v) => v.toString(16).padStart(2, '0').toUpperCase();
+  return `#${byte(ch(a.r, b.r))}${byte(ch(a.g, b.g))}${byte(ch(a.b, b.b))}`;
+}
+
+/**
+ * How much accent a frosted control carries. High enough that the pill reads as
+ * THE COLOUR rather than as tinted glass, low enough that the blur still shows
+ * what is moving behind it.
+ */
+export const FROST_TINT_ALPHA = 0.62;
+
+/** The opaque colour a frosted accent surface actually presents to the eye. */
+export const frostSurface = (accent, page, alpha = FROST_TINT_ALPHA) =>
+  mixHex(page || '#000000', accent, alpha);
+
+/** Above this luminance a surface is "very light" and cannot hold white text. */
+export const PALE_SURFACE_L = 0.42;
+
+/**
+ * The label colour for a frosted ACCENT surface.
+ *
+ * THE RULE, and it is not `inkOn`'s: on a pale surface the text is THE SAME
+ * COLOUR TAKEN MUCH DARKER — same hue, same saturation, a fraction of the
+ * lightness — so a pink key carries deep pink rather than a neutral near-black.
+ * A tinted control with grey type on it looks like a disabled control; one
+ * whose label is its own colour reads as a single object. On anything else the
+ * label is plain white.
+ *
+ * The test runs on the SURFACE (accent mixed onto the page), not on the raw
+ * accent: the same amber is a deep chip on a black page and a pastel one on a
+ * cream page, and only one of those can hold white.
+ *
+ * The darkening is not a fixed step — it descends until the label clears 4.5:1
+ * against that surface, so the rule holds for a colour as pale as #FFFF00.
+ */
+export const DARK_INK_STEPS = [28, 22, 17, 12, 8];
+
+export function accentFrostInk(accent, { page, alpha = FROST_TINT_ALPHA } = {}) {
+  const hsl = hexToHsl(accent);
+  if (!hsl) return INK_LIGHT;
+  const surface = frostSurface(accent, page, alpha);
+  const l = luminance(surface);
+  if (l == null || l <= PALE_SURFACE_L) return INK_LIGHT;
+  let ink = hslToHex({ ...hsl, l: DARK_INK_STEPS[0] });
+  for (const step of DARK_INK_STEPS) {
+    ink = hslToHex({ ...hsl, l: step });
+    if (contrastRatio(ink, surface) >= 4.5) break;
+  }
+  return ink;
+}
+
+/**
  * The line the picker shows under a colour that will be hard to read.
  *
  * A highlight colour is not decoration here: it draws LINK TEXT and active

@@ -55,7 +55,10 @@ import ScheduleCard, { clockLabel, TIME_COL_W, TIME_LABEL_CENTER_Y } from './Sch
 import { buildCompactRows, gapHourMarks, gapKey, gapNowOffset, gapNowSpans, minutesToTimeString } from '../utils/compactSchedule';
 import { insetCardPalette } from '../utils/cardPalette';
 import { BOARD_COLORS, inkOn } from '../utils/boardColors';
+import { landedDayAction, msUntilNextLocalMidnight, reanchorTarget, sameLocalDay } from '../utils/dayAnchor';
+import { accentFrostInk, FROST_TINT_ALPHA } from '../../../utils/accentColor';
 import { finderDestination, KIND_SEP, FIELD_SEP } from '../utils/finderDestination';
+import { needsCreateRow } from '../utils/taskSearch';
 import TaskFinderOverlay from './TaskFinderOverlay';
 // (HatchBackdrop's import went with the task-card hatch. The month grid's
 // today marker uses the local DiagonalHatch below, not this component.)
@@ -2425,6 +2428,15 @@ export const CalendarView = ({
   // renderDayItem deps + the React.memo'd DayPane prop, defeating EVERY memo
   // boundary in the file. This one line is the dominant calendar-lag fix.
   const styles = useMemo(() => createStyles(theme), [theme]);
+  // The label on the frosted "Today" key. White on a deep accent; on a pale one
+  // the accent's OWN hue taken far darker, so the key reads as one object
+  // instead of a tinted capsule with neutral type parked on it. Derived from
+  // the accent AND the page, because the same colour is a deep chip on black
+  // and a pastel on cream (see accentFrostInk).
+  const todayKeyInk = useMemo(
+    () => accentFrostInk(weekSelectBg(theme), { page: theme.colors.background }),
+    [theme],
+  );
 
   // The same sheet built against the sheet's own palette. The calendar
   // BEHIND the sheet keeps `styles`/`theme`; everything the sheet paints — its
@@ -2566,6 +2578,11 @@ export const CalendarView = ({
   // right thing at lines ~1547 / ~2023: there it is a coordinate ORIGIN that
   // cancels out of the translate, so it only has to be the same on both sides.)
   const currentDayIndexRef = useRef(initialDayIndexRef.current);
+  // Which DAYS_LIST index the week strip's rendered cell WINDOW is centred on —
+  // see the strip's own notes below for what it does. It lives up here with the
+  // pager's index because the two must move together: every path that changes
+  // the day (swipe, tap, "Today", a re-anchor on a new day) sets both.
+  const [stripCenterIndex, setStripCenterIndex] = useState(() => initialDayIndexRef.current);
 
   // Live horizontal scroll offset of the day pager, captured natively so the
   // week-strip highlight can track the swipe 1:1 (mirrors the photo-vault tab
@@ -2595,6 +2612,16 @@ export const CalendarView = ({
     const idx = dayIndexOf(date);
     currentDayIndexRef.current = idx;
     setSelectedDate(DAYS_LIST[idx]);
+    // RE-WINDOW THE STRIP TOO. Its cells are only the ±STRIP_HALF_WIN days
+    // around `stripCenterIndex`, and until now only a SWIPE moved that centre —
+    // so a jump further than the window (tapping a date two months out, or
+    // "Today" after the app has been resident longer than the window is wide)
+    // left the strip rendering a fortnight of days that are all off screen. The
+    // track still slid to the new day, over cells that did not exist: no day
+    // numbers under the header and no pill on any of them, which reads exactly
+    // like "today is not selected". The list is virtual either way; this only
+    // decides WHICH cells are mounted.
+    setStripCenterIndex(idx);
     onDateChange?.();
     // Instant jumps (calendar-cell tap, Today) may not emit onScroll, so anchor
     // the pill directly. Animated jumps let onScroll drive the slide instead.
@@ -2610,10 +2637,32 @@ export const CalendarView = ({
     jumpToDate(date, true);
   }, [jumpToDate]);
 
+  // Set the first time the finger actually drives the pager. Until then the
+  // only scrolls it can report are ones React Native performed itself, and
+  // those are not a choice of day — see `landedDayAction`.
+  const pagerDrivenRef = useRef(false);
+  const onDayScrollBeginDrag = useCallback(() => { pagerDrivenRef.current = true; }, []);
+
   // User finished a swipe — adopt whichever day the pager landed on.
   const onDayScrollEnd = useCallback((e) => {
     const idx = Math.round(e.nativeEvent.contentOffset.x / SCREEN_W);
     const clamped = Math.max(0, Math.min(DAYS_LIST.length - 1, idx));
+    // RN honours `initialScrollIndex` with a scroll of its own AFTER mount, and
+    // a paged list can report that one as a momentum end. Adopting it is how
+    // the selection silently slid off today on some launches and not others —
+    // the page it lands on depends on what had been laid out by then. Before
+    // the first touch, the pager is told where it belongs rather than believed.
+    if (landedDayAction({
+      landedIndex: clamped,
+      anchorIndex: currentDayIndexRef.current,
+      userDriven: pagerDrivenRef.current,
+    }) === 'restore') {
+      dayListRef.current?.scrollToOffset({
+        offset: currentDayIndexRef.current * SCREEN_W,
+        animated: false,
+      });
+      return;
+    }
     // Re-window the rendered cells around the landed day (keeps a buffer either
     // side). With cells absolutely positioned by day index and the track
     // translate independent of the window, this moves NOTHING on screen — it only
@@ -2650,7 +2699,8 @@ export const CalendarView = ({
   //   • pillLeft   — horizontal position of the fixed pill (slot STRIP_CENTER_CELL)
   //   • base       — inside trackTranslateX; nudges the whole track left/right
   //   • STRIP_CENTER_CELL — which of the 7 visible slots (0..6) the pill sits over
-  const [stripCenterIndex, setStripCenterIndex] = useState(() => initialDayIndexRef.current);
+  // (`stripCenterIndex` itself is declared further up, with the pager state it
+  // moves with — every path that changes the day now re-windows it.)
   const STRIP_HALF_WIN = 14;     // cells rendered each side of centre (fling buffer; re-window is invisible now, so generous)
   const STRIP_CENTER_CELL = 3;   // the pill sits over the middle of the 7 visible cells
 
@@ -3017,26 +3067,61 @@ export const CalendarView = ({
 
   // Opening the calendar tomorrow must still open it on TOMORROW.
   //
-  // Mounting anchors on today (see currentMonthIndex / selectedDate), but this
-  // view is not remounted for days — the phone is backgrounded, midnight
-  // passes, and coming back the grid is still sitting on yesterday with
-  // yesterday highlighted. On return to the foreground, if the calendar DAY
-  // has actually moved on, re-anchor exactly as the Today key does.
+  // Mounting anchors on today (see currentMonthIndex / selectedDate), and mount
+  // is not enough: this view is not remounted for days. The phone is
+  // backgrounded, midnight passes, and coming back the grid is still sitting on
+  // yesterday with yesterday highlighted as though it were today.
   //
-  // Guarded on the day changing, not on every foreground: someone who browsed
-  // to October, answered a message and came back should find October where
-  // they left it.
-  const anchoredDayRef = useRef(toDateString(new Date()));
+  // TWO WAYS THE DAY CHANGES UNDER A MOUNTED CALENDAR, and it used to watch only
+  // the first:
+  //   · the app was away and came back  (AppState 'active')
+  //   · midnight passed while it was on screen, with no AppState event at all —
+  //     the 11pm case, which is exactly when someone is looking at tomorrow's
+  //     plan. A timer armed for the next local midnight is the only thing that
+  //     sees this one.
+  // `reanchorTarget` decides what each means: a resume is a FRESH LOOK and
+  // re-anchors on today whatever was selected, a live rollover only follows the
+  // day if the user was sitting on today — nobody browsing October wants the
+  // grid yanked back at midnight. Both are no-ops while the day has not
+  // actually changed, so answering a message and coming back leaves October
+  // where it was.
+  const anchoredDayRef = useRef(new Date());
+  const reanchorIfNewDay = useCallback((reason) => {
+    const now = new Date();
+    const target = reanchorTarget({
+      anchoredDay: anchoredDayRef.current,
+      selected: selectedDateRef.current,
+      now,
+      reason,
+    });
+    // The anchor moves on any new day, even when the view stays put: it records
+    // which day this calendar last agreed with, not the last time it jumped.
+    if (!sameLocalDay(now, anchoredDayRef.current)) anchoredDayRef.current = now;
+    if (target) goToToday();
+  }, [goToToday]);
+
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') return;
-      const today = toDateString(new Date());
-      if (today === anchoredDayRef.current) return;
-      anchoredDayRef.current = today;
-      goToToday();
+      if (state === 'active') reanchorIfNewDay('resume');
     });
     return () => sub?.remove();
-  }, [goToToday]);
+  }, [reanchorIfNewDay]);
+
+  // The midnight timer. Re-armed from each firing (and after every re-anchor)
+  // rather than set on an interval: a 24h interval drifts, and the thing it is
+  // timing is a wall-clock boundary. A device asleep through midnight may not
+  // fire it at all, which is what the resume path above is for.
+  useEffect(() => {
+    let timer = null;
+    const arm = () => {
+      timer = setTimeout(() => {
+        reanchorIfNewDay('rollover');
+        arm();
+      }, msUntilNextLocalMidnight(new Date()));
+    };
+    arm();
+    return () => { if (timer) clearTimeout(timer); };
+  }, [reanchorIfNewDay]);
 
   // FlatList per-item layout. With every month at exactly `monthH`,
   // this lets initialScrollIndex jump straight to today without measuring.
@@ -3511,8 +3596,17 @@ export const CalendarView = ({
               accessibilityRole="button"
               accessibilityLabel="Jump to today"
             >
-              <Icon name="calendar-today" size={15} color={theme.colors.accent} />
-              <Text style={styles.todayJumpText}>Today</Text>
+              {/* FROSTED GLASS, the chat composer's material (utils/frostedChat):
+                  a blur of the grid behind, under a wash of the highlight
+                  colour. The key floats over a month of dates, so it has to be
+                  legible without becoming a slab that hides a week. */}
+              <BlurView {...blurProps(theme)} style={styles.todayJumpFrost} pointerEvents="none" />
+              <View
+                pointerEvents="none"
+                style={[styles.todayJumpTint, { backgroundColor: hexToRgba(weekSelectBg(theme), FROST_TINT_ALPHA) }]}
+              />
+              <Icon name="calendar-today" size={15} color={todayKeyInk} />
+              <Text style={[styles.todayJumpText, { color: todayKeyInk }]}>Today</Text>
             </TouchableOpacity>
           )}
       </Reanimated.View>
@@ -3730,6 +3824,7 @@ export const CalendarView = ({
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}
+          onScrollBeginDrag={onDayScrollBeginDrag}
           onMomentumScrollEnd={onDayScrollEnd}
           // Drive the week-strip pill natively from the live scroll offset so
           // it tracks the finger 1:1 (matches the photo-vault tab indicator).
@@ -3791,10 +3886,10 @@ export const CalendarView = ({
             onClose={() => setEditingTime(false)}
           />
         )}
-        showCreate={
-          newTaskTitle.trim().length > 0
-          && !searchResults.some((r) => (r.title || '').trim().toLowerCase() === newTaskTitle.trim().toLowerCase())
-        }
+        // The shared rule (utils/taskSearch): something typed, and nothing in
+        // the answers already carrying exactly that title. The Focus picker
+        // offers its create row on the same terms.
+        showCreate={needsCreateRow(newTaskTitle, searchResults)}
         createCaption={`Create · ${finderWhere.day}${finderWhere.filed ? ` · ${finderWhere.board}` : ''}${pendingTime ? ` · ${formatTimeLabel(pendingTime, use24h)}` : ''}`}
         onOpenFullForm={openFullCreate}
         results={searchResults}
@@ -3963,9 +4058,12 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textSecondary,
     letterSpacing: -0.6,
   },
-  // Jump-to-today button pinned under the grid, above the sheet peek. A solid
-  // rounded pill so it reads as a tappable action (vs. the faint caret hints).
+  // Jump-to-today key, pinned under the grid and above the sheet peek.
   // Bottom-right keeps it clear of the centred down-caret. zIndex over the grid.
+  //
+  // GLASS, not a slab: it floats over a month of dates, and a solid pill hid
+  // the better part of a week. Blur + a wash of the highlight colour lets the
+  // grid read softly through it while the key still reads as an object.
   todayJumpBtn: {
     position: 'absolute',
     right: CALENDAR_HORIZONTAL_PADDING,
@@ -3976,23 +4074,31 @@ const createStyles = (theme) => StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: theme.colors.surfaceElevated,
+    // No fill of its own any more — the frost and its accent wash are layers
+    // inside it. `overflow: hidden` is what clips them to the capsule.
+    overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-    // Lift the pill off the grid so it reads as floating chrome.
-    shadowColor: '#000',
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
+    // A rim of the accent rather than the theme's neutral hairline: on glass
+    // the edge is most of what says where the object ends.
+    borderColor: hexToRgba(weekSelectBg(theme), 0.5),
+    // NO SHADOW. STYLE-RULES §1: a shadow needs an opaque background to cast
+    // from, and Android's `elevation` draws a muddy halo behind a transparent
+    // view. The accent rim is what separates the glass from the grid now.
     zIndex: 6,
   },
+  // The frost and the accent wash, both clipped to the capsule by the button's
+  // own overflow. Absolute so the row's padding still sizes the key from its
+  // label rather than from these.
+  todayJumpFrost: { ...StyleSheet.absoluteFillObject },
+  todayJumpTint: { ...StyleSheet.absoluteFillObject },
   // "Jump to today" — a navigation key, not a success state, so it takes the
-  // highlight colour rather than the green it was borrowing.
+  // highlight colour rather than the green it was borrowing. The INK is set
+  // inline from `accentFrostInk`: white on a deep key, and on a pale one the
+  // accent's own hue taken far darker — a tinted key with grey type on it
+  // reads as disabled.
   todayJumpText: {
     fontSize: 13,
     fontWeight: '700',
-    color: theme.colors.accent,
   },
   // Day-of-week labels — lives inside each FlatList page now (below
   // the title block's hairline divider, above the grid). Fixed height

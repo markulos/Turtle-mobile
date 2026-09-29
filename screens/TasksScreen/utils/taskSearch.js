@@ -243,3 +243,24 @@ export function taskSearchMeta(task, { boardLabel = (b) => b, now = Date.now() }
   if (isDone(task)) bits.push('Done');
   return bits.join(' · ');
 }
+
+/**
+ * Should the list offer to CREATE what was typed?
+ *
+ * Yes whenever the field holds something and no answer already carries exactly
+ * that title. "Exactly" is trimmed and case-insensitive: someone who types
+ * "call omar" when "Call Omar" exists meant that one, and offering to make a
+ * second is how a list ends up with two of everything.
+ *
+ * ONE definition, because there are two finders — the Planner's day finder
+ * (CalendarView's `showCreate`) and the Focus picker — and a rule implemented
+ * twice is a rule that will disagree with itself.
+ */
+export function needsCreateRow(query, rows = []) {
+  const title = String(query || '').trim();
+  if (!title) return false;
+  const needle = title.toLowerCase();
+  return !(Array.isArray(rows) ? rows : []).some(
+    (r) => String(r?.title || '').trim().toLowerCase() === needle,
+  );
+}

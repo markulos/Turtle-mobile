@@ -4,6 +4,7 @@ import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { FONTS } from '../../../utils/fonts';
 import { TAP_ONLY_PRESSABLE } from '../../../utils/pressBehavior';
+import FaceStack from '../../../components/FaceStack';
 
 // `hiResPath` is an OPTIONAL larger source for a pane that renders big enough to
 // show the grid thumbnail's softness (currently only the All Photos hero). It's
@@ -90,6 +91,52 @@ const SharedBadge = memo(function SharedBadge({ theme, boardName, onPress }) {
   );
 });
 
+/**
+ * The right end of a board's caption: who it is shared with, and the way in to
+ * changing that.
+ *
+ * LOW OPACITY ON PURPose — every card in the grid carries one, and at full
+ * strength a column of cogs competes with the covers, which are the content.
+ * It lifts to full on press, and its TOUCH TARGET is the full 44 (§3) even
+ * though the glyph is 16.
+ *
+ * The stack is given the room the caption can spare rather than a face count,
+ * so a long board name and six people cannot between them push anything off
+ * the card — see `utils/faceStack`.
+ */
+const BoardShareControls = memo(function BoardShareControls({
+  board, theme, baseUrl, available, onPress,
+}) {
+  const people = board.sharedWith || [];
+  return (
+    <View style={styles.shareControls}>
+      {people.length ? (
+        <FaceStack
+          people={people}
+          available={available}
+          size={FACE_SIZE}
+          theme={theme}
+          baseUrl={baseUrl}
+        />
+      ) : null}
+      <Pressable
+        testID="board-share-settings"
+        accessibilityRole="button"
+        accessibilityLabel={
+          people.length
+            ? `Sharing for ${board.name}: ${people.length} ${people.length === 1 ? 'person' : 'people'}`
+            : `Sharing for ${board.name}`
+        }
+        onPress={() => onPress?.(board.name)}
+        hitSlop={{ top: 14, bottom: 14, left: 12, right: 12 }}
+        style={({ pressed }) => [styles.cog, { opacity: pressed ? 1 : 0.38 }]}
+      >
+        <Icon name="cog-outline" size={16} color={theme.colors.textPrimary} />
+      </Pressable>
+    </View>
+  );
+});
+
 function PhotoVaultBoardCard({
   board,
   width,
@@ -99,6 +146,8 @@ function PhotoVaultBoardCard({
   onLongPress,
   onPressIn,
   onPressShared,
+  onPressShareSettings,
+  baseUrl,
 }) {
   const covers = board.covers || [];
   const updated = board.metadata.includes(' · ')
@@ -199,6 +248,21 @@ function PhotoVaultBoardCard({
             onPress={() => onPressShared?.(board.name)}
           />
         ) : null}
+        {/* Only real boards. All Photos is the whole library, not something
+            that can be shared or unshared, so it carries no cog. */}
+        {onPressShareSettings ? (
+        <BoardShareControls
+          board={board}
+          theme={theme}
+          baseUrl={baseUrl}
+          // What the caption can spare for faces: the card, less the cog and
+          // the gaps, less the room a SHARED badge is already taking, less a
+          // floor for the name itself — a stack is never allowed to take the
+          // title's last few characters.
+          available={Math.max(0, width - NAME_FLOOR - COG_SLOT - (board.isLive ? SHARED_PILL_SLOT : 0))}
+          onPress={onPressShareSettings}
+        />
+        ) : null}
       </View>
     </Pressable>
   );
@@ -211,6 +275,14 @@ function PhotoVaultBoardCard({
 // Width of the seams dividing the three cover panes. One constant, two edges —
 // the vertical and horizontal seams have to match or the collage looks skewed.
 const SEAM = StyleSheet.hairlineWidth * 2;
+
+// Caption-row budget. The stack gets what is left after the cog, the SHARED
+// pill (when the board wears one) and a floor kept for the board's own name —
+// a card is not wide enough for a title AND a crowd, and the title wins.
+const FACE_SIZE = 18;
+const COG_SLOT = 26;
+const SHARED_PILL_SLOT = 64;
+const NAME_FLOOR = 74;
 
 const styles = StyleSheet.create({
   card: { marginBottom: 26 },
@@ -252,6 +324,8 @@ const styles = StyleSheet.create({
   metadata: { fontSize: 13.5, lineHeight: 16, fontFamily: FONTS.medium, marginTop: 0, paddingHorizontal: 2 },
   // A step smaller than the board-menu pill: on a two-up grid card it is a
   // margin note, not a button.
+  shareControls: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  cog: { alignItems: 'center', justifyContent: 'center' },
   sharedPill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 999 },
   sharedDot: { width: 5, height: 5, borderRadius: 2.5 },
   sharedPillText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },

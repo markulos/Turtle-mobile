@@ -24,11 +24,39 @@ describe('startPatch', () => {
   });
 
   // A task you deliberately put at 4 pm and started early keeps its 4 pm. This
-  // guard is also what makes it a FIRST-block behaviour without counting
-  // blocks: after the first, the task is timed and a second start finds
-  // nothing to set.
-  test('leaves a task that already has a time alone', () => {
-    expect(startPatch({ id: 't', time: '16:00' }, at(14, 38))).toBeNull();
+  // guard is also what makes the STAMP a first-block behaviour without counting
+  // blocks: after the first, the task is timed and a second start finds no time
+  // to set.
+  test('a task already on today with a time is left entirely alone', () => {
+    expect(startPatch({ id: 't', dueDate: '2026-09-18', time: '16:00' }, at(14, 38))).toBeNull();
+  });
+
+  // STARTING A SESSION IS HOW A TASK LANDS ON TODAY — the default, not an
+  // opt-in. The time it was given is a deliberate choice and survives; the DAY
+  // is the day the work is actually happening.
+  test('a timed task parked on another day comes to today, keeping its time', () => {
+    expect(startPatch({ id: 't', dueDate: '2026-12-25', time: '16:00' }, at(14, 38)))
+      .toEqual({ dueDate: '2026-09-18' });
+  });
+
+  test('so does a timed task with no day at all — a time is not a place', () => {
+    expect(startPatch({ id: 't', time: '16:00' }, at(14, 38)))
+      .toEqual({ dueDate: '2026-09-18' });
+  });
+
+  // A SERIES KEEPS ITS ANCHOR. A recurring task's dueDate is where every future
+  // occurrence is measured from, so moving it would drag the whole series onto
+  // today — a far bigger edit than the one the user asked for by pressing start.
+  test('a recurring task is never moved', () => {
+    expect(startPatch({ id: 't', recurring: 'weekly', dueDate: '2026-12-25' }, at(14, 38))).toBeNull();
+    expect(startPatch({ id: 't', recurrence: 'daily' }, at(14, 38))).toBeNull();
+  });
+
+  // An event or a birthday is a fact about a day, not a plan for one. You can
+  // focus during one; the calendar does not get rewritten for it.
+  test('an event or a birthday keeps its date', () => {
+    expect(startPatch({ id: 'e', itemType: 'event', dueDate: '2026-12-25' }, at(14, 38))).toBeNull();
+    expect(startPatch({ id: 'b', itemType: 'birthday' }, at(14, 38))).toBeNull();
   });
 
   // An untimed task can also be an undated one — the backlog. A time with no
