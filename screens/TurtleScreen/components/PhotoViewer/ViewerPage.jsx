@@ -41,6 +41,7 @@ import { useMusicPlayer } from '../../../../context/MusicPlayerContext';
 import { useOfflineMedia } from '../../../../context/OfflineMediaContext';
 import { dismissScale, pageTranslate } from '../../../../utils/viewerGestureMath';
 import { containSize } from '../../../../utils/zoomMath';
+import { rotatedUrl } from '../../../../utils/mediaRotation';
 import { useHdReady, useIsActive } from './stores';
 
 /**
@@ -134,15 +135,25 @@ const PhotoBody = React.memo(({ item, hdStore, getFullUrl, onAspect }) => {
   // — on tunnel mode or unmigrated rows the raw can be a 25MB HEIC, and
   // streaming it to fill a screen for half a second is the opposite of fast;
   // the thumbnail is ~60KB and always exists.
+  //
+  // Every tier carries the `?r=<angle>` rotation token (a no-op for the photos
+  // nobody has rotated): the pond serves these immutable for 30 days, and a
+  // rotate reuses both the thumbnail filenames and the display URL, so without
+  // the token a rotated photo would keep painting its old orientation here.
+  // The raw fallback gets NO token: /api/media/raw is a static mount of the
+  // ORIGINAL bytes, and rotation is applied by the derived tiers only — so a
+  // token there would promise a turn the pond never performs. In practice this
+  // branch is for local device assets that have no pond row yet (thumbnailUrl
+  // is NOT NULL for anything the pond has ingested), and those are never rotated.
   const fastUri = item.compressedUrl
-    ? getFullUrl(item.compressedUrl)
+    ? rotatedUrl(getFullUrl, item, item.compressedUrl)
     : (item.thumbnailUrl
-      ? getFullUrl(item.thumbnailUrl)
+      ? rotatedUrl(getFullUrl, item, item.thumbnailUrl)
       : getFullUrl(item.rawUrl || item.url || ''));
   // HD source: the ~1600px display variant. By the time hdReady is true the
   // manager has already prefetched these exact bytes into the disk cache, so
   // this swap decodes from disk — never a cold network fetch on a view.
-  const displayUri = getFullUrl(`/api/media/display/${item.id}`);
+  const displayUri = rotatedUrl(getFullUrl, item, `/api/media/display/${item.id}`);
   const uri = offlineUri || (hdReady ? displayUri : fastUri);
 
   const handleLoad = useCallback((e) => {

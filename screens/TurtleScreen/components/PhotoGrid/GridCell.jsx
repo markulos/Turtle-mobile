@@ -15,6 +15,7 @@ import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { rotatedUrl } from '../../../../utils/mediaRotation';
 
 const { width, height } = Dimensions.get('window');
 
@@ -268,7 +269,11 @@ export const GridItem = React.memo(({ item, openViewer, handleDelete, getFullUrl
   // 200px sm is already retina-dense, so lg cost bandwidth + glitches for no
   // visible gain. Falls back to the raw/local url when an item has no generated
   // thumbnail (local device assets).
-  const smUrl = isSkeleton ? null : getFullUrl(item.thumbnailUrl || item.url);
+  // `?r=<angle>` when the photo has been rotated: a rotate overwrites
+  // `<id>.webp` IN PLACE and the thumbnail mount is served immutable for 30
+  // days, so without the token the cell would keep painting the old bytes.
+  // Unrotated photos get the URL untouched, so no existing cache entry moves.
+  const smUrl = isSkeleton ? null : rotatedUrl(getFullUrl, item, item.thumbnailUrl || item.url);
 
   // Quiet static base — the resting tile IS the placeholder (Google Photos
   // style): no shimmer, no pulsing overlay, no extra animated views. Images

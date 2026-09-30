@@ -46,6 +46,7 @@ import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 // Dev-only responsiveness watchdog — every call below compiles to an immediate
 // return in a release build (see utils/gestureProbe).
 import gestureProbe from '../../../utils/gestureProbe';
+import { rotatedUrl } from '../../../utils/mediaRotation';
 import { buildBucketsUrl, buildGalleryUrl } from '../../../utils/galleryFilters';
 import { describeBatch } from '../../../utils/uploadWording';
 // DEV-ONLY commit timer — names the tree that owned the JS thread when the probe
@@ -121,6 +122,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import PhotoVaultBoardsPage, { SEARCH_ENTER, SEARCH_EXIT } from './PhotoVaultBoardsPage';
 import AlbumShareSheet from './AlbumShareSheet';
 import AlbumActionsSheet from './AlbumActionsSheet';
+import ImageEditor from './ImageEditor';
 import ShareInsightsPage from './ShareInsightsPage';
 import SharedBoardPage from './SharedBoardPage';
 import {
@@ -511,7 +513,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     const id = item.id;
     if (viewerHdStore.get(id) || hdInFlightRef.current.has(id)) return;
     hdInFlightRef.current.add(id);
-    Image.prefetch(getFullUrl(`/api/media/display/${id}`), { cachePolicy: 'disk' })
+    // Same URL the viewer's PhotoBody will ask for, rotation token included —
+    // otherwise the prefetch warms one cache entry and the view requests another.
+    Image.prefetch(rotatedUrl(getFullUrl, item, `/api/media/display/${id}`), { cachePolicy: 'disk' })
       .then((ok) => {
         // A failed prefetch (missing variant, offline) simply never marks:
         // the cell stays on the compressed image, which is degraded, not
@@ -2848,16 +2852,19 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     setAlbumMenuName(albumName);
   }, []);
 
-  // Placeholder for expo-image-manipulator UI integration
+  // The photo the editor is open on (null = closed). The viewer's pencil key
+  // lands here via onEditImage.
+  const [editorItem, setEditorItem] = useState(null);
+
   const openImageEditor = useCallback((target) => {
     const item = target && target.id ? target : selectedMedia;
-    if (!item || item.type === 'video') return;
-    Alert.alert(
-      "Edit Image",
-      "Image Editor coming soon! This will trigger the crop/rotate UI.",
-      [{ text: "OK", style: "cancel" }]
-    );
+    // Photos only. Videos never show the pencil, but a document can reach this
+    // through a long-press menu, and the pond refuses anything but an image.
+    if (!item || (item.type && item.type !== 'image')) return;
+    setEditorItem(item);
   }, [selectedMedia]);
+
+  const closeImageEditor = useCallback(() => setEditorItem(null), []);
 
   // The folder a "Files tab → Upload here" batch is filed into. Set at the
   // exact moment a pick succeeds (handleUpload, below) and cleared on every
@@ -3257,6 +3264,38 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
   }, [displayById, patchSparseTags, viewerActiveStore]);
 
+  /**
+   * Merge `fields` into every local copy of ONE photo — the sparse pages, the
+   * flat upload list, and the item the viewer is holding.
+   *
+   * Field-generic where applyTagsLocally is tag-specific, because a rotate
+   * changes six things at once (angle, width, height, both thumbnail URLs,
+   * blurhash, compressedUrl) and they have to land in the SAME render. Patching
+   * them one at a time would show the new thumbnail in the old aspect for a
+   * frame, which reads as a layout bug.
+   */
+  const patchMediaLocally = useCallback((mediaId, fields) => {
+    if (!mediaId || !fields) return;
+    const merge = (it) => (it && it.id === mediaId ? { ...it, ...fields } : it);
+
+    const m = sparsePagesRef.current;
+    if (m && m.size) {
+      let touched = false;
+      for (const [pageIdx, arr] of m) {
+        if (!Array.isArray(arr) || !arr.some((it) => it && it.id === mediaId)) continue;
+        m.set(pageIdx, arr.map(merge));
+        markSparseDirty(pageIdx);
+        touched = true;
+      }
+      if (touched) setSparseVersion((v) => v + 1);
+    }
+
+    setUploadItems((list) => (
+      list.some((it) => it && it.id === mediaId) ? list.map(merge) : list
+    ));
+    setSelectedMedia((prev) => (prev && prev.id === mediaId ? { ...prev, ...fields } : prev));
+  }, [markSparseDirty]);
+
   // Commit ONE photo's tags OPTIMISTICALLY: local state instantly, the PUT in
   // the background through the outbox (offline → parked, the tags stand),
   // rolled back only on a permanent rejection.
@@ -3437,7 +3476,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       if (!page) continue; // not loaded yet — warmed later, on its land
       sparseThumbsPrefetchedRef.current.add(p);
       for (const it of page) {
-        const u = it && getFullUrl(it.thumbnailUrl || it.url);
+        // Must go through rotatedUrl for the SAME reason the comment above
+        // says "matches GridItem's smUrl": warming a URL without the rotation
+        // token would fill the cache with an entry no cell ever requests.
+        const u = it && rotatedUrl(getFullUrl, it, it.thumbnailUrl || it.url);
         if (u) urls.push(u);
       }
     }
@@ -5558,6 +5600,21 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           deleteAlbum(name);
         }}
         onClose={() => setAlbumMenuName(null)}
+      />
+
+      {/* The viewer's pencil key. Mounted at the screen root so it covers the
+          viewer itself, which is where it is opened from. */}
+      <ImageEditor
+        visible={!!editorItem}
+        item={editorItem}
+        api={api}
+        getFullUrl={getFullUrl}
+        colors={theme.colors}
+        insets={insets}
+        bottomInset={tabBarH}
+        onClose={closeImageEditor}
+        onSaved={(fields) => patchMediaLocally(editorItem?.id, fields)}
+        onError={(message) => Alert.alert('Could not rotate', message)}
       />
 
       {/* "Share to the web" for a board. */}

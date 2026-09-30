@@ -46,6 +46,7 @@ import ViewerChrome from './ViewerChrome';
 import ViewerPage from './ViewerPage';
 import ViewerStage from './ViewerStage';
 import { useStageValues } from './stageValues';
+import { rotatedUrl } from '../../../../utils/mediaRotation';
 
 const { width: WIN_W, height: WIN_H } = Dimensions.get('window');
 const HOME_SPRING = { damping: 26, stiffness: 260, mass: 1 };
@@ -337,7 +338,9 @@ export default function PhotoViewer({
     const item = activeItem;
     if (!item?.id) return;
     if (offline.isSaved(item.id)) { await offline.remove(item.id); return; }
-    const ok = await offline.save(item, getFullUrl(`/api/media/display/${item.id}`));
+    // Rotation token included, so a kept copy is the picture as the user has
+    // it turned — not the orientation it happened to have on upload.
+    const ok = await offline.save(item, rotatedUrl(getFullUrl, item, `/api/media/display/${item.id}`));
     if (!ok) Alert.alert('Not saved', 'Could not save this picture for offline. Check the connection to your pond and try again.');
   }, [activeItem, offline, getFullUrl]);
   const handleFavourite = useCallback(() => { if (activeItem) onToggleFavourite?.(activeItem); }, [activeItem, onToggleFavourite]);
