@@ -44,6 +44,7 @@ import {
   Keyboard,
   Linking,
   Modal,
+  Share,
 } from 'react-native';
 import { depth, insetRule } from '../../utils/surfaceDepth';
 import { SCREEN_TITLE } from '../../utils/headerType';
@@ -92,6 +93,7 @@ import { tapHaptic, impactHaptic } from '../../utils/haptics';
 import { inkOn } from '../../utils/accentColor';
 // Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
 import { fuzzyRank } from '../../utils/trigram';
+import { noteShareText } from '../../utils/noteShareText';
 // Tab predicates + the feedback tag vocabulary (pure, unit-tested separately).
 import { APP_TAGS, PLATFORM_TAGS, isFeedbackNote, matchesFilter } from './feedbackFilter';
 // The note's own files — fetched from its media ids and shown in the note,
@@ -781,12 +783,28 @@ export default function NotesScreen() {
   }, [pendingTarget]);
 
   // Long-press menu: choose to Edit or Delete the note/todo.
+  // Hand the note's words to the OS share sheet as plain text, so it can go out
+  // as an ordinary message on anything installed — no link back into the pond,
+  // nothing the recipient needs an account for. See utils/noteShareText.js for
+  // what gets included and why tags don't.
+  const shareNoteAsText = useCallback(async (note) => {
+    const message = noteShareText(note);
+    // An empty note would open a sheet that can only send nothing.
+    if (!message) return;
+    try {
+      await Share.share({ message });
+    } catch {
+      /* the user backed out of the sheet — nothing to report */
+    }
+  }, []);
+
   const showNoteActions = (note) => {
     Alert.alert(
       note.type === 'todo' ? 'Todo' : 'Note',
       note.content?.slice(0, 80) || '',
       [
         { text: 'Edit', onPress: () => { setEditingNote(note); setComposerOpen(true); } },
+        { text: 'Share as text', onPress: () => shareNoteAsText(note) },
         { text: 'Delete', style: 'destructive', onPress: () => performDelete(note) },
         { text: 'Cancel', style: 'cancel' },
       ],
