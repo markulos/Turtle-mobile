@@ -70,3 +70,94 @@ describe('sharing a note as plain text', () => {
     expect(importBlock).toMatch(/^\s*Share,$/m);
   });
 });
+
+/**
+ * THE KEY ON THE ROW, and the two ways it silently does nothing.
+ *
+ * It is a real button on each row of the search results now, not only a long
+ * press. Two failure modes are worth pinning because both LOOK like a broken
+ * button rather than a broken condition:
+ *
+ *  1. Gating on `searchOpen` instead of a non-empty query, which would put a
+ *     send key on every note you own the moment the magnify is tapped.
+ *  2. Leaving `showShare` out of the React.memo comparators. The prop flips when
+ *     the field gains or loses its first character and nothing else about a row
+ *     changes with it, so the rows would keep their previous state and the key
+ *     would appear only where something else forced a re-render.
+ */
+describe('the share key on a search result row', () => {
+  // Slice FORWARD from the start marker — `end` is searched for after it, not
+  // from the top of the file, or a closing tag that also appears earlier gives
+  // an empty window that passes nothing.
+  const region = (start, end) => {
+    const from = SRC.indexOf(start);
+    expect(from).toBeGreaterThan(-1);
+    const to = SRC.indexOf(end, from + start.length);
+    expect(to).toBeGreaterThan(from);
+    return SRC.slice(from, to);
+  };
+
+  test('a running search is a non-empty query, not merely an open bar', () => {
+    expect(SRC).toMatch(/const searchActive = search\.trim\(\)\.length > 0;/);
+    // The gate must not be the bar's open/closed state.
+    expect(SRC).not.toMatch(/showShare=\{searchOpen\}/);
+  });
+
+  test('both row shapes get the key, gated on that', () => {
+    // Plain notes and shared-link cards are different components, and the link
+    // card is the shape you most want to forward — so it must not be the one
+    // left out. Assert PER ELEMENT, not just that the props appear somewhere.
+    for (const tag of ['<NoteRow', '<LinkNoteCard']) {
+      const element = region(tag, '/>');
+      expect(element).toMatch(/onShareAsText=\{shareNoteAsText\}/);
+      expect(element).toMatch(/showShare=\{searchActive\}/);
+    }
+    // And nowhere else: a third caller would be a row shape nobody tested.
+    expect((SRC.match(/showShare=\{searchActive\}/g) || []).length).toBe(2);
+    expect((SRC.match(/onShareAsText=\{shareNoteAsText\}/g) || []).length).toBe(2);
+  });
+
+  test('both components accept the prop with a safe default', () => {
+    expect(SRC).toMatch(/function NoteRowImpl\(\{[^}]*showShare = false/s);
+    expect(SRC).toMatch(/function LinkNoteCardImpl\(\{[^}]*showShare = false/s);
+  });
+
+  test('both memo comparators compare showShare, or the key never appears', () => {
+    const noteRowMemo = region('const NoteRow = React.memo', ');\n\nconst noteRowStyles');
+    expect(noteRowMemo).toMatch(/prev\.showShare === next\.showShare/);
+    const linkMemo = region('const LinkNoteCard = React.memo', ');\n\nconst linkCardStyles');
+    expect(linkMemo).toMatch(/prev\.showShare === next\.showShare/);
+  });
+
+  // The WHOLE <TouchableOpacity> around a marker — the testID sits after the
+  // attributes being asserted on, so slicing forward from it would miss them.
+  const elementAround = (marker) => {
+    const at = SRC.indexOf(marker);
+    expect(at).toBeGreaterThan(-1);
+    const open = SRC.lastIndexOf('<TouchableOpacity', at);
+    const close = SRC.indexOf('</TouchableOpacity>', at);
+    expect(open).toBeGreaterThan(-1);
+    expect(close).toBeGreaterThan(open);
+    return SRC.slice(open, close);
+  };
+
+  test('it is the app\'s own share glyph, and it is reachable', () => {
+    for (const marker of ['testID={`note-row-share-', 'testID={`link-card-share-']) {
+      const key = elementAround(marker);
+      // share-variant is what the rest of the app shares with (3 other uses).
+      expect(key).toMatch(/name="share-variant"/);
+      expect(key).toMatch(/accessibilityLabel="Share as text"/);
+      // A 17px glyph needs the same slop every other key on these rows gets.
+      expect(key).toMatch(/hitSlop=/);
+    }
+  });
+
+  test('the haptic is the light tap on press-in, not the impact', () => {
+    for (const marker of ['testID={`note-row-share-', 'testID={`link-card-share-']) {
+      const key = elementAround(marker);
+      expect(key).toMatch(/onPressIn=\{\(\) => tapHaptic\(\)\}/);
+      // impactHaptic is reserved for the Claude send, which is a heavier act.
+      expect(key).not.toMatch(/impactHaptic/);
+    }
+  });
+});

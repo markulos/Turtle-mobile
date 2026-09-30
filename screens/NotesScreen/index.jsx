@@ -395,6 +395,11 @@ export default function NotesScreen() {
   const [serverMatches, setServerMatches] = useState([]);
   const noteIndex = useRef([]);
   const searchInputRef = useRef(null);
+  // A search is RUNNING, which is not the same as the bar being open: an open
+  // field with nothing typed in it is still the whole timeline. This is what
+  // puts the share key on each row (see NoteRow), so it has to mean "these rows
+  // are results" — an empty bar would put a send key on every note you own.
+  const searchActive = search.trim().length > 0;
 
   // ── Fetch list ──────────────────────────────────────────
   // Newest-first: the server's GET /notes already orders DESC by
@@ -1140,6 +1145,8 @@ export default function NotesScreen() {
                 note={item}
                 onEdit={openEditNote}
                 onLongPress={showNoteActions}
+                onShareAsText={shareNoteAsText}
+                showShare={searchActive}
                 theme={theme}
                 isDark={isDark}
               />
@@ -1156,6 +1163,8 @@ export default function NotesScreen() {
               onToggleDone={toggleDone}
               onLongPress={showNoteActions}
               onSendToClaude={sendTodoToClaude}
+              onShareAsText={shareNoteAsText}
+              showShare={searchActive}
               attachThumb={attach?.uri || null}
               attachCount={attach?.count || 0}
               theme={theme}
@@ -1730,7 +1739,7 @@ const topicSearchStyles = (theme, isDark) => StyleSheet.create({
 });
 
 // ── Note row ────────────────────────────────────────────────
-function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude, attachThumb, attachCount = 0, theme, isDark }) {
+function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude, onShareAsText, showShare = false, attachThumb, attachCount = 0, theme, isDark }) {
   const isTodo = note.type === 'todo';
   const isDone = !!note.done;
   const styles = noteRowStyles(theme, isDark);
@@ -1843,6 +1852,28 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
         </View>
       )}
 
+      {/* Share as text — a key on the row itself, not just in the long-press
+          sheet, and only while a SEARCH is running. Searching is the "find the
+          thing and send it" flow, so that is where a one-tap send earns the
+          width; in an ordinary scroll down the timeline it would be a button on
+          every row that most rows never need. The sheet still has it either way.
+
+          Sits BEFORE the Claude key so the destructive-free actions read
+          left-to-right in the order you'd reach for them, and so a to-do's two
+          keys don't swap places depending on whether a search is open. */}
+      {showShare && onShareAsText && (
+        <TouchableOpacity
+          onPressIn={() => tapHaptic()}
+          onPress={() => onShareAsText(note)}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={styles.shareBtn}
+          accessibilityLabel="Share as text"
+          testID={`note-row-share-${note.id}`}
+        >
+          <Icon name="share-variant" size={17} color={theme.colors.textSecondary} />
+        </TouchableOpacity>
+      )}
+
       {/* Send-to-Claude — todos only. Queues this item for the Turtle-tab
           Claude session to work through. */}
       {isTodo && onSendToClaude && (
@@ -1869,7 +1900,12 @@ const NoteRow = React.memo(NoteRowImpl, (prev, next) =>
   // Both scalars, and both arrive LATE: the thumbnail batch resolves after the
   // rows are already on screen. Leave them out of the comparison and the
   // picture never appears until something else happens to invalidate the row.
-  && prev.attachThumb === next.attachThumb && prev.attachCount === next.attachCount,
+  && prev.attachThumb === next.attachThumb && prev.attachCount === next.attachCount
+  // Must be compared, for the same reason: it flips when the search field gains
+  // or loses its first character, and nothing else about the row changes with
+  // it. Left out, the share key would only appear on rows that happened to
+  // re-render for some other reason — which looks exactly like a broken button.
+  && prev.showShare === next.showShare,
 );
 
 const noteRowStyles = (theme, isDark) => StyleSheet.create({
@@ -1911,6 +1947,14 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     ...depth(theme, 'control'),
   },
   sendBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 2,
+    marginLeft: 8,
+    padding: 4,
+  },
+  // Same box as sendBtn, so a to-do carrying both keys spaces them evenly and a
+  // note carrying only this one sits where the Claude key would have.
+  shareBtn: {
     alignSelf: 'flex-start',
     marginTop: 2,
     marginLeft: 8,
@@ -2033,7 +2077,7 @@ function InlineVideo({ uri, style }) {
   );
 }
 
-function LinkNoteCardImpl({ note, onEdit, onLongPress, theme, isDark }) {
+function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare = false, theme, isDark }) {
   const styles = linkCardStyles(theme, isDark);
   const { getBaseUrl } = useServer();
   const url = String(note.content || '').trim();
@@ -2169,6 +2213,22 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, theme, isDark }) {
             >
               <Icon name="pencil-outline" size={17} color={theme.colors.textSecondary} />
             </TouchableOpacity>
+            {/* Share as text — while a search is running, same as NoteRow. A
+                forwarded article is the case this whole feature exists for, so
+                the link card gets the key too rather than making the one note
+                shape you most want to send be the one that needs a long-press. */}
+            {showShare && onShareAsText && (
+              <TouchableOpacity
+                onPressIn={() => tapHaptic()}
+                onPress={() => onShareAsText(note)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.actionBtn}
+                accessibilityLabel="Share as text"
+                testID={`link-card-share-${note.id}`}
+              >
+                <Icon name="share-variant" size={17} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            )}
             {/* Open the original link. */}
             <TouchableOpacity
               onPressIn={() => tapHaptic()}
@@ -2189,7 +2249,10 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, theme, isDark }) {
 // Memoized on the same terms as NoteRow — re-render only when the note object or
 // the colour scheme changes, not on every screen re-render.
 const LinkNoteCard = React.memo(LinkNoteCardImpl, (prev, next) =>
-  prev.note === next.note && prev.isDark === next.isDark,
+  prev.note === next.note && prev.isDark === next.isDark
+  // As on NoteRow: this flips with the search field, and nothing else about the
+  // card changes with it, so leaving it out would strand the key off-screen.
+  && prev.showShare === next.showShare,
 );
 
 const linkCardStyles = (theme, isDark) => StyleSheet.create({
