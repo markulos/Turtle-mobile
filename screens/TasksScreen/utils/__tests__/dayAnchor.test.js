@@ -10,7 +10,7 @@
  * MEASURED against the day lists rather than frozen at bundle load.
  */
 import {
-  landedDayAction,
+  landedPageAction,
   localDayKey,
   msUntilNextLocalMidnight,
   reanchorTarget,
@@ -123,24 +123,32 @@ describe('reanchorTarget', () => {
   });
 });
 
-describe('landedDayAction', () => {
+describe('landedPageAction', () => {
   // The scroll React Native performs itself to honour `initialScrollIndex`
   // arrives as a momentum end before any touch. Adopting the page it lands on is
   // how the selection slid off today on some launches and not others.
   test('an untouched pager that landed somewhere else is put back, not believed', () => {
-    expect(landedDayAction({ landedIndex: 0, anchorIndex: 801, userDriven: false })).toBe('restore');
-    expect(landedDayAction({ landedIndex: 799, anchorIndex: 801, userDriven: false })).toBe('restore');
+    expect(landedPageAction({ landedIndex: 0, anchorIndex: 801, userDriven: false })).toBe('restore');
+    expect(landedPageAction({ landedIndex: 799, anchorIndex: 801, userDriven: false })).toBe('restore');
   });
 
   test('an untouched pager that agrees with the anchor is harmless', () => {
-    expect(landedDayAction({ landedIndex: 801, anchorIndex: 801, userDriven: false })).toBe('adopt');
+    expect(landedPageAction({ landedIndex: 801, anchorIndex: 801, userDriven: false })).toBe('adopt');
   });
 
   test('once the finger has driven it, every landing is a choice of day', () => {
     // Including landing back where it started, and including index 0 — someone
     // CAN swipe to the end of the list.
-    expect(landedDayAction({ landedIndex: 802, anchorIndex: 801, userDriven: true })).toBe('adopt');
-    expect(landedDayAction({ landedIndex: 0, anchorIndex: 801, userDriven: true })).toBe('adopt');
-    expect(landedDayAction({ landedIndex: 801, anchorIndex: 801, userDriven: true })).toBe('adopt');
+    expect(landedPageAction({ landedIndex: 802, anchorIndex: 801, userDriven: true })).toBe('adopt');
+    expect(landedPageAction({ landedIndex: 0, anchorIndex: 801, userDriven: true })).toBe('adopt');
+    expect(landedPageAction({ landedIndex: 801, anchorIndex: 801, userDriven: true })).toBe('adopt');
+  });
+
+  // The month list's version of the same trap, and the one that shipped: the
+  // page grows when the calendar area is measured, the scroll offset does not,
+  // and the re-snap reports a month four pages back. See monthLayout.test.js
+  // for the arithmetic that produces exactly four.
+  test('a month list re-snapped by its own growth is restored, not adopted', () => {
+    expect(landedPageAction({ landedIndex: 56, anchorIndex: 60, userDriven: false })).toBe('restore');
   });
 });

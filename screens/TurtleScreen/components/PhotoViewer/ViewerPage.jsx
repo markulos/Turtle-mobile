@@ -41,8 +41,8 @@ import { useMusicPlayer } from '../../../../context/MusicPlayerContext';
 import { useOfflineMedia } from '../../../../context/OfflineMediaContext';
 import { dismissScale, pageTranslate } from '../../../../utils/viewerGestureMath';
 import { containSize } from '../../../../utils/zoomMath';
-import { rotatedUrl } from '../../../../utils/mediaRotation';
-import { useHdReady, useIsActive } from './stores';
+import { rotatedUrl, rotationOf } from '../../../../utils/mediaRotation';
+import { useHdReady, useIsActive, useMotionPlaying } from './stores';
 
 /**
  * On the way OUT the picture does not fade at all: it stays fully opaque for
@@ -192,6 +192,51 @@ const PhotoBody = React.memo(({ item, hdStore, getFullUrl, onAspect }) => {
   );
 });
 PhotoBody.displayName = 'PhotoBody';
+
+// ── Live Photo motion ────────────────────────────────────────────────────────
+/**
+ * The ~3s clip of a Live Photo, played over its own still while a finger is
+ * held down. Mounted ONLY while playing: `useVideoPlayer` is a hook, so the
+ * only way to not pay for a player on every live photo in the mounted window
+ * is for the component holding it not to exist. Unmounting is also what stops
+ * playback and releases the decoder — there is no pause path to get wrong.
+ *
+ * Silent, and mixing. Photos plays the audio on a long press; here the viewer
+ * may be sitting over the music player, and stealing the audio session for
+ * three seconds of room tone would be a bad trade. `muted` keeps the session
+ * untouched (see VideoBody for the same reasoning at length).
+ *
+ * ROTATION. The still is rotated by the POND — `rotatedUrl` asks for an
+ * already-turned image — but the clip is stored as the phone recorded it. So
+ * the angle is applied here, with the same frame swap the photo editor uses:
+ * on a quarter turn the width and height are exchanged BEFORE the rotation, so
+ * the turned video lands inside the stage instead of overflowing it. Without
+ * this a rotated Live Photo plays sideways the moment you touch it.
+ */
+const MotionBody = React.memo(({ item, getFullUrl, width, height }) => {
+  const source = getFullUrl(item.motionUrl);
+  const player = useVideoPlayer(source, (p) => {
+    p.loop = false;
+    p.muted = true;
+    p.audioMixingMode = 'mixWithOthers';
+    p.play();
+  });
+
+  const degrees = rotationOf(item);
+  const quarterTurn = degrees % 180 !== 0;
+  const frame = quarterTurn ? { width: height, height: width } : { width, height };
+
+  return (
+    <VideoView
+      style={[frame, degrees ? { transform: [{ rotate: `${degrees}deg` }] } : null]}
+      player={player}
+      contentFit="contain"
+      nativeControls={false}
+      testID={`viewer-motion-${item.id}`}
+    />
+  );
+});
+MotionBody.displayName = 'MotionBody';
 
 // ── Video ────────────────────────────────────────────────────────────────────
 const VideoBody = React.memo(({ item, isActive, getFullUrl, onVideoControls, onVideoState }) => {
@@ -396,9 +441,10 @@ VideoBody.displayName = 'VideoBody';
 
 // ── The page ─────────────────────────────────────────────────────────────────
 export const ViewerPage = React.memo(({
-  item, index, sv, activeStore, hdStore, getFullUrl, onAspect, onVideoControls, onVideoState,
+  item, index, sv, activeStore, hdStore, motionStore, getFullUrl, onAspect, onVideoControls, onVideoState,
 }) => {
   const isActive = useIsActive(activeStore, item.id);
+  const motionPlaying = useMotionPlaying(motionStore, item.id);
   const style = usePageStyle(index, sv);
   const frameStyle = useFrameStyle(sv);
   const mediaStyle = useMediaStyle(sv);
@@ -422,7 +468,22 @@ export const ViewerPage = React.memo(({
               onVideoState={onVideoState}
             />
           ) : (
-            <PhotoBody item={item} hdStore={hdStore} getFullUrl={getFullUrl} onAspect={onAspect} />
+            <>
+              <PhotoBody item={item} hdStore={hdStore} getFullUrl={getFullUrl} onAspect={onAspect} />
+              {/* The clip sits OVER the still rather than replacing it, so the
+                  frame underneath is still there the instant the finger lifts
+                  and this unmounts — no gap, no reload, no blurhash flash. */}
+              {motionPlaying && !!item.motionUrl && (
+                <View style={styles.motion} pointerEvents="none">
+                  <MotionBody
+                    item={item}
+                    getFullUrl={getFullUrl}
+                    width={sv.width}
+                    height={sv.height}
+                  />
+                </View>
+              )}
+            </>
           )}
         </Animated.View>
       </Animated.View>
@@ -447,6 +508,12 @@ const styles = StyleSheet.create({
   },
   media: {
     position: 'absolute',
+  },
+  // Centres the clip's (possibly axis-swapped) frame over the still.
+  motion: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
 

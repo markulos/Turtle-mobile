@@ -96,6 +96,16 @@ export default function ViewerStage({
   onSingleTap,
   onZoomedChange,
   onPinchDismiss,
+  /**
+   * Arm the press-and-hold that plays an iOS Live Photo's clip. FALSE on an
+   * ordinary photo, and that matters: a long press that activates wins the
+   * race and cancels the pan, so an always-armed one would eat the swipe of
+   * anyone who rests a finger for half a second before flicking. Enabled per
+   * photo, it can only ever do that on a photo where holding means something.
+   */
+  motionEnabled = false,
+  onMotionStart,
+  onMotionEnd,
 }) {
   // Per-gesture bookkeeping. Shared values, never React state.
   const mode = useSharedValue(MODE.NONE);
@@ -429,16 +439,48 @@ export default function ViewerStage({
         runOnJS(onSingleTap)();
       });
 
+    // Press and hold a Live Photo to watch it move, exactly as in Photos.
+    //
+    // Safe to RACE against the pan because the pan needs 4pt of travel to
+    // activate, so a still finger can't be both. `maxDistance` is the other
+    // half of that: drift past it before the hold matures and this fails,
+    // leaving the swipe to the pan.
+    //
+    // Release ends it through `onFinalize` rather than `onEnd` — onEnd does
+    // not fire when the system cancels a gesture (a call arriving, the app
+    // backgrounding), and a clip left playing under a still nobody is touching
+    // is the one failure here anyone would notice.
+    const longPress = Gesture.LongPress()
+      .enabled(!!motionEnabled)
+      .minDuration(320)
+      .maxDistance(12)
+      .onStart(() => {
+        'worklet';
+        // Not on a page that is still moving, and not while zoomed — the clip
+        // renders at contain, so playing it under a zoomed still would jump.
+        if (sv.settling.value || sv.pagerX.value !== 0 || sv.scale.value !== 1) return;
+        runOnJS(onMotionStart)();
+      })
+      .onFinalize(() => {
+        'worklet';
+        runOnJS(onMotionEnd)();
+      });
+
     return Gesture.Race(
       Gesture.Simultaneous(pinch, pan),
       // Exclusive → the single tap waits for the double tap to fail, so a
       // double-tap zoom never also toggles the chrome.
       Gesture.Exclusive(doubleTap, singleTap),
+      longPress,
     );
     // The bookkeeping shared values are stable refs; only the callbacks and
     // the bundle can change identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sv, onDragBegin, onRest, onDismiss, onEdgeBack, onOpenDetails, onSingleTap, onPinchDismiss]);
+    // `motionEnabled` is in here deliberately: it is the one input that
+    // changes which gestures exist. It only moves at REST (the shell reads it
+    // off the settled page), so the rebuild never lands mid-swipe.
+  }, [sv, onDragBegin, onRest, onDismiss, onEdgeBack, onOpenDetails, onSingleTap, onPinchDismiss,
+    motionEnabled, onMotionStart, onMotionEnd]);
 
   // Origin-anchored pop: the layer grows out of the tapped cell's position as
   // openProgress runs 0 → 1, and retreats toward it on close. During a

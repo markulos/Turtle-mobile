@@ -106,6 +106,15 @@ export default function PhotoViewer({
   onShare,
   onEditImage,
   onClosed,
+  /**
+   * () => boolean — Android's back key, offered to the gallery's overlays
+   * before the viewer takes it. Return true to say "that was mine, stay open".
+   * This is the ONLY place an in-Modal overlay can claim back: BackHandler
+   * listeners don't fire inside a Modal on Android, the dialog routes the key
+   * straight to onRequestClose. The gestures don't consult it — an overlay
+   * that's up is already absorbing the touches that would close the viewer.
+   */
+  onBackIntercept,
   /** (mediaId) => Promise<{ x, y, width, height } | null> — the grid cell's window rect, for the fly-back. */
   measureCell,
   theme,
@@ -124,6 +133,30 @@ export default function PhotoViewer({
   const [tagsOpen, setTagsOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [videoState, setVideoState] = useState(null);
+
+  /**
+   * Which page's Live Photo clip is playing (a media id, or null).
+   *
+   * The same hand-rolled store shape the gallery uses for the active page and
+   * the HD flags, and here for the same reason: this value flips twice per
+   * press, and as React state threaded through `pages` it would rebuild that
+   * memo — remounting every mounted page's image — on finger-down and again
+   * on finger-up.
+   */
+  const motionStore = useRef(null);
+  if (!motionStore.current) {
+    let value = null;
+    const subs = new Set();
+    motionStore.current = {
+      get: () => value,
+      set: (next) => {
+        if (next === value) return;
+        value = next;
+        subs.forEach((fn) => fn(value));
+      },
+      subscribe: (fn) => { subs.add(fn); return () => subs.delete(fn); },
+    };
+  }
 
   const itemsRef = useRef(list);
   itemsRef.current = list;
@@ -264,6 +297,11 @@ export default function PhotoViewer({
     setTimeout(() => start(null), MEASURE_GRACE_MS);
   }, [sv, finishClose, measureCell]);
 
+  const handleRequestClose = useCallback(() => {
+    if (onBackIntercept?.()) return;
+    close();
+  }, [onBackIntercept, close]);
+
   // The active photo disappeared from the list (deleted underneath us).
   useEffect(() => {
     if (!visible || closingRef.current) return;
@@ -288,6 +326,32 @@ export default function PhotoViewer({
     dragStore?.set(false);
     if (item) onIndexSettled?.(item, i);
   }, [activeStore, dragStore, onIndexSettled]);
+
+  // Press-and-hold on a Live Photo. Keyed by the id the stage was holding when
+  // it started, not by "the active page", so a clip can never be left playing
+  // on a page that has since been swiped away.
+  const motionStartedOnRef = useRef(null);
+  const handleMotionStart = useCallback(() => {
+    const id = activeIdRef.current;
+    if (!id) return;
+    motionStartedOnRef.current = id;
+    motionStore.current.set(id);
+  }, []);
+  const handleMotionEnd = useCallback(() => {
+    motionStartedOnRef.current = null;
+    motionStore.current.set(null);
+  }, []);
+
+  // Closing, or the page changing under a held finger, stops the clip. Without
+  // this a viewer dismissed mid-press leaves a player running behind it.
+  useEffect(() => {
+    if (!visible) handleMotionEnd();
+  }, [visible, handleMotionEnd]);
+  useEffect(() => {
+    if (motionStartedOnRef.current && motionStartedOnRef.current !== activeItem?.id) {
+      handleMotionEnd();
+    }
+  }, [activeItem?.id, handleMotionEnd]);
 
   const handleOpenDetails = useCallback(() => setDetailsOpen(true), []);
   const handleSingleTap = useCallback(() => setChromeVisible((v) => !v), []);
@@ -368,6 +432,7 @@ export default function PhotoViewer({
           sv={sv}
           activeStore={activeStore}
           hdStore={hdStore}
+          motionStore={motionStore.current}
           getFullUrl={getFullUrl}
           onAspect={handleAspect}
           onVideoControls={handleVideoControls}
@@ -393,7 +458,8 @@ export default function PhotoViewer({
       animationType="none"
       statusBarTranslucent
       hardwareAccelerated
-      onRequestClose={close}
+      onRequestClose={handleRequestClose}
+      testID="photo-viewer-modal"
     >
       <GestureHandlerRootView style={styles.root} testID="photo-viewer">
         <StatusBar hidden={!chromeShown} animated />
@@ -409,6 +475,9 @@ export default function PhotoViewer({
           onSingleTap={handleSingleTap}
           onZoomedChange={handleZoomedChange}
           onPinchDismiss={close}
+          motionEnabled={!!activeItem?.motionUrl && !zoomed}
+          onMotionStart={handleMotionStart}
+          onMotionEnd={handleMotionEnd}
         >
           {pages}
         </ViewerStage>

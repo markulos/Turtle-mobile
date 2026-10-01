@@ -346,3 +346,106 @@ describe('VaultUploadProvider ownership and idempotency', () => {
     expect(mockStreamMultipartUpload.mock.calls[0][0].parameters.tags).toBe(JSON.stringify(['Phone Uploads']));
   });
 });
+
+/**
+ * iOS Live Photos — the clip that belongs to a still.
+ *
+ * It goes up SECOND, in its own request, against the id the still's upload
+ * came back with. That ordering is the design: the photo is already safe
+ * before the clip is attempted, so every way the clip can fail degrades a
+ * Live Photo to a photo instead of costing the picture.
+ */
+describe('VaultUploadProvider Live Photo clips', () => {
+  const livePhoto = (id) => ({ ...asset(id), motionUri: `file:///picker/${id}.mov` });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockAuth = {
+      isAuthenticated: true, token: 'token-a',
+      authIdentity: 'sub:account-a', authGeneration: 'generation-a',
+    };
+    let n = 0;
+    mockRandomUUID.mockImplementation(() => `import-${++n}`);
+    global.fetch = jest.fn().mockImplementation(async (_url, init) => {
+      const items = JSON.parse(init.body).items;
+      return { json: async () => ({ success: true, results: items.map(() => ({ duplicate: false })) }) };
+    });
+  });
+  afterEach(() => { jest.restoreAllMocks(); });
+
+  /** The still's ingest answers with the row it made; the clip's POST is bare. */
+  const respondToStill = (body = '{"success":true,"media":{"id":"m-77"}}') => {
+    mockStreamMultipartUpload.mockImplementation(async ({ url }) => (
+      url.endsWith('/motion')
+        ? { status: 200, body: '{"success":true}' }
+        : { status: 201, body }
+    ));
+  };
+
+  test('the clip is posted to the id the still came back with, after the still', async () => {
+    respondToStill();
+    await render(<VaultUploadProvider><Probe /></VaultUploadProvider>);
+    await act(async () => { latestActions.enqueue({ assets: [livePhoto('one')], tags: [] }); });
+    await waitFor(() => expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(2));
+
+    const [still, motion] = mockStreamMultipartUpload.mock.calls.map((c) => c[0]);
+    expect(still.url).toBe('https://pond.example/api/media/upload');
+    // The clip's uri is the picker's own, used as-is: unlike the still it is
+    // not an asset id to be resolved through MediaLibrary, it is a file the
+    // picker already handed over.
+    // `/api` is already on the configured base — the clip's URL must not
+    // grow a second one.
+    expect(motion.url).toBe('https://pond.example/api/media/m-77/motion');
+    expect(motion.fileUri).toBe('file:///picker/one.mov');
+    expect(motion.mimeType).toBe('video/quicktime');
+    expect(motion.token).toBe('token-a');
+  });
+
+  test('an ordinary photo posts once and never asks about motion', async () => {
+    respondToStill();
+    await render(<VaultUploadProvider><Probe /></VaultUploadProvider>);
+    await act(async () => { latestActions.enqueue({ assets: [asset('plain')], tags: [] }); });
+    await waitFor(() => expect(latestState.state.status).toBe('done'));
+
+    expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1);
+    expect(mockStreamMultipartUpload.mock.calls[0][0].url).not.toMatch(/motion/);
+  });
+
+  test('a clip that fails leaves the PHOTO uploaded — it never fails the item', async () => {
+    mockStreamMultipartUpload.mockImplementation(async ({ url }) => {
+      if (url.endsWith('/motion')) throw new Error('tunnel dropped');
+      return { status: 201, body: '{"success":true,"media":{"id":"m-77"}}' };
+    });
+    await render(<VaultUploadProvider><Probe /></VaultUploadProvider>);
+    await act(async () => { latestActions.enqueue({ assets: [livePhoto('one')], tags: [] }); });
+
+    await waitFor(() => expect(latestState.state.status).toBe('done'));
+    // The whole point: one uploaded photo, zero failures, no re-queue of a
+    // perfectly good still to win back three seconds of video.
+    expect(latestState.state.uploaded).toBe(1);
+    expect(latestState.state.failed || 0).toBe(0);
+  });
+
+  test('a response with no id skips the clip rather than guessing at a URL', async () => {
+    respondToStill('{"success":true}');
+    await render(<VaultUploadProvider><Probe /></VaultUploadProvider>);
+    await act(async () => { latestActions.enqueue({ assets: [livePhoto('one')], tags: [] }); });
+    await waitFor(() => expect(latestState.state.status).toBe('done'));
+
+    expect(mockStreamMultipartUpload).toHaveBeenCalledTimes(1);
+    expect(latestState.state.uploaded).toBe(1);
+  });
+
+  test('the clip survives the checkpoint, so a resumed batch still knows about it', async () => {
+    respondToStill();
+    await render(<VaultUploadProvider><Probe /></VaultUploadProvider>);
+    await act(async () => { latestActions.enqueue({ assets: [livePhoto('one')], tags: [] }); });
+    await waitFor(() => expect(AsyncStorage.setItem).toHaveBeenCalled());
+
+    const saved = JSON.parse(AsyncStorage.setItem.mock.calls.at(-1)[1]);
+    expect(saved.items[0].motionUri).toBe('file:///picker/one.mov');
+  });
+});

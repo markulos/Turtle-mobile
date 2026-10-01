@@ -18,6 +18,8 @@ jest.mock('react-native-reanimated', () => {
   };
 });
 
+/** The press-and-hold the stage built, so a test can actually press and hold. */
+const mockLongPress = { enabled: null, onStart: null, onFinalize: null };
 jest.mock('react-native-gesture-handler', () => {
   const { View } = require('react-native');
   const chain = () => new Proxy(function chainFn() {}, {
@@ -27,6 +29,19 @@ jest.mock('react-native-gesture-handler', () => {
   return {
     Gesture: {
       Pan: () => chain(), Pinch: () => chain(), Tap: () => chain(),
+      // Recorded rather than swallowed: the press-and-hold is the whole Live
+      // Photo interaction, and a chain() stub would let it be wired to
+      // nothing and still pass.
+      LongPress: () => {
+        const api = {
+          enabled: (v) => { mockLongPress.enabled = v; return api; },
+          minDuration: () => api,
+          maxDistance: () => api,
+          onStart: (fn) => { mockLongPress.onStart = fn; return api; },
+          onFinalize: (fn) => { mockLongPress.onFinalize = fn; return api; },
+        };
+        return api;
+      },
       Race: () => chain(), Simultaneous: () => chain(), Exclusive: () => chain(),
     },
     GestureDetector: ({ children }) => children,
@@ -45,18 +60,30 @@ jest.mock('expo-image', () => {
   };
 });
 const mockFullscreen = { calls: 0, options: null };
+/** Every player expo-video was asked for, in creation order. */
+const mockPlayers = [];
 jest.mock('expo-video', () => {
   const React = require('react');
+  const { View } = require('react-native');
   return {
-    useVideoPlayer: () => ({ play: jest.fn(), pause: jest.fn(), playing: false, muted: true }),
+    // Runs the caller's setup against the player, so what a page configures
+    // (muted, loop, and whether it starts itself) is observable.
+    useVideoPlayer: (source, setup) => {
+      const player = { source, play: jest.fn(), pause: jest.fn(), playing: false, muted: true };
+      if (typeof setup === 'function') setup(player);
+      mockPlayers.push(player);
+      return player;
+    },
     // Records what the page asked for, and exposes the imperative handle the
     // chrome's fullscreen key reaches through.
     VideoView: React.forwardRef((props, ref) => {
-      mockFullscreen.options = props.fullscreenOptions;
+      // Only the VIDEO page passes these; the Live Photo clip's view must not
+      // clobber them with undefined.
+      if (props.fullscreenOptions) mockFullscreen.options = props.fullscreenOptions;
       React.useImperativeHandle(ref, () => ({
         enterFullscreen: () => { mockFullscreen.calls += 1; return Promise.resolve(); },
       }));
-      return null;
+      return React.createElement(View, { testID: props.testID, style: props.style });
     }),
   };
 });
@@ -148,6 +175,11 @@ const items = [
   },
   { id: 'm2', type: 'video', rawUrl: '/r/m2.mp4', width: 1920, height: 1080, tags: '[]' },
 ];
+
+/** The same list, but m1 is an iOS Live Photo — a still that carries a clip. */
+const livePhotoItems = items.map((it) => (
+  it.id === 'm1' ? { ...it, motionUrl: '/api/media/raw/motion_m1.mov' } : it
+));
 
 const theme = {
   colors: {
@@ -290,6 +322,95 @@ describe('PhotoViewer', () => {
   test('the open item vanishing from the list closes the viewer', async () => {
     const { view, props } = await renderViewer();
     await view.rerender(<PhotoViewer {...props} items={[items[0], items[2]]} />);
+    expect(props.onClosed).toHaveBeenCalled();
+  });
+
+  test('Android back is offered to the gallery overlay on top before it closes the viewer', async () => {
+    // The image editor is a full-screen overlay inside THIS Modal, and
+    // BackHandler listeners never fire inside a Modal on Android — the dialog
+    // routes the key straight here. Without the offer, one back press closes
+    // the viewer out from under an edit in progress.
+    const onBackIntercept = jest.fn(() => true);
+    const { props } = await renderViewer({ onBackIntercept });
+    const modal = screen.getByTestId('photo-viewer-modal');
+
+    await act(async () => { modal.props.onRequestClose(); });
+    expect(onBackIntercept).toHaveBeenCalledTimes(1);
+    expect(props.onClosed).not.toHaveBeenCalled();
+
+    // Nothing on top any more: the key is the viewer's again.
+    onBackIntercept.mockReturnValue(false);
+    await act(async () => { modal.props.onRequestClose(); });
+    expect(props.onClosed).toHaveBeenCalled();
+  });
+
+  test('a Live Photo wears the badge; an ordinary photo does not', async () => {
+    await renderViewer({ items: livePhotoItems, initialIndex: 1 });
+    // The badge IS the affordance — press-and-hold is invisible without it.
+    expect(screen.getByTestId('viewer-live-badge')).toBeTruthy();
+
+    await renderViewer({ items, initialIndex: 1 });
+    expect(screen.queryByTestId('viewer-live-badge')).toBeNull();
+  });
+
+  test('the press-and-hold is armed ONLY on a photo that has motion', async () => {
+    // An always-armed long press wins the race and cancels the pan, so on an
+    // ordinary photo it would eat the swipe of anyone who rests a finger for
+    // a third of a second before flicking.
+    await renderViewer({ items, initialIndex: 1 });
+    expect(mockLongPress.enabled).toBe(false);
+
+    await renderViewer({ items: livePhotoItems, initialIndex: 1 });
+    expect(mockLongPress.enabled).toBe(true);
+  });
+
+  test('holding plays the clip OVER the still, and letting go puts it away', async () => {
+    await renderViewer({ items: livePhotoItems, initialIndex: 1 });
+    mockPlayers.length = 0;
+    expect(screen.queryByTestId('viewer-motion-m1')).toBeNull();
+
+    await act(async () => { mockLongPress.onStart(); });
+    expect(screen.getByTestId('viewer-motion-m1')).toBeTruthy();
+    // Silent and mixing — the viewer may be sitting over the music player,
+    // and three seconds of room tone is not worth taking the audio session.
+    const player = mockPlayers.at(-1);
+    expect(player.source).toBe('https://pond/api/media/raw/motion_m1.mov');
+    expect(player.muted).toBe(true);
+    expect(player.loop).toBe(false);
+    expect(player.play).toHaveBeenCalled();
+
+    // The still is still there underneath the whole time, so the lift has
+    // nothing to reload.
+    expect(screen.getByTestId('img:https://pond/c/m1.jpg')).toBeTruthy();
+
+    await act(async () => { mockLongPress.onFinalize(); });
+    expect(screen.queryByTestId('viewer-motion-m1')).toBeNull();
+  });
+
+  test('a release the system never delivered as an end still stops the clip', async () => {
+    // onFinalize, not onEnd: a cancelled gesture (a call arriving, the app
+    // backgrounding) skips onEnd, and a clip left playing under a still that
+    // nobody is touching is the failure anyone would notice.
+    await renderViewer({ items: livePhotoItems, initialIndex: 1 });
+    await act(async () => { mockLongPress.onStart(); });
+    expect(screen.getByTestId('viewer-motion-m1')).toBeTruthy();
+    expect(typeof mockLongPress.onFinalize).toBe('function');
+    await act(async () => { mockLongPress.onFinalize(); });
+    expect(screen.queryByTestId('viewer-motion-m1')).toBeNull();
+  });
+
+  test('closing the viewer mid-press does not leave a player running behind it', async () => {
+    const { view, props } = await renderViewer({ items: livePhotoItems, initialIndex: 1 });
+    await act(async () => { mockLongPress.onStart(); });
+    expect(screen.getByTestId('viewer-motion-m1')).toBeTruthy();
+
+    await view.rerender(<PhotoViewer {...props} items={livePhotoItems} visible={false} />);
+    expect(screen.queryByTestId('viewer-motion-m1')).toBeNull();
+  });
+
+  test('with no overlay to ask, back closes the viewer as it always did', async () => {
+    const { props } = await renderViewer();
+    await act(async () => { screen.getByTestId('photo-viewer-modal').props.onRequestClose(); });
     expect(props.onClosed).toHaveBeenCalled();
   });
 });

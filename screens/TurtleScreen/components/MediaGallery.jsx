@@ -2750,6 +2750,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     setSelectedMedia(null);
     setViewerSoloItem(null);
     setViewerOrigin(null);
+    // The editor lives inside the viewer's Modal, so a close unmounts it.
+    // Clearing the item too keeps that state honest — otherwise the next
+    // photo opened would find the editor already "open" on the old one.
+    setEditorItem(null);
     if (pendingAlbumDropRef.current.size) {
       const drop = new Set(pendingAlbumDropRef.current);
       pendingAlbumDropRef.current.clear();
@@ -2865,6 +2869,21 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   }, [selectedMedia]);
 
   const closeImageEditor = useCallback(() => setEditorItem(null), []);
+  // What happens after an editor save that FILED A NEW ITEM lives further down,
+  // with the share plumbing: handleEditorCreated needs getFullUrl, which is
+  // declared much later in this component.
+
+  // Android back, while the viewer is up. The editor is a full-screen overlay
+  // inside the viewer's Modal, so back has to dismiss IT first — otherwise one
+  // key press closes the viewer out from under an edit in progress. Returning
+  // true keeps the viewer open. Back during a save is let through rather than
+  // swallowed: the request is already with the pond and lands either way, so
+  // the viewer is left showing the turned photo — which is what was asked for.
+  const backOutOfViewerOverlay = useCallback(() => {
+    if (!editorItem) return false;
+    closeImageEditor();
+    return true;
+  }, [editorItem, closeImageEditor]);
 
   // The folder a "Files tab → Upload here" batch is filed into. Set at the
   // exact moment a pick succeeds (handleUpload, below) and cleared on every
@@ -2887,7 +2906,13 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
 
       // Open image picker - unlocked limit for enterprise queue
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images', 'videos'], // Updated API - array of MediaType strings
+        // 'livePhotos' is ADDITIVE, not a third kind of thing to pick: with it
+        // in the list a selected Live Photo still arrives as its still image,
+        // and iOS additionally hands over the ~3s clip on
+        // `asset.pairedVideoAsset`. Without it that half is never requested —
+        // which is the entire reason Live Photos uploaded as flat photos. iOS
+        // only; Android and web ignore the entry.
+        mediaTypes: ['images', 'videos', 'livePhotos'],
         allowsMultipleSelection: true,
         selectionLimit: 0, // 0 = UNLIMITED SELECTION
         orderedSelection: true,
@@ -3106,6 +3131,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         duration: asset.duration || null,
         width: asset.width || null,
         height: asset.height || null,
+        // The other half of a Live Photo. Carried as a plain uri on the STILL's
+        // item — never as an item of its own, or the clip would queue as a
+        // second upload, land as a second row, and show up in the grid as a
+        // silent 3-second video next to the photo it belongs to.
+        motionUri: asset.pairedVideoAsset?.uri || null,
       })),
       tags,
       folderId: uploadFolderIdRef.current,
@@ -3456,6 +3486,71 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     const baseUrl = base.replace(/\/api$/, '');
     return `${baseUrl}${path}`;
   }, [getMediaBaseUrl, getBaseUrl]);
+
+  /**
+   * Hand a finished sticker to the OS share sheet.
+   *
+   * Its own path rather than doShare's, because a sticker is not a photo being
+   * shared at a chosen quality: there is exactly one tier (the cutout itself),
+   * it's a few dozen kB, and the FORMAT IS THE POINT — `public.png` is what
+   * carries the transparency through to Messages and WhatsApp. Handing the sheet
+   * `public.image`/`image/jpeg`, as the photo path does, is how a cutout arrives
+   * in a white box.
+   */
+  const shareSticker = useCallback(async (item) => {
+    const src = item?.rawUrl || item?.url;
+    if (!src) return;
+    let localUri = null;
+    try {
+      const safeName = (item.filename || `sticker_${item.id}.png`).replace(/[^\w.\-]/g, '_');
+      localUri = `${FileSystem.cacheDirectory}sticker_${safeName}`;
+      const { uri } = await FileSystem.downloadAsync(getFullUrl(src), localUri);
+      if (!(await Sharing.isAvailableAsync())) {
+        Alert.alert('Error', 'Sharing is not available on this device');
+        return;
+      }
+      // Let the alert that offered this actually leave the screen first;
+      // presenting in the same tick as a teardown is how the sheet silently
+      // never appears.
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await Sharing.shareAsync(uri, { UTI: 'public.png', mimeType: 'image/png' });
+    } catch (e) {
+      console.error('[MediaGallery] Sticker share error:', e);
+      Alert.alert('Error', 'Could not share this sticker.');
+    } finally {
+      // The cached copy existed only to feed the sheet. The sticker itself is
+      // safe in the vault.
+      if (localUri) {
+        try { await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch (e) { /* ignore */ }
+      }
+    }
+  }, [getFullUrl]);
+
+  /**
+   * The editor saved a NEW item (a markup copy, or a sticker) rather than
+   * changing the photo it was opened on — see ImageEditor's header for why those
+   * two tools can't be in-place the way rotate is.
+   *
+   * So this can't patch a row: it refetches the loaded window, which is the one
+   * refresh that doesn't collapse a deep-scrolled grid or yank the open viewer's
+   * pager. The alert is there because the result is NOT what the viewer is still
+   * showing — without it a save looks like it did nothing.
+   */
+  const handleEditorCreated = useCallback((item, { kind: editKind } = {}) => {
+    softReloadGallery();
+    if (editKind === 'sticker') {
+      Alert.alert(
+        'Sticker saved',
+        'It\'s in your vault under the "sticker" tag. Send it as a PNG and it keeps its transparent background.',
+        [
+          { text: 'Done', style: 'cancel' },
+          { text: 'Share', onPress: () => shareSticker(item) },
+        ],
+      );
+      return;
+    }
+    Alert.alert('Saved a copy', 'Your drawing was saved as a new photo. The original is untouched.');
+  }, [softReloadGallery, shareSticker]);
 
   // Warm expo-image's cache for the loaded pages immediately around the
   // viewport (±1 page ≈ the current screen + its neighbours). Called as pages
@@ -4153,6 +4248,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           onToggleFavourite={toggleFavourite}
           onShare={handleShare}
           onEditImage={openImageEditor}
+          onBackIntercept={backOutOfViewerOverlay}
           onClosed={handleViewerClosed}
           measureCell={measureCell}
           theme={theme}
@@ -4281,6 +4377,33 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               </View>
             </Pressable>
           )}
+
+          {/* The viewer's pencil key. INSIDE the viewer's Modal, like every
+              other overlay here: the editor is an in-tree View, and no zIndex
+              reaches across a Modal's own native window. Mounted at the screen
+              root it opened faithfully — underneath the photo it was editing.
+              It carries the highest zIndex in this Modal, so it covers the
+              chrome and the sheets as well as the stage. */}
+          <ImageEditor
+            visible={!!editorItem}
+            item={editorItem}
+            api={api}
+            getFullUrl={getFullUrl}
+            colors={theme.colors}
+            insets={insets}
+            bottomInset={tabBarH}
+            onClose={closeImageEditor}
+            onSaved={(fields) => patchMediaLocally(editorItem?.id, fields)}
+            onCreated={handleEditorCreated}
+            // Titled by the tool that failed: "Could not rotate" over a failed
+            // sticker cutout is a confusing thing to read.
+            onError={(message, tool) => Alert.alert(
+              tool === 'sticker' ? 'Could not make a sticker'
+                : tool === 'draw' ? 'Could not save your drawing'
+                  : 'Could not rotate',
+              message,
+            )}
+          />
         </PhotoViewer>
       </DevProfiler>
       {renderLocalSyncGallery()}
@@ -5600,21 +5723,6 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           deleteAlbum(name);
         }}
         onClose={() => setAlbumMenuName(null)}
-      />
-
-      {/* The viewer's pencil key. Mounted at the screen root so it covers the
-          viewer itself, which is where it is opened from. */}
-      <ImageEditor
-        visible={!!editorItem}
-        item={editorItem}
-        api={api}
-        getFullUrl={getFullUrl}
-        colors={theme.colors}
-        insets={insets}
-        bottomInset={tabBarH}
-        onClose={closeImageEditor}
-        onSaved={(fields) => patchMediaLocally(editorItem?.id, fields)}
-        onError={(message) => Alert.alert('Could not rotate', message)}
       />
 
       {/* "Share to the web" for a board. */}

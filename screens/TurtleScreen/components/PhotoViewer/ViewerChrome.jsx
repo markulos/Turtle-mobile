@@ -297,6 +297,17 @@ function ViewerChrome({
         />
         <View style={[styles.topRow, { top: insets.top + 6 }]} pointerEvents="box-none">
           <ChromeButton icon="chevron-left" label="Back" onPress={onBack} size={32} testID="viewer-back" />
+          {/* The only thing that says a photo moves. Press-and-hold is
+              invisible otherwise — nobody holds a finger on a photo to find
+              out — so the badge is not decoration, it IS the affordance.
+              Rides in the chrome, and so comes and goes with it, which is
+              what Photos does too. */}
+          {!!item?.motionUrl && (
+            <View style={styles.liveBadge} pointerEvents="none" testID="viewer-live-badge">
+              <Icon name="circle-slice-8" size={13} color="#fff" />
+              <Text style={styles.liveBadgeText}>LIVE</Text>
+            </View>
+          )}
           <View style={styles.topRight} pointerEvents="box-none">
             {!isVideo && <ChromeButton icon="pencil" label="Edit image" onPress={onEdit} testID="viewer-edit" />}
             <ChromeButton icon="tag-multiple" label="Edit tags" onPress={onTags} testID="viewer-tags" />
@@ -386,6 +397,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.38)',
+  },
+  liveBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
   },
   topRight: {
     flexDirection: 'row',

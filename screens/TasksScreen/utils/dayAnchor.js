@@ -70,19 +70,32 @@ export function reanchorTarget({ anchoredDay, selected, now = new Date(), reason
 }
 
 /**
- * What to do with the day the pager says it landed on.
+ * What to do with the page a paged list says it landed on.
  *
- * The day pager reports its page through `onMomentumScrollEnd`, and the view
- * adopts whatever it lands on — which is right for a swipe and wrong for the
- * scroll React Native performs ITSELF to honour `initialScrollIndex`. That one
- * arrives before the user has touched anything, and if it lands anywhere other
- * than the page we asked for, adopting it silently moves the selection off
- * today.
+ * Both of the calendar's pagers — the horizontal day pager and the vertical
+ * month list — report through `onMomentumScrollEnd`, and the view adopts
+ * whatever they land on. That is right for a swipe and WRONG for every scroll
+ * the list performs on its own, of which there are more than there look to be:
+ *
+ *   · the scroll React Native does after mount to honour `initialScrollIndex`
+ *   · a re-snap when `snapToInterval` changes, which happens the moment the
+ *     month pages are measured and grow from their static estimate
+ *   · any `scrollToIndex` the view itself issues after a resize
+ *
+ * None of those is a choice of date, and all of them can land somewhere other
+ * than the page we asked for — the offset was computed against the OLD page
+ * height. Adopting one silently redefines where "today" is: that is how the
+ * month grid opened on May while today was September, four pages adrift
+ * because the pages had grown ~7% taller under a fixed scroll offset.
  *
  *   'adopt'   — the user drove this, or it agrees with where we anchored
- *   'restore' — put the pager back on the anchored page and change nothing
+ *   'restore' — put the list back on the anchored page and change nothing
+ *
+ * The caller decides what `userDriven` means for its list. The month list
+ * scopes it to ONE gesture (set on drag begin, cleared when that gesture's
+ * momentum ends), so a later resize can't inherit a swipe's permission.
  */
-export function landedDayAction({ landedIndex, anchorIndex, userDriven }) {
+export function landedPageAction({ landedIndex, anchorIndex, userDriven }) {
   if (userDriven) return 'adopt';
   return landedIndex === anchorIndex ? 'adopt' : 'restore';
 }

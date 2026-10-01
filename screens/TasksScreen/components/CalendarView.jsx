@@ -55,7 +55,7 @@ import ScheduleCard, { clockLabel, TIME_COL_W, TIME_LABEL_CENTER_Y } from './Sch
 import { buildCompactRows, gapHourMarks, gapKey, gapNowOffset, gapNowSpans, minutesToTimeString } from '../utils/compactSchedule';
 import { insetCardPalette } from '../utils/cardPalette';
 import { BOARD_COLORS, inkOn } from '../utils/boardColors';
-import { landedDayAction, msUntilNextLocalMidnight, reanchorTarget, sameLocalDay } from '../utils/dayAnchor';
+import { landedPageAction, msUntilNextLocalMidnight, reanchorTarget, sameLocalDay } from '../utils/dayAnchor';
 import { accentFrostInk, FROST_TINT_ALPHA } from '../../../utils/accentColor';
 import { finderDestination, KIND_SEP, FIELD_SEP } from '../utils/finderDestination';
 import { needsCreateRow } from '../utils/taskSearch';
@@ -2639,7 +2639,7 @@ export const CalendarView = ({
 
   // Set the first time the finger actually drives the pager. Until then the
   // only scrolls it can report are ones React Native performed itself, and
-  // those are not a choice of day — see `landedDayAction`.
+  // those are not a choice of day — see `landedPageAction`.
   const pagerDrivenRef = useRef(false);
   const onDayScrollBeginDrag = useCallback(() => { pagerDrivenRef.current = true; }, []);
 
@@ -2652,7 +2652,7 @@ export const CalendarView = ({
     // the selection silently slid off today on some launches and not others —
     // the page it lands on depends on what had been laid out by then. Before
     // the first touch, the pager is told where it belongs rather than believed.
-    if (landedDayAction({
+    if (landedPageAction({
       landedIndex: clamped,
       anchorIndex: currentDayIndexRef.current,
       userDriven: pagerDrivenRef.current,
@@ -3023,16 +3023,63 @@ export const CalendarView = ({
   // identical to iOS Calendar.
   const flatListRef = useRef(null);
 
+  // The committed month index, mirrored into a ref. Two readers want the
+  // LATEST value without being re-created by it: the momentum handler (which
+  // would otherwise be rebuilt on every scroll) and the re-anchor effect below
+  // (which would re-run on every scroll-driven month change and yank the list
+  // back mid-swipe). Assigned during render, so it is current by the time
+  // either of them can fire.
+  const currentMonthIndexRef = useRef(currentMonthIndex);
+  currentMonthIndexRef.current = currentMonthIndex;
+
+  // Did a FINGER drive the scroll that is about to end? Scoped to one gesture:
+  // set on drag begin, cleared by the momentum end it belongs to. A scroll
+  // nobody dragged — see below — must not be allowed to redefine the month.
+  const monthDrivenRef = useRef(false);
+  const onMonthScrollBeginDrag = useCallback(() => { monthDrivenRef.current = true; }, []);
+
   // Scroll-driven state sync. Triggered when the user lifts a finger
   // and the FlatList settles on a page, OR when a programmatic scroll
   // (from chevrons / Today) finishes its momentum.
+  //
+  // WHY THIS IS GUARDED — the "calendar opens on May" bug.
+  //
+  // A month page is MONTH_HEIGHT tall until the calendar area is measured,
+  // then it grows to fill the screen (monthLayout, up to MAX_CELL_HEIGHT) —
+  // about 7% taller on a phone. Two things are pinned to that height:
+  // `initialScrollIndex`, which React Native honours with a scroll of its own
+  // after mount, and `snapToInterval`, which re-snaps the list when it
+  // changes. Both fire with the offset computed at the OLD height, so the
+  // list settles at 60 × 475 = 28 524pt and this handler, now dividing by the
+  // NEW 511pt page, reads index 56. Four months back. On 30 Sep that is May,
+  // every single launch, and because the re-anchor effect below then faithfully
+  // restores the index it was handed, May is where it stayed.
+  //
+  // So: a landing nobody dragged is only believed when it AGREES with the
+  // anchor. Otherwise the list is put back where the view says it belongs.
+  // (The chevrons and Today still work — `scrollToMonth` writes the target
+  // index before it scrolls, so their landing agrees by construction.)
   const onMomentumScrollEnd = useCallback((e) => {
     const idx = Math.round(e.nativeEvent.contentOffset.y / monthH);
     const clamped = Math.max(0, Math.min(MONTHS_LIST.length - 1, idx));
-    if (clamped !== currentMonthIndex) {
+    const userDriven = monthDrivenRef.current;
+    monthDrivenRef.current = false;
+    if (landedPageAction({
+      landedIndex: clamped,
+      anchorIndex: currentMonthIndexRef.current,
+      userDriven,
+    }) === 'restore') {
+      flatListRef.current?.scrollToIndex({
+        index: currentMonthIndexRef.current,
+        animated: false,
+        viewPosition: 0,
+      });
+      return;
+    }
+    if (clamped !== currentMonthIndexRef.current) {
       setCurrentMonthIndex(clamped);
     }
-  }, [currentMonthIndex, monthH]);
+  }, [monthH]);
 
   // (The moving-list top fade that used to live here — a shared value driven by
   // the list's drag/momentum events — went with the gradient it animated. The
@@ -3132,12 +3179,6 @@ export const CalendarView = ({
   }), [monthH]);
   const keyExtractor = useCallback((item) => `${item.getFullYear()}-${item.getMonth()}`, []);
 
-  // Mirror the committed month index into a ref so the re-anchor effect below
-  // can read the latest WITHOUT re-running on every scroll-driven month change
-  // (which would yank the list back mid-swipe).
-  const currentMonthIndexRef = useRef(currentMonthIndex);
-  currentMonthIndexRef.current = currentMonthIndex;
-
   // Re-anchor the month list whenever the per-page height (`monthH`) changes:
   // first when `calAreaH` is measured (static estimate → real fill-screen
   // height), and AGAIN on any later resize (rotation, split-screen, unfold).
@@ -3149,6 +3190,11 @@ export const CalendarView = ({
   const didRescaleRef = useRef(false);
   useEffect(() => {
     if (calAreaH <= 0) return;
+    // A resize is never a choice of month. Drop any gesture permission still
+    // standing (a slow drag can end without momentum, leaving the flag set),
+    // so the re-snap this height change provokes is read as what it is — the
+    // list being moved, not the user moving it — and restored to the anchor.
+    monthDrivenRef.current = false;
     const raf = requestAnimationFrame(() => {
       try {
         flatListRef.current?.scrollToIndex({ index: currentMonthIndexRef.current, animated: false, viewPosition: 0 });
@@ -3496,6 +3542,7 @@ export const CalendarView = ({
             getItemLayout={getItemLayout}
             initialScrollIndex={currentMonthIndex}
             onScrollToIndexFailed={onScrollToIndexFailed}
+            onScrollBeginDrag={onMonthScrollBeginDrag}
             onMomentumScrollEnd={onMomentumScrollEnd}
             // Signals FlatList that visible cells should re-render when
             // selectedDate changes — otherwise the "selected" highlight can

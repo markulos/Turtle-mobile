@@ -25,6 +25,25 @@ export function useIsActive(store, id) {
   return active;
 }
 
+/**
+ * "Is THIS page's Live Photo clip playing right now?"
+ *
+ * A store rather than a prop for the usual reason, and a sharper one than the
+ * others: this flips on finger-down and back on finger-up. Threaded as a prop
+ * it would change the `pages` memo's identity twice per press, remounting
+ * every mounted page's expo-image and tearing down the very texture the clip
+ * is supposed to be cross-fading out of.
+ */
+export function useMotionPlaying(store, id) {
+  const [playing, setPlaying] = useState(() => (store ? store.get() === id : false));
+  useEffect(() => {
+    if (!store) { setPlaying(false); return undefined; }
+    setPlaying(store.get() === id);
+    return store.subscribe((value) => setPlaying(value === id));
+  }, [store, id]);
+  return playing;
+}
+
 /** "Is this photo's HD variant warm?" — flips once, on a quiet frame, never back. */
 export function useHdReady(store, id) {
   const [ready, setReady] = useState(() => (store ? !!store.get(id) : false));

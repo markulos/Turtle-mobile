@@ -98,6 +98,30 @@ const DOC_MIME = {
   odp: 'application/vnd.oasis.opendocument.presentation',
 };
 
+/**
+ * The id the pond gave the thing we just uploaded.
+ *
+ * The two uploaders answer in different shapes and only this needs to care:
+ * `chunkedUpload` returns the parsed /finish body, while
+ * `streamMultipartUpload` returns expo-file-system's upload result, whose
+ * `body` is still a JSON STRING. Both wrap the same ingest payload,
+ * `{ success, media: { id, … } }`.
+ *
+ * Returns null rather than throwing on anything unexpected — the only caller
+ * is the Live Photo clip, which is optional by design.
+ */
+export function uploadedMediaId(result) {
+  if (!result) return null;
+  let payload = result;
+  if (typeof result.body === 'string') {
+    try { payload = JSON.parse(result.body); } catch { return null; }
+  } else if (result.body && typeof result.body === 'object') {
+    payload = result.body;
+  }
+  const id = payload?.media?.id ?? payload?.id ?? null;
+  return id ? String(id) : null;
+}
+
 // Terminal per-item states — anything here counts toward batch progress.
 const TERMINAL = new Set(['uploaded', 'duplicate', 'failed', 'missing']);
 
@@ -468,7 +492,10 @@ export function VaultUploadProvider({ children }) {
       const SEGMENT_SIZE = 24;
       const SEGMENT_BREATHER_MS = 250;
       const base = getBaseUrlRef.current?.() || '';
-      const uploadEndpoint = base.endsWith('/api') ? `${base}/media/upload` : `${base}/api/media/upload`;
+      // The configured base may or may not already carry `/api` — normalise
+      // once here so every media endpoint below is built the same way.
+      const mediaApi = base.endsWith('/api') ? `${base}/media` : `${base}/api/media`;
+      const uploadEndpoint = `${mediaApi}/upload`;
 
       for (;;) {
       const segment = batch.items.filter((it) => !TERMINAL.has(it.status)).slice(0, SEGMENT_SIZE);
@@ -628,9 +655,10 @@ export function VaultUploadProvider({ children }) {
             { ...a, item: mediaName, sizeBytes: meta.size || null, chunked: useChunked },
             diagCtx(),
           );
+          let uploadResult = null;
           try {
             if (useChunked) {
-              await chunkedUpload({
+              uploadResult = await chunkedUpload({
                 baseUrl: base,
                 fileUri: mediaUri,
                 fileSize: meta.size || 0,
@@ -644,7 +672,7 @@ export function VaultUploadProvider({ children }) {
                 onAnomaly: reportAnomaly,
               });
             } else {
-            await streamMultipartUpload({
+            uploadResult = await streamMultipartUpload({
               url: uploadEndpoint,
               fileUri: mediaUri,
               mimeType: mediaType,
@@ -669,6 +697,40 @@ export function VaultUploadProvider({ children }) {
           }
           if (!isCurrentBatch()) return;
           item.status = 'uploaded';
+
+          // THE OTHER HALF OF A LIVE PHOTO.
+          //
+          // The photo is in the vault now, which is what makes this safe to do
+          // second: a clip that never arrives leaves an ordinary photo behind,
+          // not a broken one. So every failure here is swallowed — a Live Photo
+          // degrading to a photo is the correct outcome on a phone that lost
+          // the pond mid-batch, and failing the item would re-queue the whole
+          // still to win back three seconds of video.
+          //
+          // Awaited rather than fired and forgotten: the pool is the only thing
+          // holding the background window open, and a detached request would be
+          // killed the moment the batch finished.
+          if (item.motionUri) {
+            const mediaId = uploadedMediaId(uploadResult);
+            if (!mediaId) {
+              console.warn(`[VaultUpload] no media id in the response for ${mediaName}; its Live Photo clip is skipped`);
+            } else {
+              try {
+                await streamMultipartUpload({
+                  url: `${mediaApi}/${mediaId}/motion`,
+                  fileUri: item.motionUri,
+                  mimeType: 'video/quicktime',
+                  token: batch.token,
+                  label: `${mediaName} (motion)`,
+                  signal: batch.abortController.signal,
+                });
+                console.log(`[VaultUpload] ✓ ${mediaName} · Live Photo clip attached`);
+              } catch (e) {
+                console.warn(`[VaultUpload] Live Photo clip for ${mediaName} did not attach (the photo is fine): ${e.message}`);
+              }
+            }
+          }
+
           item.meta = null; // terminal — release the retained graph as we go
           reclaimStaged(item);
         } catch (error) {
@@ -818,6 +880,11 @@ export function VaultUploadProvider({ children }) {
         duration: a.duration || null,
         width: a.width || null,
         height: a.height || null,
+        // iOS Live Photo: the clip that belongs to this still. A plain string,
+        // so it survives the checkpoint to AsyncStorage like everything else
+        // here and a batch resumed after a kill still knows which photos have
+        // motion owing. Null on every ordinary photo.
+        motionUri: a.motionUri || null,
         status: 'pending',
         clientImportId: Crypto.randomUUID(),
       })),

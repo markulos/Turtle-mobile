@@ -60,3 +60,38 @@ describe('monthLayout', () => {
     expect(monthLayout({ ...PHONE, areaH: 100, bottomReserve: 192 })).toBeNull();
   });
 });
+
+/**
+ * THE "CALENDAR OPENS ON MAY" ARITHMETIC.
+ *
+ * This is the measurement behind the bug, written down so the next person
+ * doesn't have to rediscover it on a phone. CalendarView renders every month
+ * page at the STATIC MONTH_HEIGHT until the calendar area is measured, then at
+ * the grown height this module returns. `initialScrollIndex` and
+ * `snapToInterval` are both pinned to that height, so the list is parked at an
+ * offset computed with the old one and then re-read with the new one.
+ *
+ * The drift is not a rounding wobble — it is four whole months on a stock
+ * phone, which on 30 September reads as May. The guard that stops the list
+ * adopting that reading lives in `landedPageAction` (dayAnchor.test.js); this
+ * test exists so that if the geometry ever changes, the number in that story
+ * is checked rather than trusted.
+ */
+describe('the stale-offset drift the month pager has to survive', () => {
+  const MONTH_RANGE = 60;                                  // today's index in MONTHS_LIST
+  const STATIC_MONTH_H = PHONE.chromeH + 6 * PHONE.minCell; // CalendarView's MONTH_HEIGHT
+
+  test('the measured page is taller than the static estimate', () => {
+    const { monthH } = monthLayout(PHONE);
+    expect(monthH).toBeGreaterThan(STATIC_MONTH_H);
+  });
+
+  test("today's offset, re-read at the measured height, is four months back", () => {
+    const { monthH } = monthLayout(PHONE);
+    // Where the list is actually parked after `initialScrollIndex`.
+    const parkedOffset = MONTH_RANGE * STATIC_MONTH_H;
+    // What onMomentumScrollEnd computes from it once the pages have grown.
+    const misread = Math.round(parkedOffset / monthH);
+    expect(MONTH_RANGE - misread).toBe(4);
+  });
+});
