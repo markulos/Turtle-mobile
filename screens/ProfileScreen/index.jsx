@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator,
+  View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, ActivityIndicator,
   RefreshControl, AppState,
 } from 'react-native';
 import { depth } from '../../utils/surfaceDepth';
@@ -25,6 +25,7 @@ import ErrorBoundary from '../../components/ErrorBoundary';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
+import FriendChatPage from './components/FriendChatPage';
 import ConversationsOverlay from '../TurtleScreen/components/ConversationsOverlay';
 import LinkDesktop from '../TurtleScreen/components/LinkDesktop';
 import PasswordsScreen from '../PasswordsScreen';
@@ -51,7 +52,7 @@ import Turtle3DPanel from './Turtle3DPanel';
 const nameKey = (identity) => `profileName:${identity || 'anon'}`;
 
 export default function ProfileScreen() {
-  const { theme } = useTheme();
+  const { theme, isDark } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
   // Name edit keyboard: pad the page so the field can scroll clear of it.
@@ -70,6 +71,10 @@ export default function ProfileScreen() {
   const [draft, setDraft] = useState('');
   const [friendCount, setFriendCount] = useState(null);
   const [showFriends, setShowFriends] = useState(false);
+  // The person whose conversation is open, or null. The friend object itself,
+  // not an id: the thread's header wants their name and avatar immediately,
+  // and the row that was pressed already holds both.
+  const [chatFriend, setChatFriend] = useState(null);
   const [friends, setFriends] = useState([]);
   // Invites the owner has sent that nobody has signed in against yet. The
   // server only returns these to the owner, so for everyone else it stays [].
@@ -529,9 +534,23 @@ export default function ProfileScreen() {
         serverBase={serverBase}
         refreshing={refreshing}
         onRefresh={onRefresh}
+        onOpenChat={setChatFriend}
         theme={theme}
         insets={insets}
         styles={styles}
+      />
+
+      {/* The conversation behind a friend's row. Mounted here, beside the
+          Friends page rather than inside it, so it draws OVER that page — an
+          EdgeSwipePage nested in another one is an in-tree overlay and the
+          last sibling wins. */}
+      <FriendChatPage
+        visible={!!chatFriend}
+        onClose={() => setChatFriend(null)}
+        friend={chatFriend}
+        theme={theme}
+        isDark={isDark}
+        serverBase={serverBase}
       />
 
       {/* Board conversations — hosted HERE now rather than reached by switching
@@ -818,7 +837,7 @@ const MEDAL = { 1: '#F5B301', 2: '#A8B3BD', 3: '#C9773F' };
  * highlighted, but ranked honestly.
  */
 function FriendsPage({
-  visible, onClose, leaderboard, pending, serverBase, refreshing, onRefresh, theme, insets, styles,
+  visible, onClose, leaderboard, pending, serverBase, refreshing, onRefresh, onOpenChat, theme, insets, styles,
 }) {
   const c = theme.colors;
   const tint = c.accent || c.accentInfo;
@@ -874,13 +893,25 @@ function FriendsPage({
                 // a standing feel catchable rather than fixed.
                 const gap = top && r.rank > 1 ? (leaderboard[r.rank - 2]?.stats?.points || 0) - pts : 0;
                 const avatar = resolveAvatarUrl(r.avatarUrl, serverBase);
+                // A row opens a conversation — EXCEPT your own (the pond
+                // refuses a message to yourself, so a row that looked tappable
+                // would only ever produce an error) and except someone who has
+                // not signed in yet, who has no account to deliver to.
+                const canMessage = !r.isMe && r.joined !== false && !!onOpenChat;
                 return (
-                  <View
+                  <Pressable
                     key={r.id}
-                    style={[
+                    disabled={!canMessage}
+                    onPressIn={canMessage ? () => tapHaptic() : undefined}
+                    onPress={canMessage ? () => onOpenChat({ id: r.id, name: r.name, avatarUrl: r.avatarUrl }) : undefined}
+                    accessibilityRole={canMessage ? 'button' : undefined}
+                    accessibilityLabel={canMessage ? `Message ${r.name}` : undefined}
+                    testID={canMessage ? `friend-row-${r.id}` : undefined}
+                    style={({ pressed }) => [
                       statStyles.boardRow,
                       { borderColor: c.border },
                       r.isMe && { backgroundColor: tint + '14' },
+                      pressed && canMessage && { opacity: 0.7 },
                     ]}
                   >
                     <Text
@@ -923,7 +954,7 @@ function FriendsPage({
                       </Text>
                     </View>
                     <Text style={[statStyles.boardPoints, { color: r.isMe ? tint : c.textPrimary }]}>{pts}</Text>
-                  </View>
+                  </Pressable>
                 );
               })}
             </>

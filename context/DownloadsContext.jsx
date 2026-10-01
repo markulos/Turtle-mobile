@@ -73,6 +73,11 @@ export const useMediaVersion = () => useContext(MediaVersionContext);
 // must not re-render six times a second because something is downloading.
 const SyncContext = createContext({
   tasksVersion: 0, notesVersion: 0, focusVersion: 0,
+  // Person-to-person messages. The counter is the "something arrived" bell; the
+  // ping says WHO it was with, so an open thread can tell a message meant for
+  // it from one in another conversation. Content-free by design — see
+  // routes/messages.js.
+  messagesVersion: 0, messagesPing: null,
   pomodoroState: null, pomodoroDurations: null,
   // The timer as the user should SEE it (translated, minus a dismissed ended
   // card), and the one way to dismiss. Both the Turtle tab's card and the
@@ -101,6 +106,8 @@ export function DownloadsProvider({ children }) {
   const [tasksVersion, setTasksVersion] = useState(0);
   const [notesVersion, setNotesVersion] = useState(0);
   const [focusVersion, setFocusVersion] = useState(0);
+  const [messagesVersion, setMessagesVersion] = useState(0);
+  const [messagesPing, setMessagesPing] = useState(null);
   const [pomodoroState, setPomodoroState] = useState(null);
   const [pomodoroDurations, setPomodoroDurations] = useState(null);
   // The last `focus:changed` push, raw: { payload, receivedAt }.
@@ -207,6 +214,17 @@ export function DownloadsProvider({ children }) {
     // write still in flight.
     socket.on('tasks:changed', (p) => { if (accepts(p)) setTasksVersion((v) => v + 1); });
     socket.on('notes:changed', (p) => { if (accepts(p)) setNotesVersion((v) => v + 1); });
+    // A message from a friend. Lives HERE rather than in the thread screen for
+    // the same reason the focus listener moved up: the tab navigator is lazy,
+    // so anything mounted inside a tab does not exist until that tab is first
+    // opened, and a listener that is not there cannot ring. The ping carries no
+    // text (socket auth is in observe mode on the pond — routes/messages.js);
+    // whoever is listening refetches over authenticated HTTP.
+    socket.on('message:new', (p) => {
+      if (!isCurrent()) return;
+      setMessagesPing({ withUserId: p?.withUserId ?? null, at: p?.at ?? Date.now() });
+      setMessagesVersion((v) => v + 1);
+    });
     // A TASK-LINKED focus block lives in `task_pomodoros`, not in the pond's
     // in-memory timer, so starting one never reached another device — the only
     // surface that noticed was the tray HUD, because it polls.
@@ -308,8 +326,8 @@ export function DownloadsProvider({ children }) {
   }, []);
   const pomodoroView = useMemo(() => visibleTimer(pomodoroState, dismissedEndedId), [pomodoroState, dismissedEndedId]);
   const syncValue = useMemo(
-    () => ({ tasksVersion, notesVersion, focusVersion, pomodoroState, pomodoroDurations, pomodoroView, dismissEndedTimer, focusPush }),
-    [tasksVersion, notesVersion, focusVersion, pomodoroState, pomodoroDurations, pomodoroView, dismissEndedTimer, focusPush],
+    () => ({ tasksVersion, notesVersion, focusVersion, messagesVersion, messagesPing, pomodoroState, pomodoroDurations, pomodoroView, dismissEndedTimer, focusPush }),
+    [tasksVersion, notesVersion, focusVersion, messagesVersion, messagesPing, pomodoroState, pomodoroDurations, pomodoroView, dismissEndedTimer, focusPush],
   );
   return (
     <DownloadsContext.Provider value={value}>
