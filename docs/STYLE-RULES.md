@@ -365,6 +365,20 @@ repo skill (loaded before any UI work) and by review.
   tree, which iOS presents fine (a SIBLING Modal over an open one is what disappears). Never leave such a
   sheet inside the page component that raised it — a parent's zIndex or `overflow: hidden` outranks and
   clips it no matter what the sheet itself carries.
+- EVERY FULL-SCREEN PAGE CLEARS THE TOP HOOD ITSELF — the status bar and whatever the phone parks in it
+  (a notch, a Dynamic Island). Pad the page's first row by `panelTopInset(insets.top)` from
+  `components/tabBarLayout`; never a bare constant, never 0 "because the screen underneath already did it".
+  THE TRAP is that it looks covered: an `overlay` EdgeSwipePage mounts inside a screen whose root took the
+  inset (`<SafeAreaView edges={['top']}>` in Notes, `paddingTop: insets.top` in the Planner), so "clearing
+  it again would clear it twice" reads as obvious. It is wrong — the page is an ABSOLUTE FILL, laid out
+  against its ancestor's padding box, so the ancestor's padding does not move it down; the Modal form is
+  `statusBarTranslucent` and says so outright. Both filter panels shipped with their back key, title and
+  Clear key printed through the clock on that reasoning (commit 3b7b2c1 took the inset out of them, having
+  read a correctly-cleared status bar as "a notch's worth of nothing above the title"). The tell that the
+  "twice" reading is wrong: the pages that work — OverviewPage, in the SAME Planner tree, plus
+  GlobalSearchPage, SharedBoardPage and MediaGallery's pages — all take the whole `insets.top`. The one
+  genuine 0 is a panel rendered EMBEDDED in another page's body, which has a real layout parent to pad it.
+  Pinned by `components/__tests__/panelTopHood.scan.test.js`, which scans every `<EdgeSwipePage` caller.
 - A sheet's FOOTER is a PINNED BAR and the SHELL owns the space under it: `ViewerSheet` pads it by
   `max(insets.bottom, bottomInset)` + 12 pt, so the keys clear the home indicator — or whatever the
   caller says is under the sheet (a floating tab bar) — instead of resting flush on the bottom of the

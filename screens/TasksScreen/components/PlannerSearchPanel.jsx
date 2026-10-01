@@ -319,11 +319,11 @@ export default function PlannerSearchPanel({
       renderItem={renderRow}
       emptyText={EMPTY[mode] || EMPTY.list}
       fullScreen={fullScreen}
-      // No safe-area padding when this opens INSIDE the Planner, under a header
-      // that has already cleared the status bar — taking the inset again there
-      // was a notch's worth of nothing above the field. Full-screen it owns the
-      // status bar itself, so the inset is its job again (undefined = take it).
-      insetTop={fullScreen ? undefined : 0}
+      // No insetTop: the hood is the panel's job in BOTH forms. The overlay
+      // form opening inside the Planner does not inherit its header's
+      // clearance — an absolute fill lays out over the hood regardless — so the
+      // 0 this used to pass put the search field through the clock. See
+      // panelTopInset.
       // The Focus tab's list before you have typed is a SUGGESTION, and saying
       // so is the difference between "here is what is next" and "here are some
       // tasks for no reason".

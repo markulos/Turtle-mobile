@@ -39,7 +39,7 @@ import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import { tapHaptic } from '../../../utils/haptics';
 import { inkOn } from '../../../utils/accentColor';
 import { boardLabel } from '../utils/taskHelpers';
-import { panelBottomInset } from '../../../components/tabBarLayout';
+import { panelBottomInset, panelTopInset } from '../../../components/tabBarLayout';
 
 const STATUS = [
   { key: 'todo', label: 'To do', icon: 'checkbox-blank-circle-outline' },
@@ -146,12 +146,13 @@ export default function PlannerFilterPanel({
   return (
     <EdgeSwipePage overlay visible={visible} onClose={close}>
       <View style={[s.page, { backgroundColor: theme.colors.background }]}>
-        {/* No safe-area padding at the top: this overlay opens INSIDE the
-            Planner, under a header that has already cleared the status bar, so
-            taking the inset again here was a notch's worth of nothing above the
-            title. The BOTTOM inset still applies — nothing else clears the home
-            indicator for us. */}
-        <View style={[s.header, { paddingTop: 8 }]}>
+        {/* Both ends are the panel's own job. Opening INSIDE the Planner does
+            NOT mean its header has covered this: the page is an absolute fill,
+            so it lays out over the hood whatever the screen above it padded —
+            OverviewPage is an overlay in this same tree and takes the whole
+            inset. See panelTopInset; this is the bug it exists to close.
+            Nothing else clears the home indicator or the dock below, either. */}
+        <View style={[s.header, { paddingTop: panelTopInset(insets.top) }]}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Back"

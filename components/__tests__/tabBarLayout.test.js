@@ -7,8 +7,8 @@
  * (Apply, Show, Save), which is why this is a rule and not a preference.
  */
 import {
-  BAR_CONTENT_HEIGHT, CARD_GAP_BOTTOM, PANEL_BOTTOM_GAP,
-  dockOccupied, panelBottomInset,
+  BAR_CONTENT_HEIGHT, CARD_GAP_BOTTOM, PANEL_BOTTOM_GAP, PANEL_TOP_GAP,
+  dockOccupied, panelBottomInset, panelTopInset,
   PILL_SIZE, BAR_VERTICAL_PAD, TAB_ITEM_PADDING, TAB_ICON_SLOT, clusterStart,
 } from '../tabBarLayout';
 
@@ -51,6 +51,38 @@ describe('panelBottomInset — every panel ends ABOVE the dock', () => {
   // reaches for useBottomTabBarHeight(), drifts from every other panel.
   test('it is a pure function of the inset — two panels cannot disagree', () => {
     expect(panelBottomInset(34)).toBe(panelBottomInset(34));
+  });
+});
+
+describe('panelTopInset — every panel clears the TOP HOOD', () => {
+  // The Notes filter panel shipped with its back key, its "Filter" title and
+  // its Clear key drawn through the status bar clock. This is that bug's
+  // inverse, and the mirror of panelBottomInset at the other end.
+  test('a hooded phone gets the whole hood, plus a breath', () => {
+    expect(panelTopInset(59)).toBe(59 + PANEL_TOP_GAP);
+  });
+
+  test('…which is strictly more than the hood alone, so nothing sits on it', () => {
+    expect(panelTopInset(59)).toBeGreaterThan(59);
+  });
+
+  // A phone with no notch still has a status bar; the breath is what keeps the
+  // title off it, so it is not conditional on there being an inset to clear.
+  test('a phone with no hood still gets the breath', () => {
+    expect(panelTopInset(0)).toBe(PANEL_TOP_GAP);
+    expect(panelTopInset()).toBe(PANEL_TOP_GAP);
+  });
+
+  test('junk in is still a usable number, never NaN padding', () => {
+    expect(panelTopInset(undefined)).toBe(PANEL_TOP_GAP);
+    expect(panelTopInset(null)).toBe(PANEL_TOP_GAP);
+    expect(Number.isFinite(panelTopInset(NaN))).toBe(true);
+  });
+
+  // The whole point of exporting it: "my parent already cleared the status bar"
+  // is a judgement two panels made differently, and both were wrong.
+  test('it is a pure function of the inset — two panels cannot disagree', () => {
+    expect(panelTopInset(59)).toBe(panelTopInset(59));
   });
 });
 

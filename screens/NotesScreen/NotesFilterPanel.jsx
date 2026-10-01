@@ -34,7 +34,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import { tapHaptic } from '../../utils/haptics';
 import { inkOn } from '../../utils/accentColor';
-import { panelBottomInset } from '../../components/tabBarLayout';
+import { panelBottomInset, panelTopInset } from '../../components/tabBarLayout';
 
 /** The kind chips, in the order they read — widest scope first. */
 const KIND_ICONS = {
@@ -139,10 +139,13 @@ export default function NotesFilterPanel({
   return (
     <EdgeSwipePage overlay visible={visible} onClose={close}>
       <View style={[s.page, { backgroundColor: theme.colors.background }]}>
-        {/* No safe-area padding at the top: this overlay opens INSIDE Notes,
-            under a header that has already cleared the status bar. The BOTTOM
-            inset still applies — nothing else clears the home indicator. */}
-        <View style={[s.header, { paddingTop: 8 }]}>
+        {/* Both ends are the panel's own job. Opening INSIDE Notes does NOT
+            mean the screen's SafeAreaView has covered this: the page is an
+            absolute fill, so it lays out over the hood whatever the screen
+            above it padded (see panelTopInset — the title printed over the
+            clock is what assuming otherwise looks like). Nothing else clears
+            the home indicator or the dock below, either. */}
+        <View style={[s.header, { paddingTop: panelTopInset(insets.top) }]}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Back"

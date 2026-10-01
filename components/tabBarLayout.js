@@ -1,5 +1,9 @@
 /**
- * Geometry shared by the tab bar and its sliding chip.
+ * Geometry shared by the tab bar and its sliding chip — and, at the bottom of
+ * the file, the two rules that keep a panel clear of the screen's own furniture
+ * at BOTH ends: the dock below (`panelBottomInset`) and the top hood above
+ * (`panelTopInset`). They live here together because a panel needs both and
+ * should not have to learn two modules to get its edges right.
  *
  * These live in one module because two separate things have to agree on them
  * exactly: the bar sets its horizontal padding so the tabs sit as a centred
@@ -89,6 +93,46 @@ export const dockOccupied = (insetsBottom = 0) =>
  * control is clear of it rather than touching it.
  */
 export const PANEL_BOTTOM_GAP = 12;
+
+/**
+ * A breath between the top hood and the panel's first row, so the title and its
+ * keys sit under the status bar rather than against it. 8pt is what
+ * VaultSearchPanel has always used (`topPad + 8`); this is that number, named.
+ */
+export const PANEL_TOP_GAP = 8;
+
+/**
+ * THE RULE: every full-screen panel clears the TOP HOOD itself.
+ *
+ * The hood is the status bar and whatever the phone parks in it — a notch, a
+ * Dynamic Island. A panel that starts at y=0 draws its back key, its title and
+ * its Clear key straight through the clock.
+ *
+ * THE TRAP is that the panel LOOKS like it is already covered. An `overlay`
+ * EdgeSwipePage mounts inside a screen whose root has taken the inset already
+ * (`<SafeAreaView edges={['top']}>` in Notes, `paddingTop: insets.top` in the
+ * Planner), so the natural reading is "my parent cleared it, I must not clear
+ * it twice". That reading is WRONG, and it has cost this app the bug twice:
+ *
+ *   The page is an ABSOLUTE FILL. It is laid out against its ancestor's padding
+ *   box, so the ancestor's safe-area padding does not move it down — it covers
+ *   the hood no matter what the screen above it did. (The Modal form says the
+ *   same thing more obviously: it is `statusBarTranslucent`.)
+ *
+ * The giveaway that the "twice" reading is wrong is that it contradicts the
+ * panels that work: OverviewPage is an overlay in the SAME Planner tree and
+ * takes the whole `insets.top`, as do GlobalSearchPage, SharedBoardPage and
+ * MediaGallery's pages. Commit 3b7b2c1 read a correctly-cleared status bar as
+ * "a notch's worth of nothing above the title" and took the inset out of the
+ * two filter panels; what that left is the title printed over the clock.
+ *
+ * So the inset is NOT a judgement call per panel, which is why this is a
+ * function and not a comment. The one genuine exception is a panel rendered
+ * EMBEDDED in another page's body rather than as its own EdgeSwipePage — a
+ * real layout parent does pad its children, so that caller passes 0.
+ */
+export const panelTopInset = (insetsTop = 0) =>
+  (Number(insetsTop) || 0) + PANEL_TOP_GAP;
 
 /**
  * THE RULE: every panel ends above the dock, not behind it.

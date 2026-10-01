@@ -31,7 +31,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AppTextInput from '../../../components/AppTextInput';
 import EdgeSwipePage from './EdgeSwipePage';
 import { HIT_SLOP_8, ROW_KEY_W, SEARCH_HEIGHT } from './VaultSearchDock';
-import { panelBottomInset } from '../../../components/tabBarLayout';
+import { panelBottomInset, panelTopInset } from '../../../components/tabBarLayout';
 
 export default function VaultSearchPanel({
   visible,
@@ -57,11 +57,13 @@ export default function VaultSearchPanel({
   // The field's own testID, when a caller already has one its tests use.
   // Defaults to the dock's `<prefix>-input` convention.
   inputTestID,
-  // How much room to leave above the field. Defaults to the safe area, which is
-  // right for a caller that covers the whole screen — but an `overlay` panel
-  // opened INSIDE a page that has already cleared the status bar would then
-  // clear it twice, and the notch's worth of nothing above the field is the
-  // tell. Such a caller passes 0.
+  // How much hood to clear above the field. Defaults to the safe area, which is
+  // right for EVERY caller that is its own EdgeSwipePage — the overlay form
+  // included. Opening inside a page that has already taken the inset does NOT
+  // cover this one: an absolute fill lays out over the hood regardless, so a
+  // caller that passes 0 on that reasoning prints its field through the clock
+  // (see panelTopInset). Only a caller rendered EMBEDDED in another page's
+  // body, which has a real layout parent to pad it, passes 0.
   insetTop,
   // Take the WHOLE screen — the Modal form of EdgeSwipePage rather than the
   // in-tree overlay. `overlay` exists because a caller already inside a page
@@ -101,7 +103,7 @@ export default function VaultSearchPanel({
   return (
     <EdgeSwipePage overlay={!fullScreen} visible={visible} onClose={close}>
       <View style={styles.page}>
-        <View style={[styles.header, { paddingTop: topPad + 8 }]}>
+        <View style={[styles.header, { paddingTop: panelTopInset(topPad) }]}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Back"
