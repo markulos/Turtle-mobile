@@ -24,7 +24,21 @@ import {
   ChangeMasterPasswordModal,
 } from './components';
 
-export default function PasswordsScreen() {
+/**
+ * `onBack` — a way out, drawn as the FIRST KEY OF THE HEADER ROW.
+ *
+ * Optional because this screen has two hosts and only one of them needs it: as
+ * the `Vault` tab it is a destination with nothing to go back to, while the
+ * Profile opens it as an EdgeSwipePage that has to be closeable.
+ *
+ * It is a prop rather than something the host draws ON TOP of this screen,
+ * which is what the Profile used to do — an absolutely-positioned chevron at
+ * `left: 12` over a header whose title starts at `x: 16`. A floating key
+ * reserves no room, so the title had no idea it was there and "Passwords" was
+ * printed straight through the chevron. A key in the row is a key the title
+ * lays out beside.
+ */
+export default function PasswordsScreen({ onBack }) {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   // The tab bar floats over the page now, so lists clear it themselves.
@@ -132,7 +146,22 @@ export default function PasswordsScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Passwords</Text>
+        <View style={styles.headerLeft}>
+          {!!onBack && (
+            <TouchableOpacity
+              onPressIn={() => tapHaptic()}
+              onPress={onBack}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.backKey}
+              accessibilityRole="button"
+              accessibilityLabel="Close the vault"
+              testID="passwords-back"
+            >
+              <Icon name="chevron-left" size={28} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+          )}
+          <Text style={styles.headerTitle} numberOfLines={1}>Passwords</Text>
+        </View>
         <View style={styles.headerActions}>
           <TouchableOpacity
             onPressIn={() => tapHaptic()}
@@ -242,10 +271,31 @@ const createStyles = (theme) =>
       borderBottomWidth: 1,
       borderBottomColor: theme.colors.border,
     },
+    // The title and its back key are ONE group, so the row's space-between puts
+    // the gap between them and the actions rather than between the key and the
+    // title. Shrinks, so a long title gives way to the keys instead of pushing
+    // them off the right edge (STYLE-RULES §2).
+    headerLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 2,
+      flexShrink: 1,
+    },
+    // Pulled back toward the gutter: a chevron glyph carries its own side
+    // bearing, so a key boxed flush at 16pt reads as indented next to the
+    // title's flat stem.
+    backKey: {
+      width: 30,
+      height: 36,
+      marginLeft: -8,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     headerTitle: {
       fontSize: 18,
       fontWeight: '700',
       color: theme.colors.textPrimary,
+      flexShrink: 1,
     },
     headerActions: {
       flexDirection: 'row',

@@ -628,17 +628,12 @@ export default function ProfileScreen() {
         styles={styles}
       />
 
-      {/* Password vault — the tab it replaces in the dock. */}
+      {/* Password vault — the tab it replaces in the dock. The way out is a
+          PROP, not a chevron floated on top: an absolute key reserves no room,
+          so the vault's own "Passwords" title laid out as though nothing were
+          there and printed straight through it. */}
       <EdgeSwipePage overlay visible={vaultOpen} onClose={() => setVaultOpen(false)}>
-        <PasswordsScreen />
-        <TouchableOpacity
-          onPress={() => setVaultOpen(false)}
-          style={[styles.vaultBack, { top: insets.top + 8 }]}
-          hitSlop={HIT}
-          accessibilityLabel="Close the vault"
-        >
-          <Icon name="chevron-left" size={28} color={c.textPrimary} />
-        </TouchableOpacity>
+        <PasswordsScreen onBack={() => setVaultOpen(false)} />
       </EdgeSwipePage>
     </View>
   );
@@ -1799,9 +1794,5 @@ const makeStyles = (theme) => {
     friendRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
     friendName: { fontSize: 15, fontWeight: '600', color: c.textPrimary, flex: 1 },
     empty: { color: c.textSecondary, textAlign: 'center', padding: 40 },
-    vaultBack: {
-      position: 'absolute', left: 12,
-      width: 36, height: 36, alignItems: 'center', justifyContent: 'center',
-    },
   });
 };
