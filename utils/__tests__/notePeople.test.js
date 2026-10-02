@@ -39,6 +39,33 @@ describe('notePeopleRoster', () => {
     expect(roster[0].avatarUrl).toBe('/api/avatars/u1.jpg');
   });
 
+  it('finds the author a picture when their row has only a name', () => {
+    // This is a to-do row built from a TASK: the tasks DTO carries ownerName but
+    // no avatar, so the row's null must not pin the face to "has no photo".
+    const roster = notePeopleRoster(
+      { sharedBy: { userId: 'u2', name: 'Ada', avatarUrl: null }, involvedUsers: [] },
+      people,
+    );
+    expect(roster[0]).toEqual({ userId: 'u2', name: 'Ada', avatarUrl: '/api/avatars/u2.jpg' });
+  });
+
+  it('lets the row\'s own name and picture win over the map', () => {
+    const roster = notePeopleRoster(
+      { sharedBy: { userId: 'u2', name: 'Ada Lovelace', avatarUrl: '/fresh.jpg' } },
+      people,
+    );
+    expect(roster[0].name).toBe('Ada Lovelace');
+    expect(roster[0].avatarUrl).toBe('/fresh.jpg');
+  });
+
+  it('still shows an author the map has never heard of', () => {
+    const roster = notePeopleRoster(
+      { sharedBy: { userId: 'ghost', name: 'Someone', avatarUrl: null } },
+      people,
+    );
+    expect(roster).toEqual([{ userId: 'ghost', name: 'Someone', avatarUrl: null }]);
+  });
+
   it('does not draw the author twice when they are also in involvedUsers', () => {
     // The server does not forbid this, and the card must not show one person
     // twice because of it.

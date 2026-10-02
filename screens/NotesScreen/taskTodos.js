@@ -57,10 +57,23 @@ export function taskAsTodo(task) {
     // column, and adding one to carry what a JSON blob already holds would be
     // a migration for nothing.
     mediaIds: Array.isArray(meta.mediaIds) ? meta.mediaIds : [],
-    // Notes-only decorations a task never has. Spelled out rather than left
-    // undefined so the row components never have to guess.
+    // Who made it and who is on it, in the shape the byline reads.
+    //
+    // A task HAS both — `userId`/`ownerName` is its owner and `involvedUsers` is
+    // the people on it — so a to-do row showing nobody was this translation
+    // dropping them, not a task lacking them. The Notes list is mostly these
+    // rows, so leaving them blank meant the byline was invisible on almost every
+    // card in it.
+    //
+    // No avatar here on purpose: the tasks DTO carries a NAME but no picture, and
+    // the byline resolves ids to faces through usePondPeople anyway. Passing null
+    // lets that lookup supply it rather than pinning the face to "no photo".
+    sharedBy: task.userId
+      ? { userId: task.userId, name: task.ownerName || null, avatarUrl: null }
+      : null,
+    involvedUsers: Array.isArray(task.involvedUsers) ? task.involvedUsers : [],
+    // A notes-only decoration a task genuinely does not have.
     thumbUrl: null,
-    sharedBy: null,
     // What makes this a task rather than only a note.
     __task: true,
     // The task's whole meta blob, carried so an edit can merge into it rather

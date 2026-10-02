@@ -24,6 +24,12 @@
  * the id alone. A nameless face is a person whose name we have not learned yet;
  * a missing face is a person who has been silently dropped.
  */
+/** The people map is a Map, but callers may hand over nothing at all. */
+function lookup(peopleById, userId) {
+  if (!peopleById || typeof peopleById.get !== 'function') return null;
+  return peopleById.get(userId) || null;
+}
+
 export function notePeopleRoster(note, peopleById) {
   const out = [];
   const seen = new Set();
@@ -35,18 +41,27 @@ export function notePeopleRoster(note, peopleById) {
     out.push(person);
   };
 
-  // The author, from the note's own row — it already carries the name and the
-  // avatar, so this face never waits on the people map.
+  // The author. A plain note's own row carries their name AND their picture, so
+  // that face never waits on the people map; a to-do row built from a TASK
+  // carries only the name, because the tasks DTO has no avatar on it. So the
+  // row wins where it has an answer and the map fills in the rest — rather than
+  // the row's `null` pinning the face to "this person has no photo".
   const by = note?.sharedBy;
-  if (by && String(by.userId || '').trim()) {
-    add({ userId: String(by.userId), name: by.name || null, avatarUrl: by.avatarUrl || null });
+  const authorId = String(by?.userId || '').trim();
+  if (authorId) {
+    const known = lookup(peopleById, authorId);
+    add({
+      userId: authorId,
+      name: by.name || known?.name || null,
+      avatarUrl: by.avatarUrl || known?.avatarUrl || null,
+    });
   }
 
   const involved = Array.isArray(note?.involvedUsers) ? note.involvedUsers : [];
   for (const raw of involved) {
     const userId = String(raw || '').trim();
     if (!userId) continue;
-    const known = peopleById && typeof peopleById.get === 'function' ? peopleById.get(userId) : null;
+    const known = lookup(peopleById, userId);
     add({
       userId,
       name: known?.name || null,

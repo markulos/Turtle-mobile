@@ -158,3 +158,39 @@ describe('inboxCountLabel', () => {
     expect(inboxCountLabel(4)).toBe('4 in the inbox');
   });
 });
+
+/**
+ * A to-do row is a TASK wearing a note's shape, and the Notes list is mostly
+ * these rows. They carried no author at all, which is why the card byline was
+ * invisible on nearly every card in that list while working perfectly on the
+ * plain notes mixed in among them.
+ */
+describe('taskAsTodo — who is on it', () => {
+  const task = (over = {}) => ({
+    id: 't1', title: 'Fix the dock', userId: 'u1', ownerName: 'Mark', involvedUsers: [], ...over,
+  });
+
+  it('carries the task owner across as the row\'s author', () => {
+    expect(taskAsTodo(task()).sharedBy).toEqual({
+      userId: 'u1', name: 'Mark', avatarUrl: null,
+    });
+  });
+
+  it('carries the people on the task across as its collaborators', () => {
+    expect(taskAsTodo(task({ involvedUsers: ['u2', 'u3'] })).involvedUsers).toEqual(['u2', 'u3']);
+  });
+
+  it('leaves no author on a task that somehow has no owner', () => {
+    expect(taskAsTodo(task({ userId: null })).sharedBy).toBeNull();
+  });
+
+  it('survives an owner with no name yet — the byline resolves the id to a face', () => {
+    expect(taskAsTodo(task({ ownerName: undefined })).sharedBy)
+      .toEqual({ userId: 'u1', name: null, avatarUrl: null });
+  });
+
+  it('is an empty list, never undefined, when nobody else is on it', () => {
+    expect(taskAsTodo(task({ involvedUsers: undefined })).involvedUsers).toEqual([]);
+    expect(taskAsTodo(task({ involvedUsers: 'nonsense' })).involvedUsers).toEqual([]);
+  });
+});
