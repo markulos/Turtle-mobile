@@ -102,6 +102,20 @@ const PEN_COLORS = ['#ffffff', '#111111', '#ff3b30', '#ffcc00', '#34c759', '#0a8
 const PEN_SIZES = [3, 6, 12];
 
 /**
+ * How alike a pixel has to be to the one you tapped for the wand to take it.
+ *
+ * Three named steps rather than a slider: the useful range is narrow, the
+ * difference between 0.11 and 0.13 is not something anyone can aim at, and a
+ * tap-retap-retap loop through three choices is faster than dragging a control
+ * and waiting for a round trip after each nudge.
+ */
+const WAND_TOLERANCES = [
+  { key: 'tight', label: 'Tight', value: 0.07 },
+  { key: 'normal', label: 'Normal', value: 0.13 },
+  { key: 'loose', label: 'Loose', value: 0.22 },
+];
+
+/**
  * Dropped points closer than this (in stage pixels) to the last kept one. A
  * move event per frame is thousands of sub-pixel points otherwise.
  */
@@ -182,6 +196,23 @@ export default function ImageEditor({
   const [penSize, setPenSize] = useState(PEN_SIZES[1]);
   // The lasso: one open path, closed by the pond on save.
   const [outline, setOutline] = useState([]);
+  /**
+   * The WAND: tap instead of trace, and the pond works out the edge.
+   *
+   * It answers in the same normalized outline a finger produces, so everything
+   * downstream — the dashed preview, Clear, Save, the pond's /sticker route —
+   * is untouched. The only new state is which mode the sticker tool is in and
+   * how fussy the match should be.
+   *
+   * It has to be the pond: a wand needs PIXELS, and react-native has no pixel
+   * API. The libraries that would give it one are native modules, which means
+   * a new runtime fingerprint and a TestFlight build before a single phone
+   * could use it — while the pond already decodes these photos for every
+   * sticker it cuts. See server services/imageWand.js.
+   */
+  const [wand, setWand] = useState(false);
+  const [tolerance, setTolerance] = useState(WAND_TOLERANCES[1].value);
+  const [wanding, setWanding] = useState(false);
 
   /**
    * THE GESTURE'S OWN STATE LIVES IN THESE REFS; the state above mirrors them
@@ -215,6 +246,9 @@ export default function ImageEditor({
    */
   const discardEdits = useCallback(() => {
     setTurns(0);
+    // The wand is a MODE of the sticker tool, so it goes back to tracing when
+    // the tool changes or the editor is pointed at another photo.
+    setWand(false);
     setStrokes([]);
     setLive(null);
     setOutline([]);
@@ -286,7 +320,10 @@ export default function ImageEditor({
 
   // Refreshed every render, so the once-built PanResponder always reads the
   // tool, the rect and the pen as they are NOW.
-  drawRef.current = { tool, rect, penColor, penSize, saving, strokeCount: strokes.length };
+  drawRef.current = { tool, rect, penColor, penSize, saving, strokeCount: strokes.length, wand };
+  // The wand's own inputs, read by a callback that is built once.
+  const wandRef = useRef({});
+  wandRef.current = { api, itemId: item?.id, tolerance, wanding };
 
   /**
    * Where the finger is, in stage space.
@@ -311,9 +348,58 @@ export default function ImageEditor({
     return { x: origin.x + (pageX - origin.pageX), y: origin.y + (pageY - origin.pageY) };
   }, []);
 
+  /**
+   * A tap in wand mode: ask the pond what is under it.
+   *
+   * The answer REPLACES the outline, exactly as a second trace does — two
+   * selections cannot be combined into one cutout, and the alternative
+   * (silently keeping the first while showing the second) is the worse of the
+   * two surprises.
+   */
+  const castWand = useCallback(async (point) => {
+    const { api: client, itemId } = wandRef.current;
+    if (!client || !itemId) return;
+    setWanding(true);
+    try {
+      const res = await client.post(`/media/${itemId}/wand`, {
+        seed: point,
+        tolerance: wandRef.current.tolerance,
+      });
+      const next = Array.isArray(res?.outline) ? res.outline : null;
+      if (!next || next.length < 3) throw new Error('Could not find an edge there.');
+      notifyHaptic();
+      outlineRef.current = next;
+      setOutline(next);
+    } catch (e) {
+      // An older pond has no /wand route at all, and says so as a 404 — which
+      // is a different sentence from "that selected the whole photo".
+      const raw = (e && e.message) || '';
+      onError?.(
+        /\b404\b|not found/i.test(raw)
+          ? 'This pond does not have the wand yet — it needs an update.'
+          : humanError(e, 'Could not work out a selection there.'),
+        'sticker',
+      );
+    } finally {
+      setWanding(false);
+    }
+  }, [onError]);
+
   const beginStroke = useCallback((e) => {
-    const { tool: t, rect: r, saving: busy, strokeCount } = drawRef.current;
+    const { tool: t, rect: r, saving: busy, strokeCount, wand: isWand } = drawRef.current;
     if (busy || (t !== 'draw' && t !== 'sticker')) return;
+    // In wand mode the surface takes TAPS, not traces: the point is the seed.
+    if (t === 'sticker' && isWand) {
+      const native = e?.nativeEvent || {};
+      const at = { x: native.locationX, y: native.locationY };
+      if (isOutsidePhoto(at, r)) { tracking.current = null; return; }
+      const seed = toPhotoPoint(at, r);
+      tracking.current = null;
+      if (!seed || wandRef.current.wanding) return;
+      impactHaptic();
+      void castWand(seed);
+      return;
+    }
     const native = e?.nativeEvent || {};
     const touch = { x: native.locationX, y: native.locationY };
     // A finger-down in the letterbox was never aimed at the photo; starting a
@@ -517,7 +603,7 @@ export default function ImageEditor({
   const hint = drawing && !ready
     ? 'Loading the photo…'
     : tool === 'sticker'
-      ? 'Trace around what you want to keep.'
+      ? (wand ? 'Tap what you want to keep.' : 'Trace around what you want to keep.')
       : tool === 'draw' ? 'Draw on the photo with your finger.' : null;
 
   const liveAll = live ? [...strokes, live] : strokes;
@@ -632,7 +718,7 @@ export default function ImageEditor({
           </View>
         )}
 
-        {saving && (
+        {(saving || wanding) && (
           <View style={styles.savingVeil} pointerEvents="none">
             <ActivityIndicator size="large" color="#fff" />
           </View>
@@ -682,6 +768,50 @@ export default function ImageEditor({
                 </Pressable>
               ))}
             </View>
+          </View>
+        )}
+
+        {/* The sticker tool's own row: trace or tap, and how fussy the tap is.
+            The tolerance keys only appear in wand mode — three dead chips over
+            a lasso would be three things that do nothing. */}
+        {tool === 'sticker' && (
+          <View style={styles.penRow}>
+            <Pressable
+              onPress={() => { tapHaptic(); setWand((w) => !w); }}
+              disabled={saving || wanding}
+              style={({ pressed }) => [
+                styles.wandKey,
+                wand && styles.wandKeyOn,
+                pressed && styles.pressed,
+                (saving || wanding) && styles.disabled,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={wand ? 'Switch back to tracing' : 'Select by tapping instead of tracing'}
+              accessibilityState={{ selected: wand }}
+              testID="image-editor-wand"
+            >
+              <Icon name="auto-fix" size={17} color="#fff" />
+              <Text style={styles.wandLabel}>{wand ? 'Tap to pick' : 'Auto‑select'}</Text>
+            </Pressable>
+
+            {wand && (
+              <View style={styles.sizes}>
+                {WAND_TOLERANCES.map((t) => (
+                  <Pressable
+                    key={t.key}
+                    onPress={() => { tapHaptic(); setTolerance(t.value); }}
+                    disabled={saving || wanding}
+                    style={[styles.tolKey, tolerance === t.value && styles.sizeKeyOn]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Match ${t.label.toLowerCase()}`}
+                    accessibilityState={{ selected: tolerance === t.value }}
+                    testID={`image-editor-tolerance-${t.key}`}
+                  >
+                    <Text style={styles.tolLabel}>{t.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
           </View>
         )}
 
@@ -879,6 +1009,33 @@ const styles = StyleSheet.create({
   sizeDot: {
     backgroundColor: '#fff',
   },
+  // The wand toggle and its three match keys. flexShrink on the toggle and a
+  // capped label width, per the app-wide rule: this row gains controls when the
+  // wand is on and must narrow rather than run past its own edge.
+  wandKey: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    flexShrink: 1,
+    minWidth: 0,
+    height: 34,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  wandKeyOn: {
+    backgroundColor: 'rgba(255,255,255,0.28)',
+  },
+  wandLabel: { color: '#fff', fontSize: 13, fontWeight: '700', flexShrink: 1 },
+  tolKey: {
+    height: 34,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  tolLabel: { color: '#fff', fontSize: 12, fontWeight: '700' },
   toolRow: {
     flexDirection: 'row',
     // Wrap + shrink per the app-wide rule: a tool row must never lay out past

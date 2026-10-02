@@ -3527,6 +3527,54 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   }, [getFullUrl]);
 
   /**
+   * Put a finished sticker in the phone's own photo library.
+   *
+   * WHAT THIS IS AND IS NOT. iOS has no public way to add to the Messages
+   * STICKER DRAWER — that drawer is fed by an iMessage sticker-pack extension,
+   * which is native code and an App Store submission, not something an app can
+   * write into at runtime. What IS open is the photo library, and on iOS 17+
+   * that is the same door Apple's own flow uses: a transparent PNG in Photos
+   * can be lifted into a sticker by touching and holding the subject.
+   *
+   * So this saves the cutout, with its transparency intact, where the phone can
+   * get at it. Sharing (above) remains the direct route into a conversation.
+   */
+  const saveStickerToPhotos = useCallback(async (item) => {
+    const src = item?.rawUrl || item?.url;
+    if (!src) return;
+    let localUri = null;
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Photos access needed',
+          'Allow access to your photo library to save stickers to it.',
+        );
+        return;
+      }
+      // Downloaded under a .png name on purpose: the library infers the type
+      // from the extension, and a sticker saved as anything else loses the
+      // transparency that is the whole point of it.
+      const safeName = (item.filename || `sticker_${item.id}.png`).replace(/[^\w.\-]/g, '_');
+      localUri = `${FileSystem.cacheDirectory}save_${safeName.endsWith('.png') ? safeName : `${safeName}.png`}`;
+      const { uri } = await FileSystem.downloadAsync(getFullUrl(src), localUri);
+      await MediaLibrary.saveToLibraryAsync(uri);
+      notifyHaptic();
+      Alert.alert(
+        'Saved to Photos',
+        'Touch and hold the subject in Photos to lift it out as a sticker, or send it straight from here.',
+      );
+    } catch (e) {
+      console.error('[MediaGallery] Sticker save error:', e);
+      Alert.alert('Error', 'Could not save this sticker to your photos.');
+    } finally {
+      if (localUri) {
+        try { await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch (err) { /* ignore */ }
+      }
+    }
+  }, [getFullUrl]);
+
+  /**
    * The editor saved a NEW item (a markup copy, or a sticker) rather than
    * changing the photo it was opened on — see ImageEditor's header for why those
    * two tools can't be in-place the way rotate is.
@@ -3541,16 +3589,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     if (editKind === 'sticker') {
       Alert.alert(
         'Sticker saved',
-        'It\'s in your vault under the "sticker" tag. Send it as a PNG and it keeps its transparent background.',
+        'It\'s in your vault under the "sticker" tag. Save it to Photos to use it as a phone sticker, or send it as a PNG and it keeps its transparent background.',
         [
           { text: 'Done', style: 'cancel' },
+          { text: 'Save to Photos', onPress: () => saveStickerToPhotos(item) },
           { text: 'Share', onPress: () => shareSticker(item) },
         ],
       );
       return;
     }
     Alert.alert('Saved a copy', 'Your drawing was saved as a new photo. The original is untouched.');
-  }, [softReloadGallery, shareSticker]);
+  }, [softReloadGallery, shareSticker, saveStickerToPhotos]);
 
   // Warm expo-image's cache for the loaded pages immediately around the
   // viewport (±1 page ≈ the current screen + its neighbours). Called as pages

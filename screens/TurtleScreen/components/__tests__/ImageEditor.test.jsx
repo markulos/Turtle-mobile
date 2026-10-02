@@ -459,6 +459,149 @@ describe('ImageEditor', () => {
     });
   });
 
+  describe('the wand', () => {
+    /** A tap at a stage point — a grant with no moves and an immediate release. */
+    const tapAt = async (view, x, y) => {
+      const surface = view.getByTestId('image-editor-surface');
+      await act(async () => {
+        fireEvent(surface, 'responderGrant', { nativeEvent: stagePoint(x, y) });
+      });
+      await act(async () => {
+        fireEvent(surface, 'responderRelease', { nativeEvent: stagePoint(x, y) });
+      });
+    };
+
+    const wandApi = (outline) => ({
+      post: jest.fn(async (route) => (
+        route.endsWith('/wand')
+          ? { success: true, outline }
+          : { success: true, item: { id: 'p2' } }
+      )),
+    });
+
+    const SQUARE = [[0.4, 0.4], [0.6, 0.4], [0.6, 0.6], [0.4, 0.6]];
+
+    test('a tap asks the pond what is under it, in PHOTO coordinates', async () => {
+      const api = wandApi(SQUARE);
+      const { view } = await open({ api });
+      await pickTool(view, 'image-editor-sticker');
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-wand')); });
+
+      // Dead centre of the photo (300x225 at y=187.5).
+      await tapAt(view, 150, PHOTO_TOP + 112.5);
+
+      expect(api.post).toHaveBeenCalledTimes(1);
+      const [route, body] = api.post.mock.calls[0];
+      expect(route).toBe('/media/p1/wand');
+      // The seed is a fraction of the PHOTO, with the letterbox subtracted —
+      // the same contract a traced point travels under.
+      expect(body.seed[0]).toBeCloseTo(0.5, 3);
+      expect(body.seed[1]).toBeCloseTo(0.5, 3);
+      expect(body.tolerance).toBeGreaterThan(0);
+    });
+
+    test('the answer becomes the outline, and saves through the ORDINARY route', async () => {
+      // Nothing downstream of the wand knows a wand was involved: same preview,
+      // same Clear, same /sticker save.
+      const api = wandApi(SQUARE);
+      const { view } = await open({ api });
+      await pickTool(view, 'image-editor-sticker');
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-wand')); });
+      await tapAt(view, 150, PHOTO_TOP + 112.5);
+
+      expect(view.getByTestId('image-editor-lasso')).toBeTruthy();
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-save')); });
+
+      const save = api.post.mock.calls.find(([r]) => r.endsWith('/sticker'));
+      expect(save).toBeTruthy();
+      expect(save[1].outline).toEqual(SQUARE);
+    });
+
+    test('the match keys change what is asked for', async () => {
+      const api = wandApi(SQUARE);
+      const { view } = await open({ api });
+      await pickTool(view, 'image-editor-sticker');
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-wand')); });
+
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-tolerance-tight')); });
+      await tapAt(view, 150, PHOTO_TOP + 112.5);
+      const tight = api.post.mock.calls[0][1].tolerance;
+
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-tolerance-loose')); });
+      await tapAt(view, 150, PHOTO_TOP + 112.5);
+      const loose = api.post.mock.calls[1][1].tolerance;
+
+      expect(tight).toBeLessThan(loose);
+    });
+
+    test('a tap in the letterbox asks nothing — there is no photo there', async () => {
+      const api = wandApi(SQUARE);
+      const { view } = await open({ api });
+      await pickTool(view, 'image-editor-sticker');
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-wand')); });
+      await tapAt(view, 150, 40);
+      expect(api.post).not.toHaveBeenCalled();
+    });
+
+    test('a pond without the route says so, instead of "could not"', async () => {
+      // Every pond that has not been updated answers 404 here, and that is a
+      // different sentence from "that selected the whole photo".
+      const api = { post: jest.fn(async () => { throw new Error('API Error 404: Not Found'); }) };
+      const onError = jest.fn();
+      const { view } = await open({ api, onError });
+      await pickTool(view, 'image-editor-sticker');
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-wand')); });
+      await tapAt(view, 150, PHOTO_TOP + 112.5);
+
+      expect(onError).toHaveBeenCalledWith(
+        expect.stringMatching(/needs an update/i),
+        'sticker',
+      );
+    });
+
+    test('the pond\'s own refusal is passed through, not flattened', async () => {
+      const api = {
+        post: jest.fn(async () => {
+          throw new Error('API Error 400: {"success":false,"message":"That selected almost the whole photo — try a lower tolerance."}');
+        }),
+      };
+      const onError = jest.fn();
+      const { view } = await open({ api, onError });
+      await pickTool(view, 'image-editor-sticker');
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-wand')); });
+      await tapAt(view, 150, PHOTO_TOP + 112.5);
+
+      expect(onError).toHaveBeenCalledWith(
+        expect.stringMatching(/lower tolerance/),
+        'sticker',
+      );
+    });
+
+    test('switching tools puts the sticker tool back to tracing', async () => {
+      const api = wandApi(SQUARE);
+      const { view } = await open({ api });
+      await pickTool(view, 'image-editor-sticker');
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-wand')); });
+      expect(view.getByText('Tap what you want to keep.')).toBeTruthy();
+
+      await pickTool(view, 'image-editor-rotate');
+      await pickTool(view, 'image-editor-sticker');
+      expect(view.getByText('Trace around what you want to keep.')).toBeTruthy();
+    });
+
+    test('tracing still works — the wand is a mode, not a replacement', async () => {
+      const api = wandApi(SQUARE);
+      const { view } = await open({ api });
+      await pickTool(view, 'image-editor-sticker');
+      await drag(view, [[0, PHOTO_TOP], [150, PHOTO_TOP + 112.5], [300, PHOTO_TOP + 225]]);
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-save')); });
+
+      const save = api.post.mock.calls.find(([r]) => r.endsWith('/sticker'));
+      expect(save[1].outline).toEqual([[0, 0], [0.5, 0.5], [1, 1]]);
+      expect(api.post.mock.calls.some(([r]) => r.endsWith('/wand'))).toBe(false);
+    });
+  });
+
   describe('markup', () => {
     test('posts the stroke in PHOTO coordinates, with the letterbox subtracted', async () => {
       const { view, api } = await open();
