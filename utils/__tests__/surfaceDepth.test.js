@@ -4,7 +4,8 @@
  * how a soft falloff becomes a drawn edge, and dropping the mode check is how
  * dark mode gains 124 invisible shadow layers.
  */
-import { depth, DEPTH, LEVELS, insetRule, ridgeRule, RULE_W } from '../surfaceDepth';
+import { StyleSheet } from 'react-native';
+import { cardEdge, depth, DEPTH, LEVELS, insetRule, ridgeRule, RULE_W } from '../surfaceDepth';
 
 const light = { mode: 'light' };
 const dark = { mode: 'dark' };
@@ -179,5 +180,39 @@ describe('the rules are thick enough to be two lines', () => {
 
   test('both rules use the same width, so the two never disagree', () => {
     expect(ridgeRule(light).borderTopWidth).toBe(insetRule(light).borderTopWidth);
+  });
+});
+
+/**
+ * The card EDGE. Separate from depth() because the two fail separately: the
+ * shadow makes a card float, the border says where it ends. In a long list the
+ * eye is counting boundaries, which is the job a hairline was not doing.
+ */
+describe('cardEdge', () => {
+  const light = { mode: 'light', colors: { border: 'rgba(0,0,0,0.1)', borderStrong: 'rgba(0,0,0,0.2)' } };
+  const dark = { mode: 'dark', colors: { border: 'rgba(255,255,255,0.08)', borderStrong: 'rgba(255,255,255,0.15)' } };
+
+  it('is a full point, not a hairline', () => {
+    // 0.33pt on a 3x screen at 10% black is a line the renderer barely commits
+    // to — which is the whole complaint this exists to answer.
+    expect(cardEdge(light).borderWidth).toBe(RULE_W);
+    expect(cardEdge(light).borderWidth).toBeGreaterThan(StyleSheet.hairlineWidth);
+  });
+
+  it('takes the STRONG border token, not the plain one', () => {
+    expect(cardEdge(light).borderColor).toBe(light.colors.borderStrong);
+    expect(cardEdge(dark).borderColor).toBe(dark.colors.borderStrong);
+  });
+
+  it('applies in BOTH themes, unlike depth()', () => {
+    // depth() is deliberately light-only; a dark card still needs its boundary,
+    // because the tonal step between surface and page is small in a long list.
+    expect(depth(dark, 'card')).toEqual({});
+    expect(cardEdge(dark).borderWidth).toBe(RULE_W);
+  });
+
+  it('falls back rather than drawing an invisible edge on a themeless call', () => {
+    expect(cardEdge(undefined).borderColor).toBeTruthy();
+    expect(cardEdge({}).borderWidth).toBe(RULE_W);
   });
 });

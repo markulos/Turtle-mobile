@@ -101,6 +101,37 @@ export function depth(theme, level = 'card') {
 }
 
 /**
+ * The EDGE of a card that has to be picked out from the page behind it.
+ *
+ * `depth()` above handles the floating; this handles the outline, and the two
+ * are separate because they fail separately. A near-white card on a white page
+ * is carried almost entirely by its shadow, and a shadow alone leaves the card's
+ * boundary soft — fine for a panel you are looking at, not fine for a LIST of
+ * cards, where the eye is counting where one ends and the next begins.
+ *
+ * So: a full point at `borderStrong` rather than a hairline at `border`. Both
+ * are tokens the theme already defines (and already tints with the user's accent
+ * colour), so this is the existing palette drawn more firmly, not a new look. A
+ * hairline is 0.33pt on a 3× screen — at 10 % black over a near-white fill that
+ * is a line the renderer can barely commit to.
+ *
+ * Spread it AFTER the fill and alongside depth():
+ *
+ *   row: { backgroundColor: theme.colors.surface, borderRadius: 12,
+ *          ...cardEdge(theme), ...depth(theme, 'card') },
+ *
+ * Unlike depth(), this applies in BOTH themes: a dark card gets its separation
+ * from tone, but in a long list the tonal step between `surface` and the page is
+ * small enough that the edge is doing real work there too.
+ */
+export function cardEdge(theme) {
+  return {
+    borderWidth: RULE_W,
+    borderColor: theme?.colors?.borderStrong || 'rgba(0, 0, 0, 0.2)',
+  };
+}
+
+/**
  * How thick each of the two lines is.
  *
  * A POINT, not a hairline. At 0.33pt the pair was two sub-pixel lines a

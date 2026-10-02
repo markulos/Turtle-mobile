@@ -46,7 +46,7 @@ import {
   Modal,
   Share,
 } from 'react-native';
-import { depth, insetRule } from '../../utils/surfaceDepth';
+import { cardEdge, depth, insetRule } from '../../utils/surfaceDepth';
 // The card byline: the author's face first, then the people the note is shared
 // with, overlapping behind. Its own file so it can be rendered in a test.
 import NoteByline from './NoteByline';
@@ -1733,7 +1733,6 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
 
       <View style={styles.body}>
         {/* Who shared it — automatic avatar + name at the top of the card. */}
-        <NoteByline note={note} style={{ marginBottom: 4 }} />
         <Text
           numberOfLines={2}
           style={[
@@ -1763,9 +1762,16 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
             )}
           </View>
         )}
-        <Text style={styles.timestamp}>
-          {formatRelativeTime(note.createdAt)}
-        </Text>
+        {/* The footer: when it was written on the left, WHO wrote it on the
+            right. The byline sits at the end of the card rather than the top
+            because the note's own words are what you are scanning for — the
+            people are the signature under it, not the headline over it. */}
+        <View style={styles.footer}>
+          <Text style={styles.timestamp}>
+            {formatRelativeTime(note.createdAt)}
+          </Text>
+          <NoteByline note={note} style={styles.footerByline} />
+        </View>
       </View>
 
       {/* What this note has attached, at a glance while scrolling past it.
@@ -1868,8 +1874,10 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderRadius: 12,
     marginBottom: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
+    // A defined edge, not a hairline: in a long list the eye is counting where
+    // one card ends and the next begins, and a 10%-black hairline on a
+    // near-white fill is a line the renderer barely commits to.
+    ...cardEdge(theme),
     ...depth(theme, 'card'),
   },
   checkbox: {
@@ -1998,8 +2006,23 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
   timestamp: {
     fontSize: 10,
     color: theme.colors.textMuted,
-    marginTop: 6,
     letterSpacing: 0.2,
+  },
+  // The stamp and the byline share one baseline at the bottom of the card. The
+  // marginTop that used to be on the stamp lives here, so the two cannot drift
+  // apart. `flex-end` rather than `space-between`: with the byline shrinking,
+  // space-between would leave the stamp stranded mid-row on a narrow card.
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  // Pushed to the right edge, and allowed to narrow — the author's name
+  // ellipsizes rather than shoving the stamp off the other end.
+  footerByline: {
+    marginLeft: 'auto',
+    flexShrink: 1,
   },
 });
 
@@ -2073,7 +2096,6 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
     <View style={styles.card}>
       {/* Who shared it — automatic avatar + name strip at the top of the card
           (above the media, like a social post header). */}
-      <NoteByline note={note} style={{ paddingHorizontal: 12, paddingTop: 10, paddingBottom: 8 }} />
       {/* Media region — thumbnail, inline player, or a graceful fallback while
           the unfurl is still pending (no thumb yet). */}
       <TouchableOpacity
@@ -2151,6 +2173,9 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
 
         <View style={styles.footer}>
           <Text style={styles.timestamp}>{formatRelativeTime(note.createdAt)}</Text>
+          {/* Who shared it, at the end of the card like the plain note row —
+              just inside the action keys, which keep the actual corner. */}
+          <NoteByline note={note} style={styles.footerByline} />
           <View style={styles.actions}>
             {/* Edit — opens the composer to add to / rewrite the description that
                 was auto-created from the link's metadata. */}
@@ -2210,9 +2235,10 @@ const linkCardStyles = (theme, isDark) => StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderRadius: 12,
     marginBottom: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
     overflow: 'hidden',
+    // Same defined edge as the plain note row — the two card kinds sit in one
+    // list and must read as one family.
+    ...cardEdge(theme),
     ...depth(theme, 'card'),
   },
   mediaWrap: {
@@ -2307,8 +2333,14 @@ const linkCardStyles = (theme, isDark) => StyleSheet.create({
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 8,
     marginTop: 10,
+  },
+  // Takes the slack between the stamp and the keys, and narrows before it
+  // pushes either of them anywhere.
+  footerByline: {
+    marginLeft: 'auto',
+    flexShrink: 1,
   },
   timestamp: {
     fontSize: 10,

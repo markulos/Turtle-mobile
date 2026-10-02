@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
 // FlashList's own jest setup — without it the component dies on I18nManager.
@@ -73,6 +73,26 @@ const msg = (over = {}) => ({
 
 const props = (over = {}) => ({
   visible: true, onClose: jest.fn(), friend, theme, isDark: false, serverBase: 'http://pond', ...over,
+});
+
+// Bring the page down EXPLICITLY after every case.
+//
+// FlashList schedules its initial scroll through a setTimeout(0) and cancels it
+// on unmount (useUnmountAwareCallbacks), so the component has to come down while
+// the test environment is still alive. Left to the implicit cleanup, that timer
+// can outlive the environment and fire into a torn-down I18nManager — which
+// takes the WHOLE RUN down rather than failing one test, with a bare
+// "Cannot read properties of undefined (reading 'isRTL')" and no suite name on
+// it. Whether it lands is pure timing, so it surfaces as the gate breaking after
+// an unrelated change reorders the suites.
+afterEach(async () => {
+  // Let the deferred scroll LAND first, while there is still a live component
+  // and a live environment for it to land in — a microtask flush is not enough,
+  // because this is a macrotask.
+  await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0); }); });
+  // Then take the page down, which cancels anything scheduled since.
+  cleanup();
+  await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0); }); });
 });
 
 beforeEach(() => {
