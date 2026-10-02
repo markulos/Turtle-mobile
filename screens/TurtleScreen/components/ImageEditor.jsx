@@ -43,6 +43,14 @@
  * resolution by sharp without the phone ever decoding it. See
  * imageEditorGeometry.js for the coordinate contract.
  *
+ * WHICH DIMENSIONS THE COORDINATES ARE A FRACTION OF — the thing that was
+ * wrong. They are a fraction of the photo AS DECODED, measured from the
+ * <Image>'s own onLoad, NOT of `item.width`/`item.height`. The row's columns
+ * are null for every tunnel-stored photo on this pond and carry pre-EXIF
+ * dimensions elsewhere, and with nothing to go on `fitRect` returns the whole
+ * stage — so a trace was being sent as a fraction of the letterboxed stage and
+ * cut out as a fraction of the photo. See `natural` below.
+ *
  * The fit trick (rotate): for a quarter turn the frame's width/height are
  * SWAPPED before the rotation is applied, so the rotated result lands exactly
  * inside the measured stage instead of overflowing it. `contentFit="contain"`
@@ -139,6 +147,32 @@ export default function ImageEditor({
   const [turns, setTurns] = useState(0);
   const [saving, setSaving] = useState(false);
   const [stage, setStage] = useState({ w: 0, h: 0 });
+  /**
+   * The DECODED size of the photo on screen, from the <Image>'s own onLoad.
+   *
+   * THIS IS THE GROUND TRUTH AND THE ROW'S `width`/`height` ARE NOT. Two
+   * reasons, and the second one is most of this pond:
+   *
+   *   · The pond bakes EXIF orientation into every render it serves
+   *     (services/imageRotation.js `openRotated` — a bare `.rotate()` first,
+   *     always). So a portrait phone photo DECODES portrait while a row that
+   *     recorded raw sensor dimensions says landscape.
+   *   · A tunnel-stored row may never have been probed at all, and carries
+   *     `width: null, height: null`. On this pond that is the common case, not
+   *     the exotic one: every photo in the library sampled on 2026-10-02 had
+   *     both columns null.
+   *
+   * With no dimensions `fitRect` falls back to the whole stage, and the
+   * fallback's own comment claims the result is "at worst uniformly stretched,
+   * never offset". That reasoning is wrong, and it is the bug: the fractions go
+   * to the pond, which multiplies them by the PHOTO's pixels, so a fraction of
+   * the letterboxed STAGE lands both offset AND stretched. A trace around
+   * someone's head cuts out a rectangle of sky next to them.
+   *
+   * Measuring removes the whole class: onLoad reports what was actually
+   * decoded, EXIF and all, with nothing to keep in sync and no backfill.
+   */
+  const [natural, setNatural] = useState(null);
 
   // Finished strokes, and the one the finger is still drawing. Separate so a
   // move only re-renders the live path, not the whole scribble.
@@ -208,12 +242,45 @@ export default function ImageEditor({
     setStage((prev) => (prev.w === width && prev.h === height ? prev : { w: width, h: height }));
   }, []);
 
+  /**
+   * The photo's size, measured if we have it and taken from the row if not.
+   *
+   * The row is the FALLBACK now, not the source — see `natural` above. It is
+   * still worth having: it is right for most ponds, and it lets the surface arm
+   * on the first frame instead of after a decode.
+   */
+  const source = useMemo(() => {
+    if (natural) return natural;
+    const w = Number(item?.width) || 0;
+    const h = Number(item?.height) || 0;
+    return w > 0 && h > 0 ? { w, h } : null;
+  }, [natural, item?.width, item?.height]);
+
   // Where the photo is actually drawn inside the stage. Everything a finger
   // does is measured against THIS, not the stage — see imageEditorGeometry.
-  const rect = useMemo(
-    () => fitRect(stage, { w: item?.width, h: item?.height }),
-    [stage, item?.width, item?.height],
-  );
+  const rect = useMemo(() => fitRect(stage, source), [stage, source]);
+
+  /**
+   * Is the geometry trustworthy enough to draw against?
+   *
+   * `fitRect` answers with the whole stage when it is given nothing, and that
+   * answer is unusable here (it is the bug described on `natural`). So the
+   * drawing surface does not arm until the photo's real proportions are known
+   * — a tool that waits a beat for the decode is better than one that silently
+   * cuts the wrong part of the picture.
+   */
+  const ready = !!source && rect.w > 0 && rect.h > 0;
+
+  /** Reset the measurement when the editor is pointed at a different photo. */
+  useEffect(() => { setNatural(null); }, [item?.id, visible]);
+
+  const onImageLoad = useCallback((e) => {
+    const s = e?.source;
+    const w = Number(s?.width) || 0;
+    const h = Number(s?.height) || 0;
+    if (w <= 0 || h <= 0) return;
+    setNatural((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+  }, []);
 
   // Refreshed every render, so the once-built PanResponder always reads the
   // tool, the rect and the pen as they are NOW.
@@ -441,9 +508,13 @@ export default function ImageEditor({
   const drawing = tool === 'draw' || tool === 'sticker';
   const canUndo = tool === 'sticker' ? outline.length > 0 : drawn;
   const title = tool === 'draw' ? 'Draw' : tool === 'sticker' ? 'Make a sticker' : 'Edit photo';
-  const hint = tool === 'sticker'
-    ? 'Trace around what you want to keep.'
-    : tool === 'draw' ? 'Draw on the photo with your finger.' : null;
+  // Say so while the surface is disarmed, rather than letting a finger find
+  // out by drawing nothing.
+  const hint = drawing && !ready
+    ? 'Loading the photo…'
+    : tool === 'sticker'
+      ? 'Trace around what you want to keep.'
+      : tool === 'draw' ? 'Draw on the photo with your finger.' : null;
 
   const liveAll = live ? [...strokes, live] : strokes;
 
@@ -473,6 +544,8 @@ export default function ImageEditor({
             transition={0}
             cachePolicy="memory-disk"
             placeholder={item.blurhash ? { blurhash: item.blurhash } : null}
+            // What the photo ACTUALLY is, as decoded. See `natural`.
+            onLoad={onImageLoad}
             testID="image-editor-preview"
           />
         )}
@@ -487,7 +560,7 @@ export default function ImageEditor({
             inside the same coordinate space, which is what makes
             isOutsidePhoto's answer meaningful. When the tool isn't a drawing one
             the surface isn't mounted at all, so rotate keeps its own taps. */}
-        {drawing && rect.w > 0 && (
+        {drawing && ready && (
           <View
             style={styles.surface}
             testID="image-editor-surface"

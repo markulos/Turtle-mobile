@@ -124,6 +124,13 @@ const pickTool = async (view, id) => {
 
 const frameOf = (view) => StyleSheet.flatten(view.getByTestId('image-editor-preview').props.style);
 
+/** The <Image> reporting what it actually decoded — EXIF already applied. */
+const decodes = async (view, width, height) => {
+  await act(async () => {
+    fireEvent(view.getByTestId('image-editor-preview'), 'load', { source: { width, height } });
+  });
+};
+
 describe('ImageEditor', () => {
   test('renders nothing when closed, or when there is no photo', async () => {
     const closed = await render(<ImageEditor visible={false} item={photo()} api={okApi()} />);
@@ -311,6 +318,108 @@ describe('ImageEditor', () => {
       expect(surface.props.onStartShouldSetResponder()).toBe(false);
 
       await act(async () => { release({ success: true, item: { id: 'p2' } }); });
+    });
+  });
+
+  /**
+   * The finger and the photo have to agree about where the photo IS.
+   *
+   * Every test above hands the editor a row carrying width/height, which is the
+   * case that always worked — and is why this shipped broken. On the real pond
+   * every tunnel-stored photo has `width: null, height: null` (all 3078 of them
+   * when sampled on 2026-10-02), and elsewhere the columns can hold pre-EXIF
+   * dimensions while the pond serves an auto-oriented render. With nothing to
+   * go on, fitRect returns the whole STAGE, and a trace was posted as a
+   * fraction of the letterboxed stage then cut as a fraction of the photo.
+   */
+  describe('where the photo actually is', () => {
+    const unmeasured = () => photo({ width: null, height: null });
+
+    test('an unmeasured photo does NOT arm the surface — it waits to be decoded', async () => {
+      // Better a tool that waits a beat than one that silently cuts the wrong
+      // part of the picture.
+      const { view } = await open({ item: unmeasured() });
+      await pickTool(view, 'image-editor-sticker');
+      expect(view.queryByTestId('image-editor-surface')).toBeNull();
+      expect(view.getByText('Loading the photo…')).toBeTruthy();
+
+      await decodes(view, 4000, 3000);
+      expect(view.getByTestId('image-editor-surface')).toBeTruthy();
+      expect(view.getByText('Trace around what you want to keep.')).toBeTruthy();
+    });
+
+    test('a row with NO dimensions still posts photo coordinates, not stage ones', async () => {
+      const { view, api } = await open({ item: unmeasured() });
+      await pickTool(view, 'image-editor-draw');
+      await decodes(view, 4000, 3000);
+
+      // The same three points as the markup test: the photo's top-left, centre
+      // and bottom-right, in stage space.
+      await drag(view, [[0, PHOTO_TOP], [150, PHOTO_TOP + 112.5], [300, PHOTO_TOP + 225]]);
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-save')); });
+
+      // Before the fix these came out as fractions of the 300x600 STAGE —
+      // [0, 0.3125], [0.5, 0.5], [1, 0.6875] — and the pond cut a band across
+      // the middle of the photo instead of the whole of it.
+      expect(api.post.mock.calls[0][1].strokes[0].points).toEqual([[0, 0], [0.5, 0.5], [1, 1]]);
+    });
+
+    test('what was DECODED beats what the row claims — EXIF is baked by the pond', async () => {
+      // The row says landscape (raw sensor dimensions); the pond auto-orients
+      // every render, so the photo on screen is portrait. The row is wrong and
+      // the measurement is right.
+      const { view, api } = await open({ item: photo({ width: 4000, height: 3000 }) });
+      await pickTool(view, 'image-editor-sticker');
+      await decodes(view, 3000, 4000);
+
+      // Portrait in a 300x600 stage: drawn 300x400, so 100 px of letterbox
+      // above it — NOT the 187.5 the row's landscape aspect implies.
+      await drag(view, [[0, 100], [150, 300], [300, 500]]);
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-save')); });
+
+      const [route, body] = api.post.mock.calls[0];
+      expect(route).toBe('/media/p1/sticker');
+      expect(body.outline).toEqual([[0, 0], [0.5, 0.5], [1, 1]]);
+    });
+
+    test('a finger-down in the letterbox is still refused, against the MEASURED rect', async () => {
+      const { view, api } = await open({ item: unmeasured() });
+      await pickTool(view, 'image-editor-sticker');
+      await decodes(view, 4000, 3000);
+
+      // y=50 is black bar: above the photo, which starts at 187.5.
+      await drag(view, [[150, 50], [160, 60]]);
+      await act(async () => { fireEvent.press(view.getByTestId('image-editor-save')); });
+      // Nothing traced, so Save is just a close.
+      expect(api.post).not.toHaveBeenCalled();
+    });
+
+    test('pointing the editor at another photo forgets the last one\'s size', async () => {
+      // The measurement is per-photo; carrying it over would letterbox the next
+      // one against the previous one's proportions.
+      const { view } = await open({ item: unmeasured() });
+      await pickTool(view, 'image-editor-sticker');
+      await decodes(view, 4000, 3000);
+      expect(view.getByTestId('image-editor-surface')).toBeTruthy();
+
+      await view.rerender(
+        <ImageEditor
+          visible
+          item={photo({ id: 'p2', width: null, height: null })}
+          api={okApi()}
+          getFullUrl={getFullUrl}
+          colors={colors}
+          insets={{ top: 40, bottom: 20 }}
+          bottomInset={60}
+          onClose={jest.fn()}
+          onSaved={jest.fn()}
+          onCreated={jest.fn()}
+          onError={jest.fn()}
+        />,
+      );
+      // A different photo resets to 'rotate', so switch back and check it waits.
+      await pickTool(view, 'image-editor-sticker');
+      expect(view.queryByTestId('image-editor-surface')).toBeNull();
     });
   });
 
