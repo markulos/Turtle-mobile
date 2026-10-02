@@ -28,12 +28,11 @@ import { tapHaptic } from '../../utils/haptics';
 import {
   DEFAULT_RATIO,
   MAX_IMAGE_H,
-  fileCountLabel,
-  missingLabel,
   splitAttachments,
   stripThumbUrl,
   viewerImages,
-} from './attachments';
+} from '../../utils/mediaAttachments';
+import { fileCountLabel, missingLabel } from './attachments';
 
 /**
  * One inline image.

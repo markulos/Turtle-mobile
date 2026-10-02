@@ -19,7 +19,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useServer } from '../../context/ServerContext';
-import { BY_IDS_MAX, chunkIds, collectMediaIds } from './attachments';
+import { BY_IDS_MAX, chunkIds } from '../../utils/mediaAttachments';
+import { collectMediaIds } from './attachments';
 
 export default function useNoteThumbs(notes) {
   const { api } = useServer();
