@@ -47,6 +47,9 @@ import {
   Share,
 } from 'react-native';
 import { depth, insetRule } from '../../utils/surfaceDepth';
+// The card byline: the author's face first, then the people the note is shared
+// with, overlapping behind. Its own file so it can be rendered in a test.
+import NoteByline from './NoteByline';
 import { SCREEN_TITLE } from '../../utils/headerType';
 import AppTextInput from '../../components/AppTextInput';
 // expo-image for the link card's remote thumbnail (disk+memory cache + a soft
@@ -88,7 +91,6 @@ import { useOpenTarget } from '../../context/OpenTargetContext';
 import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
 import { TAP_ONLY } from '../../utils/pressBehavior';
-import { resolveAvatarUrl } from '../../utils/avatarUrl';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
 import { inkOn } from '../../utils/accentColor';
 // Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
@@ -270,58 +272,6 @@ function sourceIcon(url) {
   if (/(twitter\.com|x\.com)/.test(u)) return 'twitter';
   if (/spotify\.com/.test(u)) return 'spotify';
   return 'web';
-}
-
-// ── Sharer byline ───────────────────────────────────────────
-// Avatar + name of who shared/created a note, shown automatically at the top
-// of every card (the server stamps notes.user_id at creation and owner-
-// backfills legacy rows, so every note carries a sharer). No avatar → the
-// user's initial on their stable per-user colour (the same userId→hue hash the
-// tasks calendar and FilterMenu swatches use, so a person's colour matches
-// across surfaces).
-const sharerColor = (userId) => {
-  if (!userId) return '#888888';
-  let h = 0;
-  for (let i = 0; i < userId.length; i++) h = (h * 31 + userId.charCodeAt(i)) % 360;
-  return `hsl(${h}, 60%, 52%)`;
-};
-function SharedByLine({ note, style }) {
-  const { theme } = useTheme();
-  const { getBaseUrl } = useServer();
-  const sharer = note && note.sharedBy;
-  if (!sharer || (!sharer.name && !sharer.avatarUrl)) return null;
-  // avatar_url is a relative server path (/api/avatars/<id>.jpg?v=…).
-  const avatarUri = resolveAvatarUrl(sharer.avatarUrl, getBaseUrl());
-  return (
-    <View style={[{ flexDirection: 'row', alignItems: 'center', gap: 6 }, style]}>
-      {avatarUri ? (
-        <ExpoImage
-          source={{ uri: avatarUri }}
-          style={{ width: 18, height: 18, borderRadius: 9 }}
-          contentFit="cover"
-          transition={120}
-        />
-      ) : (
-        <View
-          style={{
-            width: 18, height: 18, borderRadius: 9,
-            backgroundColor: sharerColor(sharer.userId),
-            alignItems: 'center', justifyContent: 'center',
-          }}
-        >
-          <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>
-            {String(sharer.name || '?').trim().charAt(0).toUpperCase()}
-          </Text>
-        </View>
-      )}
-      <Text
-        numberOfLines={1}
-        style={{ flexShrink: 1, fontSize: 11.5, fontWeight: '600', color: theme.colors.textSecondary }}
-      >
-        {sharer.name || 'Member'}
-      </Text>
-    </View>
-  );
 }
 
 export default function NotesScreen() {
@@ -1783,7 +1733,7 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
 
       <View style={styles.body}>
         {/* Who shared it — automatic avatar + name at the top of the card. */}
-        <SharedByLine note={note} style={{ marginBottom: 4 }} />
+        <NoteByline note={note} style={{ marginBottom: 4 }} />
         <Text
           numberOfLines={2}
           style={[
@@ -2123,7 +2073,7 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
     <View style={styles.card}>
       {/* Who shared it — automatic avatar + name strip at the top of the card
           (above the media, like a social post header). */}
-      <SharedByLine note={note} style={{ paddingHorizontal: 12, paddingTop: 10, paddingBottom: 8 }} />
+      <NoteByline note={note} style={{ paddingHorizontal: 12, paddingTop: 10, paddingBottom: 8 }} />
       {/* Media region — thumbnail, inline player, or a graceful fallback while
           the unfurl is still pending (no thumb yet). */}
       <TouchableOpacity
