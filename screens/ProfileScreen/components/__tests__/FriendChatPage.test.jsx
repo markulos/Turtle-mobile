@@ -39,8 +39,9 @@ jest.mock('../../../../utils/copyText', () => ({
   default: (...args) => mockCopyText(...args),
 }));
 
-import { Linking } from 'react-native';
+import { Linking, StyleSheet } from 'react-native';
 import FriendChatPage from '../FriendChatPage';
+import { FROST_OVERLAP } from '../../../../utils/frostedChat';
 import { __resetLinkPreviewCache } from '../../../../utils/useLinkPreview';
 
 const theme = {
@@ -329,6 +330,77 @@ describe('holding a message', () => {
     await act(async () => { fireEvent.press(failed) });
     // The retry went back out to the pond (the first POST plus this one).
     expect(mockApi.post.mock.calls.filter((c) => String(c[0]).includes('/messages/'))).toHaveLength(2);
+  });
+});
+
+describe('the chat scrolls BEHIND the frosted composer', () => {
+  // The composer is a translucent frosted card (ChatComposer's own shell, the
+  // same one the main Claude chat wears). That only reads as glass if there is
+  // conversation behind it — which means the list fills the page and is INSET
+  // by the composer's measured height rather than ending above it.
+  const listInset = () => {
+    const flat = StyleSheet.flatten(screen.getByTestId('friend-chat-list').props.contentContainerStyle);
+    return flat.paddingBottom;
+  };
+
+  test('the list is inset by the dock, plus the overlap the frost needs', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+
+    const dock = screen.getByTestId('friend-chat-dock');
+    await act(async () => {
+      fireEvent(dock, 'layout', { nativeEvent: { layout: { height: 180 } } });
+    });
+
+    // FROST_OVERLAP is the clearance that keeps the newest message resting
+    // just clear of the bar while older ones slide under it.
+    expect(listInset()).toBe(180 + FROST_OVERLAP);
+  });
+
+  test('the inset follows the composer as it grows', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    const dock = screen.getByTestId('friend-chat-dock');
+
+    await act(async () => { fireEvent(dock, 'layout', { nativeEvent: { layout: { height: 150 } } }); });
+    const short = listInset();
+    // A multi-line draft makes the composer taller; the newest message has to
+    // stay clear of it rather than ending up underneath.
+    await act(async () => { fireEvent(dock, 'layout', { nativeEvent: { layout: { height: 230 } } }); });
+    expect(listInset()).toBe(short + 80);
+  });
+
+  test('the scrollbar stops at the composer instead of running under it', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await act(async () => {
+      fireEvent(screen.getByTestId('friend-chat-dock'), 'layout', { nativeEvent: { layout: { height: 180 } } });
+    });
+    expect(screen.getByTestId('friend-chat-list').props.scrollIndicatorInsets)
+      .toEqual({ right: 1, bottom: 180 });
+  });
+
+  test('the dock does not eat presses meant for the chat showing through it', async () => {
+    // A transparent strip sits between the composer card and the tab dock.
+    // Without box-none that strip is a dead zone over live messages.
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    expect(screen.getByTestId('friend-chat-dock').props.pointerEvents).toBe('box-none');
+  });
+
+  test('the copy toast rides inside the dock, so the keyboard carries it', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await act(async () => { fireEvent(screen.getByTestId('friend-chat-bubble-m1'), 'longPress'); });
+    await act(async () => { fireEvent.press(screen.getByTestId('friend-chat-actions-copy-message')); });
+
+    // Positioned by the dock's own stacking rather than by a hand-tracked
+    // `bottom:` that has to be kept in step with the keyboard.
+    const toast = await screen.findByTestId('friend-chat-toast');
+    expect(toast).toBeTruthy();
+    const wrap = StyleSheet.flatten(screen.getByTestId('friend-chat-dock').props.style);
+    expect(wrap.position).toBe('absolute');
+    expect(wrap.bottom).toBe(0);
   });
 });
 

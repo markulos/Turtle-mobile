@@ -70,6 +70,7 @@ import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import useKeyboardHeight from '../../../utils/useKeyboardHeight';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { copyText } from '../../../utils/copyText';
+import { FROST_OVERLAP } from '../../../utils/frostedChat';
 import { firstLinkUrl, linkSegments } from '../../../utils/messageLinks';
 import {
   mergeThread, optimisticMessage, timeLabel, startsNewDay, dayLabel,
@@ -102,6 +103,16 @@ export default function FriendChatPage({
   const listRef = useRef(null);
   const seq = useRef(0);
   const friendId = friend?.id || null;
+
+  // Measured height of the floating composer dock. The list is inset by it so
+  // the newest message rests just clear of the frost while older ones scroll
+  // UNDER it — the same arrangement the main chat uses.
+  //
+  // Seeded, so the first frame does not overlap before onLayout lands, and
+  // seeded GENEROUSLY on purpose: over-guessing shows a gap that closes a
+  // frame later, under-guessing hides the newest message behind the composer,
+  // which is the one thing this screen must never do.
+  const [dockHeight, setDockHeight] = useState(220);
 
   const thread = useMemo(() => mergeThread(rows, locals), [rows, locals]);
 
@@ -398,10 +409,14 @@ export default function FriendChatPage({
             data={thread}
             keyExtractor={(m) => String(m.localId || m.id)}
             renderItem={renderItem}
-            contentContainerStyle={s.listContent}
+            // The list fills the WHOLE page and the composer floats over it, so
+            // the inset is what keeps the newest message clear of the frost at
+            // rest while older ones slide under it as you scroll.
+            contentContainerStyle={[s.listContent, { paddingBottom: dockHeight + FROST_OVERLAP }]}
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
-            scrollIndicatorInsets={{ right: 1 }}
+            // The scrollbar stops at the composer rather than running under it.
+            scrollIndicatorInsets={{ right: 1, bottom: dockHeight }}
             indicatorStyle={isDark ? 'white' : 'black'}
             onContentSizeChange={() => stickToEnd(false)}
             ListEmptyComponent={(
@@ -416,36 +431,51 @@ export default function FriendChatPage({
           />
         )}
 
-        {/* The composer clears the DOCK when the keyboard is down — it floats
-            over this page and reserves no layout space. With the keyboard up
-            there is no dock to clear, only the keyboard itself. */}
-        <ChatComposer
-          theme={theme}
-          value={draft}
-          onChangeText={setDraft}
-          onSend={() => send(draft)}
-          sending={sending}
-          disabled={!friendId}
-          placeholder={`Message ${friend?.name || ''}…`}
-          marginBottom={keyboard > 0 ? keyboard + 8 : panelBottomInset(insets.bottom)}
-          inputProps={{ testID: 'friend-chat-input' }}
-        />
+        {/* The composer DOCK — an absolute overlay, not a row in the column.
+            That is the whole difference between a frosted bar and a bar that
+            merely looks frosted: there has to be chat behind it to see.
+            Measured, because the composer grows with the text in it and the
+            list's inset has to follow (the main chat's dock does the same).
 
-        {/* A copy is invisible, so without this "Copy message" reads as an
-            option that did nothing. Sits above the composer, which is itself
-            lifted by the keyboard — so the toast rides with it. */}
-        {!!toast && (
-          <View
-            pointerEvents="none"
-            style={[s.toastWrap, {
-              bottom: (keyboard > 0 ? keyboard + 8 : panelBottomInset(insets.bottom)) + 72,
-            }]}
-          >
-            <View style={s.toast}>
-              <Text numberOfLines={1} style={s.toastText} testID="friend-chat-toast">{toast}</Text>
+            The composer clears the floating tab dock when the keyboard is
+            down — it reserves no layout space. With the keyboard up there is
+            no dock to clear, only the keyboard itself. */}
+        <View
+          style={s.dock}
+          // box-none, or the transparent strip between the composer and the
+          // tab dock becomes a dead zone that eats presses meant for the
+          // messages showing through it.
+          pointerEvents="box-none"
+          testID="friend-chat-dock"
+          onLayout={(e) => {
+            const h = Math.round(e.nativeEvent.layout.height);
+            // Guard: this fires on every keyboard frame and on every line the
+            // input grows by, and each set re-lays out the list.
+            setDockHeight((prev) => (prev === h ? prev : h));
+          }}
+        >
+          {/* A copy is invisible, so without this "Copy message" reads as an
+              option that did nothing. Inside the dock, so it rides the
+              keyboard with the composer instead of tracking it by hand. */}
+          {!!toast && (
+            <View pointerEvents="none" style={s.toastWrap}>
+              <View style={s.toast}>
+                <Text numberOfLines={1} style={s.toastText} testID="friend-chat-toast">{toast}</Text>
+              </View>
             </View>
-          </View>
-        )}
+          )}
+          <ChatComposer
+            theme={theme}
+            value={draft}
+            onChangeText={setDraft}
+            onSend={() => send(draft)}
+            sending={sending}
+            disabled={!friendId}
+            placeholder={`Message ${friend?.name || ''}…`}
+            marginBottom={keyboard > 0 ? keyboard + 8 : panelBottomInset(insets.bottom)}
+            inputProps={{ testID: 'friend-chat-input' }}
+          />
+        </View>
       </View>
 
       <MessageActionsSheet
@@ -518,10 +548,15 @@ const makeStyles = (theme) => {
     link: { color: c.accentInfo, textDecorationLine: 'underline' },
     linkMine: { color: inkOn(c.accentInfo), textDecorationLine: 'underline' },
 
-    // The copy confirmation. Above the composer, clear of the keyboard, and
-    // `pointerEvents: 'none'` so it can never swallow a press meant for a
-    // bubble underneath it.
-    toastWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
+    // The composer's own layer, over the conversation rather than beside it.
+    // Nothing sets a height: it is whatever the composer (plus its keyboard /
+    // dock margin) comes to, and `onLayout` reports that to the list.
+    dock: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+
+    // The copy confirmation, stacked above the composer inside the dock so it
+    // rides the keyboard with it. `pointerEvents: 'none'` on the view itself,
+    // so it can never swallow a press meant for a bubble underneath.
+    toastWrap: { alignItems: 'center', marginBottom: 8 },
     toast: {
       maxWidth: '80%', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 999,
       backgroundColor: 'rgba(22,26,32,0.94)',
