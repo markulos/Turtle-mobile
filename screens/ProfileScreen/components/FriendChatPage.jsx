@@ -232,14 +232,29 @@ export default function FriendChatPage({
     if (thread.length) settled.current = true;
   }, [stickToEnd, thread.length]);
 
-  // The keyboard shrinks the list rather than changing its content, so there is
-  // no content-size event to ride — the newest bubble would sit behind the
-  // composer otherwise.
+  /**
+   * Going to TEXT brings you to the newest message.
+   *
+   * The keyboard does not change the list's CONTENT, so there is no
+   * content-size event to ride; and it does not shrink the list either, since
+   * the composer floats over a full-height one. What it does is make the dock
+   * taller, which pushes the bottom of the conversation up behind it.
+   *
+   * Unconditional on the way UP, deliberately: "I am about to type" is a
+   * statement about wanting the end of the conversation, even from someone who
+   * was reading history a moment ago. The usual don't-yank rule still applies
+   * to everything else (a message arriving, a preview resolving) — it is
+   * opening the keyboard specifically that overrides it.
+   */
+  const keyboardUp = keyboard > 0;
   useEffect(() => {
     if (!visible || !thread.length) return;
-    if (settled.current && !nearBottom.current) return;
+    if (!keyboardUp && settled.current && !nearBottom.current) return;
     stickToEnd(true);
-  }, [keyboard, visible, thread.length, stickToEnd]);
+    // Reading history is over: the next arrival should follow too, rather than
+    // being held back by where they were before they tapped the box.
+    if (keyboardUp) nearBottom.current = true;
+  }, [keyboard, keyboardUp, visible, thread.length, stickToEnd]);
 
   // ── Sending ───────────────────────────────────────────────────────────────
   const send = useCallback(async (text, retryOf = null) => {

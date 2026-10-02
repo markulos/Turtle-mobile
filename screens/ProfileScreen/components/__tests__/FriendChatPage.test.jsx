@@ -25,6 +25,14 @@ jest.mock('../../../../context/ServerContext', () => ({
   getApiAuthToken: async () => 't',
 }));
 
+// The keyboard, drivable. The real hook listens to RN Keyboard events, which
+// jest does not emit; what the component cares about is only the HEIGHT.
+let mockKeyboardHeight = 0;
+jest.mock('../../../../utils/useKeyboardHeight', () => ({
+  __esModule: true,
+  default: () => mockKeyboardHeight,
+}));
+
 let mockSignals = { messagesVersion: 0, messagesPing: null };
 jest.mock('../../../../context/DownloadsContext', () => ({
   useSyncSignals: () => mockSignals,
@@ -65,6 +73,7 @@ const props = (over = {}) => ({
 beforeEach(() => {
   jest.clearAllMocks();
   mockSignals = { messagesVersion: 0, messagesPing: null };
+  mockKeyboardHeight = 0;
   mockApi.get.mockResolvedValue({ success: true, messages: [msg()] });
   mockApi.post.mockResolvedValue({ success: true, message: msg({ id: 'real', mine: true }) });
   // The preview cache is module-level and outlives a test, which is the whole
@@ -468,6 +477,36 @@ describe('a conversation opens at the newest message', () => {
     scrollToEnd.mockClear();
     await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 600); });
     expect(scrollToEnd).toHaveBeenCalled();
+  });
+
+  test('opening the KEYBOARD brings you to the newest message, even from history', async () => {
+    // "I am about to type" is a statement about wanting the end of the
+    // conversation. The keyboard does not change the list's content, so there
+    // is no content-size event to ride — it only makes the dock taller, which
+    // pushes the last message up behind it.
+    const { rerender } = await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
+    // Read back into history — normally that stops the view being yanked.
+    await act(async () => { fireEvent.scroll(listOf(), scrollEvent(900)); });
+    scrollToEnd.mockClear();
+
+    mockKeyboardHeight = 320;
+    await rerender(<FriendChatPage {...props()} />);
+    expect(scrollToEnd).toHaveBeenCalled();
+  });
+
+  test('a message arriving while they read history still does NOT yank them', async () => {
+    // The override is the KEYBOARD specifically, not a general surrender of the
+    // don't-yank rule.
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
+    await act(async () => { fireEvent.scroll(listOf(), scrollEvent(900)); });
+    scrollToEnd.mockClear();
+
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 600); });
+    expect(scrollToEnd).not.toHaveBeenCalled();
   });
 
   test('switching to another person opens at THEIR newest message', async () => {

@@ -4,7 +4,17 @@ import AppTextInput from './AppTextInput';
 import { BlurView } from 'expo-blur';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { blurProps, frostOverlayColor, frostBorderColor } from '../utils/frostedChat';
+import { inkOn } from '../utils/accentColor';
 import { tapHaptic, impactHaptic } from '../utils/haptics';
+
+/**
+ * The user's highlight colour, which every key in this bar wears.
+ *
+ * `accent` is what the Settings picker writes; `accentInfo` is the built-in
+ * fallback for a theme that predates it. Named once here so the send key, the
+ * action keys and their ink can never drift apart.
+ */
+const accentOf = (theme) => theme?.colors?.accent || theme?.colors?.accentInfo || '#4ADE80';
 
 /**
  * ChatComposer — the app's ONE chat input body, shared by the main Turtle chat
@@ -97,12 +107,12 @@ export default function ChatComposer({
           accessibilityLabel="Send"
         >
           {sending ? (
-            <ActivityIndicator size="small" color={armed ? (theme.mode === 'dark' ? '#111' : '#fff') : c.textMuted} />
+            <ActivityIndicator size="small" color={armed ? inkOn(accentOf(theme)) : c.textMuted} />
           ) : (
             <Icon
               name="arrow-up"
               size={17}
-              color={armed ? (theme.mode === 'dark' ? '#111111' : '#FFFFFF') : c.textMuted}
+              color={armed ? inkOn(accentOf(theme)) : c.textMuted}
             />
           )}
         </TouchableOpacity>
@@ -125,19 +135,24 @@ export default function ChatComposer({
 
 // Shared circular action button, so callers get the exact @ / # look.
 export function ComposerAction({ theme, icon, onPress, active, accessibilityLabel, size = 14 }) {
-  const c = theme.colors;
+  const accent = accentOf(theme);
   return (
     <TouchableOpacity
       style={{
         width: 29, height: 29, borderRadius: 14.5, alignItems: 'center', justifyContent: 'center',
-        backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.05)',
+        // The highlight colour IS the key. An active one is the full accent; a
+        // resting one is the same hue held back, so the row reads as one family
+        // rather than as grey buttons with one coloured exception.
+        backgroundColor: active ? accent : `${accent}2E`,
       }}
       onPressIn={() => tapHaptic()}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
     >
-      <Icon name={icon} size={size} color={active ? (c.accentInfo || '#4ADE80') : c.textPrimary} />
+      {/* inkOn, not a fixed white: the accent can be a pale yellow, and white
+          on it is unreadable. It picks black or white by contrast ratio. */}
+      <Icon name={icon} size={size} color={active ? inkOn(accent) : accent} />
     </TouchableOpacity>
   );
 }
@@ -186,7 +201,10 @@ const makeStyles = (theme) => StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)',
   },
+  // Armed, the send key is the highlight colour itself — see accentOf. The
+  // glyph over it comes from inkOn (above), which is why this sets no colour:
+  // a fixed white vanishes on a pale accent and a fixed black on a deep one.
   sendCircleArmed: {
-    backgroundColor: theme.mode === 'dark' ? '#FFFFFF' : '#111111',
+    backgroundColor: accentOf(theme),
   },
 });
