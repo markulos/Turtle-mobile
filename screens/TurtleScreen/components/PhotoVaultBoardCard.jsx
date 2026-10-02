@@ -1,6 +1,7 @@
 import React, { memo, useEffect, useRef } from 'react';
 import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { FONTS } from '../../../utils/fonts';
 import { TAP_ONLY_PRESSABLE } from '../../../utils/pressBehavior';
@@ -30,6 +31,55 @@ const Cover = ({ path, slot, resolveCoverUrl, hiResPath }) => (
 
 const withAlpha = (color, hexAlpha) => (
   typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color) ? color + hexAlpha : undefined
+);
+
+/**
+ * EdgeVignette — the soft darkening that lifts a collage off the page.
+ *
+ * A grid of photographs on a near-white page has no edge of its own: a cover
+ * that happens to be pale simply dissolves into the background, and the card
+ * stops reading as an object. A vignette gives every card the same quiet
+ * boundary whatever its photos happen to be, without a border — which on a
+ * photo grid reads as a frame, and frames look cheap.
+ *
+ * TWO GRADIENTS, NOT FOUR. A LinearGradient runs along ONE axis, so the
+ * obvious build is four strips (top, bottom, left, right). Two do the same
+ * work: a gradient that is dark at BOTH ends and clear through the middle
+ * covers two opposite edges at once, and crossing a vertical one with a
+ * horizontal one darkens all four — with the corners naturally doubling, which
+ * is what a real vignette does anyway.
+ *
+ * The verticals are stronger than the horizontals: the card is half again as
+ * wide as it is tall, so the same fraction of the short axis is fewer points
+ * and needs more weight to read. Both stop well short of the middle — this is
+ * an edge treatment, not a scrim, and the photographs are the content.
+ */
+const VIGNETTE_TOP_BOTTOM = ['rgba(0,0,0,0.34)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.40)'];
+const VIGNETTE_SIDES = ['rgba(0,0,0,0.26)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.26)'];
+// Clear by a fifth of the way in, and clear again a fifth from the far edge.
+const VIGNETTE_STOPS = [0, 0.2, 0.8, 1];
+
+const EdgeVignette = () => (
+  // pointerEvents none on both: they sit over the covers inside the card's own
+  // Pressable, and a press must reach it.
+  <>
+    <LinearGradient
+      testID="board-vignette-y"
+      pointerEvents="none"
+      colors={VIGNETTE_TOP_BOTTOM}
+      locations={VIGNETTE_STOPS}
+      style={StyleSheet.absoluteFillObject}
+    />
+    <LinearGradient
+      testID="board-vignette-x"
+      pointerEvents="none"
+      colors={VIGNETTE_SIDES}
+      locations={VIGNETTE_STOPS}
+      start={{ x: 0, y: 0.5 }}
+      end={{ x: 1, y: 0.5 }}
+      style={StyleSheet.absoluteFillObject}
+    />
+  </>
 );
 
 // Published-to-the-web cue for the boards grid: a flashing dot plus a SHARED
@@ -219,6 +269,10 @@ function PhotoVaultBoardCard({
             <Icon name="image-multiple-outline" size={28} color={theme.colors.textMuted} />
           </View>
         )}
+        {/* LAST child, so it lies over the covers and the seams between them —
+            including the empty-board placeholder, which otherwise would be the
+            one card on the grid with no edge. */}
+        <EdgeVignette />
       </View>
       {/* Caption = text column + an optional state badge pinned to the right
           edge. The column is the flexible side so a long board name truncates
@@ -232,7 +286,7 @@ function PhotoVaultBoardCard({
               weight and the age trails it in muted text, with no separator dot.
               Falls back to the single metadata string for boards built before the
               model split the two. */}
-          <Text style={[styles.metadata, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+          <Text style={[styles.metadata, { color: theme.colors.textSecondary }]} numberOfLines={1}>
             {board.itemLabel ?? board.metadata}
             {board.recency ? (
               <Text style={{ color: theme.colors.textTertiary ?? theme.colors.textSecondary }}>
@@ -320,8 +374,35 @@ const styles = StyleSheet.create({
   // is centred against both text lines rather than hanging off the title.
   caption: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 9 },
   captionText: { flex: 1, minWidth: 0 },
-  name: { fontSize: 14, lineHeight: 17, fontFamily: FONTS.semibold, paddingHorizontal: 2 },
-  metadata: { fontSize: 13.5, lineHeight: 16, fontFamily: FONTS.medium, marginTop: 0, paddingHorizontal: 2 },
+  // TYPE HIERARCHY. The two lines used to sit a half-step apart — semibold over
+  // medium, both in textPrimary — so the caption read as two labels rather than
+  // as a name with a note under it. Opening the gap in BOTH directions is what
+  // makes it read as one block with an obvious first line:
+  //
+  //   · the name goes to Bold, with a touch of negative tracking. Figtree's
+  //     Bold tightens on its own at display sizes but not at 14pt, and without
+  //     it a bolder weight reads wider rather than stronger.
+  //   · the count drops two weights to Light and out of textPrimary into
+  //     textSecondary, then takes a further 0.78 opacity on top. Weight alone
+  //     was not enough against a bold line directly above it.
+  //
+  // Custom faces carry their own weight: RN ignores `fontWeight` once
+  // `fontFamily` names a bundled font, so these name the family directly.
+  name: {
+    fontSize: 14,
+    lineHeight: 17,
+    fontFamily: FONTS.bold,
+    letterSpacing: -0.2,
+    paddingHorizontal: 2,
+  },
+  metadata: {
+    fontSize: 13.5,
+    lineHeight: 16,
+    fontFamily: FONTS.light,
+    opacity: 0.78,
+    marginTop: 0,
+    paddingHorizontal: 2,
+  },
   // A step smaller than the board-menu pill: on a two-up grid card it is a
   // margin note, not a button.
   shareControls: { flexDirection: 'row', alignItems: 'center', gap: 6 },

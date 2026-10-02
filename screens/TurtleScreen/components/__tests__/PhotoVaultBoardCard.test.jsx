@@ -5,6 +5,10 @@ import PhotoVaultBoardCard from '../PhotoVaultBoardCard';
 
 jest.mock('expo-image', () => ({ Image: 'ExpoImage' }));
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
+// A host string, so `colors` arrives as the authored rgba() strings. The real
+// component runs them through processColor and hands on opaque integers, which
+// can be asserted against but say nothing to the next person reading the test.
+jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
 
 const theme = {
   mode: 'dark',
@@ -101,17 +105,73 @@ describe('PhotoVaultBoardCard', () => {
     expect(title.fontSize).toBe(14);
     // Weight comes from the family, not fontWeight — RN ignores fontWeight once
     // a custom fontFamily is set, so a numeric weight would silently do nothing.
-    expect(title.fontFamily).toBe('Figtree_600SemiBold');
+    //
+    // Bold, not semibold: the caption is a NAME with a note under it, and at a
+    // half-step apart the two lines read as two labels instead.
+    expect(title.fontFamily).toBe('Figtree_700Bold');
     expect(title.fontWeight).toBeUndefined();
+    // Figtree does not tighten itself at 14pt, so a bolder weight reads wider
+    // rather than stronger without this.
+    expect(title.letterSpacing).toBeLessThan(0);
     // Metadata stays a step below the title so the hierarchy reads title-first.
     const meta = StyleSheet.flatten(view.getByText('47 items · 2d').props.style);
     expect(meta.fontSize).toBeCloseTo(13.5, 2);
     expect(meta.fontSize).toBeLessThan(title.fontSize);
+    // …and it is pushed back in all three ways that are available, because
+    // weight alone was not enough under a bold line: two weights down, out of
+    // textPrimary (asserted below), and an opacity on top.
+    expect(meta.fontFamily).toBe('Figtree_300Light');
+    expect(meta.opacity).toBeLessThan(1);
     // The caption is ONE block: no margin between the two lines, and line-heights
     // close to the glyph size so leading slack doesn't reopen the gap.
     expect(meta.marginTop).toBe(0);
     expect(title.lineHeight).toBe(17);
     expect(meta.lineHeight).toBe(16);
+  });
+
+  test('every collage carries the edge vignette, over the covers', async () => {
+    // A pale cover on a near-white page has no edge of its own and the card
+    // stops reading as an object. Two crossed gradients give every card the
+    // same quiet boundary whatever its photos happen to be.
+    const view = await render(
+      <PhotoVaultBoardCard
+        board={board}
+        width={186}
+        theme={theme}
+        resolveCoverUrl={(p) => `https://pond${p}`}
+        onPress={() => {}}
+        onLongPress={() => {}}
+      />,
+    );
+    for (const id of ['board-vignette-y', 'board-vignette-x']) {
+      const g = view.getByTestId(id);
+      // Dark at BOTH ends and clear through the middle — one gradient covering
+      // two opposite edges is what makes two of these enough for four sides.
+      expect(g.props.colors[0]).toMatch(/^rgba\(0,0,0,0\.[1-9]/);
+      expect(g.props.colors[g.props.colors.length - 1]).toMatch(/^rgba\(0,0,0,0\.[1-9]/);
+      expect(g.props.colors.slice(1, -1).every((c) => c === 'rgba(0,0,0,0)')).toBe(true);
+      // An edge treatment, not a scrim: clear well before the middle.
+      expect(g.props.locations[1]).toBeLessThanOrEqual(0.25);
+      expect(g.props.locations[2]).toBeGreaterThanOrEqual(0.75);
+      // It lies over the covers inside the card's own Pressable, so a press
+      // has to pass straight through it.
+      expect(g.props.pointerEvents).toBe('none');
+    }
+  });
+
+  test('an empty board gets the edge too — it must not be the one bare card', async () => {
+    const view = await render(
+      <PhotoVaultBoardCard
+        board={{ ...board, covers: [] }}
+        width={186}
+        theme={theme}
+        resolveCoverUrl={(p) => `https://pond${p}`}
+        onPress={() => {}}
+        onLongPress={() => {}}
+      />,
+    );
+    expect(view.getByTestId('board-empty-cover')).toBeTruthy();
+    expect(view.getByTestId('board-vignette-y')).toBeTruthy();
   });
 
   test('badges a published board as SHARED, and says so to screen readers', async () => {
