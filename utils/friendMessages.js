@@ -24,6 +24,7 @@
  * fine in a demo and go wrong on a slow link, so they are testable without a
  * socket, a server or a rendered bubble.
  */
+import { attachmentIdsOf } from './messageAttachments';
 
 /**
  * How far apart a local bubble and its server row may be stamped and still be
@@ -51,13 +52,23 @@ export function byTime(a, b) {
  * Only ever compares against rows the server says are MINE — a friend echoing
  * your words back is a different message that happens to read the same, and
  * swallowing it would delete half a conversation.
+ *
+ * ── Photos count as identity, and for a photo-only message they ARE it ─────
+ * Matching on text alone meant a message with no words could never be recognised
+ * in the server's answer, so a photo sent on its own stayed on screen TWICE —
+ * once as the optimistic bubble that can never settle, once as the real row.
+ * Vault ids are unique, so comparing them is a sharper match than text ever was:
+ * two photo-only messages seconds apart are told apart properly.
  */
 export function isEchoed(local, serverRows) {
   const text = String(local?.content ?? '').trim();
-  if (!text) return false;
+  const ids = attachmentIdsOf(local).join(',');
+  // Nothing to match on at all — not a message this function can reason about.
+  if (!text && !ids) return false;
   return serverRows.some((row) => (
     row?.mine
     && String(row.content ?? '').trim() === text
+    && attachmentIdsOf(row).join(',') === ids
     && Math.abs((row.createdAt || 0) - (local?.createdAt || 0)) <= ECHO_WINDOW_MS
   ));
 }
@@ -79,16 +90,22 @@ export function mergeThread(serverRows = [], locals = []) {
 }
 
 /**
- * Build the optimistic bubble for text the user just sent.
+ * Build the optimistic bubble for what the user just sent.
  *
  * `localId` is its handle for the lifetime of the send — the one thing that
  * survives into the failed state, where there is no server id to key by.
+ *
+ * `attachments` are carried so a photo-only message is not a BLANK bubble for the
+ * length of the round trip. They are already-uploaded vault ids by the time this
+ * is called (the composer uploads on pick), so the bubble points at exactly the
+ * rows the settled message will.
  */
-export function optimisticMessage(content, { now = Date.now(), seq = 0 } = {}) {
+export function optimisticMessage(content, { now = Date.now(), seq = 0, attachments = [] } = {}) {
   return {
     id: `local-${now}-${seq}`,
     localId: `local-${now}-${seq}`,
     content: String(content ?? '').trim(),
+    attachments: Array.isArray(attachments) ? attachments : [],
     createdAt: now,
     mine: true,
     local: true,

@@ -120,3 +120,57 @@ describe('labels', () => {
     expect(dayLabel(new Date(2026, 2, 1, 8, 0).getTime(), { now, locale: 'en-GB' })).toMatch(/Mar/);
   });
 });
+
+/**
+ * A message with PHOTOS has to settle the same way a message with words does.
+ *
+ * Matching on text alone could never recognise a photo sent on its own in the
+ * server's answer, so that bubble stayed on screen twice — once as an optimistic
+ * copy that can never settle, once as the real row.
+ */
+describe('photos count as identity', () => {
+  const now = 1_700_000_000_000;
+  const attach = (ids) => ids.map((mediaId) => ({ type: 'media', mediaId }));
+
+  test('a photo-only bubble settles into its server row', () => {
+    const local = optimisticMessage('', { now, seq: 1, attachments: attach(['m1']) });
+    const serverRow = {
+      id: 'srv1', mine: true, content: '', attachments: attach(['m1']), createdAt: now + 400,
+    };
+    expect(isEchoed(local, [serverRow])).toBe(true);
+    // And so the thread draws it ONCE.
+    expect(mergeThread([serverRow], [local]).map((m) => m.id)).toEqual(['srv1']);
+  });
+
+  test('two different photo-only messages seconds apart are NOT confused', () => {
+    // The thing text matching could never do: tell apart two messages that both
+    // say nothing. Vault ids are unique, so this is a sharper match, not a looser one.
+    const local = optimisticMessage('', { now, seq: 1, attachments: attach(['m2']) });
+    const other = {
+      id: 'srv1', mine: true, content: '', attachments: attach(['m1']), createdAt: now + 400,
+    };
+    expect(isEchoed(local, [other])).toBe(false);
+    expect(mergeThread([other], [local])).toHaveLength(2);
+  });
+
+  test('a caption with photos has to match on BOTH halves', () => {
+    const local = optimisticMessage('look at this', { now, seq: 1, attachments: attach(['m1']) });
+    const sameWords = {
+      id: 'srv1', mine: true, content: 'look at this', attachments: [], createdAt: now + 400,
+    };
+    expect(isEchoed(local, [sameWords])).toBe(false);
+    expect(isEchoed(local, [{ ...sameWords, attachments: attach(['m1']) }])).toBe(true);
+  });
+
+  test('a plain text message is unaffected by rows that carry no attachments field', () => {
+    // An older pond does not send one at all; that must still read as "none".
+    const local = optimisticMessage('on my way', { now, seq: 1 });
+    expect(isEchoed(local, [{ id: 'srv1', mine: true, content: 'on my way', createdAt: now }])).toBe(true);
+  });
+
+  test('a bubble with neither words nor photos is still never matched', () => {
+    expect(isEchoed(optimisticMessage('', { now, seq: 1 }), [
+      { id: 'srv1', mine: true, content: '', createdAt: now },
+    ])).toBe(false);
+  });
+});

@@ -34,6 +34,18 @@
  * ordering and de-duplication live because they are the parts that look fine
  * on a fast link and go wrong on a slow one.
  *
+ * ─── Photos ────────────────────────────────────────────────────────────────
+ *
+ * A message can carry up to six, as VAULT MEDIA IDS rather than bytes — the
+ * photo goes through the ordinary media pipeline first and the message
+ * references what came back, so a sent photo is a vault item like any other.
+ * The composer therefore uploads on PICK, not on send (services/vaultAttach says
+ * why), and the thread resolves every id it is shown in one batched pass
+ * (useThreadPhotos) rather than one request per bubble.
+ *
+ * A photo IS a message: the send key arms with nothing typed, and a wordless
+ * bubble draws no empty line under the picture.
+ *
  * ─── Links are not plain text ──────────────────────────────────────────────
  *
  * A URL someone sends is pressable where it was written, and the FIRST link in
@@ -62,7 +74,18 @@ import ChatComposer from '../../../components/ChatComposer';
 import AnimalAvatar from '../../../components/AnimalAvatar';
 import MessageLinkCard from '../../../components/MessageLinkCard';
 import MessageActionsSheet from '../../../components/MessageActionsSheet';
-import { useServer } from '../../../context/ServerContext';
+import AttachmentViewer from '../../../components/AttachmentViewer';
+import MessagePhotos from './MessagePhotos';
+import MessageDraftPhotos, { MessageAttachKey } from './MessageDraftPhotos';
+import useThreadPhotos from './useThreadPhotos';
+import { pickPhotos, uploadErrorMessage, uploadPickedAsset } from '../../../services/vaultAttach';
+import {
+  attachmentIdsOf,
+  attachmentRoom,
+  canSendMessage,
+  toAttachments,
+} from '../../../utils/messageAttachments';
+import { useServer, getApiAuthToken } from '../../../context/ServerContext';
 import { useSyncSignals } from '../../../context/DownloadsContext';
 import { panelTopInset, panelBottomInset } from '../../../components/tabBarLayout';
 import { depth } from '../../../utils/surfaceDepth';
@@ -72,6 +95,7 @@ import useKeyboardHeight from '../../../utils/useKeyboardHeight';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { copyText } from '../../../utils/copyText';
 import { FROST_OVERLAP } from '../../../utils/frostedChat';
+import { isImage, viewerImages } from '../../../utils/mediaAttachments';
 import { firstLinkUrl, linkSegments } from '../../../utils/messageLinks';
 import {
   mergeThread, optimisticMessage, timeLabel, startsNewDay, dayLabel,
@@ -118,7 +142,7 @@ export default function FriendChatPage({
 }) {
   const c = theme.colors;
   const insets = useSafeAreaInsets();
-  const { api } = useServer();
+  const { api, getBaseUrl } = useServer();
   const { messagesVersion, messagesPing } = useSyncSignals();
   const keyboard = useKeyboardHeight();
 
@@ -144,6 +168,19 @@ export default function FriendChatPage({
   const [dockHeight, setDockHeight] = useState(220);
 
   const thread = useMemo(() => mergeThread(rows, locals), [rows, locals]);
+
+  // Every photo in the open conversation, resolved in one pass rather than one
+  // request per bubble — see useThreadPhotos.
+  const threadPhotos = useThreadPhotos(thread);
+  const photoOrigin = useMemo(() => String(serverBase || '').replace(/\/api$/, ''), [serverBase]);
+
+  // The full-size viewer. It holds the pictures of the ONE message that was
+  // tapped, so paging walks that message rather than the whole conversation.
+  const [viewer, setViewer] = useState(null);
+  const openPhotos = useCallback((images, index) => {
+    if (images?.length) { impactHaptic('light'); setViewer({ images, index }); }
+  }, []);
+  useEffect(() => { if (!visible) setViewer(null); }, [visible]);
 
   // ── Reading the thread ────────────────────────────────────────────────────
   // Reading also marks THEIR messages read, server-side, which is what clears
@@ -212,23 +249,89 @@ export default function FriendChatPage({
     try { listRef.current?.scrollToEnd?.({ animated: true }); } catch { /* list went away */ }
   }, [keyboardUp, visible, thread.length]);
 
+  // ── The draft's photos ────────────────────────────────────────────────────
+  // Each entry is { key, uri, id?, uploading, error }. `uri` is the LOCAL file
+  // the picker handed over and stays the preview for the life of the draft: it
+  // is already on the device, so it paints instantly and does not wait on the
+  // vault generating a thumbnail for something uploaded three seconds ago.
+  const [photos, setPhotos] = useState([]);
+  const photoSeq = useRef(0);
+  const readyPhotoIds = useMemo(
+    () => photos.filter((p) => p.id && !p.error).map((p) => p.id),
+    [photos],
+  );
+  // Anything still in flight holds Send: posting now would deliver the words
+  // without the picture they were written about.
+  const uploading = photos.some((p) => p.uploading);
+
+  // Closing the thread — or switching to another person — empties the strip. A
+  // photo picked for one conversation following you into another is the kind of
+  // mistake you cannot take back.
+  useEffect(() => { setPhotos([]); }, [visible, friendId]);
+
+  const removePhoto = useCallback((key) => {
+    tapHaptic();
+    setPhotos((prev) => prev.filter((p) => p.key !== key));
+  }, []);
+
+  const addPhotos = useCallback(async () => {
+    const room = attachmentRoom(readyPhotoIds);
+    if (room <= 0) return;
+    const picked = await pickPhotos({ limit: room }).catch(() => null);
+    if (!picked || picked.status !== 'picked') return;
+
+    const uploadUrl = `${getBaseUrl()}/media/upload`;
+    const token = getApiAuthToken();
+    for (const asset of picked.assets) {
+      photoSeq.current += 1;
+      const key = `p${photoSeq.current}`;
+      setPhotos((prev) => [...prev, { key, uri: asset.uri, uploading: true, error: null }]);
+      try {
+        const media = await uploadPickedAsset({
+          uploadUrl, token, asset, label: `message:${asset.fileName}`,
+        });
+        setPhotos((prev) => prev.map((p) => (
+          p.key === key ? { ...p, id: media.id, uploading: false } : p
+        )));
+      } catch (e) {
+        // The failed thumbnail STAYS, carrying its reason, until it is
+        // dismissed. A photo that silently vanished from the strip would look
+        // like it had been sent.
+        notifyHaptic('error');
+        setPhotos((prev) => prev.map((p) => (
+          p.key === key ? { ...p, uploading: false, error: uploadErrorMessage(e) } : p
+        )));
+      }
+    }
+  }, [getBaseUrl, readyPhotoIds]);
+
   // ── Sending ───────────────────────────────────────────────────────────────
   const send = useCallback(async (text, retryOf = null) => {
     const content = String(text ?? '').trim();
-    if (!content || !friendId) return;
+    // A retry re-sends exactly what that bubble carried; a new send takes
+    // whatever the strip has ready. A PHOTO IS A MESSAGE, so words are not
+    // required — only one of the two.
+    const ids = retryOf ? attachmentIdsOf(retryOf) : readyPhotoIds;
+    if (!canSendMessage(content, ids) || !friendId) return;
 
     seq.current += 1;
     const bubble = retryOf
       ? { ...retryOf, failed: false }
-      : optimisticMessage(content, { seq: seq.current });
+      : optimisticMessage(content, { seq: seq.current, attachments: toAttachments(ids) });
 
     setLocals((prev) => (retryOf
       ? prev.map((l) => (l.localId === retryOf.localId ? bubble : l))
       : [...prev, bubble]));
-    if (!retryOf) setDraft('');
+    if (!retryOf) { setDraft(''); setPhotos([]); }
     setSending(true);
     try {
-      await api.post(`/messages/${encodeURIComponent(friendId)}`, { content });
+      // `attachments` only rides along when there are some: an ordinary message
+      // is still the plain `{ content }` body this endpoint has always taken,
+      // which keeps it readable in a log and costs an older pond nothing.
+      await api.post(`/messages/${encodeURIComponent(friendId)}`, {
+        content,
+        ...(ids.length ? { attachments: toAttachments(ids) } : null),
+      });
       // The POST's own row is not spliced in here: the refetch below is the one
       // source of truth for what the thread contains, and mergeThread already
       // recognises this bubble in it. Splicing as well is how a message ends up
@@ -242,7 +345,7 @@ export default function FriendChatPage({
     } finally {
       setSending(false);
     }
-  }, [api, friendId, load]);
+  }, [api, friendId, load, readyPhotoIds]);
 
   const retry = useCallback((bubble) => {
     tapHaptic();
@@ -287,18 +390,38 @@ export default function FriendChatPage({
     else say(`Could not copy ${noun.toLowerCase()}`);
   }, [say]);
 
-  // The verbs. The link pair only appears when the message HAS a link — a row
-  // that does nothing is worse than an absent one.
+  // The verbs. Each appears only when it would actually do something — a row
+  // that does nothing is worse than an absent one, which is why a photo sent
+  // with no words offers no "Copy message" to copy an empty string with.
   const heldActions = useMemo(() => {
     if (!held) return [];
     const content = held.content || '';
     const link = firstLinkUrl(content);
-    const rows = [{
-      key: 'copy-message',
-      label: 'Copy message',
-      icon: 'content-copy',
-      onSelect: () => { copyText(content).then((r) => reportCopy(r, 'Message')); },
-    }];
+    const rows = [];
+    if (content.trim()) {
+      rows.push({
+        key: 'copy-message',
+        label: 'Copy message',
+        icon: 'content-copy',
+        onSelect: () => { copyText(content).then((r) => reportCopy(r, 'Message')); },
+      });
+    }
+    // The pictures of the held message, in its own order — the same list a tap
+    // on one of them opens, so the sheet and the photo agree on what is next.
+    const openable = viewerImages(
+      photoOrigin,
+      attachmentIdsOf(held)
+        .map((id) => threadPhotos?.get?.(String(id)))
+        .filter((m) => m && isImage(m) && (m.thumbnailLgUrl || m.thumbnailUrl)),
+    );
+    if (openable.length) {
+      rows.push({
+        key: 'open-photos',
+        label: openable.length === 1 ? 'Open photo' : `Open ${openable.length} photos`,
+        icon: 'image-outline',
+        onSelect: () => openPhotos(openable, 0),
+      });
+    }
     if (link) {
       rows.push({
         key: 'copy-link',
@@ -313,7 +436,7 @@ export default function FriendChatPage({
       });
     }
     return rows;
-  }, [held, reportCopy, say]);
+  }, [held, reportCopy, say, photoOrigin, threadPhotos, openPhotos]);
 
   // ── Rows ──────────────────────────────────────────────────────────────────
   const s = useMemo(() => makeStyles(theme), [theme]);
@@ -326,6 +449,10 @@ export default function FriendChatPage({
     const bodyStyle = inked ? s.bodyMine : s.bodyTheirs;
     const link = firstLinkUrl(item.content);
     const segments = linkSegments(item.content);
+    const photoIds = attachmentIdsOf(item);
+    // A photo sent on its own has no words, and an empty <Text> would still
+    // claim a line of leading under the picture.
+    const hasText = String(item.content || '').trim().length > 0;
     const onHold = () => hold(item);
     const body = (
       <View style={mine ? s.wrapMine : s.wrapTheirs}>
@@ -342,6 +469,16 @@ export default function FriendChatPage({
             item.local && !item.failed && s.bubbleSending,
           ]}
         >
+          {photoIds.length > 0 && (
+            <MessagePhotos
+              ids={photoIds}
+              photos={threadPhotos}
+              origin={photoOrigin}
+              mine={inked}
+              theme={theme}
+              onOpen={openPhotos}
+            />
+          )}
           {!!link && (
             <MessageLinkCard
               url={link}
@@ -357,21 +494,23 @@ export default function FriendChatPage({
               only way react-native makes part of a line pressable. Holding a
               link has to raise the sheet too — a long press does NOT pass
               from a nested Text to its parent. */}
-          <Text style={bodyStyle}>
-            {segments.map((seg, i) => (seg.url ? (
-              <Text
-                key={i}
-                style={[bodyStyle, s.link, inked && s.linkMine]}
-                onPress={() => { Linking.openURL(seg.url).catch(() => {}); }}
-                onLongPress={onHold}
-                suppressHighlighting
-              >
-                {seg.text}
-              </Text>
-            ) : (
-              <Text key={i} style={bodyStyle}>{seg.text}</Text>
-            )))}
-          </Text>
+          {hasText && (
+            <Text style={bodyStyle}>
+              {segments.map((seg, i) => (seg.url ? (
+                <Text
+                  key={i}
+                  style={[bodyStyle, s.link, inked && s.linkMine]}
+                  onPress={() => { Linking.openURL(seg.url).catch(() => {}); }}
+                  onLongPress={onHold}
+                  suppressHighlighting
+                >
+                  {seg.text}
+                </Text>
+              ) : (
+                <Text key={i} style={bodyStyle}>{seg.text}</Text>
+              )))}
+            </Text>
+          )}
           <Text style={inked ? s.stampMine : s.stampTheirs}>
             {item.failed ? 'Not sent — tap to try again' : timeLabel(item.createdAt)}
           </Text>
@@ -385,7 +524,7 @@ export default function FriendChatPage({
         {body}
       </View>
     );
-  }, [thread, s, retry, hold, theme, serverBase]);
+  }, [thread, s, retry, hold, theme, serverBase, threadPhotos, photoOrigin, openPhotos]);
 
   const avatar = resolveAvatarUrl(friend?.avatarUrl, serverBase);
 
@@ -491,9 +630,24 @@ export default function FriendChatPage({
             value={draft}
             onChangeText={setDraft}
             onSend={() => send(draft)}
-            sending={sending}
+            sending={sending || uploading}
             disabled={!friendId}
-            placeholder={`Message ${friend?.name || ''}…`}
+            // A PHOTO IS A MESSAGE — so the key arms with nothing typed. It stays
+            // dark while one is still uploading, because that photo has no vault
+            // id yet and sending now would leave it behind.
+            canSend={canSendMessage(draft, readyPhotoIds) && !uploading && !!friendId}
+            placeholder={photos.length > 0
+              ? 'Say something about it, or just send…'
+              : `Message ${friend?.name || ''}…`}
+            topSlot={<MessageDraftPhotos items={photos} theme={theme} onRemove={removePhoto} />}
+            actions={(
+              <MessageAttachKey
+                ids={readyPhotoIds}
+                theme={theme}
+                disabled={!friendId}
+                onPress={addPhotos}
+              />
+            )}
             marginBottom={keyboard > 0 ? keyboard + 8 : panelBottomInset(insets.bottom)}
             inputProps={{ testID: 'friend-chat-input' }}
           />
@@ -507,6 +661,15 @@ export default function FriendChatPage({
         actions={heldActions}
         theme={theme}
         testID="friend-chat-actions"
+      />
+
+      {/* A photo, full size. The same viewer a note's attachments open — it takes
+          URLs, so it never routes through the media vault. */}
+      <AttachmentViewer
+        visible={!!viewer}
+        images={viewer?.images || []}
+        index={viewer?.index || 0}
+        onClose={() => setViewer(null)}
       />
     </EdgeSwipePage>
   );
