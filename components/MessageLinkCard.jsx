@@ -17,11 +17,8 @@
  *   - Nothing oversets the bubble (STYLE-RULES): the text column shrinks and
  *     every line is `numberOfLines`-capped, because a long og:title is alone
  *     too wide for the row and wrapping cannot save a single item.
- *   - `onLoaded` fires once, when the card first appears, so the thread can
- *     stay pinned to the bottom — a card arriving a second after the message
- *     would otherwise push the newest line out of view.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -39,25 +36,11 @@ export default function MessageLinkCard({
   theme,
   serverBase,
   onLongPress,
-  onLoaded,
   testID,
 }) {
   const c = theme.colors;
   const preview = useLinkPreview(url);
   const [thumbFailed, setThumbFailed] = useState(false);
-
-  // Fire-once, and never from render. `onLoaded` is deliberately NOT a
-  // dependency — a parent passing a fresh arrow each render would otherwise
-  // re-notify forever.
-  const announced = useRef(false);
-  const onLoadedRef = useRef(onLoaded);
-  onLoadedRef.current = onLoaded;
-  useEffect(() => {
-    if (preview && !announced.current) {
-      announced.current = true;
-      onLoadedRef.current?.();
-    }
-  }, [preview]);
 
   if (!preview) return null;
 

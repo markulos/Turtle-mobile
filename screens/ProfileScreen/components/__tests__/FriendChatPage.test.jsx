@@ -2,6 +2,11 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
+// FlashList's own jest setup — without it the component dies on I18nManager.
+// The scroll BEHAVIOUR under test here is the list's (maintainVisibleContentPosition),
+// not ours, so this renders the real thing rather than a stand-in that would
+// prove nothing.
+require('@shopify/flash-list/jestSetup');
 jest.mock('expo-image', () => ({ Image: 'Image' }));
 jest.mock('expo-blur', () => ({ BlurView: 'BlurView' }));
 jest.mock('../../../../utils/haptics', () => ({
@@ -413,116 +418,40 @@ describe('the chat scrolls BEHIND the frosted composer', () => {
   });
 });
 
-describe('a conversation opens at the newest message', () => {
-  // The content height moves several times after the first paint — messages
-  // land, the composer dock is measured and changes the inset, a link preview
-  // resolves and makes a bubble taller. A single scroll on load survives none
-  // of those, which is how a thread ends up opening mid-history.
+describe('the newest message sits at the absolute bottom', () => {
+  // The behaviour itself is the LIST's now, not ours: FlashList's
+  // `maintainVisibleContentPosition` does it natively, which is why the
+  // hand-rolled scroll-to-end that used to live here is gone. Re-testing a
+  // third-party list's scrolling would be testing the wrong thing.
+  //
+  // What IS ours, and what breaks silently if someone edits it, is the
+  // CONFIGURATION — so that is what this pins.
   const listOf = () => screen.getByTestId('friend-chat-list');
-  const scrollEvent = (fromBottom) => ({
-    nativeEvent: {
-      contentOffset: { y: 1000 - fromBottom },
-      contentSize: { height: 2000 },
-      layoutMeasurement: { height: 1000 },
-    },
-  });
 
-  let scrollToEnd;
-  beforeEach(() => {
-    scrollToEnd = jest.spyOn(require('react-native').FlatList.prototype, 'scrollToEnd')
-      .mockImplementation(() => {});
-  });
-  afterEach(() => scrollToEnd.mockRestore());
-
-  test('it parks at the end when the messages land', async () => {
+  test('the list is pinned to the bottom, on the main chat settings', async () => {
     await render(<FriendChatPage {...props()} />);
     await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
-    expect(scrollToEnd).toHaveBeenCalled();
+
+    const cfg = listOf().props.maintainVisibleContentPosition;
+    // Opens at the newest line with no scroll afterwards to go wrong.
+    expect(cfg.startRenderingFromBottom).toBe(true);
+    // And a new message only pulls the view down if the reader was already
+    // near the bottom — the same number TurtleScreen's chat uses, because two
+    // different answers is how two chats in one app start behaving differently.
+    expect(cfg.autoscrollToBottomThreshold).toBe(0.2);
   });
 
-  test('and AGAIN when the dock measurement moves the inset under it', async () => {
-    await render(<FriendChatPage {...props()} />);
-    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
-    scrollToEnd.mockClear();
-
-    // The dock measures, the padding changes, the content grows.
-    await act(async () => {
-      fireEvent(screen.getByTestId('friend-chat-dock'), 'layout', { nativeEvent: { layout: { height: 190 } } });
-      fireEvent(listOf(), 'contentSizeChange', 0, 520);
-    });
-    expect(scrollToEnd).toHaveBeenCalled();
-  });
-
-  test('a reader scrolled up into history is left where they are', async () => {
-    await render(<FriendChatPage {...props()} />);
-    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
-    // Settle at the bottom first — that is what arms the "don't yank" rule.
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
-
-    await act(async () => { fireEvent.scroll(listOf(), scrollEvent(900)); });
-    scrollToEnd.mockClear();
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 600); });
-    expect(scrollToEnd).not.toHaveBeenCalled();
-  });
-
-  test('but one still near the bottom keeps following the conversation', async () => {
-    await render(<FriendChatPage {...props()} />);
-    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
-
-    // Nudged off the bottom by a bubble growing, not by scrolling away.
-    await act(async () => { fireEvent.scroll(listOf(), scrollEvent(20)); });
-    scrollToEnd.mockClear();
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 600); });
-    expect(scrollToEnd).toHaveBeenCalled();
-  });
-
-  test('opening the KEYBOARD brings you to the newest message, even from history', async () => {
-    // "I am about to type" is a statement about wanting the end of the
-    // conversation. The keyboard does not change the list's content, so there
-    // is no content-size event to ride — it only makes the dock taller, which
-    // pushes the last message up behind it.
+  test('that config is frozen at module scope, not rebuilt per render', async () => {
+    // FlashList treats it as LAYOUT CONFIGURATION. An object literal in the
+    // render body hands it a new identity on every render — here, on every
+    // keystroke in the composer.
     const { rerender } = await render(<FriendChatPage {...props()} />);
     await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
-    // Read back into history — normally that stops the view being yanked.
-    await act(async () => { fireEvent.scroll(listOf(), scrollEvent(900)); });
-    scrollToEnd.mockClear();
+    const first = listOf().props.maintainVisibleContentPosition;
 
-    mockKeyboardHeight = 320;
+    await act(async () => { fireEvent.changeText(screen.getByTestId('friend-chat-input'), 'typing'); });
     await rerender(<FriendChatPage {...props()} />);
-    expect(scrollToEnd).toHaveBeenCalled();
-  });
-
-  test('a message arriving while they read history still does NOT yank them', async () => {
-    // The override is the KEYBOARD specifically, not a general surrender of the
-    // don't-yank rule.
-    await render(<FriendChatPage {...props()} />);
-    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
-    await act(async () => { fireEvent.scroll(listOf(), scrollEvent(900)); });
-    scrollToEnd.mockClear();
-
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 600); });
-    expect(scrollToEnd).not.toHaveBeenCalled();
-  });
-
-  test('switching to another person opens at THEIR newest message', async () => {
-    const { rerender } = await render(<FriendChatPage {...props()} />);
-    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
-    // Read back into this thread's history…
-    await act(async () => { fireEvent.scroll(listOf(), scrollEvent(900)); });
-
-    // …then open someone else's. The "leave them alone" state must not carry.
-    // Awaited: rerender is async in this RNTL, and a floating one settles
-    // inside the NEXT test's environment.
-    await rerender(<FriendChatPage {...props({ friend: { id: 'u3', name: 'Andres', avatarUrl: null } })} />);
-    scrollToEnd.mockClear();
-    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
-    expect(scrollToEnd).toHaveBeenCalled();
+    expect(listOf().props.maintainVisibleContentPosition).toBe(first);
   });
 });
 

@@ -51,8 +51,9 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, BackHandler, FlatList, Linking, Pressable, StyleSheet, Text, View,
+  ActivityIndicator, BackHandler, Linking, Pressable, StyleSheet, Text, View,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
@@ -80,14 +81,32 @@ import {
 const TOAST_MS = 1800;
 
 /**
- * How far from the bottom still counts as "reading the newest message".
+ * The newest message sits at the ABSOLUTE BOTTOM, and stays there.
  *
- * Generous on purpose: it is the difference between a thread that follows the
- * conversation and one that jumps away from what you were reading. A reader
- * a screen deep into history is clearly not at the bottom; a reader twenty
- * points off it was only nudged there by a bubble growing.
+ * Lifted wholesale from the main chat (TurtleScreen's CHAT_MAINTAIN_POSITION),
+ * because that one was already made to run properly and a second, different
+ * answer to the same question is how two chats in one app start behaving
+ * differently.
+ *
+ *   startRenderingFromBottom  — the thread OPENS at the newest line, with no
+ *     scroll-to-end afterwards to go wrong. A hand-rolled version has to
+ *     survive the content height moving several times after first paint (the
+ *     messages land, the dock is measured and changes the inset, a link
+ *     preview resolves and makes a bubble taller) and be re-park-proof at each
+ *     one. This is the list doing it natively instead.
+ *   autoscrollToBottomThreshold — a new message pulls the view down only if
+ *     the reader was already within a fifth of a screen of the bottom. Being
+ *     yanked out of history because something arrived is the other half of the
+ *     complaint, and this is the same number the main chat uses.
+ *
+ * Frozen at module scope: FlashList treats this as layout CONFIGURATION, so an
+ * object literal in the render body hands it a new identity on every render —
+ * which here means every keystroke in the composer.
  */
-const STICK_SLACK = 120;
+const CHAT_PINNED_TO_BOTTOM = {
+  startRenderingFromBottom: true,
+  autoscrollToBottomThreshold: 0.2,
+};
 
 export default function FriendChatPage({
   visible,
@@ -178,83 +197,20 @@ export default function FriendChatPage({
   }, [visible, onClose]);
 
   /**
-   * Keep the newest message in view.
-   *
-   * Driven by EVENTS, never by a timer. A `setTimeout(…, 60)` here is a guess
-   * at when the list has finished laying out, and a guess that outlives the
-   * screen: the timer fires, the list is gone, and `scrollToEnd` reaches into
-   * an unmounted VirtualizedList. Content-size change is the real signal, and
-   * it already fires on first paint and on every message added.
-   *
-   * Guarded anyway, because the keyboard path can still race a close.
-   */
-  const stickToEnd = useCallback((animated = false) => {
-    if (!listRef.current) return;
-    try { listRef.current.scrollToEnd({ animated }); } catch { /* list went away */ }
-  }, []);
-
-  /**
-   * ── Opening at the newest message ───────────────────────────────────────
-   *
-   * A conversation OPENS at the bottom, always. After that the view only
-   * follows new content if the reader was already down there — being yanked
-   * out of history because a message arrived is the opposite complaint.
-   *
-   * `settled` is what separates the two. Until the thread has actually been
-   * parked at the end once, every content-size change re-parks it; after that,
-   * `nearBottom` decides. This matters more than it looks, because the content
-   * height moves SEVERAL times after the first paint and each move can leave
-   * the view stranded mid-thread:
-   *   · the messages arrive,
-   *   · the composer dock is measured and the list's inset changes under it,
-   *   · a link preview card resolves a second later and makes a bubble taller.
-   * A single scroll-to-end on load survives none of those.
-   */
-  const settled = useRef(false);
-  const nearBottom = useRef(true);
-
-  // Every open, and every switch to another person, starts over.
-  useEffect(() => {
-    settled.current = false;
-    nearBottom.current = true;
-  }, [visible, friendId]);
-
-  const onScroll = useCallback((e) => {
-    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    const fromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
-    nearBottom.current = fromBottom <= STICK_SLACK;
-  }, []);
-
-  /** The list grew or shrank: follow it, or let it be if the reader is reading. */
-  const onContentSizeChange = useCallback(() => {
-    if (settled.current && !nearBottom.current) return;
-    stickToEnd(false);
-    if (thread.length) settled.current = true;
-  }, [stickToEnd, thread.length]);
-
-  /**
    * Going to TEXT brings you to the newest message.
    *
-   * The keyboard does not change the list's CONTENT, so there is no
-   * content-size event to ride; and it does not shrink the list either, since
-   * the composer floats over a full-height one. What it does is make the dock
-   * taller, which pushes the bottom of the conversation up behind it.
-   *
-   * Unconditional on the way UP, deliberately: "I am about to type" is a
-   * statement about wanting the end of the conversation, even from someone who
-   * was reading history a moment ago. The usual don't-yank rule still applies
-   * to everything else (a message arriving, a preview resolving) — it is
-   * opening the keyboard specifically that overrides it.
+   * The ONE thing `maintainVisibleContentPosition` cannot do for us. The
+   * keyboard changes no CONTENT, so there is no size change for the list to
+   * anchor against — it only makes the dock taller, which pushes the bottom of
+   * the conversation up behind it. Unconditional on the way up: "I am about to
+   * type" is a statement about wanting the end of the conversation, even from
+   * someone who was reading history a moment ago.
    */
   const keyboardUp = keyboard > 0;
   useEffect(() => {
-    if (!visible || !thread.length) return;
-    if (!keyboardUp && settled.current && !nearBottom.current) return;
-    stickToEnd(true);
-    // Reading history is over: the next arrival should follow too, rather than
-    // being held back by where they were before they tapped the box.
-    if (keyboardUp) nearBottom.current = true;
-  }, [keyboard, keyboardUp, visible, thread.length, stickToEnd]);
+    if (!visible || !keyboardUp || !thread.length) return;
+    try { listRef.current?.scrollToEnd?.({ animated: true }); } catch { /* list went away */ }
+  }, [keyboardUp, visible, thread.length]);
 
   // ── Sending ───────────────────────────────────────────────────────────────
   const send = useCallback(async (text, retryOf = null) => {
@@ -393,7 +349,6 @@ export default function FriendChatPage({
               theme={theme}
               serverBase={serverBase}
               onLongPress={onHold}
-              onLoaded={() => stickToEnd(false)}
               testID={`friend-chat-link-${item.localId || item.id}`}
             />
           )}
@@ -430,7 +385,7 @@ export default function FriendChatPage({
         {body}
       </View>
     );
-  }, [thread, s, retry, hold, theme, serverBase, stickToEnd]);
+  }, [thread, s, retry, hold, theme, serverBase]);
 
   const avatar = resolveAvatarUrl(friend?.avatarUrl, serverBase);
 
@@ -469,27 +424,22 @@ export default function FriendChatPage({
             </Pressable>
           </View>
         ) : (
-          <FlatList
+          <View style={s.listWrap}>
+          <FlashList
             ref={listRef}
             data={thread}
             keyExtractor={(m) => String(m.localId || m.id)}
             renderItem={renderItem}
-            // The list fills the WHOLE page and the composer floats over it, so
-            // the inset is what keeps the newest message clear of the frost at
-            // rest while older ones slide under it as you scroll.
-            contentContainerStyle={[s.listContent, { paddingBottom: dockHeight + FROST_OVERLAP }]}
+            // The whole of the scroll behaviour, and the reason there is no
+            // hand-rolled version of it here any more. See CHAT_PINNED_TO_BOTTOM.
+            maintainVisibleContentPosition={CHAT_PINNED_TO_BOTTOM}
+            // FlashList ignores `style`, so the flex:1 lives on the wrapper View.
+            contentContainerStyle={{ paddingVertical: 10, paddingBottom: dockHeight + FROST_OVERLAP }}
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
             // The scrollbar stops at the composer rather than running under it.
             scrollIndicatorInsets={{ right: 1, bottom: dockHeight }}
             indicatorStyle={isDark ? 'white' : 'black'}
-            onContentSizeChange={onContentSizeChange}
-            // The list's own layout settles after its content does (the dock is
-            // measured, then the inset changes), so this is the other moment
-            // the first park can be lost.
-            onLayout={() => { if (!settled.current) stickToEnd(false); }}
-            onScroll={onScroll}
-            scrollEventThrottle={64}
             ListEmptyComponent={(
               <View style={s.centre}>
                 <Icon name="chat-outline" size={40} color={c.textMuted} />
@@ -500,6 +450,7 @@ export default function FriendChatPage({
             )}
             testID="friend-chat-list"
           />
+          </View>
         )}
 
         {/* The composer DOCK — an absolute overlay, not a row in the column.
@@ -573,7 +524,7 @@ const makeStyles = (theme) => {
     avatar: { width: 32, height: 32, borderRadius: 16 },
     title: { flex: 1, fontSize: 17, fontWeight: '700', color: c.textPrimary },
 
-    listContent: { paddingVertical: 10, flexGrow: 1 },
+    listWrap: { flex: 1 },
     centre: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 28 },
     emptyText: { fontSize: 14, color: c.textTertiary, textAlign: 'center' },
     errorText: { fontSize: 14, color: c.textSecondary, textAlign: 'center' },
