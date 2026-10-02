@@ -63,7 +63,8 @@ import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
-import { avatarAnimal } from './utils/avatar';
+import { AnimalGlyph } from './components/AnimalAvatar';
+import { useMyAvatarAnimal } from './utils/avatarChoice';
 import { inkOn } from './utils/accentColor';
 import ProfileScreen from './screens/ProfileScreen';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
@@ -104,8 +105,11 @@ function TabNavigator() {
   const { theme, hideVaultButton } = useTheme();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
-  // The avatar tab needs to know WHOSE avatar to draw.
+  // The avatar tab needs to know WHOSE avatar to draw…
   const { authIdentity } = useAuth();
+  // …and which animal they picked for it, if they picked one. Subscribed, so
+  // the tab changes the moment the choice is made rather than at next launch.
+  const myAnimal = useMyAvatarAnimal();
   // Tabs actually rendered. The Vault tab is optional and Profile is always on,
   // so the cluster is 5 wide by default (Vault hidden) — the same width as
   // before this tab existed, which is why clusterPadding and the sliding pill
@@ -169,10 +173,24 @@ function TabNavigator() {
           // `color` the navigator hands every other tab, for free. The identity
           // still reads: it's the user's own animal. The full tinted avatar (and
           // any uploaded photo) still lives on the Profile screen itself.
+          //
+          // A CHOSEN animal wins over the assigned one here, exactly as it does
+          // on the Profile card — the tab is the most-seen picture of "you" in
+          // the app, and leaving it on the assigned animal made the choice look
+          // like it had only half applied. A chosen animal is an emoji, so it
+          // keeps its own colour instead of taking `color`; that is the cost of
+          // being able to pick an animal the icon font does not have, and it
+          // still reads correctly on both the plain and the accent-chip states.
           if (route.name === 'Profile') {
             return (
               <TabBarIcon focused={focused}>
-                <Icon name={avatarAnimal(authIdentity || 'anon') || 'account-circle-outline'} size={24} color={color} />
+                <AnimalGlyph
+                  id={authIdentity || 'anon'}
+                  animal={myAnimal}
+                  size={24}
+                  color={color}
+                  testID="tab-profile-animal"
+                />
               </TabBarIcon>
             );
           }

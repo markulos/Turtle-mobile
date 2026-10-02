@@ -14,9 +14,9 @@ import { useTheme } from '../../context/ThemeContext';
 import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
-import AnimalAvatar from '../../components/AnimalAvatar';
+import AnimalAvatar, { AnimalGlyph } from '../../components/AnimalAvatar';
 import AnimalPicker from '../../components/AnimalPicker';
-import { generatedName, avatarGlyph } from '../../utils/avatar';
+import { generatedName } from '../../utils/avatar';
 import {
   adoptServerAvatarAnimal, setMyAvatarAnimal, useMyAvatarAnimal,
 } from '../../utils/avatarChoice';
@@ -74,7 +74,6 @@ export default function ProfileScreen() {
   const myAnimal = useMyAvatarAnimal();
   const [animalPickerOpen, setAnimalPickerOpen] = useState(false);
   const fallbackName = useMemo(() => generatedName(identity, myAnimal), [identity, myAnimal]);
-  const myGlyph = useMemo(() => avatarGlyph(identity, myAnimal), [identity, myAnimal]);
 
   const [name, setName] = useState(fallbackName);
   const [editing, setEditing] = useState(false);
@@ -414,10 +413,8 @@ export default function ProfileScreen() {
               >
                 {avatarFullUrl ? (
                   <Image source={{ uri: avatarFullUrl }} style={styles.avatarImg} contentFit="cover" cachePolicy="memory-disk" transition={150} />
-                ) : myGlyph.emoji ? (
-                  <Text style={styles.avatarEmoji}>{myGlyph.emoji}</Text>
                 ) : (
-                  <Icon name={myGlyph.icon} size={46} color={c.textTertiary} />
+                  <AnimalGlyph id={identity} animal={myAnimal} size={46} color={c.textTertiary} />
                 )}
               </Pressable>
             </View>
@@ -477,11 +474,7 @@ export default function ProfileScreen() {
                 accessibilityLabel={`Choose your animal, currently ${fallbackName}`}
                 testID="profile-handle-chip"
               >
-                {myGlyph.emoji ? (
-                  <Text style={styles.handleEmoji}>{myGlyph.emoji}</Text>
-                ) : (
-                  <Icon name={myGlyph.icon} size={12} color={c.textTertiary} />
-                )}
+                <AnimalGlyph id={identity} animal={myAnimal} size={12} color={c.textTertiary} />
                 <Text style={styles.handleText} numberOfLines={1}>{fallbackName}</Text>
               </Pressable>
             )}
@@ -1804,11 +1797,6 @@ const makeStyles = (theme) => {
     },
     // Fills the bordered circle above (which clips it).
     avatarImg: { width: '100%', height: '100%' },
-    // A chosen animal is an emoji (utils/avatar explains why). Sized to sit in
-    // the same optical space the 46pt icon did; the lineHeight is what stops
-    // it riding high, since an emoji's box is taller than its ink.
-    avatarEmoji: { fontSize: 44, lineHeight: 53, textAlign: 'center' },
-    handleEmoji: { fontSize: 12, lineHeight: 15 },
     metaRow: {
       flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
       flexWrap: 'wrap', alignSelf: 'stretch',

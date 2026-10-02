@@ -404,6 +404,89 @@ describe('the chat scrolls BEHIND the frosted composer', () => {
   });
 });
 
+describe('a conversation opens at the newest message', () => {
+  // The content height moves several times after the first paint — messages
+  // land, the composer dock is measured and changes the inset, a link preview
+  // resolves and makes a bubble taller. A single scroll on load survives none
+  // of those, which is how a thread ends up opening mid-history.
+  const listOf = () => screen.getByTestId('friend-chat-list');
+  const scrollEvent = (fromBottom) => ({
+    nativeEvent: {
+      contentOffset: { y: 1000 - fromBottom },
+      contentSize: { height: 2000 },
+      layoutMeasurement: { height: 1000 },
+    },
+  });
+
+  let scrollToEnd;
+  beforeEach(() => {
+    scrollToEnd = jest.spyOn(require('react-native').FlatList.prototype, 'scrollToEnd')
+      .mockImplementation(() => {});
+  });
+  afterEach(() => scrollToEnd.mockRestore());
+
+  test('it parks at the end when the messages land', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
+    expect(scrollToEnd).toHaveBeenCalled();
+  });
+
+  test('and AGAIN when the dock measurement moves the inset under it', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
+    scrollToEnd.mockClear();
+
+    // The dock measures, the padding changes, the content grows.
+    await act(async () => {
+      fireEvent(screen.getByTestId('friend-chat-dock'), 'layout', { nativeEvent: { layout: { height: 190 } } });
+      fireEvent(listOf(), 'contentSizeChange', 0, 520);
+    });
+    expect(scrollToEnd).toHaveBeenCalled();
+  });
+
+  test('a reader scrolled up into history is left where they are', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    // Settle at the bottom first — that is what arms the "don't yank" rule.
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
+
+    await act(async () => { fireEvent.scroll(listOf(), scrollEvent(900)); });
+    scrollToEnd.mockClear();
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 600); });
+    expect(scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  test('but one still near the bottom keeps following the conversation', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
+
+    // Nudged off the bottom by a bubble growing, not by scrolling away.
+    await act(async () => { fireEvent.scroll(listOf(), scrollEvent(20)); });
+    scrollToEnd.mockClear();
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 600); });
+    expect(scrollToEnd).toHaveBeenCalled();
+  });
+
+  test('switching to another person opens at THEIR newest message', async () => {
+    const { rerender } = await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
+    // Read back into this thread's history…
+    await act(async () => { fireEvent.scroll(listOf(), scrollEvent(900)); });
+
+    // …then open someone else's. The "leave them alone" state must not carry.
+    // Awaited: rerender is async in this RNTL, and a floating one settles
+    // inside the NEXT test's environment.
+    await rerender(<FriendChatPage {...props({ friend: { id: 'u3', name: 'Andres', avatarUrl: null } })} />);
+    scrollToEnd.mockClear();
+    await act(async () => { fireEvent(listOf(), 'contentSizeChange', 0, 400); });
+    expect(scrollToEnd).toHaveBeenCalled();
+  });
+});
+
 describe('the socket is a bell, not the delivery', () => {
   test('a ping about THIS friend refetches the thread', async () => {
     const { rerender } = await render(<FriendChatPage {...props()} />);

@@ -79,6 +79,16 @@ import {
 /** How long a copy confirmation stays up. */
 const TOAST_MS = 1800;
 
+/**
+ * How far from the bottom still counts as "reading the newest message".
+ *
+ * Generous on purpose: it is the difference between a thread that follows the
+ * conversation and one that jumps away from what you were reading. A reader
+ * a screen deep into history is clearly not at the bottom; a reader twenty
+ * points off it was only nudged there by a bubble growing.
+ */
+const STICK_SLACK = 120;
+
 export default function FriendChatPage({
   visible,
   onClose,
@@ -183,11 +193,51 @@ export default function FriendChatPage({
     try { listRef.current.scrollToEnd({ animated }); } catch { /* list went away */ }
   }, []);
 
+  /**
+   * ── Opening at the newest message ───────────────────────────────────────
+   *
+   * A conversation OPENS at the bottom, always. After that the view only
+   * follows new content if the reader was already down there — being yanked
+   * out of history because a message arrived is the opposite complaint.
+   *
+   * `settled` is what separates the two. Until the thread has actually been
+   * parked at the end once, every content-size change re-parks it; after that,
+   * `nearBottom` decides. This matters more than it looks, because the content
+   * height moves SEVERAL times after the first paint and each move can leave
+   * the view stranded mid-thread:
+   *   · the messages arrive,
+   *   · the composer dock is measured and the list's inset changes under it,
+   *   · a link preview card resolves a second later and makes a bubble taller.
+   * A single scroll-to-end on load survives none of those.
+   */
+  const settled = useRef(false);
+  const nearBottom = useRef(true);
+
+  // Every open, and every switch to another person, starts over.
+  useEffect(() => {
+    settled.current = false;
+    nearBottom.current = true;
+  }, [visible, friendId]);
+
+  const onScroll = useCallback((e) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    const fromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
+    nearBottom.current = fromBottom <= STICK_SLACK;
+  }, []);
+
+  /** The list grew or shrank: follow it, or let it be if the reader is reading. */
+  const onContentSizeChange = useCallback(() => {
+    if (settled.current && !nearBottom.current) return;
+    stickToEnd(false);
+    if (thread.length) settled.current = true;
+  }, [stickToEnd, thread.length]);
+
   // The keyboard shrinks the list rather than changing its content, so there is
   // no content-size event to ride — the newest bubble would sit behind the
   // composer otherwise.
   useEffect(() => {
     if (!visible || !thread.length) return;
+    if (settled.current && !nearBottom.current) return;
     stickToEnd(true);
   }, [keyboard, visible, thread.length, stickToEnd]);
 
@@ -418,7 +468,13 @@ export default function FriendChatPage({
             // The scrollbar stops at the composer rather than running under it.
             scrollIndicatorInsets={{ right: 1, bottom: dockHeight }}
             indicatorStyle={isDark ? 'white' : 'black'}
-            onContentSizeChange={() => stickToEnd(false)}
+            onContentSizeChange={onContentSizeChange}
+            // The list's own layout settles after its content does (the dock is
+            // measured, then the inset changes), so this is the other moment
+            // the first park can be lost.
+            onLayout={() => { if (!settled.current) stickToEnd(false); }}
+            onScroll={onScroll}
+            scrollEventThrottle={64}
             ListEmptyComponent={(
               <View style={s.centre}>
                 <Icon name="chat-outline" size={40} color={c.textMuted} />

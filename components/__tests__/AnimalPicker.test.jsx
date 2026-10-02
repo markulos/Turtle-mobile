@@ -6,6 +6,7 @@
  * asserted on the catalogue alone.
  */
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
@@ -18,7 +19,7 @@ jest.mock('../../utils/haptics', () => ({
 }));
 
 import AnimalPicker from '../AnimalPicker';
-import AnimalAvatar from '../AnimalAvatar';
+import AnimalAvatar, { AnimalGlyph } from '../AnimalAvatar';
 import { avatarAnimal, generatedName } from '../../utils/avatar';
 
 const theme = {
@@ -66,7 +67,9 @@ describe('AnimalPicker', () => {
     expect(generatedName(sheepId)).toMatch(/ Sheep$/);
 
     // …and once raccoon is the choice, the adjective is kept and the noun moves.
-    rerender(
+    // Awaited: rerender is async in this RNTL, and a floating one settles
+    // inside the NEXT test's environment.
+    await rerender(
       <AnimalPicker
         visible
         onClose={() => {}}
@@ -111,6 +114,36 @@ describe('AnimalPicker', () => {
   });
 });
 
+describe('AnimalGlyph — the bare mark, shared by the disc, the card and the TAB', () => {
+  // The Profile tab draws this. Before it did, picking an animal changed the
+  // card and the handle but left the most-seen picture of "you" in the app on
+  // the animal you were assigned, so the choice looked half-applied.
+  test('a chosen animal is the emoji, at the size it was given', async () => {
+    await render(<AnimalGlyph id={sheepId} animal="raccoon" size={24} color="#fff" testID="g" />);
+    const mark = screen.getByTestId('g-emoji');
+    expect(mark.props.children).toBe('🦝');
+    const flat = StyleSheet.flatten(mark.props.style);
+    expect(flat.fontSize).toBe(24);
+    // The lineHeight is the bit that gets dropped when this is copy-pasted —
+    // an emoji's box is taller than its ink and it rides high without one.
+    expect(flat.lineHeight).toBeGreaterThan(24);
+  });
+
+  test('no choice is the assigned icon, tinted by whatever asked for it', async () => {
+    await render(<AnimalGlyph id={sheepId} size={24} color="#ff9900" testID="g" />);
+    const mark = screen.getByTestId('g-icon');
+    expect(mark.props.name).toBe('sheep');
+    expect(mark.props.size).toBe(24);
+    // The tab hands it the active/inactive tint every other tab gets.
+    expect(mark.props.color).toBe('#ff9900');
+  });
+
+  test('an emoji keeps its OWN colour — a tint would flatten or ignore it', async () => {
+    await render(<AnimalGlyph id={sheepId} animal="raccoon" size={24} color="#ff9900" testID="g" />);
+    expect(StyleSheet.flatten(screen.getByTestId('g-emoji').props.style).color).toBeUndefined();
+  });
+});
+
 describe('AnimalAvatar', () => {
   test('draws the chosen animal as an emoji', async () => {
     await render(<AnimalAvatar id={sheepId} animal="raccoon" testID="disc" />);
@@ -134,7 +167,7 @@ describe('AnimalAvatar', () => {
   test('the disc keeps its stable tint whichever glyph is in it', async () => {
     const { rerender } = await render(<AnimalAvatar id={sheepId} testID="disc" />);
     const before = screen.getByTestId('disc').props.style;
-    rerender(<AnimalAvatar id={sheepId} animal="raccoon" testID="disc" />);
+    await rerender(<AnimalAvatar id={sheepId} animal="raccoon" testID="disc" />);
     expect(screen.getByTestId('disc').props.style).toEqual(before);
   });
 });

@@ -4,6 +4,45 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { avatarGlyph, avatarTint } from '../utils/avatar';
 
 /**
+ * AnimalGlyph — a person's animal as a bare mark, at a given size.
+ *
+ * The emoji-or-icon branch in ONE place. It is needed in four now (this disc,
+ * the Profile card, the handle chip, the Profile tab) and a copy of it is a
+ * copy of the emoji's vertical-centring fix, which is the part that gets
+ * forgotten: an emoji's own box is taller than its ink, so without an explicit
+ * lineHeight it rides high in whatever slot it is given.
+ *
+ * `color` applies to the ICON form only. An emoji carries its own colour and
+ * tinting it either does nothing or flattens it, depending on the platform —
+ * so a caller that tints (the tab bar does, for active/inactive) gets a
+ * full-colour mark when an animal has been chosen. That is the trade: it is
+ * the user's actual animal, which is the point of letting them choose one.
+ */
+export function AnimalGlyph({ id, animal = null, size = 24, color, style, testID }) {
+  const { emoji, icon } = avatarGlyph(id, animal);
+  if (emoji) {
+    return (
+      <Text
+        style={[styles.glyphEmoji, { fontSize: size, lineHeight: Math.round(size * 1.2) }, style]}
+        testID={testID ? `${testID}-emoji` : undefined}
+      >
+        {emoji}
+      </Text>
+    );
+  }
+  if (!icon) return null;
+  return (
+    <Icon
+      name={icon}
+      size={size}
+      color={color}
+      style={style}
+      testID={testID ? `${testID}-icon` : undefined}
+    />
+  );
+}
+
+/**
  * AnimalAvatar — one user's identity disc.
  *
  * A tinted circle carrying their animal. Same treatment as the board discs in
@@ -38,6 +77,7 @@ export default function AnimalAvatar({
   const { emoji, icon } = avatarGlyph(id, chosen);
   const tint = avatarTint(id);
   const glyph = Math.round(size * 0.55);
+  const hasAnimal = !!(emoji || icon);
 
   return (
     <View
@@ -54,21 +94,13 @@ export default function AnimalAvatar({
       ]}
       testID={testID}
     >
-      {emoji ? (
-        // No colour is applied: an emoji carries its own, and tinting it would
-        // either do nothing or flatten it depending on the platform.
-        <Text
-          style={[styles.emoji, { fontSize: glyph, lineHeight: Math.round(glyph * 1.2) }]}
-          testID={testID ? `${testID}-emoji` : undefined}
-        >
-          {emoji}
-        </Text>
-      ) : icon ? (
-        <Icon
-          name={icon}
+      {hasAnimal ? (
+        <AnimalGlyph
+          id={id}
+          animal={chosen}
           size={glyph}
           color={onLight ? tint : '#FFFFFF'}
-          testID={testID ? `${testID}-icon` : undefined}
+          testID={testID}
         />
       ) : (
         <Text
@@ -84,7 +116,7 @@ export default function AnimalAvatar({
 
 const styles = StyleSheet.create({
   initial: { fontWeight: '700' },
-  // The lineHeight above plus this: an emoji's own box is taller than its ink,
-  // so without both it sits visibly high inside the disc.
-  emoji: { textAlign: 'center' },
+  // Paired with the explicit lineHeight in AnimalGlyph: an emoji's own box is
+  // taller than its ink, so without both it sits visibly high in its slot.
+  glyphEmoji: { textAlign: 'center' },
 });
