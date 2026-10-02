@@ -84,15 +84,6 @@ export function linkSegments(text) {
   return out;
 }
 
-/** Every http(s) link in a message, normalized and de-duplicated, in order. */
-export function allLinkUrls(text) {
-  const seen = [];
-  for (const seg of linkSegments(text)) {
-    if (seg.url && !seen.includes(seg.url)) seen.push(seg.url);
-  }
-  return seen;
-}
-
 /** The first http(s) link in a message, or null. The one that gets a card. */
 export function firstLinkUrl(text) {
   for (const seg of linkSegments(text)) {

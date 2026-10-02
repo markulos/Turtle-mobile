@@ -7,7 +7,6 @@
  * what someone said.
  */
 import {
-  allLinkUrls,
   firstLinkUrl,
   hostOf,
   isFreshEntry,
@@ -91,13 +90,6 @@ describe('firstLinkUrl', () => {
   it('is null when there is none', () => {
     expect(firstLinkUrl('just words')).toBeNull();
     expect(firstLinkUrl('')).toBeNull();
-  });
-});
-
-describe('allLinkUrls', () => {
-  it('keeps order and drops repeats', () => {
-    expect(allLinkUrls('https://a.com then https://b.com then https://a.com'))
-      .toEqual(['https://a.com', 'https://b.com']);
   });
 });
 

@@ -171,11 +171,3 @@ export const generatedName = (id, chosen) => {
   const adjective = NAME_ADJECTIVES[hashOf(`${id}#adj`) % NAME_ADJECTIVES.length];
   return `${adjective} ${noun}`;
 };
-
-/** Everything a surface needs to paint one avatar, in one call. */
-export const avatarFor = (id, chosen) => ({
-  animal: avatarAnimal(id),
-  ...avatarGlyph(id, chosen),
-  tint: avatarTint(id),
-  name: generatedName(id, chosen),
-});

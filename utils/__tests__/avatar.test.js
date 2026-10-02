@@ -13,7 +13,6 @@ import {
   AVATAR_CHOICES,
   avatarAnimal,
   avatarEmoji,
-  avatarFor,
   avatarGlyph,
   avatarTint,
   generatedName,
@@ -134,28 +133,6 @@ describe('the generated name follows the chosen animal', () => {
 
   test('an unknown choice keeps the assigned noun', () => {
     expect(generatedName('sub:123', 'tyrannosaurus')).toBe('Gentle Koala');
-  });
-});
-
-describe('avatarFor', () => {
-  test('hands a surface everything it needs in one call', () => {
-    expect(avatarFor('sub:123', 'raccoon')).toEqual({
-      // `animal` stays the ASSIGNED one — it is the stable handle, and some
-      // surfaces still want it even when a choice has been made.
-      animal: 'koala',
-      emoji: '🦝',
-      icon: null,
-      tint: avatarTint('sub:123'),
-      name: 'Gentle Raccoon',
-    });
-  });
-
-  test('is the old shape when nothing is chosen', () => {
-    const a = avatarFor('sub:123');
-    expect(a.animal).toBe('koala');
-    expect(a.icon).toBe('koala');
-    expect(a.emoji).toBeNull();
-    expect(a.name).toBe('Gentle Koala');
   });
 });
 

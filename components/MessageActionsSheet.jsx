@@ -34,7 +34,7 @@ export default function MessageActionsSheet({
   onClose,
   /** The message being held — only its text is used. */
   message,
-  /** Rows: [{ key, label, icon, onSelect, destructive }] */
+  /** Rows: [{ key, label, icon, onSelect }] */
   actions = [],
   theme,
   testID = 'message-actions',
@@ -73,17 +73,8 @@ export default function MessageActionsSheet({
               style={({ pressed }) => [s.row, pressed && s.rowPressed]}
               testID={`${testID}-${a.key}`}
             >
-              <Icon
-                name={a.icon}
-                size={20}
-                color={a.destructive ? (c.accentError || '#e5484d') : c.textSecondary}
-              />
-              <Text
-                numberOfLines={1}
-                style={[s.rowLabel, a.destructive && { color: c.accentError || '#e5484d' }]}
-              >
-                {a.label}
-              </Text>
+              <Icon name={a.icon} size={20} color={c.textSecondary} />
+              <Text numberOfLines={1} style={s.rowLabel}>{a.label}</Text>
             </Pressable>
           ))}
         </View>
