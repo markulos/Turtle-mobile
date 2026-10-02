@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
-import { fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 import PhotoVaultBoardCard from '../PhotoVaultBoardCard';
 
 jest.mock('expo-image', () => ({ Image: 'ExpoImage' }));
@@ -129,6 +129,45 @@ describe('PhotoVaultBoardCard', () => {
     expect(meta.lineHeight).toBe(16);
   });
 
+  test('the edge waits for the photograph, then fades in with it', async () => {
+    // On an unloaded cover the pane is a flat placeholder tone and the vignette
+    // has nothing to sit on — it reads as a smudge on grey, and then the photo
+    // arrives underneath and the card changes twice.
+    const view = await render(
+      <PhotoVaultBoardCard
+        board={board}
+        width={186}
+        theme={theme}
+        resolveCoverUrl={(p) => `https://pond${p}`}
+        onPress={() => {}}
+        onLongPress={() => {}}
+      />,
+    );
+    // Mounted but fully transparent until the hero reports in…
+    expect(StyleSheet.flatten(view.getByTestId('board-vignette').props.style).opacity)
+      .not.toBe(1);
+
+    await act(async () => { fireEvent(view.getByTestId('board-cover-hero'), 'load'); });
+    // …and animated, not snapped: the opacity is an Animated.Value, so the edge
+    // arrives as part of the photo landing rather than as its own event.
+    expect(view.getByTestId('board-vignette')).toBeTruthy();
+  });
+
+  test('an empty board gets NO edge — there is no photograph for one to belong to', async () => {
+    const view = await render(
+      <PhotoVaultBoardCard
+        board={{ ...board, covers: [] }}
+        width={186}
+        theme={theme}
+        resolveCoverUrl={(p) => `https://pond${p}`}
+        onPress={() => {}}
+        onLongPress={() => {}}
+      />,
+    );
+    expect(view.getByTestId('board-empty-cover')).toBeTruthy();
+    expect(view.queryByTestId('board-vignette')).toBeNull();
+  });
+
   test('every collage carries the edge vignette, over the covers', async () => {
     // A pale cover on a near-white page has no edge of its own and the card
     // stops reading as an object. Two crossed gradients give every card the
@@ -143,6 +182,7 @@ describe('PhotoVaultBoardCard', () => {
         onLongPress={() => {}}
       />,
     );
+    await act(async () => { fireEvent(view.getByTestId('board-cover-hero'), 'load'); });
     for (const id of ['board-vignette-y', 'board-vignette-x']) {
       const g = view.getByTestId(id);
       // Dark at BOTH ends and clear through the middle — one gradient covering
@@ -151,27 +191,17 @@ describe('PhotoVaultBoardCard', () => {
       expect(g.props.colors[g.props.colors.length - 1]).toMatch(/^rgba\(0,0,0,0\.[1-9]/);
       expect(g.props.colors.slice(1, -1).every((c) => c === 'rgba(0,0,0,0)')).toBe(true);
       // An edge treatment, not a scrim: clear well before the middle.
-      expect(g.props.locations[1]).toBeLessThanOrEqual(0.25);
-      expect(g.props.locations[2]).toBeGreaterThanOrEqual(0.75);
+      expect(g.props.locations[1]).toBeLessThan(0.4);
+      expect(g.props.locations[2]).toBeGreaterThan(0.6);
+      // And SOFT: the eye finds the end of a gradient, not its darkest point,
+      // so nothing here may get heavy enough to read as a band.
+      const peak = Math.max(...[g.props.colors[0], g.props.colors[g.props.colors.length - 1]]
+        .map((c) => Number(c.match(/([\d.]+)\)$/)[1])));
+      expect(peak).toBeLessThanOrEqual(0.3);
       // It lies over the covers inside the card's own Pressable, so a press
       // has to pass straight through it.
       expect(g.props.pointerEvents).toBe('none');
     }
-  });
-
-  test('an empty board gets the edge too — it must not be the one bare card', async () => {
-    const view = await render(
-      <PhotoVaultBoardCard
-        board={{ ...board, covers: [] }}
-        width={186}
-        theme={theme}
-        resolveCoverUrl={(p) => `https://pond${p}`}
-        onPress={() => {}}
-        onLongPress={() => {}}
-      />,
-    );
-    expect(view.getByTestId('board-empty-cover')).toBeTruthy();
-    expect(view.getByTestId('board-vignette-y')).toBeTruthy();
   });
 
   test('badges a published board as SHARED, and says so to screen readers', async () => {

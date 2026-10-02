@@ -196,7 +196,9 @@ export default function ImageEditor({
    */
   const liveRef = useRef(null);
   const outlineRef = useRef([]);
-  const originRef = useRef(null);
+  // Whether the finger that is down STARTED a valid stroke (on the photo, not
+  // in the letterbox). Coordinates no longer live here — see touchPoint.
+  const tracking = useRef(null);
   const drawRef = useRef({});
 
   const stored = rotationOf(item);
@@ -218,7 +220,7 @@ export default function ImageEditor({
     setOutline([]);
     liveRef.current = null;
     outlineRef.current = [];
-    originRef.current = null;
+    tracking.current = null;
   }, []);
 
   // Reopening on a different photo (or the same one after a save) must not
@@ -289,16 +291,18 @@ export default function ImageEditor({
   /**
    * Where the finger is, in stage space.
    *
-   * `locationX/Y` is only dependable on the GRANT, where the touch target is
-   * provably this surface; during a drag Android reports it against whatever
-   * view happens to be under the finger, which silently warps any stroke that
-   * passes over another view. So the origin is taken once at grant, and every
-   * later point is that origin plus the finger's travel in PAGE space — which
-   * is the screen's own coordinate system and means the same thing on both
-   * platforms for the whole gesture.
+   * `locationX/Y` is dependable on the GRANT — but ONLY because the preview
+   * layer above is wrapped in a `pointerEvents="none"` View (see the render);
+   * without that wrapper the <Svg> is the touch target and every reading is
+   * short by the letterbox. During a drag Android reports locationX against
+   * whatever view happens to be under the finger, which silently warps any
+   * stroke that passes over another view. So the origin is taken once at grant,
+   * and every later point is that origin plus the finger's travel in PAGE
+   * space — the screen's own coordinate system, which means the same thing on
+   * both platforms for the whole gesture.
    */
   const touchPoint = useCallback((e) => {
-    const origin = originRef.current;
+    const origin = tracking.current;
     const native = e?.nativeEvent;
     if (!origin || !native) return null;
     const pageX = Number(native.pageX);
@@ -314,10 +318,10 @@ export default function ImageEditor({
     const touch = { x: native.locationX, y: native.locationY };
     // A finger-down in the letterbox was never aimed at the photo; starting a
     // stroke there would stamp a clamped mark on the nearest edge.
-    if (isOutsidePhoto(touch, r)) { originRef.current = null; return; }
+    if (isOutsidePhoto(touch, r)) { tracking.current = null; return; }
     const point = toPhotoPoint(touch, r);
-    if (!point) { originRef.current = null; return; }
-    originRef.current = {
+    if (!point) { tracking.current = null; return; }
+    tracking.current = {
       ...touch,
       pageX: Number(native.pageX) || 0,
       pageY: Number(native.pageY) || 0,
@@ -331,7 +335,7 @@ export default function ImageEditor({
       setOutline(outlineRef.current);
       return;
     }
-    if (strokeCount >= MAX_STROKES) { originRef.current = null; return; }
+    if (strokeCount >= MAX_STROKES) { tracking.current = null; return; }
     liveRef.current = { color: drawRef.current.penColor, size: drawRef.current.penSize, points: [point] };
     setLive(liveRef.current);
   }, []);
@@ -359,7 +363,7 @@ export default function ImageEditor({
   }, [touchPoint]);
 
   const endStroke = useCallback(() => {
-    originRef.current = null;
+    tracking.current = null;
     if (drawRef.current.tool === 'sticker') return;
     const finished = liveRef.current;
     liveRef.current = null;
@@ -566,10 +570,27 @@ export default function ImageEditor({
             testID="image-editor-surface"
             {...responder}
           >
+            {/* THE WRAPPER IS LOAD-BEARING, NOT TIDINESS.
+                `pointerEvents="none"` on the <Svg> itself does NOTHING:
+                react-native-svg builds its native props from an extracted list
+                that has no `pointerEvents` in it, so the prop is dropped and the
+                SVG view stays hit-testable. The moment a trace had drawn
+                anything, the Svg — which covers exactly the photo's rect —
+                became the touch target, and `locationX/locationY` arrived
+                relative to IT rather than to the surface. Short by the
+                letterbox: on a 4:3 photo in a tall stage, about 190 points of
+                pure vertical offset between the finger and the line following
+                it. A plain View DOES honour the prop, for itself and its whole
+                subtree, which puts the touch target back on the surface where
+                every coordinate in this file assumes it is. */}
+            <View
+              pointerEvents="none"
+              style={{ position: 'absolute', left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+              testID="image-editor-preview-layer"
+            >
             <Svg
               width={rect.w}
               height={rect.h}
-              style={{ position: 'absolute', left: rect.x, top: rect.y }}
               pointerEvents="none"
             >
               {tool === 'draw' && liveAll.map((s, i) => (
@@ -607,6 +628,7 @@ export default function ImageEditor({
                 />
               )}
             </Svg>
+            </View>
           </View>
         )}
 

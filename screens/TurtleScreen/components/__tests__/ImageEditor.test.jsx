@@ -99,6 +99,14 @@ async function open(props = {}) {
  * if the 187.5 was subtracted.
  */
 const PHOTO_TOP = 187.5;
+/**
+ * A finger at (x, y) in STAGE coordinates.
+ *
+ * `locationX/locationY` are relative to the view the touch HIT, so these are
+ * only honest while the surface really is the deepest hit-testable thing under
+ * the finger. That is a property of the tree, not of the arithmetic, and it is
+ * pinned separately — see "the preview layer cannot be touched".
+ */
 const stagePoint = (x, y) => ({ locationX: x, locationY: y, pageX: x, pageY: y + 1000 });
 
 /** One finger-down → moves → up over the drawing surface. */
@@ -304,6 +312,34 @@ describe('ImageEditor', () => {
       await pickTool(view, 'image-editor-draw');
       const style = StyleSheet.flatten(view.getByTestId('image-editor-surface').props.style);
       expect(style).toMatchObject({ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 });
+    });
+
+    test('the preview layer cannot be touched, so the surface stays the target', async () => {
+      // THE SECOND HALF OF THE MIS-TRACE, and the half that was visible on the
+      // device. `pointerEvents="none"` on the <Svg> does nothing —
+      // react-native-svg builds its native props from an extracted list with no
+      // `pointerEvents` in it, so the prop is dropped and the SVG view stays
+      // hit-testable. It covers exactly the photo's rect, so as soon as a trace
+      // had drawn anything the Svg became the touch target and every
+      // `locationX/locationY` arrived relative to IT — short by the letterbox,
+      // about 190 points of vertical offset on a 4:3 photo in a tall stage.
+      //
+      // A plain View DOES honour the prop, for itself and its whole subtree.
+      // This asserts the WRAPPER, because that is the thing that fixes it: the
+      // arithmetic was always right and the coordinates fed into it were not.
+      const { view } = await open();
+      await pickTool(view, 'image-editor-sticker');
+      const layer = view.getByTestId('image-editor-preview-layer');
+      expect(layer.props.pointerEvents).toBe('none');
+
+      // And it is positioned where the Svg used to position itself, so moving
+      // the offset onto the wrapper did not move the drawing.
+      const style = StyleSheet.flatten(layer.props.style);
+      expect(style.position).toBe('absolute');
+      expect(style.top).toBeCloseTo(PHOTO_TOP, 1);
+      expect(style.left).toBe(0);
+      expect(style.width).toBe(300);
+      expect(style.height).toBeCloseTo(225, 1);
     });
 
     test('refuses to draw while a save is in flight', async () => {
