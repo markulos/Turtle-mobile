@@ -1,7 +1,6 @@
-import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
+import React, { memo, useEffect, useRef } from 'react';
 import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { FONTS } from '../../../utils/fonts';
 import { TAP_ONLY_PRESSABLE } from '../../../utils/pressBehavior';
@@ -13,10 +12,9 @@ import FaceStack from '../../../components/FaceStack';
 // placeholder, so the cheap already-cached image paints on the first frame and
 // the big one swaps in when it lands — a lazy upgrade, not a blocking load.
 // Every other pane keeps requesting the small thumbnail alone.
-const Cover = ({ path, slot, resolveCoverUrl, hiResPath, onLoad }) => (
+const Cover = ({ path, slot, resolveCoverUrl, hiResPath }) => (
   <Image
     testID={`board-cover-${slot}`}
-    onLoad={onLoad}
     source={{ uri: resolveCoverUrl(hiResPath || path) }}
     placeholder={hiResPath ? { uri: resolveCoverUrl(path) } : undefined}
     placeholderContentFit="cover"
@@ -33,87 +31,6 @@ const Cover = ({ path, slot, resolveCoverUrl, hiResPath, onLoad }) => (
 const withAlpha = (color, hexAlpha) => (
   typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color) ? color + hexAlpha : undefined
 );
-
-/**
- * EdgeVignette — the soft darkening that lifts a collage off the page.
- *
- * A grid of photographs on a near-white page has no edge of its own: a cover
- * that happens to be pale simply dissolves into the background, and the card
- * stops reading as an object. A vignette gives every card the same quiet
- * boundary whatever its photos happen to be, without a border — which on a
- * photo grid reads as a frame, and frames look cheap.
- *
- * TWO GRADIENTS, NOT FOUR. A LinearGradient runs along ONE axis, so the
- * obvious build is four strips (top, bottom, left, right). Two do the same
- * work: a gradient that is dark at BOTH ends and clear through the middle
- * covers two opposite edges at once, and crossing a vertical one with a
- * horizontal one darkens all four — with the corners naturally doubling, which
- * is what a real vignette does anyway.
- *
- * The verticals are stronger than the horizontals: the card is half again as
- * wide as it is tall, so the same fraction of the short axis is fewer points
- * and needs more weight to read. Both stop well short of the middle — this is
- * an edge treatment, not a scrim, and the photographs are the content.
- */
-// Softer than the first pass, and ramped over a longer distance. The earlier
-// values read as a band around the edge rather than as a falloff: the eye finds
-// the END of a gradient, so the darkest point matters less than how far it
-// takes to disappear. Clear by 28 % rather than 20 %, at roughly two thirds the
-// previous weight.
-const VIGNETTE_TOP_BOTTOM = ['rgba(0,0,0,0.22)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.26)'];
-const VIGNETTE_SIDES = ['rgba(0,0,0,0.16)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.16)'];
-const VIGNETTE_STOPS = [0, 0.28, 0.72, 1];
-
-/** How long the edge takes to arrive once the cover is there. */
-const VIGNETTE_FADE_MS = 280;
-
-/**
- * It waits for the photographs.
- *
- * On a cover that has not loaded, the pane is a flat placeholder tone and the
- * vignette has nothing to sit on — it reads as a smudge on grey, and then the
- * photo arrives underneath it and the card changes twice. Fading it in with the
- * image means the edge appears as part of the photo landing, which is the one
- * moment it can arrive without being noticed as a separate event.
- */
-const EdgeVignette = ({ visible }) => {
-  const fade = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.timing(fade, {
-      toValue: visible ? 1 : 0,
-      duration: VIGNETTE_FADE_MS,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: true,
-    }).start();
-  }, [visible, fade]);
-
-  return (
-    // pointerEvents none: it sits over the covers inside the card's own
-    // Pressable, and a press must reach it.
-    <Animated.View
-      pointerEvents="none"
-      testID="board-vignette"
-      style={[StyleSheet.absoluteFillObject, { opacity: fade }]}
-    >
-      <LinearGradient
-        testID="board-vignette-y"
-        pointerEvents="none"
-        colors={VIGNETTE_TOP_BOTTOM}
-        locations={VIGNETTE_STOPS}
-        style={StyleSheet.absoluteFillObject}
-      />
-      <LinearGradient
-        testID="board-vignette-x"
-        pointerEvents="none"
-        colors={VIGNETTE_SIDES}
-        locations={VIGNETTE_STOPS}
-        start={{ x: 0, y: 0.5 }}
-        end={{ x: 1, y: 0.5 }}
-        style={StyleSheet.absoluteFillObject}
-      />
-    </Animated.View>
-  );
-};
 
 // Published-to-the-web cue for the boards grid: a flashing dot plus a SHARED
 // caps label in the info tint, so "this board is out on the web" reads at a
@@ -233,14 +150,6 @@ function PhotoVaultBoardCard({
   baseUrl,
 }) {
   const covers = board.covers || [];
-  // Whether the hero cover has painted, which is what the edge waits for.
-  // Keyed on the hero's path so a RECYCLED card drops back to "waiting" for the
-  // next board's photo instead of showing the previous one's edge over a
-  // placeholder — this is a FlatList cell and it is reused constantly.
-  const heroPath = covers[0] || null;
-  const [loadedHero, setLoadedHero] = useState(null);
-  const heroLoaded = !!heroPath && loadedHero === heroPath;
-  const setHeroLoaded = useCallback(() => setLoadedHero(heroPath), [heroPath]);
   const updated = board.metadata.includes(' · ')
     ? `, updated ${board.metadata.split(' · ')[1]}`
     : '';
@@ -284,9 +193,6 @@ function PhotoVaultBoardCard({
                 slot="hero"
                 resolveCoverUrl={resolveCoverUrl}
                 hiResPath={board.heroHiRes}
-                // The hero is two thirds of the collage and the slowest to
-                // arrive; when it is there the card has its picture.
-                onLoad={setHeroLoaded}
               />
             </View>
             <View style={styles.sideColumn}>
@@ -313,10 +219,6 @@ function PhotoVaultBoardCard({
             <Icon name="image-multiple-outline" size={28} color={theme.colors.textMuted} />
           </View>
         )}
-        {/* LAST child, so it lies over the covers and the seams between them.
-            An EMPTY board gets none: there is no photograph for an edge to
-            belong to, and a vignette on a flat placeholder is just a smudge. */}
-        {!!covers.length && <EdgeVignette visible={heroLoaded} />}
       </View>
       {/* Caption = text column + an optional state badge pinned to the right
           edge. The column is the flexible side so a long board name truncates
