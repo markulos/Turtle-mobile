@@ -33,10 +33,25 @@
  * never seen — `utils/friendMessages` does that matching, and is where the
  * ordering and de-duplication live because they are the parts that look fine
  * on a fast link and go wrong on a slow one.
+ *
+ * ─── Links are not plain text ──────────────────────────────────────────────
+ *
+ * A URL someone sends is pressable where it was written, and the FIRST link in
+ * a message also gets a preview card above the text (`MessageLinkCard`): a
+ * thumbnail, the page's title and a line of summary, so the message is still
+ * recognisable a week later. Holding any bubble raises
+ * `MessageActionsSheet` — copy the message, copy or open its link.
+ *
+ * Both halves are shared components rather than markup in this file, so the
+ * board conversations (BoardTimeline) can take the same treatment without a
+ * second implementation of either. This matches the web app's MessagesScreen,
+ * and the preview itself is the pond's existing unfurl service, so a link
+ * previewed on the phone is already cached for the web and the other way
+ * round.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, BackHandler, FlatList, Pressable, StyleSheet, Text, View,
+  ActivityIndicator, BackHandler, FlatList, Linking, Pressable, StyleSheet, Text, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -44,17 +59,24 @@ import { Image } from 'expo-image';
 import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import ChatComposer from '../../../components/ChatComposer';
 import AnimalAvatar from '../../../components/AnimalAvatar';
+import MessageLinkCard from '../../../components/MessageLinkCard';
+import MessageActionsSheet from '../../../components/MessageActionsSheet';
 import { useServer } from '../../../context/ServerContext';
 import { useSyncSignals } from '../../../context/DownloadsContext';
 import { panelTopInset, panelBottomInset } from '../../../components/tabBarLayout';
 import { depth } from '../../../utils/surfaceDepth';
 import { inkOn } from '../../../utils/accentColor';
-import { tapHaptic, notifyHaptic } from '../../../utils/haptics';
+import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import useKeyboardHeight from '../../../utils/useKeyboardHeight';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
+import { copyText } from '../../../utils/copyText';
+import { firstLinkUrl, linkSegments } from '../../../utils/messageLinks';
 import {
   mergeThread, optimisticMessage, timeLabel, startsNewDay, dayLabel,
 } from '../../../utils/friendMessages';
+
+/** How long a copy confirmation stays up. */
+const TOAST_MS = 1800;
 
 export default function FriendChatPage({
   visible,
@@ -195,6 +217,72 @@ export default function FriendChatPage({
     send(bubble.content, bubble);
   }, [send]);
 
+  // ── Holding a message ─────────────────────────────────────────────────────
+  // The sheet lives here, not in the bubble: only one may be open at a time,
+  // and a Modal mounted per row is a Modal per row.
+  const [held, setHeld] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  // One timer, cleared on unmount — a toast outliving the page would set state
+  // on something gone.
+  const toastTimer = useRef(null);
+  const say = useCallback((text) => {
+    setToast(text);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), TOAST_MS);
+  }, []);
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
+  // Closing the thread takes the sheet with it.
+  useEffect(() => { if (!visible) setHeld(null); }, [visible]);
+
+  const hold = useCallback((item) => {
+    // A hold IS a tap-shaped gesture, not a movement, so it earns its haptic —
+    // and react-native has already cancelled it if the finger travelled.
+    impactHaptic('light');
+    setHeld(item);
+  }, []);
+
+  /**
+   * What copyText did, in words. It returns three outcomes rather than a
+   * boolean because they are three different things to tell someone: it is on
+   * the clipboard, the share sheet took it somewhere, or nothing happened
+   * (an older build with no expo-clipboard, and the share sheet dismissed).
+   */
+  const reportCopy = useCallback((outcome, noun) => {
+    if (outcome === 'copied') say(`${noun} copied`);
+    else if (outcome === 'shared') say(`${noun} shared`);
+    else say(`Could not copy ${noun.toLowerCase()}`);
+  }, [say]);
+
+  // The verbs. The link pair only appears when the message HAS a link — a row
+  // that does nothing is worse than an absent one.
+  const heldActions = useMemo(() => {
+    if (!held) return [];
+    const content = held.content || '';
+    const link = firstLinkUrl(content);
+    const rows = [{
+      key: 'copy-message',
+      label: 'Copy message',
+      icon: 'content-copy',
+      onSelect: () => { copyText(content).then((r) => reportCopy(r, 'Message')); },
+    }];
+    if (link) {
+      rows.push({
+        key: 'copy-link',
+        label: 'Copy link',
+        icon: 'link-variant',
+        onSelect: () => { copyText(link).then((r) => reportCopy(r, 'Link')); },
+      }, {
+        key: 'open-link',
+        label: 'Open link',
+        icon: 'open-in-new',
+        onSelect: () => { Linking.openURL(link).catch(() => say('Could not open that link')); },
+      });
+    }
+    return rows;
+  }, [held, reportCopy, say]);
+
   // ── Rows ──────────────────────────────────────────────────────────────────
   const s = useMemo(() => makeStyles(theme), [theme]);
 
@@ -202,18 +290,58 @@ export default function FriendChatPage({
     const previous = index > 0 ? thread[index - 1] : null;
     const newDay = startsNewDay(item, previous);
     const mine = !!item.mine;
+    const inked = mine && !item.failed;
+    const bodyStyle = inked ? s.bodyMine : s.bodyTheirs;
+    const link = firstLinkUrl(item.content);
+    const segments = linkSegments(item.content);
+    const onHold = () => hold(item);
     const body = (
       <View style={mine ? s.wrapMine : s.wrapTheirs}>
         <Pressable
-          disabled={!item.failed}
-          onPress={() => retry(item)}
+          // A failed bubble keeps its tap-to-retry; every other bubble has
+          // nothing to do on a tap, and `disabled` would take the HOLD away
+          // with it — so only the press handler is conditional.
+          onPress={item.failed ? () => retry(item) : undefined}
+          onLongPress={onHold}
+          delayLongPress={400}
+          testID={`friend-chat-bubble-${item.localId || item.id}`}
           style={[
             mine ? (item.failed ? s.bubbleFailed : s.bubbleMine) : s.bubbleTheirs,
             item.local && !item.failed && s.bubbleSending,
           ]}
         >
-          <Text style={mine && !item.failed ? s.bodyMine : s.bodyTheirs}>{item.content}</Text>
-          <Text style={mine && !item.failed ? s.stampMine : s.stampTheirs}>
+          {!!link && (
+            <MessageLinkCard
+              url={link}
+              mine={inked}
+              theme={theme}
+              serverBase={serverBase}
+              onLongPress={onHold}
+              onLoaded={() => stickToEnd(false)}
+              testID={`friend-chat-link-${item.localId || item.id}`}
+            />
+          )}
+          {/* One outer <Text> so the message still wraps and selects as one
+              paragraph; the links are nested spans inside it, which is the
+              only way react-native makes part of a line pressable. Holding a
+              link has to raise the sheet too — a long press does NOT pass
+              from a nested Text to its parent. */}
+          <Text style={bodyStyle}>
+            {segments.map((seg, i) => (seg.url ? (
+              <Text
+                key={i}
+                style={[bodyStyle, s.link, inked && s.linkMine]}
+                onPress={() => { Linking.openURL(seg.url).catch(() => {}); }}
+                onLongPress={onHold}
+                suppressHighlighting
+              >
+                {seg.text}
+              </Text>
+            ) : (
+              <Text key={i} style={bodyStyle}>{seg.text}</Text>
+            )))}
+          </Text>
+          <Text style={inked ? s.stampMine : s.stampTheirs}>
             {item.failed ? 'Not sent — tap to try again' : timeLabel(item.createdAt)}
           </Text>
         </Pressable>
@@ -226,7 +354,7 @@ export default function FriendChatPage({
         {body}
       </View>
     );
-  }, [thread, s, retry]);
+  }, [thread, s, retry, hold, theme, serverBase, stickToEnd]);
 
   const avatar = resolveAvatarUrl(friend?.avatarUrl, serverBase);
 
@@ -302,7 +430,32 @@ export default function FriendChatPage({
           marginBottom={keyboard > 0 ? keyboard + 8 : panelBottomInset(insets.bottom)}
           inputProps={{ testID: 'friend-chat-input' }}
         />
+
+        {/* A copy is invisible, so without this "Copy message" reads as an
+            option that did nothing. Sits above the composer, which is itself
+            lifted by the keyboard — so the toast rides with it. */}
+        {!!toast && (
+          <View
+            pointerEvents="none"
+            style={[s.toastWrap, {
+              bottom: (keyboard > 0 ? keyboard + 8 : panelBottomInset(insets.bottom)) + 72,
+            }]}
+          >
+            <View style={s.toast}>
+              <Text numberOfLines={1} style={s.toastText} testID="friend-chat-toast">{toast}</Text>
+            </View>
+          </View>
+        )}
       </View>
+
+      <MessageActionsSheet
+        visible={!!held}
+        onClose={() => setHeld(null)}
+        message={held}
+        actions={heldActions}
+        theme={theme}
+        testID="friend-chat-actions"
+      />
     </EdgeSwipePage>
   );
 }
@@ -358,5 +511,22 @@ const makeStyles = (theme) => {
     bodyTheirs: { fontSize: 15, lineHeight: 20, color: c.textPrimary },
     stampMine: { fontSize: 10, marginTop: 3, alignSelf: 'flex-end', color: inkOn(c.accentInfo), opacity: 0.7 },
     stampTheirs: { fontSize: 10, marginTop: 3, alignSelf: 'flex-end', color: c.textTertiary },
+
+    // A link in prose. On THEIR bubble it takes the accent; on the sender's own
+    // the fill is already the accent, so it keeps the bubble's ink and is told
+    // apart by the underline alone.
+    link: { color: c.accentInfo, textDecorationLine: 'underline' },
+    linkMine: { color: inkOn(c.accentInfo), textDecorationLine: 'underline' },
+
+    // The copy confirmation. Above the composer, clear of the keyboard, and
+    // `pointerEvents: 'none'` so it can never swallow a press meant for a
+    // bubble underneath it.
+    toastWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
+    toast: {
+      maxWidth: '80%', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 999,
+      backgroundColor: 'rgba(22,26,32,0.94)',
+      ...depth(theme, 'overlay'),
+    },
+    toastText: { fontSize: 12.5, fontWeight: '600', color: '#fff' },
   });
 };

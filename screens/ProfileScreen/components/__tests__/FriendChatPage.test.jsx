@@ -30,7 +30,18 @@ jest.mock('../../../../context/DownloadsContext', () => ({
   useSyncSignals: () => mockSignals,
 }));
 
+// copyText reaches for the native clipboard and falls back to the OS share
+// sheet; neither is a thing in jest, and what matters here is WHAT was handed
+// to it. Its own behaviour is covered by utils/__tests__/copyText.test.js.
+const mockCopyText = jest.fn(async () => 'copied');
+jest.mock('../../../../utils/copyText', () => ({
+  copyText: (...args) => mockCopyText(...args),
+  default: (...args) => mockCopyText(...args),
+}));
+
+import { Linking } from 'react-native';
 import FriendChatPage from '../FriendChatPage';
+import { __resetLinkPreviewCache } from '../../../../utils/useLinkPreview';
 
 const theme = {
   colors: {
@@ -55,6 +66,9 @@ beforeEach(() => {
   mockSignals = { messagesVersion: 0, messagesPing: null };
   mockApi.get.mockResolvedValue({ success: true, messages: [msg()] });
   mockApi.post.mockResolvedValue({ success: true, message: msg({ id: 'real', mine: true }) });
+  // The preview cache is module-level and outlives a test, which is the whole
+  // point of it in the app and a cross-test leak here.
+  __resetLinkPreviewCache();
 });
 
 describe('opening a conversation', () => {
@@ -128,6 +142,193 @@ describe('sending', () => {
     const input = await type('   ');
     await act(async () => { fireEvent.press(screen.getByLabelText('Send')); });
     expect(mockApi.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('a link in a message', () => {
+  const WITH_LINK = 'read https://example.com/story now';
+  const PREVIEW = {
+    host: 'example.com',
+    title: 'A story about turtles',
+    description: 'Slow and steady',
+    thumbUrl: '/api/media/thumbnails/linkthumb-abc.jpg',
+    mediaType: 'link',
+  };
+
+  /** Route the thread read and the preview read to different answers. */
+  const withLink = ({ preview = null, row = null } = {}) => {
+    mockApi.get.mockImplementation((path) => (
+      path.startsWith('/share/link-preview')
+        ? Promise.resolve({ success: true, preview: row })
+        : Promise.resolve({ success: true, messages: [msg({ content: WITH_LINK })] })
+    ));
+    mockApi.post.mockImplementation((path) => (
+      path === '/share/preview'
+        ? Promise.resolve({ success: true, preview })
+        : Promise.resolve({ success: true })
+    ));
+  };
+
+  test('the URL is pressable where it was written, and the prose is untouched', async () => {
+    const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    withLink();
+    await render(<FriendChatPage {...props()} />);
+
+    const link = await screen.findByText('https://example.com/story');
+    await act(async () => { fireEvent.press(link); });
+    expect(open).toHaveBeenCalledWith('https://example.com/story');
+
+    // The words either side are still on screen as written.
+    expect(screen.getByText('read ')).toBeTruthy();
+    expect(screen.getByText(' now')).toBeTruthy();
+    open.mockRestore();
+  });
+
+  test('asks the CHEAP cached endpoint first, and only then unfurls', async () => {
+    withLink({ preview: PREVIEW });
+    await render(<FriendChatPage {...props()} />);
+
+    await waitFor(() => expect(mockApi.post).toHaveBeenCalledWith('/share/preview', { url: 'https://example.com/story' }));
+    const previewReads = mockApi.get.mock.calls.filter((c) => String(c[0]).startsWith('/share/link-preview'));
+    expect(previewReads).toHaveLength(1);
+    expect(previewReads[0][0]).toBe('/share/link-preview?url=https%3A%2F%2Fexample.com%2Fstory');
+  });
+
+  test('a cached preview is used WITHOUT unfurling the page again', async () => {
+    // The row shape the cache-only GET really returns — snake_case, with a
+    // status. This is the second reader of a thread, and it costs nothing.
+    withLink({
+      row: {
+        status: 'ok',
+        title: 'A story about turtles',
+        description: 'Slow and steady',
+        thumb_url: '/api/media/thumbnails/linkthumb-abc.jpg',
+        media_type: 'link',
+      },
+    });
+    await render(<FriendChatPage {...props()} />);
+
+    expect(await screen.findByText('A story about turtles')).toBeTruthy();
+    expect(mockApi.post).not.toHaveBeenCalledWith('/share/preview', expect.anything());
+  });
+
+  test('the card shows the title, summary, host and thumbnail', async () => {
+    withLink({ preview: PREVIEW });
+    await render(<FriendChatPage {...props()} />);
+
+    expect(await screen.findByText('A story about turtles')).toBeTruthy();
+    expect(screen.getByText('Slow and steady')).toBeTruthy();
+    expect(screen.getByText('example.com')).toBeTruthy();
+    // A server-RELATIVE thumbnail path has to be joined to the pond's origin.
+    const thumb = screen.getByTestId('friend-chat-link-m1-thumb');
+    expect(thumb.props.source.uri).toBe('http://pond/api/media/thumbnails/linkthumb-abc.jpg');
+  });
+
+  test('a link the pond cannot unfurl leaves the message alone', async () => {
+    // Login wall, dead link, non-HTML: a NORMAL outcome, not an error. The
+    // link stays pressable and no empty card is drawn.
+    withLink({ preview: null });
+    await render(<FriendChatPage {...props()} />);
+
+    expect(await screen.findByText('https://example.com/story')).toBeTruthy();
+    await act(async () => {});
+    expect(screen.queryByTestId('friend-chat-link-m1-thumb')).toBeNull();
+  });
+
+  test('a message with no link asks the pond nothing about previews', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await act(async () => {});
+    expect(mockApi.get.mock.calls.some((c) => String(c[0]).includes('/share/'))).toBe(false);
+    expect(mockApi.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('holding a message', () => {
+  const hold = async (id = 'm1') => {
+    const bubble = await screen.findByTestId(`friend-chat-bubble-${id}`);
+    await act(async () => { fireEvent(bubble, 'longPress'); });
+  };
+
+  test('offers to copy it, and says so when it has', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await hold();
+
+    const copy = screen.getByTestId('friend-chat-actions-copy-message');
+    await act(async () => { fireEvent.press(copy); });
+
+    expect(mockCopyText).toHaveBeenCalledWith('hello');
+    expect(await screen.findByTestId('friend-chat-toast')).toBeTruthy();
+    expect(screen.getByText('Message copied')).toBeTruthy();
+  });
+
+  test('says plainly when a copy did NOT happen', async () => {
+    mockCopyText.mockResolvedValueOnce('none');
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await hold();
+    await act(async () => { fireEvent.press(screen.getByTestId('friend-chat-actions-copy-message')); });
+
+    expect(await screen.findByText(/Could not copy/)).toBeTruthy();
+  });
+
+  test('a message with no link is not offered link options that do nothing', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await hold();
+
+    expect(screen.getByTestId('friend-chat-actions-copy-message')).toBeTruthy();
+    expect(screen.queryByTestId('friend-chat-actions-copy-link')).toBeNull();
+    expect(screen.queryByTestId('friend-chat-actions-open-link')).toBeNull();
+  });
+
+  test('a message WITH a link can have the link copied or opened', async () => {
+    const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    mockApi.get.mockImplementation((path) => (
+      path.startsWith('/share/link-preview')
+        ? Promise.resolve({ success: true, preview: null })
+        : Promise.resolve({ success: true, messages: [msg({ content: 'see https://example.com/story' })] })
+    ));
+    mockApi.post.mockResolvedValue({ success: true, preview: null });
+
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await hold();
+
+    await act(async () => { fireEvent.press(screen.getByTestId('friend-chat-actions-copy-link')); });
+    expect(mockCopyText).toHaveBeenCalledWith('https://example.com/story');
+
+    await hold();
+    await act(async () => { fireEvent.press(screen.getByTestId('friend-chat-actions-open-link')); });
+    expect(open).toHaveBeenCalledWith('https://example.com/story');
+    open.mockRestore();
+  });
+
+  test('the sheet closes when the scrim is pressed', async () => {
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await hold();
+    expect(screen.getByTestId('friend-chat-actions')).toBeTruthy();
+
+    await act(async () => { fireEvent.press(screen.getByTestId('friend-chat-actions-scrim')); });
+    expect(screen.queryByTestId('friend-chat-actions')).toBeNull();
+  });
+
+  // A failed bubble's TAP is its retry. Making the whole Pressable `disabled`
+  // to express that would have taken the HOLD away with it.
+  test('a failed message can still be held, and still retries on a tap', async () => {
+    mockApi.post.mockRejectedValue(new Error('no route to pond'));
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    await act(async () => { fireEvent.changeText(screen.getByTestId('friend-chat-input'), 'did this land?'); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Send')); });
+    expect(await screen.findByText(/tap to try again/i)).toBeTruthy();
+
+    const failed = screen.getByText('did this land?');
+    await act(async () => { fireEvent.press(failed) });
+    // The retry went back out to the pond (the first POST plus this one).
+    expect(mockApi.post.mock.calls.filter((c) => String(c[0]).includes('/messages/'))).toHaveLength(2);
   });
 });
 
