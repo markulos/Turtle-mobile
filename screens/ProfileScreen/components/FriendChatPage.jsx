@@ -40,8 +40,9 @@
  * photo goes through the ordinary media pipeline first and the message
  * references what came back, so a sent photo is a vault item like any other.
  * The composer therefore uploads on PICK, not on send (services/vaultAttach says
- * why), and the thread resolves every id it is shown in one batched pass
- * (useThreadPhotos) rather than one request per bubble.
+ * why), and a bubble draws its photo straight from `/api/media/display/:id` —
+ * no lookup first, and crucially the only thing that works for a photo someone
+ * sent YOU, since `/media/by-ids` is owner-scoped. MessagePhotos explains it.
  *
  * A photo IS a message: the send key arms with nothing typed, and a wordless
  * bubble draws no empty line under the picture.
@@ -77,7 +78,6 @@ import MessageActionsSheet from '../../../components/MessageActionsSheet';
 import AttachmentViewer from '../../../components/AttachmentViewer';
 import MessagePhotos from './MessagePhotos';
 import MessageDraftPhotos, { MessageAttachKey } from './MessageDraftPhotos';
-import useThreadPhotos from './useThreadPhotos';
 import { pickPhotos, uploadErrorMessage, uploadPickedAsset } from '../../../services/vaultAttach';
 import {
   attachmentIdsOf,
@@ -95,7 +95,7 @@ import useKeyboardHeight from '../../../utils/useKeyboardHeight';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { copyText } from '../../../utils/copyText';
 import { FROST_OVERLAP } from '../../../utils/frostedChat';
-import { isImage, viewerImages } from '../../../utils/mediaAttachments';
+import { viewerImageUrl } from '../../../utils/mediaAttachments';
 import { firstLinkUrl, linkSegments } from '../../../utils/messageLinks';
 import {
   mergeThread, optimisticMessage, timeLabel, startsNewDay, dayLabel,
@@ -169,10 +169,34 @@ export default function FriendChatPage({
 
   const thread = useMemo(() => mergeThread(rows, locals), [rows, locals]);
 
-  // Every photo in the open conversation, resolved in one pass rather than one
-  // request per bubble — see useThreadPhotos.
-  const threadPhotos = useThreadPhotos(thread);
+  // Photos are addressed by id through /api/media/display/:id, so there is
+  // nothing to resolve first — see MessagePhotos for why that is also the only
+  // thing that works for a photo somebody sent US.
   const photoOrigin = useMemo(() => String(serverBase || '').replace(/\/api$/, ''), [serverBase]);
+
+  /**
+   * The pictures of one message, as `{ key, uri }`.
+   *
+   * A bubble still in flight draws the LOCAL files it was sent with, so a photo
+   * is on screen the instant Send is pressed and does not blink when the upload
+   * lands. Everything settled is addressed by vault id through the display tier.
+   */
+  const photoFramesOf = useCallback((message) => {
+    const local = Array.isArray(message?.localUris) ? message.localUris : [];
+    if (local.length) return local.map((uri, i) => ({ key: `local-${i}`, uri }));
+    return attachmentIdsOf(message).map((id) => ({
+      key: id,
+      uri: viewerImageUrl(photoOrigin, { id }),
+    }));
+  }, [photoOrigin]);
+
+  /** The same pictures, in the shape AttachmentViewer wants. */
+  const photosOf = useCallback(
+    (message) => photoFramesOf(message).map(({ key, uri }) => ({
+      key, uri, previewUri: uri, name: null,
+    })),
+    [photoFramesOf],
+  );
 
   // The full-size viewer. It holds the pictures of the ONE message that was
   // tapped, so paging walks that message rather than the whole conversation.
@@ -250,74 +274,95 @@ export default function FriendChatPage({
   }, [keyboardUp, visible, thread.length]);
 
   // ── The draft's photos ────────────────────────────────────────────────────
-  // Each entry is { key, uri, id?, uploading, error }. `uri` is the LOCAL file
-  // the picker handed over and stays the preview for the life of the draft: it
-  // is already on the device, so it paints instantly and does not wait on the
-  // vault generating a thumbnail for something uploaded three seconds ago.
+  //
+  // Each entry is { key, uri, asset, error }. `uri` is the LOCAL file the picker
+  // handed over, and it is what the strip AND the sent bubble both draw: it is
+  // already on the device, so it paints with no network at all.
+  //
+  // ── Sending does not wait for the upload ────────────────────────────────
+  // The upload starts the moment a photo is picked, but Send no longer blocks on
+  // it. Press it and the bubble is on screen immediately, drawn from the local
+  // file; the upload finishes behind it, and only then does the message POST.
+  // So the wait that used to sit between "I chose a photo" and "I may send it"
+  // now sits where nobody is looking at it.
   const [photos, setPhotos] = useState([]);
   const photoSeq = useRef(0);
-  const readyPhotoIds = useMemo(
-    () => photos.filter((p) => p.id && !p.error).map((p) => p.id),
-    [photos],
-  );
-  // Anything still in flight holds Send: posting now would deliver the words
-  // without the picture they were written about.
-  const uploading = photos.some((p) => p.uploading);
+  // key → Promise<mediaId>. The promise IS the upload: anything that needs the
+  // id awaits it rather than polling a flag, so a send that arrives mid-upload
+  // simply joins the one already running instead of starting a second.
+  const uploads = useRef(new Map());
+
+  /** Start this photo's upload, or hand back the one already in flight. */
+  const uploadOf = useCallback((entry) => {
+    const running = uploads.current.get(entry.key);
+    if (running) return running;
+    const started = uploadPickedAsset({
+      uploadUrl: `${getBaseUrl()}/media/upload`,
+      token: getApiAuthToken(),
+      asset: entry.asset,
+      label: `message:${entry.asset?.fileName || entry.key}`,
+    }).then(
+      (media) => media.id,
+      (e) => {
+        // Forgotten, so a retry genuinely retries rather than re-awaiting a
+        // promise that has already rejected.
+        uploads.current.delete(entry.key);
+        setPhotos((prev) => prev.map((p) => (
+          p.key === entry.key ? { ...p, error: uploadErrorMessage(e) } : p
+        )));
+        throw e;
+      },
+    );
+    uploads.current.set(entry.key, started);
+    return started;
+  }, [getBaseUrl]);
 
   // Closing the thread — or switching to another person — empties the strip. A
   // photo picked for one conversation following you into another is the kind of
   // mistake you cannot take back.
-  useEffect(() => { setPhotos([]); }, [visible, friendId]);
+  useEffect(() => { setPhotos([]); uploads.current.clear(); }, [visible, friendId]);
 
   const removePhoto = useCallback((key) => {
     tapHaptic();
     setPhotos((prev) => prev.filter((p) => p.key !== key));
+    uploads.current.delete(key);
   }, []);
 
   const addPhotos = useCallback(async () => {
-    const room = attachmentRoom(readyPhotoIds);
+    const room = attachmentRoom(photos);
     if (room <= 0) return;
     const picked = await pickPhotos({ limit: room }).catch(() => null);
     if (!picked || picked.status !== 'picked') return;
 
-    const uploadUrl = `${getBaseUrl()}/media/upload`;
-    const token = getApiAuthToken();
-    for (const asset of picked.assets) {
+    const entries = picked.assets.map((asset) => {
       photoSeq.current += 1;
-      const key = `p${photoSeq.current}`;
-      setPhotos((prev) => [...prev, { key, uri: asset.uri, uploading: true, error: null }]);
-      try {
-        const media = await uploadPickedAsset({
-          uploadUrl, token, asset, label: `message:${asset.fileName}`,
-        });
-        setPhotos((prev) => prev.map((p) => (
-          p.key === key ? { ...p, id: media.id, uploading: false } : p
-        )));
-      } catch (e) {
-        // The failed thumbnail STAYS, carrying its reason, until it is
-        // dismissed. A photo that silently vanished from the strip would look
-        // like it had been sent.
-        notifyHaptic('error');
-        setPhotos((prev) => prev.map((p) => (
-          p.key === key ? { ...p, uploading: false, error: uploadErrorMessage(e) } : p
-        )));
-      }
-    }
-  }, [getBaseUrl, readyPhotoIds]);
+      return { key: `p${photoSeq.current}`, uri: asset.uri, asset, error: null };
+    });
+    setPhotos((prev) => [...prev, ...entries]);
+    // Started now, awaited later — by Send, if it has not finished by then.
+    for (const entry of entries) uploadOf(entry).catch(() => { /* the entry carries it */ });
+  }, [photos, uploadOf]);
 
   // ── Sending ───────────────────────────────────────────────────────────────
   const send = useCallback(async (text, retryOf = null) => {
     const content = String(text ?? '').trim();
-    // A retry re-sends exactly what that bubble carried; a new send takes
-    // whatever the strip has ready. A PHOTO IS A MESSAGE, so words are not
-    // required — only one of the two.
-    const ids = retryOf ? attachmentIdsOf(retryOf) : readyPhotoIds;
-    if (!canSendMessage(content, ids) || !friendId) return;
+    // A retry re-sends exactly the photos that bubble carried; a new send takes
+    // the strip, minus anything whose upload has already failed. A PHOTO IS A
+    // MESSAGE, so words are not required — only one of the two.
+    const carried = retryOf ? (retryOf.photos || []) : photos.filter((p) => !p.error);
+    if (!canSendMessage(content, carried) || !friendId) return;
 
     seq.current += 1;
     const bubble = retryOf
       ? { ...retryOf, failed: false }
-      : optimisticMessage(content, { seq: seq.current, attachments: toAttachments(ids) });
+      : {
+        ...optimisticMessage(content, { seq: seq.current }),
+        // Drawn from the device while the upload runs, so the picture is on
+        // screen before the network has been asked for anything.
+        localUris: carried.map((p) => p.uri),
+        // Kept so a tap-to-retry can re-upload rather than re-pick.
+        photos: carried,
+      };
 
     setLocals((prev) => (retryOf
       ? prev.map((l) => (l.localId === retryOf.localId ? bubble : l))
@@ -325,9 +370,19 @@ export default function FriendChatPage({
     if (!retryOf) { setDraft(''); setPhotos([]); }
     setSending(true);
     try {
+      // Usually already resolved — the upload began when the photo was picked.
+      const ids = await Promise.all(carried.map((entry) => uploadOf(entry)));
+      // The ids go onto the OPTIMISTIC bubble before the POST, and that matters:
+      // mergeThread recognises this bubble in the server's answer by its content
+      // AND its attachments, so a bubble that never learned its ids would sit on
+      // screen beside the real row instead of settling into it.
+      if (ids.length) {
+        setLocals((prev) => prev.map((l) => (
+          l.localId === bubble.localId ? { ...l, attachments: toAttachments(ids) } : l
+        )));
+      }
       // `attachments` only rides along when there are some: an ordinary message
-      // is still the plain `{ content }` body this endpoint has always taken,
-      // which keeps it readable in a log and costs an older pond nothing.
+      // is still the plain `{ content }` body this endpoint has always taken.
       await api.post(`/messages/${encodeURIComponent(friendId)}`, {
         content,
         ...(ids.length ? { attachments: toAttachments(ids) } : null),
@@ -345,7 +400,7 @@ export default function FriendChatPage({
     } finally {
       setSending(false);
     }
-  }, [api, friendId, load, readyPhotoIds]);
+  }, [api, friendId, load, photos, uploadOf]);
 
   const retry = useCallback((bubble) => {
     tapHaptic();
@@ -408,12 +463,7 @@ export default function FriendChatPage({
     }
     // The pictures of the held message, in its own order — the same list a tap
     // on one of them opens, so the sheet and the photo agree on what is next.
-    const openable = viewerImages(
-      photoOrigin,
-      attachmentIdsOf(held)
-        .map((id) => threadPhotos?.get?.(String(id)))
-        .filter((m) => m && isImage(m) && (m.thumbnailLgUrl || m.thumbnailUrl)),
-    );
+    const openable = photosOf(held);
     if (openable.length) {
       rows.push({
         key: 'open-photos',
@@ -436,7 +486,7 @@ export default function FriendChatPage({
       });
     }
     return rows;
-  }, [held, reportCopy, say, photoOrigin, threadPhotos, openPhotos]);
+  }, [held, reportCopy, say, photosOf, openPhotos]);
 
   // ── Rows ──────────────────────────────────────────────────────────────────
   const s = useMemo(() => makeStyles(theme), [theme]);
@@ -449,7 +499,7 @@ export default function FriendChatPage({
     const bodyStyle = inked ? s.bodyMine : s.bodyTheirs;
     const link = firstLinkUrl(item.content);
     const segments = linkSegments(item.content);
-    const photoIds = attachmentIdsOf(item);
+    const photoFrames = photoFramesOf(item);
     // A photo sent on its own has no words, and an empty <Text> would still
     // claim a line of leading under the picture.
     const hasText = String(item.content || '').trim().length > 0;
@@ -469,14 +519,12 @@ export default function FriendChatPage({
             item.local && !item.failed && s.bubbleSending,
           ]}
         >
-          {photoIds.length > 0 && (
+          {photoFrames.length > 0 && (
             <MessagePhotos
-              ids={photoIds}
-              photos={threadPhotos}
-              origin={photoOrigin}
+              photos={photoFrames}
               mine={inked}
               theme={theme}
-              onOpen={openPhotos}
+              onOpen={(index) => openPhotos(photosOf(item), index)}
             />
           )}
           {!!link && (
@@ -524,7 +572,7 @@ export default function FriendChatPage({
         {body}
       </View>
     );
-  }, [thread, s, retry, hold, theme, serverBase, threadPhotos, photoOrigin, openPhotos]);
+  }, [thread, s, retry, hold, theme, serverBase, photoFramesOf, photosOf, openPhotos]);
 
   const avatar = resolveAvatarUrl(friend?.avatarUrl, serverBase);
 
@@ -630,19 +678,19 @@ export default function FriendChatPage({
             value={draft}
             onChangeText={setDraft}
             onSend={() => send(draft)}
-            sending={sending || uploading}
+            sending={sending}
             disabled={!friendId}
-            // A PHOTO IS A MESSAGE — so the key arms with nothing typed. It stays
-            // dark while one is still uploading, because that photo has no vault
-            // id yet and sending now would leave it behind.
-            canSend={canSendMessage(draft, readyPhotoIds) && !uploading && !!friendId}
+            // A PHOTO IS A MESSAGE — the key arms with nothing typed. It no
+            // longer waits on the upload either: send puts the bubble on screen
+            // from the local file and the upload finishes behind it.
+            canSend={canSendMessage(draft, photos) && !!friendId}
             placeholder={photos.length > 0
               ? 'Say something about it, or just send…'
               : `Message ${friend?.name || ''}…`}
             topSlot={<MessageDraftPhotos items={photos} theme={theme} onRemove={removePhoto} />}
             actions={(
               <MessageAttachKey
-                ids={readyPhotoIds}
+                ids={photos}
                 theme={theme}
                 disabled={!friendId}
                 onPress={addPhotos}

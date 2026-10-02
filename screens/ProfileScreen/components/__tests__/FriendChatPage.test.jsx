@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
 // FlashList's own jest setup — without it the component dies on I18nManager.
@@ -85,13 +85,21 @@ const props = (over = {}) => ({
 // "Cannot read properties of undefined (reading 'isRTL')" and no suite name on
 // it. Whether it lands is pure timing, so it surfaces as the gate breaking after
 // an unrelated change reorders the suites.
+// Let FlashList's deferred scroll LAND before the suite moves on.
+//
+// FlashList schedules its initial scroll through a setTimeout(0)
+// (useUnmountAwareCallbacks). If the run ends with that still pending, it fires
+// into a torn-down I18nManager and takes the WHOLE RUN down rather than failing
+// one test — a bare "Cannot read properties of undefined (reading 'isRTL')" with
+// no suite name on it. Whether it lands is pure timing, so it surfaces as the
+// gate breaking after an unrelated change reorders the suites.
+//
+// A macrotask flush is the whole fix. Do NOT also unmount by hand here: an
+// explicit cleanup() detaches `screen`, and the NEXT test then renders into a
+// tree its queries cannot see — which shows up as a component that appears to
+// mount and fetch nothing at all. RNTL's own auto-cleanup already unmounts.
+
 afterEach(async () => {
-  // Let the deferred scroll LAND first, while there is still a live component
-  // and a live environment for it to land in — a microtask flush is not enough,
-  // because this is a macrotask.
-  await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0); }); });
-  // Then take the page down, which cancels anything scheduled since.
-  cleanup();
   await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0); }); });
 });
 
@@ -475,6 +483,161 @@ describe('the newest message sits at the absolute bottom', () => {
   });
 });
 
+/**
+ * A photo somebody sent YOU has to appear.
+ *
+ * The bug this pins: the bubble used to resolve its ids through
+ * `GET /media/by-ids`, which is OWNER-SCOPED — it answers with the caller's own
+ * media and silently omits the rest. So the sender saw their photo and the
+ * recipient got an empty list and a placeholder that never resolved. Sending was
+ * never broken; the picture simply never loaded on the other side.
+ *
+ * The fix is to address `/api/media/display/:id` directly, which needs no lookup
+ * and has no owner scoping. These cases are about the URL and about asking for
+ * NOTHING first, because both are the bug.
+ */
+describe('a photo in a message', () => {
+  const withPhoto = (over = {}) => msg({
+    content: '',
+    attachments: [{ type: 'media', mediaId: 'media_abc' }],
+    ...over,
+  });
+
+  /** Every image source in the rendered tree — walked, the way this repo's
+   *  other render tests measure a tree. */
+  const uris = () => {
+    const out = [];
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      const uri = node.props?.source?.uri;
+      if (uri) out.push(uri);
+      (node.children || []).forEach(walk);
+    };
+    walk(screen.toJSON());
+    return out;
+  };
+
+  /** Text nodes rendering an empty string — the "blank line" being guarded against. */
+  const emptyTextNodes = () => {
+    let n = 0;
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      const kids = node.children || [];
+      if (node.type === 'Text' && kids.length === 1 && kids[0] === '') n += 1;
+      kids.forEach(walk);
+    };
+    walk(screen.toJSON());
+    return n;
+  };
+
+  test("draws a photo THEY sent, addressed by id", async () => {
+    mockApi.get.mockResolvedValue({ success: true, messages: [withPhoto({ mine: false })] });
+    const view = await render(<FriendChatPage {...props()} />);
+    // eslint-disable-next-line no-console
+    console.log('DEBUG getCalls=', mockApi.get.mock.calls.length,
+      'screenNull=', screen.toJSON() === null,
+      'viewNull=', view.toJSON() === null,
+      'view=', JSON.stringify(view.toJSON()).slice(0, 300));
+    await screen.findByTestId('message-photo-media_abc');
+    expect(uris()).toContain('http://pond/api/media/display/media_abc');
+  });
+
+  test('asks the vault NOTHING to do it — no lookup before the first pixel', async () => {
+    mockApi.get.mockResolvedValue({ success: true, messages: [withPhoto({ mine: false })] });
+    await render(<FriendChatPage {...props()} />);
+    await screen.findByTestId('message-photo-media_abc');
+    // The thread read, and nothing else. A by-ids call here is the owner-scoped
+    // lookup that could never answer for someone else's photo.
+    const paths = mockApi.get.mock.calls.map((c) => String(c[0]));
+    expect(paths.some((p) => p.includes('by-ids'))).toBe(false);
+  });
+
+  test('draws one I sent the same way', async () => {
+    mockApi.get.mockResolvedValue({ success: true, messages: [withPhoto({ mine: true })] });
+    await render(<FriendChatPage {...props()} />);
+    expect(uris()).toContain('http://pond/api/media/display/media_abc');
+  });
+
+  test('a wordless photo message draws no empty line of text under it', async () => {
+    mockApi.get.mockResolvedValue({ success: true, messages: [withPhoto()] });
+    await render(<FriendChatPage {...props()} />);
+    await screen.findByTestId('message-photo-media_abc');
+    expect(emptyTextNodes()).toBe(0);
+  });
+
+  test('every photo on a message gets its own frame', async () => {
+    mockApi.get.mockResolvedValue({
+      success: true,
+      messages: [msg({
+        content: 'these',
+        attachments: [{ type: 'media', mediaId: 'a1' }, { type: 'media', mediaId: 'a2' }],
+      })],
+    });
+    await render(<FriendChatPage {...props()} />);
+    await screen.findByTestId('message-photo-a1');
+    expect(screen.getByTestId('message-photo-a2')).toBeTruthy();
+    expect(uris()).toEqual(expect.arrayContaining([
+      'http://pond/api/media/display/a1',
+      'http://pond/api/media/display/a2',
+    ]));
+  });
+});
+
+/**
+ * Sending a photo must not wait for the upload.
+ *
+ * The upload starts when the photo is PICKED, but Send no longer blocks on it:
+ * the bubble goes up immediately, drawn from the local file on the device, and
+ * the POST happens once the id lands. What this pins is the ORDER — that the
+ * picture is on screen before the pond has been asked for anything.
+ */
+describe('a photo sends without waiting for the upload', () => {
+  const localMsg = {
+    localId: 'local-1', id: 'local-1', content: '', mine: true, local: true,
+    createdAt: 1_700_000_000_100, localUris: ['file:///tmp/pic.jpg'],
+  };
+
+  test('an in-flight bubble draws the LOCAL file, not a vault url', async () => {
+    // mergeThread keeps a local bubble the server has not caught up with, which
+    // is the state between pressing Send and the upload finishing.
+    mockApi.get.mockResolvedValue({ success: true, messages: [] });
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    expect(screen.queryByTestId('message-photo-local-0')).toBeNull();
+  });
+
+  test('a settled bubble addresses the vault by id', async () => {
+    mockApi.get.mockResolvedValue({
+      success: true,
+      messages: [msg({ content: '', mine: true, attachments: [{ type: 'media', mediaId: 'm9' }] })],
+    });
+    await render(<FriendChatPage {...props()} />);
+    await screen.findByTestId('message-photo-m9');
+    const found = [];
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (node.props?.source?.uri) found.push(node.props.source.uri);
+      (node.children || []).forEach(walk);
+    };
+    walk(screen.toJSON());
+    expect(found).toContain('http://pond/api/media/display/m9');
+  });
+});
+
+/**
+ * KEEP THIS DESCRIBE LAST, AND ADD NOTHING AFTER IT.
+ *
+ * These two drive a RERENDER rather than a fresh mount — the only way to change
+ * what the mocked `useSyncSignals` returns mid-test — and they POISON whatever
+ * runs next in this file. The following test's `render()` returns a null tree and
+ * fires no effects at all, so a perfectly good case fails with "unable to find"
+ * and reads as a bug in whatever was just added rather than as a leak from here.
+ * A known-good case copied to the end of the file fails the same way, which is how
+ * this was pinned down — it is NOT caused by whatever sits below.
+ *
+ * Unmounting them by hand does not fix it and neither does flushing timers, so
+ * the mitigation for now is ORDER. If you need to add cases, add them ABOVE.
+ */
 describe('the socket is a bell, not the delivery', () => {
   test('a ping about THIS friend refetches the thread', async () => {
     const { rerender } = await render(<FriendChatPage {...props()} />);
