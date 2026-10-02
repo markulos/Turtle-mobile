@@ -15,7 +15,11 @@ import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
-import { generatedName, avatarAnimal } from '../../utils/avatar';
+import AnimalPicker from '../../components/AnimalPicker';
+import { generatedName, avatarGlyph } from '../../utils/avatar';
+import {
+  adoptServerAvatarAnimal, setMyAvatarAnimal, useMyAvatarAnimal,
+} from '../../utils/avatarChoice';
 import { dockOccupied } from '../../components/tabBarLayout';
 import { tapHaptic } from '../../utils/haptics';
 import { resolveAvatarUrl } from '../../utils/avatarUrl';
@@ -64,7 +68,13 @@ export default function ProfileScreen() {
   // Identity string (e.g. "sub:123" / "phone:+1…"). Everything derived —
   // animal, tint, generated name — hangs off this one value.
   const identity = authIdentity || 'anon';
-  const fallbackName = useMemo(() => generatedName(identity), [identity]);
+  // The animal this person has PICKED, or null for the one their id hashes to.
+  // Everything derived from the identity below follows it, so choosing a
+  // raccoon changes the disc AND turns "Gentle Sheep" into "Gentle Raccoon".
+  const myAnimal = useMyAvatarAnimal();
+  const [animalPickerOpen, setAnimalPickerOpen] = useState(false);
+  const fallbackName = useMemo(() => generatedName(identity, myAnimal), [identity, myAnimal]);
+  const myGlyph = useMemo(() => avatarGlyph(identity, myAnimal), [identity, myAnimal]);
 
   const [name, setName] = useState(fallbackName);
   const [editing, setEditing] = useState(false);
@@ -141,7 +151,13 @@ export default function ProfileScreen() {
         api.get('/me/stats'),
       ]);
       if (!mounted.current) return;
-      if (meRes.status === 'fulfilled' && meRes.value?.user) setMe(meRes.value.user);
+      if (meRes.status === 'fulfilled' && meRes.value?.user) {
+        setMe(meRes.value.user);
+        // A choice made on another device (or before a re-install) comes back
+        // here. It only fills a GAP — see adoptServerAvatarAnimal; it must not
+        // overwrite a pick made on this phone a moment ago.
+        adoptServerAvatarAnimal(meRes.value.user.settings);
+      }
       if (friendsRes.status === 'fulfilled') {
         const r = friendsRes.value;
         const list = Array.isArray(r?.friends) ? r.friends : (Array.isArray(r) ? r : []);
@@ -384,15 +400,26 @@ export default function ProfileScreen() {
             {/* Ring in the accent, so the avatar reads as the card's focal
                 point rather than another bordered disc. */}
             <View style={styles.avatarRing}>
-              {/* The uploaded image wins; with none, the user's animal shows as
-                  a silhouette in the same circle. */}
-              <View style={styles.avatarCircle}>
+              {/* The uploaded image wins; with none, the user's animal shows in
+                  the same circle — and the circle is then the way to CHANGE
+                  it, which is why it is pressable only in that state. With a
+                  photo set there is no animal on screen to tap, so the handle
+                  chip below carries the affordance instead. */}
+              <Pressable
+                onPress={avatarFullUrl ? undefined : () => { tapHaptic(); setAnimalPickerOpen(true); }}
+                accessibilityRole={avatarFullUrl ? undefined : 'button'}
+                accessibilityLabel={avatarFullUrl ? undefined : 'Choose your animal'}
+                style={styles.avatarCircle}
+                testID="profile-avatar-disc"
+              >
                 {avatarFullUrl ? (
                   <Image source={{ uri: avatarFullUrl }} style={styles.avatarImg} contentFit="cover" cachePolicy="memory-disk" transition={150} />
+                ) : myGlyph.emoji ? (
+                  <Text style={styles.avatarEmoji}>{myGlyph.emoji}</Text>
                 ) : (
-                  <Icon name={avatarAnimal(identity)} size={46} color={c.textTertiary} />
+                  <Icon name={myGlyph.icon} size={46} color={c.textTertiary} />
                 )}
-              </View>
+              </Pressable>
             </View>
             {/* Changing the picture lives in Settings — this badge is a shortcut
                 to it rather than a second uploader. */}
@@ -440,10 +467,23 @@ export default function ProfileScreen() {
               appears when it's something other than a plain member. */}
           <View style={styles.metaRow}>
             {fallbackName !== name && (
-              <View style={styles.handleChip}>
-                <Icon name={avatarAnimal(identity)} size={12} color={c.textTertiary} />
+              /* Pressable, because this is the only way to the animal picker
+                 for someone who has a photo uploaded — their animal is not
+                 drawn in the circle above for them to tap. */
+              <Pressable
+                onPress={() => { tapHaptic(); setAnimalPickerOpen(true); }}
+                style={styles.handleChip}
+                accessibilityRole="button"
+                accessibilityLabel={`Choose your animal, currently ${fallbackName}`}
+                testID="profile-handle-chip"
+              >
+                {myGlyph.emoji ? (
+                  <Text style={styles.handleEmoji}>{myGlyph.emoji}</Text>
+                ) : (
+                  <Icon name={myGlyph.icon} size={12} color={c.textTertiary} />
+                )}
                 <Text style={styles.handleText} numberOfLines={1}>{fallbackName}</Text>
-              </View>
+              </Pressable>
             )}
             {!!me?.role && me.role !== 'member' && (
               <View style={styles.roleChip}>
@@ -551,6 +591,19 @@ export default function ProfileScreen() {
         theme={theme}
         isDark={isDark}
         serverBase={serverBase}
+      />
+
+      {/* Choosing your own animal. Stays open after a pick so a few can be
+          tried against the live card behind it — the sheet's own Done (or a
+          tap on the scrim) is what closes it. */}
+      <AnimalPicker
+        visible={animalPickerOpen}
+        onClose={() => setAnimalPickerOpen(false)}
+        identity={identity}
+        chosen={myAnimal}
+        onChoose={(key) => { void setMyAvatarAnimal(key, api); }}
+        theme={theme}
+        testID="profile-animal-picker"
       />
 
       {/* Board conversations — hosted HERE now rather than reached by switching
@@ -1751,6 +1804,11 @@ const makeStyles = (theme) => {
     },
     // Fills the bordered circle above (which clips it).
     avatarImg: { width: '100%', height: '100%' },
+    // A chosen animal is an emoji (utils/avatar explains why). Sized to sit in
+    // the same optical space the 46pt icon did; the lineHeight is what stops
+    // it riding high, since an emoji's box is taller than its ink.
+    avatarEmoji: { fontSize: 44, lineHeight: 53, textAlign: 'center' },
+    handleEmoji: { fontSize: 12, lineHeight: 15 },
     metaRow: {
       flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
       flexWrap: 'wrap', alignSelf: 'stretch',

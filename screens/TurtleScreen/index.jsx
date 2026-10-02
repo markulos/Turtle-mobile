@@ -55,6 +55,7 @@ import TypingIndicator from '../../components/TypingIndicator';
 import MarkdownText from '../../components/MarkdownText';
 import { copyText } from '../../utils/copyText';
 import { generatedName } from '../../utils/avatar';
+import { useMyAvatarAnimal } from '../../utils/avatarChoice';
 import { useCommandBus } from '../../context/CommandBusContext';
 import { useOpenTarget } from '../../context/OpenTargetContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -194,7 +195,12 @@ export default function TurtleScreen() {
     })();
     return () => { alive = false; };
   }, [api]);
-  const selfName = selfProfile?.displayName?.trim() || generatedName(authIdentity || 'anon');
+  // The animal this person picked for themselves, so the header disc and the
+  // generated name here agree with the Profile card rather than showing the
+  // assigned animal next to a chosen one.
+  const myAnimal = useMyAvatarAnimal();
+  const selfName = selfProfile?.displayName?.trim()
+    || generatedName(authIdentity || 'anon', myAnimal);
   const selfAvatarUrl = selfProfile?.avatarUrl
     ? (selfProfile.avatarUrl.startsWith('/')
       ? `${getBaseUrl().replace(/\/api$/, '')}${selfProfile.avatarUrl}`
@@ -2240,7 +2246,7 @@ export default function TurtleScreen() {
                   transition={150}
                 />
               ) : (
-                <AnimalAvatar id={authIdentity || 'anon'} size={30} />
+                <AnimalAvatar id={authIdentity || 'anon'} size={30} animal={myAnimal} />
               )}
             </View>
             <View
