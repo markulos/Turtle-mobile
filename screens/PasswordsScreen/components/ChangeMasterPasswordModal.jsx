@@ -17,6 +17,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { useTheme } from '../../../context/ThemeContext';
 import { unlockVault } from '../utils/crypto';
 import { impactHaptic } from '../../../utils/haptics';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 /**
  * Change Master Password.
@@ -276,6 +277,7 @@ const createStyles = (theme) =>
       gap: 10,
     },
     input: {
+      ...INPUT_FIELD,
       flex: 1,
       height: 46,
       fontSize: 15,

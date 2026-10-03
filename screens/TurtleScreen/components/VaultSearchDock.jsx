@@ -25,6 +25,7 @@ import { Animated, Easing, Keyboard, Pressable, StyleSheet, Text, View } from 'r
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AppTextInput from '../../../components/AppTextInput';
 import { TAP_ONLY_PRESSABLE } from '../../../utils/pressBehavior';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 // ── The search transition's timings ─────────────────────────────────────────
 // Exported because MORE than one thing moves on them: the page lifts, and the
@@ -342,7 +343,7 @@ export const styles = StyleSheet.create({
   // filled surface. The field reads as an outline, and the fill comes from the
   // page behind it.
   search: { height: SEARCH_HEIGHT, flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: 19, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 },
-  searchInput: { flex: 1, fontSize: 15, height: '100%', padding: 0 },
+  searchInput: { ...INPUT_FIELD, flex: 1, fontSize: 15, padding: 0 },
   clearSearch: { width: 44, height: 44, marginRight: -12, alignItems: 'center', justifyContent: 'center' },
   // A bare glyph in the reference, not a filled circle. Keeps a 44 pt touch
   // target without drawing a button.

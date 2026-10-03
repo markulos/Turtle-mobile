@@ -40,6 +40,7 @@ import { useSheetDismiss } from '../utils/useSheetDismiss';
 import useKeyboardHeight from '../utils/useKeyboardHeight';
 import { depth } from '../utils/surfaceDepth';
 import { impactHaptic, markGesture } from '../utils/haptics';
+import { INPUT_FIELD } from '../utils/inputField';
 import {
   hexToHsl,
   hslToHex,
@@ -433,17 +434,13 @@ const createStyles = (theme) =>
       color: theme.colors.textTertiary,
       marginBottom: 4,
     },
-    // A single-line field in a fixed row: no vertical padding of its own, and
-    // Android's two centring instructions, or the value rides above the caret.
     hexInput: {
+      ...INPUT_FIELD,
       height: 42,
       fontSize: 16,
       fontWeight: '600',
       letterSpacing: 1,
-      paddingVertical: 0,
       paddingHorizontal: 12,
-      includeFontPadding: false,
-      textAlignVertical: 'center',
       color: theme.colors.inputText,
       backgroundColor: theme.colors.inputBackground,
       borderRadius: 21,

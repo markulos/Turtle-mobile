@@ -35,6 +35,7 @@ import { useServer } from '../../../context/ServerContext';
 import { tapHaptic } from '../../../utils/haptics';
 import { ROW_COVER, VaultResultRow } from '../../TurtleScreen/components/VaultSearchDock';
 import { loadCounts, rankPeople } from '../utils/peopleFrequency';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 /** Fold case and spacing so "Mo" finds "Mohamed" and " mo " finds it too. */
 const norm = (s) => String(s || '').trim().toLowerCase();
@@ -328,7 +329,7 @@ const makeStyles = (theme, accent) =>
       backgroundColor: theme.colors.surface,
       borderRadius: 19, paddingHorizontal: 14, marginBottom: 6,
     },
-    searchInput: { flex: 1, fontSize: 15, height: '100%', padding: 0, color: theme.colors.textPrimary },
+    searchInput: { ...INPUT_FIELD, flex: 1, fontSize: 15, padding: 0, color: theme.colors.textPrimary },
     list: { flex: 1 },
     group: {
       fontSize: 10.5, letterSpacing: 0.9, fontWeight: '700',

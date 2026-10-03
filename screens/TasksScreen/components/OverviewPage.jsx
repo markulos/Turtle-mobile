@@ -35,6 +35,7 @@ import { RULE_HIGHLIGHT, RULE_W } from '../../../utils/surfaceDepth';
 import { insetRule } from '../../../utils/surfaceDepth';
 import { boardLabel, isTaskDoneNow, itemTypeOf, localTodayStr } from '../utils/taskHelpers';
 import { overviewStats, NO_BOARD } from '../utils/overviewStats';
+import { INPUT_FIELD } from '../../../utils/inputField';
 import StatsPanel from './StatsPanel';
 
 const pct = (done, total) => (total > 0 ? Math.round((done / total) * 100) : 0);
@@ -1244,15 +1245,11 @@ const styles = StyleSheet.create({
     paddingRight: 4,
     paddingVertical: 4,
   },
-  // The single-line field metrics this app uses everywhere: no height of its
-  // own inside a row, Android's reserved font padding off, its centring on.
   bdAddInput: {
+    ...INPUT_FIELD,
     flex: 1,
     fontSize: 14,
     height: 36,
-    paddingVertical: 0,
-    includeFontPadding: false,
-    textAlignVertical: 'center',
   },
   // The board's own bead, on the string that now runs inside the rectangle.
   // Painted after the thread, and filled with the page colour, so the line
@@ -1375,7 +1372,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   finderField: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, height: FINDER_HEIGHT },
-  finderInput: { flex: 1, height: '100%', fontSize: 15, padding: 0 },
+  finderInput: { ...INPUT_FIELD, flex: 1, fontSize: 15, padding: 0 },
   finderCreate: {
     flexDirection: 'row',
     alignItems: 'center',

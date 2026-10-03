@@ -31,6 +31,7 @@ import { DismissKeyboardView } from '../../components/KeyboardSafeView';
 import { scanForPonds, scanFunnels, confirmServerForPhone, SEED_FUNNELS } from '../../services/pondDiscovery';
 import { parseInviteLink } from '../../utils/inviteLinks';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
+import { INPUT_FIELD } from '../../utils/inputField';
 
 // Brand turtle, rendered to a 1024px PNG. Was a 6.4 MB auto-traced SVG
 // (7,069 hyper-precise paths) bundled into the app for a logo shown at ~120px
@@ -994,9 +995,13 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   input: {
+    // No height here on purpose — inputContainer is 52pt with alignItems
+    // 'center', and that is the only thing that should be deciding where this
+    // text sits. The `height: '100%'` that used to be here left the invite
+    // field's placeholder and its caret on different lines.
+    ...INPUT_FIELD,
     flex: 1,
     fontSize: 16,
-    height: '100%',
   },
   codeInput: {
     letterSpacing: 8,

@@ -45,6 +45,7 @@ import { useVaultUploadActions } from '../context/VaultUploadContext';
 import { useOfflineMedia } from '../context/OfflineMediaContext';
 import { getAutoUploadSettings, setAutoUploadEnabled, runAutoUpload } from '../services/cameraRollAutoUpload';
 import PondInvitesSection from '../components/PondInvitesSection';
+import { INPUT_FIELD } from '../utils/inputField';
 
 const MASTER_KEY_STORE = 'vault_master_key';
 const SALT_STORE = 'vault_salt';
@@ -1707,10 +1708,9 @@ const createStyles = (theme) => StyleSheet.create({
     // No margin — the row's gap already spaces it off the field.
   },
   searchInput: {
+    ...INPUT_FIELD,
     flex: 1,
     height: 40,
-    paddingVertical: 0,
-    textAlignVertical: 'center',
     fontSize: 15,
     color: theme.colors.inputText,
   },
@@ -1938,6 +1938,7 @@ const createStyles = (theme) => StyleSheet.create({
     marginRight: 8,
   },
   input: {
+    ...INPUT_FIELD,
     flex: 1,
     height: 44,
     paddingRight: 12,
@@ -2034,6 +2035,7 @@ const createStyles = (theme) => StyleSheet.create({
     ...depth(theme, 'card'),
   },
   passwordInput: {
+    ...INPUT_FIELD,
     backgroundColor: theme.colors.inputBackground,
     height: 44,
     paddingHorizontal: 14,

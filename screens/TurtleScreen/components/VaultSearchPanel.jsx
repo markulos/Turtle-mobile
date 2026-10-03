@@ -32,6 +32,7 @@ import AppTextInput from '../../../components/AppTextInput';
 import EdgeSwipePage from './EdgeSwipePage';
 import { HIT_SLOP_8, ROW_KEY_W, SEARCH_HEIGHT } from './VaultSearchDock';
 import { panelBottomInset, panelTopInset } from '../../../components/tabBarLayout';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 export default function VaultSearchPanel({
   visible,
@@ -224,7 +225,7 @@ const panelStyles = (theme, isDark) => StyleSheet.create({
     paddingHorizontal: 14,
     gap: 8,
   },
-  fieldInput: { flex: 1, fontSize: 15, height: '100%', padding: 0 },
+  fieldInput: { ...INPUT_FIELD, flex: 1, fontSize: 15, padding: 0 },
   clear: { width: 44, height: 44, marginRight: -12, alignItems: 'center', justifyContent: 'center' },
   // Wraps, and each chip may shrink — nothing runs past the panel's edge.
   filterRow: {

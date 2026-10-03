@@ -32,6 +32,7 @@ import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 import { useSheetDismiss } from '../../../utils/useSheetDismiss';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 // Same presentation curve as the music vault's track menu, so every card in
 // the app enters with one motion signature.
@@ -496,15 +497,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  // Inline field in an icon row: explicit height + zero vertical padding, or
-  // the glyphs ride high against the icon. App-wide rule for inline inputs.
   newInput: {
+    ...INPUT_FIELD,
     flex: 1,
     fontSize: 15,
     height: 34,
-    paddingVertical: 0,
-    textAlignVertical: 'center',
-    includeFontPadding: false,
   },
   saveText: { fontSize: 14, fontWeight: '700' },
 });

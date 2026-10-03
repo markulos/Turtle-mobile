@@ -36,6 +36,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../utils/haptics';
+import { INPUT_FIELD } from '../utils/inputField';
 
 /**
  * Reduce a typed or pasted number to what the server stores: digits, with at
@@ -442,10 +443,9 @@ const createStyles = (theme) => StyleSheet.create({
     height: 42,
   },
   input: {
+    ...INPUT_FIELD,
     flex: 1,
     height: 42,
-    paddingVertical: 0,
-    textAlignVertical: 'center',
     fontSize: 15,
     color: theme.colors.inputText,
   },

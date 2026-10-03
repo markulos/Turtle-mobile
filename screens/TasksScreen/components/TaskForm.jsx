@@ -40,6 +40,7 @@ import { bumpInvolved } from '../utils/peopleFrequency';
 // no app, so a text is the only channel. Pure policy, kept out of here.
 import { guestReminderConfig } from '../utils/guestReminders';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
+import { INPUT_FIELD } from '../../../utils/inputField';
 import {
   PRIORITIES,
   ITEM_TYPES,
@@ -1832,6 +1833,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     borderColor: theme.colors.textPrimary,
   },
   input: {
+    ...INPUT_FIELD,
     height: 40, // Match "add a new task" height
     borderWidth: 0,
     borderRadius: 10,

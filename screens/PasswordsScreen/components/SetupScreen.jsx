@@ -13,6 +13,7 @@ import AppTextInput from '../../../components/AppTextInput';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic } from '../../../utils/haptics';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 export const SetupScreen = ({ onSetup, isProcessing }) => {
   const { theme } = useTheme();
@@ -131,6 +132,7 @@ const createStyles = (theme) =>
       marginBottom: 16,
     },
     input: {
+      ...INPUT_FIELD,
       flex: 1,
       height: 48,
       marginLeft: 12,

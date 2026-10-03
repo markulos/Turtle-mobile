@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { tapHaptic, impactHaptic } from '../../../utils/haptics';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 // Two-step unlock:
 //   • Biometrics (if enrolled + a master password was saved) → unlock directly,
@@ -257,7 +258,7 @@ const createStyles = (theme, insets, isDark) =>
       paddingHorizontal: 16,
       marginBottom: 16,
     },
-    input: { flex: 1, height: 48, marginLeft: 12, fontSize: 16, color: theme.colors.inputText },
+    input: { ...INPUT_FIELD, flex: 1, height: 48, marginLeft: 12, fontSize: 16, color: theme.colors.inputText },
     button: {
       backgroundColor: theme.colors.surfaceElevated,
       height: 48,

@@ -20,6 +20,7 @@ import { useSheetDismiss } from '../../../utils/useSheetDismiss';
 import { usePondAccess } from '../../../utils/usePondAccess';
 import AnimalAvatar from '../../../components/AnimalAvatar';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
+import { INPUT_FIELD } from '../../../utils/inputField';
 import { Image } from 'expo-image';
 
 // Sheet-presentation curve — the same weighted ease-out the vault's other
@@ -647,17 +648,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  // Inline text field in an icon row. Vertical padding + an auto height leaves
-  // the glyphs riding HIGH against the row's icon (font ascent/descent are not
-  // symmetric); an explicit height with zero vertical padding centers the text
-  // and the caret on the row's midline. App-wide rule for inline inputs.
   newInput: {
+    ...INPUT_FIELD,
     flex: 1,
     fontSize: 15,
     height: 34,
-    paddingVertical: 0,
-    textAlignVertical: 'center',
-    includeFontPadding: false,
   },
   createText: { fontSize: 14, fontWeight: '700' },
   playlistScroll: { maxHeight: 260 },

@@ -29,6 +29,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AppTextInput from '../../../components/AppTextInput';
 import { tapHaptic } from '../../../utils/haptics';
 import { KIND_SEP, FIELD_SEP } from '../utils/finderDestination';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 /**
  * The field is the vault's board-search pill, one size up: a fully rounded
@@ -298,7 +299,7 @@ const makeStyles = (theme) => StyleSheet.create({
     height: SEARCH_HEIGHT,
     ...depth(theme, 'control'),
   },
-  input: { flex: 1, height: '100%', fontSize: 15, color: theme.colors.textPrimary, padding: 0 },
+  input: { ...INPUT_FIELD, flex: 1, fontSize: 15, color: theme.colors.textPrimary, padding: 0 },
   timeChip: {
     flexDirection: 'row',
     alignItems: 'center',

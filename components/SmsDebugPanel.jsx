@@ -43,6 +43,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
 import { tapHaptic } from '../utils/haptics';
+import { INPUT_FIELD } from '../utils/inputField';
 
 const DEFAULT_TEMPLATE = '🐢 Turtle test message — if you can read this, SMS from your pond works.';
 const MAX_TEXT = 480;
@@ -284,21 +285,29 @@ const makeStyles = (theme) => {
     warnRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
     warnText: { flex: 1, fontSize: 12, lineHeight: 17 },
     sendBlock: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border, paddingTop: 12 },
-    // Explicit height + zero vertical padding + centered text: the house rule
-    // for inline inputs, since padding makes the glyphs ride high.
     input: {
+      ...INPUT_FIELD,
       backgroundColor: c.inputBackground || c.surfaceElevated,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: c.border,
       borderRadius: 8,
       paddingHorizontal: 10,
-      paddingVertical: 0,
       height: 40,
-      textAlignVertical: 'center',
       color: c.textPrimary,
       fontSize: 14,
     },
-    multiline: { height: 76, paddingVertical: 8, textAlignVertical: 'top' },
+    // Layered OVER `input`, so it has to undo the single-line rule that `input`
+    // spreads: a box that grows with its text owns its own height, wants its
+    // padding back and its text at the top. `includeFontPadding` goes back on
+    // too — switched off it crops ascenders and descenders across the several
+    // lines this field is for, which is exactly why INPUT_FIELD says multi-line
+    // is out of its scope.
+    multiline: {
+      height: 76,
+      paddingVertical: 8,
+      textAlignVertical: 'top',
+      includeFontPadding: true,
+    },
     actions: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
     sendBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 6,

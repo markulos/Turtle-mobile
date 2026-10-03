@@ -28,6 +28,7 @@ import { useServer } from '../../../context/ServerContext';
 import { useTheme } from '../../../context/ThemeContext';
 import { tapHaptic } from '../../../utils/haptics';
 import { searchEverything, stripMarks } from '../../../services/globalSearch';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 const DEBOUNCE_MS = 250;
 const THUMB_COLS = 3;
@@ -304,10 +305,9 @@ const makeStyles = (c) => StyleSheet.create({
     backgroundColor: c.surfaceHighlight,
   },
   input: {
+    ...INPUT_FIELD,
     flex: 1,
     height: 42,
-    paddingVertical: 0,
-    textAlignVertical: 'center',
     fontSize: 15,
     color: c.textPrimary,
   },

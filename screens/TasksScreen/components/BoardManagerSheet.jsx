@@ -20,6 +20,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ViewerSheet, { sheetColors } from '../../TurtleScreen/components/PhotoViewer/ViewerSheet';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 import { boardLabel } from '../utils/taskHelpers';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 function BoardRow({ name, dot, stat, sharedBy, selected, editing, colors, onSelect, onStartEdit, onCommitEdit, onCancelEdit, onDelete }) {
   const total = stat?.total || 0;
@@ -363,14 +364,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   nameInput: {
+    ...INPUT_FIELD,
     flex: 1,
     height: 32,
     borderRadius: 8,
     paddingHorizontal: 8,
-    paddingVertical: 0,
     fontSize: 15,
     fontWeight: '700',
-    textAlignVertical: 'center',
   },
   figure: {
     fontSize: 16,

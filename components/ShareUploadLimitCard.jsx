@@ -23,6 +23,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useServer } from '../context/ServerContext';
 import { useTheme } from '../context/ThemeContext';
 import { tapHaptic, notifyHaptic } from '../utils/haptics';
+import { INPUT_FIELD } from '../utils/inputField';
 
 /** 0 is unlimited — the same convention the server stores. */
 const PRESETS = [
@@ -210,7 +211,7 @@ const createStyles = (theme) => StyleSheet.create({
   chip: { minHeight: 36, borderRadius: 18, paddingHorizontal: 14, justifyContent: 'center', flexShrink: 1, maxWidth: '100%' },
   chipText: { fontSize: 14, fontWeight: '600' },
   customRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
-  input: { flex: 1, height: 40, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: 12, fontSize: 15 },
+  input: { ...INPUT_FIELD, flex: 1, height: 40, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: 12, fontSize: 15 },
   apply: { width: 44, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 },
   status: { fontSize: 13, color: theme.colors.textSecondary, flexShrink: 1 },

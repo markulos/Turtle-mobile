@@ -32,6 +32,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 import { useSheetDismiss } from '../../../utils/useSheetDismiss';
+import { INPUT_FIELD } from '../../../utils/inputField';
 
 const isDead = (s) => !!s.revokedAt || !!(s.expiresAt && s.expiresAt < Date.now());
 
@@ -779,8 +780,9 @@ const makeStyles = (theme) => StyleSheet.create({
   optionText: { fontSize: 14, color: theme.colors.textPrimary, flex: 1 },
   optionHint: { fontSize: 11.5, color: theme.colors.textMuted, marginTop: 2, lineHeight: 15 },
   input: {
+    ...INPUT_FIELD,
     borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border, borderRadius: 10,
-    paddingHorizontal: 12, height: 42, paddingVertical: 0, textAlignVertical: 'center',
+    paddingHorizontal: 12, height: 42,
     color: theme.colors.textPrimary, fontSize: 14, backgroundColor: theme.colors.surfaceElevated,
     ...depth(theme, 'control'),
   },
