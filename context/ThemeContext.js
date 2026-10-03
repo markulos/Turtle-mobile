@@ -66,6 +66,35 @@ const withAlpha = (hex, alpha) => {
   return `rgba(${(int >> 16) & 255}, ${(int >> 8) & 255}, ${int & 255}, ${alpha})`;
 };
 
+/**
+ * `amount` of `fg` mixed into `bg`, as an OPAQUE colour.
+ *
+ * Opaque is the whole point, and it is why this is not withAlpha. A translucent
+ * fill composites against whatever happens to be behind it — the page here,
+ * another card there, a photograph somewhere else — so one token would be a
+ * different colour in every place it was used, which is the opposite of what a
+ * token is for. It also tints everything drawn INSIDE it, so a thumbnail or a
+ * chip on the card would pick up the wash a second time.
+ *
+ * A line can afford to be translucent because it is one pixel over a known
+ * surface. A FILL cannot.
+ *
+ * Both inputs must be 6-digit hex; anything else returns the base unchanged
+ * rather than an invalid colour string, which RN renders as nothing at all.
+ */
+export const blend = (fg, bg, amount) => {
+  const f = /^#?([0-9a-f]{6})$/i.exec(String(fg || ''));
+  const b = /^#?([0-9a-f]{6})$/i.exec(String(bg || ''));
+  if (!f || !b) return bg;
+  const top = parseInt(f[1], 16);
+  const base = parseInt(b[1], 16);
+  const t = Math.max(0, Math.min(1, Number(amount) || 0));
+  const channel = (shift) => Math.round(
+    (((top >> shift) & 255) * t) + (((base >> shift) & 255) * (1 - t)),
+  );
+  return `rgb(${channel(16)}, ${channel(8)}, ${channel(0)})`;
+};
+
 // Golden Ratio - 1.618
 const PHI = 1.618;
 
@@ -497,6 +526,20 @@ export const ThemeProvider = ({ children }) => {
       // light backgrounds, where a tint of the same alpha disappears.
       border: withAlpha(accentColor, isDark ? 0.22 : 0.28),
       borderStrong: withAlpha(accentColor, isDark ? 0.4 : 0.45),
+      // The accent as a FILL rather than as a line — a card washed with the
+      // chosen highlight instead of merely outlined in it.
+      //
+      // The alpha is far lower than the two above and that is not timidity: a
+      // card is thousands of times the area of the hairline around it, and
+      // colour read at that size at a line's strength stops being a tint and
+      // becomes the subject of the card, with the writing on it to be read
+      // THROUGH it. This is the amount at which the fill still answers "which
+      // highlight is this pond on" at a glance down the list.
+      //
+      // Dark takes more than light because a saturated hue mixed into near
+      // black barely moves it, while the same mix into warm paper is plainly
+      // visible.
+      surfaceAccent: blend(accentColor, baseTheme.colors.surface, isDark ? 0.16 : 0.1),
     },
   }), [baseTheme, accentColor, isDark]);
 

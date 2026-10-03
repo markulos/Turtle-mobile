@@ -1710,139 +1710,156 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
       onPress={() => onPress(note)}
       onLongPress={() => onLongPress(note)}
       delayLongPress={350}
-      style={styles.row}
+      style={styles.card}
     >
-      {/* Leading icon — checkbox (todo) or note glyph */}
-      {isTodo ? (
-        <TouchableOpacity
-          onPressIn={() => tapHaptic()}
-          onPress={() => onToggleDone(note)}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          style={[styles.checkbox, isDone && styles.checkboxDone]}
-        >
-          {/* A ticked todo stays GREEN — that box is a done state, not a
-              selection, so it keeps its own colour whatever the accent is; the
-              tick is inked against THAT fill. */}
-          {isDone && <Icon name="check" size={14} color={inkOn(theme.colors.accentSuccess)} />}
-        </TouchableOpacity>
-      ) : (
-        <View style={styles.noteIcon}>
-          <Icon name="text" size={14} color={theme.colors.textMuted} />
-        </View>
-      )}
-
-      <View style={styles.body}>
-        {/* Who shared it — automatic avatar + name at the top of the card. */}
-        <Text
-          numberOfLines={2}
-          style={[
-            styles.content,
-            isDone && styles.contentDone,
-          ]}
-        >
-          {note.content}
-        </Text>
-        {note.description ? (
-          <Text numberOfLines={2} style={styles.description}>
-            {note.description}
-          </Text>
-        ) : null}
-        {thumbUri ? (
-          <Image source={{ uri: thumbUri }} style={styles.linkThumb} resizeMode="cover" />
-        ) : null}
-        {Array.isArray(note.tags) && note.tags.length > 0 && (
-          <View style={styles.tagRow}>
-            {note.tags.slice(0, 4).map((t) => (
-              <View key={t} style={styles.tag}>
-                <Text style={styles.tagText} numberOfLines={1}>{t}</Text>
-              </View>
-            ))}
-            {note.tags.length > 4 && (
-              <Text style={styles.moreTags}>+{note.tags.length - 4}</Text>
-            )}
+      {/* The card's top line: the key, the note's words, and whatever trailing
+          furniture this note has earned — a thumbnail, a share key, a Claude
+          key. The footer is NOT in here, and that is the point; see below. */}
+      <View style={styles.main}>
+        {/* Leading icon — checkbox (todo) or note glyph */}
+        {isTodo ? (
+          <TouchableOpacity
+            onPressIn={() => tapHaptic()}
+            onPress={() => onToggleDone(note)}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            style={[styles.checkbox, isDone && styles.checkboxDone]}
+          >
+            {/* A ticked todo stays GREEN — that box is a done state, not a
+                selection, so it keeps its own colour whatever the accent is; the
+                tick is inked against THAT fill. */}
+            {isDone && <Icon name="check" size={14} color={inkOn(theme.colors.accentSuccess)} />}
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.noteIcon}>
+            <Icon name="text" size={14} color={theme.colors.textMuted} />
           </View>
         )}
-        {/* The footer: when it was written on the left, WHO wrote it on the
-            right. The byline sits at the end of the card rather than the top
-            because the note's own words are what you are scanning for — the
-            people are the signature under it, not the headline over it. */}
-        <View style={styles.footer}>
-          <Text style={styles.timestamp}>
-            {formatRelativeTime(note.createdAt)}
+
+        <View style={styles.body}>
+          {/* Who shared it — automatic avatar + name at the top of the card. */}
+          <Text
+            numberOfLines={2}
+            style={[
+              styles.content,
+              isDone && styles.contentDone,
+            ]}
+          >
+            {note.content}
           </Text>
-          <NoteByline note={note} style={styles.footerByline} />
-        </View>
-      </View>
-
-      {/* What this note has attached, at a glance while scrolling past it.
-          A trailing square rather than a full-width strip on purpose: the row
-          heights stay even down the list, so the timeline still reads as a
-          list of notes and not as a gallery. The picture is the note's first
-          IMAGE (see rowThumb) — that's what you recognise it by.
-
-          The frame is drawn from `attachCount` alone, so it is there from the
-          first frame, before any thumbnail has resolved and for a note that
-          carries only documents. The paperclip is what it holds until a
-          picture arrives, and forever if none can. */}
-      {attachCount > 0 && (
-        <View style={styles.attachThumb}>
-          {attachThumb ? (
-            <ExpoImage
-              testID={`note-row-thumb-${note.id}`}
-              source={{ uri: attachThumb }}
-              style={StyleSheet.absoluteFill}
-              contentFit="cover"
-              transition={140}
-              cachePolicy="memory-disk"
-            />
-          ) : (
-            <Icon name="paperclip" size={16} color={theme.colors.textMuted} />
-          )}
-          {/* How many files in all, not how many pictures — "2 more things are
-              in here" is the useful thing, and the note itself lists them. */}
-          {attachCount > 1 && (
-            <View style={styles.attachBadge}>
-              <Text style={styles.attachBadgeText}>{attachCount}</Text>
+          {note.description ? (
+            <Text numberOfLines={2} style={styles.description}>
+              {note.description}
+            </Text>
+          ) : null}
+          {thumbUri ? (
+            <Image source={{ uri: thumbUri }} style={styles.linkThumb} resizeMode="cover" />
+          ) : null}
+          {Array.isArray(note.tags) && note.tags.length > 0 && (
+            <View style={styles.tagRow}>
+              {note.tags.slice(0, 4).map((t) => (
+                <View key={t} style={styles.tag}>
+                  <Text style={styles.tagText} numberOfLines={1}>{t}</Text>
+                </View>
+              ))}
+              {note.tags.length > 4 && (
+                <Text style={styles.moreTags}>+{note.tags.length - 4}</Text>
+              )}
             </View>
           )}
         </View>
-      )}
 
-      {/* Share as text — a key on the row itself, not just in the long-press
-          sheet, and only while a SEARCH is running. Searching is the "find the
-          thing and send it" flow, so that is where a one-tap send earns the
-          width; in an ordinary scroll down the timeline it would be a button on
-          every row that most rows never need. The sheet still has it either way.
+        {/* What this note has attached, at a glance while scrolling past it.
+            A trailing square rather than a full-width strip on purpose: the row
+            heights stay even down the list, so the timeline still reads as a
+            list of notes and not as a gallery. The picture is the note's first
+            IMAGE (see rowThumb) — that's what you recognise it by.
 
-          Sits BEFORE the Claude key so the destructive-free actions read
-          left-to-right in the order you'd reach for them, and so a to-do's two
-          keys don't swap places depending on whether a search is open. */}
-      {showShare && onShareAsText && (
-        <TouchableOpacity
-          onPressIn={() => tapHaptic()}
-          onPress={() => onShareAsText(note)}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          style={styles.shareBtn}
-          accessibilityLabel="Share as text"
-          testID={`note-row-share-${note.id}`}
-        >
-          <Icon name="share-variant" size={17} color={theme.colors.textSecondary} />
-        </TouchableOpacity>
-      )}
+            The frame is drawn from `attachCount` alone, so it is there from the
+            first frame, before any thumbnail has resolved and for a note that
+            carries only documents. The paperclip is what it holds until a
+            picture arrives, and forever if none can. */}
+        {attachCount > 0 && (
+          <View style={styles.attachThumb}>
+            {attachThumb ? (
+              <ExpoImage
+                testID={`note-row-thumb-${note.id}`}
+                source={{ uri: attachThumb }}
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+                transition={140}
+                cachePolicy="memory-disk"
+              />
+            ) : (
+              <Icon name="paperclip" size={16} color={theme.colors.textMuted} />
+            )}
+            {/* How many files in all, not how many pictures — "2 more things are
+                in here" is the useful thing, and the note itself lists them. */}
+            {attachCount > 1 && (
+              <View style={styles.attachBadge}>
+                <Text style={styles.attachBadgeText}>{attachCount}</Text>
+              </View>
+            )}
+          </View>
+        )}
 
-      {/* Send-to-Claude — todos only. Queues this item for the Turtle-tab
-          Claude session to work through. */}
-      {isTodo && onSendToClaude && (
-        <TouchableOpacity
-          onPressIn={() => impactHaptic('medium')}
-          onPress={() => onSendToClaude(note)}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          style={styles.sendBtn}
-          accessibilityLabel="Send to Claude"
-        >
-          <Icon name="robot-outline" size={18} color={theme.colors.accentInfo} />
-        </TouchableOpacity>
-      )}
+        {/* Share as text — a key on the row itself, not just in the long-press
+            sheet, and only while a SEARCH is running. Searching is the "find the
+            thing and send it" flow, so that is where a one-tap send earns the
+            width; in an ordinary scroll down the timeline it would be a button on
+            every row that most rows never need. The sheet still has it either way.
+
+            Sits BEFORE the Claude key so the destructive-free actions read
+            left-to-right in the order you'd reach for them, and so a to-do's two
+            keys don't swap places depending on whether a search is open. */}
+        {showShare && onShareAsText && (
+          <TouchableOpacity
+            onPressIn={() => tapHaptic()}
+            onPress={() => onShareAsText(note)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.shareBtn}
+            accessibilityLabel="Share as text"
+            testID={`note-row-share-${note.id}`}
+          >
+            <Icon name="share-variant" size={17} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+        )}
+
+        {/* Send-to-Claude — todos only. Queues this item for the Turtle-tab
+            Claude session to work through. */}
+        {isTodo && onSendToClaude && (
+          <TouchableOpacity
+            onPressIn={() => impactHaptic('medium')}
+            onPress={() => onSendToClaude(note)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.sendBtn}
+            accessibilityLabel="Send to Claude"
+          >
+            <Icon name="robot-outline" size={18} color={theme.colors.accentInfo} />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* The footer: when it was written on the left, WHO wrote it on the
+          right. The byline sits at the end of the card rather than the top
+          because the note's own words are what you are scanning for — the
+          people are the signature under it, not the headline over it.
+
+          IT IS A SIBLING OF THE TOP LINE, NOT A CHILD OF THE BODY COLUMN, and
+          that is what actually pins the faces. Inside the body, the row's right
+          edge was the body's right edge — which moves inward by a thumbnail
+          here and by a Claude key there, so the one thing you track down a list
+          landed at a different x on almost every card. Out here the right edge
+          is the CARD's, which every card has in the same place.
+
+          The left inset keeps the stamp under the note's first word rather than
+          under the checkbox, which is the only thing the body column was buying
+          this row. */}
+      <View style={styles.footer}>
+        <Text style={styles.timestamp}>
+          {formatRelativeTime(note.createdAt)}
+        </Text>
+        <NoteByline note={note} style={styles.footerByline} />
+      </View>
     </TouchableOpacity>
   );
 }
@@ -1864,14 +1881,29 @@ const NoteRow = React.memo(NoteRowImpl, (prev, next) =>
   && prev.showShare === next.showShare,
 );
 
+/**
+ * The leading key's column — the checkbox on a to-do, the glyph on a note.
+ *
+ * Named because THREE things have to agree on it: both keys, and the footer's
+ * left inset, which exists only to step over this column so the timestamp lands
+ * under the note's first word. A literal in the third place is how that quietly
+ * stops lining up.
+ */
+const ICON_COL = 22;
+
+/** The space between that column and the note's words. */
+const ICON_GAP = 12;
+
 const noteRowStyles = (theme, isDark) => StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
+  card: {
     paddingVertical: 12,
     paddingHorizontal: 14,
-    backgroundColor: theme.colors.surface,
+    // Washed with the chosen highlight rather than left neutral grey: the
+    // accent is the one thing in the app that is the user's own, and a list of
+    // cards is the largest surface it can say so on. The token is mixed opaque
+    // in ThemeContext so the thumbnails and chips ON the card are not tinted a
+    // second time by it.
+    backgroundColor: theme.colors.surfaceAccent,
     borderRadius: 12,
     marginBottom: 8,
     // A defined edge, not a hairline: in a long list the eye is counting where
@@ -1880,9 +1912,16 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     ...cardEdge(theme),
     ...depth(theme, 'card'),
   },
+  // The card's top line. Was the card itself, until the footer moved out of the
+  // body column to put the byline on the card's own right edge.
+  main: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: ICON_GAP,
+  },
   checkbox: {
-    width: 22,
-    height: 22,
+    width: ICON_COL,
+    height: ICON_COL,
     borderRadius: 6,
     borderWidth: 1.5,
     borderColor: theme.colors.borderStrong,
@@ -1895,8 +1934,8 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     borderColor: theme.colors.accentSuccess,
   },
   noteIcon: {
-    width: 22,
-    height: 22,
+    width: ICON_COL,
+    height: ICON_COL,
     borderRadius: 6,
     backgroundColor: theme.colors.surfaceElevated,
     alignItems: 'center',
@@ -2012,11 +2051,17 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
   // marginTop that used to be on the stamp lives here, so the two cannot drift
   // apart. `flex-end` rather than `space-between`: with the byline shrinking,
   // space-between would leave the stamp stranded mid-row on a narrow card.
+  //
+  // The left inset is the leading key's column stepped over by hand. This row
+  // spans the whole card now — that is what puts the faces on the card's right
+  // edge — and without the inset the timestamp would slide left to sit under
+  // the checkbox instead of under the note's first word.
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     marginTop: 6,
+    paddingLeft: ICON_COL + ICON_GAP,
   },
   // Pushed to the right edge, and allowed to narrow — the author's name
   // ellipsizes rather than shoving the stamp off the other end.
@@ -2232,7 +2277,9 @@ const LinkNoteCard = React.memo(LinkNoteCardImpl, (prev, next) =>
 
 const linkCardStyles = (theme, isDark) => StyleSheet.create({
   card: {
-    backgroundColor: theme.colors.surface,
+    // The same accent wash as the plain note row — the two card kinds sit in
+    // one list and a neutral one among tinted ones reads as a different app.
+    backgroundColor: theme.colors.surfaceAccent,
     borderRadius: 12,
     marginBottom: 8,
     overflow: 'hidden',

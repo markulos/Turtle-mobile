@@ -123,9 +123,13 @@ describe('the share key on a search result row', () => {
   });
 
   test('both memo comparators compare showShare, or the key never appears', () => {
-    const noteRowMemo = region('const NoteRow = React.memo', ');\n\nconst noteRowStyles');
+    // Terminated on the style factory's NAME, not on `);\n\nconst …`: the
+    // comparator is what this is about, and keying on the blank line between
+    // the two meant that adding so much as a comment above the styles failed a
+    // test with nothing to say about comments.
+    const noteRowMemo = region('const NoteRow = React.memo', 'const noteRowStyles');
     expect(noteRowMemo).toMatch(/prev\.showShare === next\.showShare/);
-    const linkMemo = region('const LinkNoteCard = React.memo', ');\n\nconst linkCardStyles');
+    const linkMemo = region('const LinkNoteCard = React.memo', 'const linkCardStyles');
     expect(linkMemo).toMatch(/prev\.showShare === next\.showShare/);
   });
 
