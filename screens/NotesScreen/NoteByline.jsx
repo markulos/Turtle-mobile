@@ -5,6 +5,11 @@
  * tucked behind it — the same reading order a task row has, where the first disc
  * answers "whose is this" and the ones behind it answer "who else is on it".
  *
+ * The stack TRAILS the name so it lands on the card's right edge, at the same x
+ * on every row. With it leading, the row ended at the end of the name and the
+ * discs drifted with how long that person's name happened to be — which is no
+ * good for the one thing you scan down a list for.
+ *
  * The server stamps `notes.user_id` at creation and owner-backfills legacy rows,
  * so every note carries an author and this row is never empty for a real note.
  * `involvedUsers` is the shared-with list and arrives as IDS ONLY — resolving it
@@ -33,8 +38,14 @@ import { stackWidth } from '../../utils/faceStack';
 import usePondPeople from '../../utils/usePondPeople';
 import { notePeopleLabel, notePeopleRoster } from '../../utils/notePeople';
 
-/** Face size for the byline — the size the hand-drawn disc here used to be. */
-export const BYLINE_FACE = 18;
+/**
+ * Face size for the byline.
+ *
+ * Larger than the 18pt disc this row started as: at the BOTTOM of a card, beside
+ * a 10pt timestamp, the faces are the only thing in that line you are meant to
+ * read at a glance, and 18 made them read as punctuation.
+ */
+export const BYLINE_FACE = 22;
 
 /** Past four, discs stop reading as faces at all; the rest become a "+n". */
 const BYLINE_MAX_FACES = 4;
@@ -82,6 +93,20 @@ export default function NoteByline({ note, style }) {
       accessible
       accessibilityLabel={notePeopleLabel(roster)}
     >
+      {/* The name comes FIRST so the faces can be LAST, which is what pins them
+          to the right edge of the card.
+          
+          With the stack leading, the row's right edge was the end of the NAME —
+          so the discs landed at a different x on every card, drifting with how
+          long that person's name happened to be. Trailing them anchors the one
+          thing you track down a list. The name ellipsizes into whatever is left. */}
+      <Text
+        numberOfLines={1}
+        testID="note-byline-name"
+        style={[styles.name, { color: theme.colors.textSecondary }]}
+      >
+        {author.name || 'Member'}
+      </Text>
       <FaceStack
         people={roster}
         available={BYLINE_FACE_ROOM}
@@ -90,20 +115,14 @@ export default function NoteByline({ note, style }) {
         theme={theme}
         baseUrl={getBaseUrl()}
       />
-      {/* The AUTHOR's name, still — the byline names whose note it is, and the
-          faces behind the first one are who else is on it. */}
-      <Text
-        numberOfLines={1}
-        testID="note-byline-name"
-        style={[styles.name, { color: theme.colors.textSecondary }]}
-      >
-        {author.name || 'Member'}
-      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  name: { flexShrink: 1, fontSize: 11.5, fontWeight: '600' },
+  // Everything packs to the RIGHT, so the stack's right edge is the card's and
+  // sits at the same x on every row.
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
+  // Narrows before the faces do — a stack cannot shrink, a name can.
+  name: { flexShrink: 1, textAlign: 'right', fontSize: 11.5, fontWeight: '600' },
 });

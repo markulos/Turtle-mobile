@@ -1,5 +1,5 @@
-// The byline on a note card: the author's face first, the people it is shared
-// with overlapping behind, and the author's name beside them.
+// The byline on a note card: the author's name, then their face with everyone
+// the note is shared with overlapping behind it, pinned to the card's right edge.
 //
 // FaceStack is rendered for real rather than mocked — the overlap and the
 // first-on-top z-order ARE the feature here, and a mock would assert that props
@@ -142,4 +142,67 @@ it('still draws the author before the people map has landed', async () => {
   const view = await render(<NoteByline note={note({ involvedUsers: ['u2'] })} />);
   expect(faces(view)).toHaveLength(2);
   expect(view.getByTestId('note-byline-name').props.children).toBe('Mark');
+});
+
+/**
+ * The faces are an ANCHOR, so where they sit is the feature.
+ *
+ * With the stack leading, the row's right edge was the end of the author's NAME,
+ * so the discs landed at a different x on every card and drifted with how long
+ * that name happened to be. Trailing them pins the one thing you track down a
+ * list of cards.
+ */
+describe('the stack is pinned to the right edge', () => {
+  /** The byline's children, in layout order. */
+  const order = (view) => {
+    let row = null;
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (!row && node.props?.testID === 'note-byline') row = node;
+      (node.children || []).forEach(walk);
+    };
+    walk(view.toJSON());
+    return (row?.children || []).map((child) => (
+      typeof child === 'object' && child?.props?.testID === 'note-byline-name' ? 'name' : 'faces'
+    ));
+  };
+
+  it('puts the name FIRST and the faces LAST', async () => {
+    const view = await render(<NoteByline note={note({ involvedUsers: ['u2'] })} />);
+    expect(order(view)[0]).toBe('name');
+    expect(order(view).at(-1)).toBe('faces');
+  });
+
+  it('packs the row to the right, so the edge is the card\'s', async () => {
+    const view = await render(<NoteByline note={note()} />);
+    let row = null;
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (!row && node.props?.testID === 'note-byline') row = node;
+      (node.children || []).forEach(walk);
+    };
+    walk(view.toJSON());
+    expect(flat(row.props.style).justifyContent).toBe('flex-end');
+  });
+
+  it('lets the NAME narrow, never the faces — a stack cannot ellipsize', async () => {
+    const view = await render(<NoteByline note={note()} />);
+    let name = null;
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (!name && node.props?.testID === 'note-byline-name') name = node;
+      (node.children || []).forEach(walk);
+    };
+    walk(view.toJSON());
+    const st = flat(name.props.style);
+    expect(st.flexShrink).toBe(1);
+    expect(st.textAlign).toBe('right');
+    expect(name.props.numberOfLines).toBe(1);
+  });
+
+  it('draws the faces bigger than the 18pt disc this row started as', async () => {
+    expect(BYLINE_FACE).toBeGreaterThan(18);
+    const view = await render(<NoteByline note={note()} />);
+    expect(faces(view)[0].width).toBe(BYLINE_FACE);
+  });
 });
