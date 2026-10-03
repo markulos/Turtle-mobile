@@ -35,6 +35,7 @@ import LinkDesktop from '../TurtleScreen/components/LinkDesktop';
 import PasswordsScreen from '../PasswordsScreen';
 import SettingsScreen from '../SettingsScreen';
 import Turtle3DPanel from './Turtle3DPanel';
+import { subscribeChatIntent, takePendingChat } from '../../services/chatIntent';
 
 /**
  * ProfileScreen — the personal tab.
@@ -84,7 +85,35 @@ export default function ProfileScreen() {
   // not an id: the thread's header wants their name and avatar immediately,
   // and the row that was pressed already holds both.
   const [chatFriend, setChatFriend] = useState(null);
+  // A tapped message notification names the sender by ID and nothing else, so
+  // the thread opens on the id alone and the name and face arrive with
+  // /friends. The thread itself only ever needed the id — everything the header
+  // shows is decoration over a conversation that is already loading.
+  useEffect(() => {
+    const open = (userId) => setChatFriend((current) => (
+      // Already in this conversation: leave the richer object alone rather than
+      // replacing it with a bare id and blanking the header.
+      current && String(current.id) === String(userId) ? current : { id: String(userId) }
+    ));
+    // Cold start: the tap was handled before this screen existed and parked
+    // what it wanted. Taking it clears it, so returning here later does not
+    // reopen the thread.
+    const parked = takePendingChat();
+    if (parked) open(parked);
+    return subscribeChatIntent(open);
+  }, []);
   const [friends, setFriends] = useState([]);
+  // The friend object the thread's header draws, upgraded in place once the
+  // roster lands. Derived rather than written back into state: a fetch landing
+  // must not reopen a thread the user has since closed.
+  //
+  // Declared AFTER `friends` on purpose — a dependency array is evaluated where
+  // it is written, so reading `friends` above its own `useState` is a temporal
+  // dead zone crash on first render, not a stale value.
+  const chatFriendResolved = useMemo(() => {
+    if (!chatFriend || chatFriend.name) return chatFriend;
+    return friends.find((f) => String(f?.id) === String(chatFriend.id)) || chatFriend;
+  }, [chatFriend, friends]);
   // Invites the owner has sent that nobody has signed in against yet. The
   // server only returns these to the owner, so for everyone else it stays [].
   const [pendingFriends, setPendingFriends] = useState([]);
@@ -580,7 +609,7 @@ export default function ProfileScreen() {
       <FriendChatPage
         visible={!!chatFriend}
         onClose={() => setChatFriend(null)}
-        friend={chatFriend}
+        friend={chatFriendResolved}
         theme={theme}
         isDark={isDark}
         serverBase={serverBase}

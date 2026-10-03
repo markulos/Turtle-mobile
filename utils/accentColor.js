@@ -218,3 +218,42 @@ export function legibilityNote(color, background) {
   if (ratio == null || ratio >= LEGIBLE_MIN) return null;
   return 'Faint against this page — links and small labels in it will be hard to read.';
 }
+
+/**
+ * The two ends of a surface FILLED with the accent, lighter end first.
+ *
+ * A flat fill of a saturated colour at card size reads as a printed block; the
+ * same colour with a light end and a deep one reads as a surface with a light
+ * falling on it, which is the difference between a coloured rectangle and a
+ * card. Both ends are the SAME hue — this is a gradient OF the accent, not a
+ * blend into another colour, so whatever highlight is chosen keeps its identity
+ * and nothing drifts toward a second hue at one corner.
+ *
+ * Narrow on purpose (±~15%). Wide enough that the light reads, tight enough
+ * that `inkOn` can pick one ink for the whole card: a gradient the eye reads as
+ * one colour has one contrast answer, and a wider one would want black type at
+ * the top and white at the bottom.
+ */
+export function accentGradient(accent) {
+  const base = normalizeHex(accent);
+  if (!base) return null;
+  return [mixHex(base, INK_LIGHT, 0.16), mixHex(base, '#000000', 0.12)];
+}
+
+/**
+ * Ink, veiled — the same ink `inkOn` chose, at less than full strength.
+ *
+ * Secondary text on a coloured card cannot be the app's grey: grey is a colour,
+ * and on orange it reads as a different ink rather than as the same ink said
+ * more quietly. Dropping the ALPHA keeps the hue relationship exact at every
+ * point of the gradient, which an opaque mix against one sampled point cannot.
+ *
+ * Translucent is right here for the same reason it was wrong for the fill: this
+ * is type over a known surface, not a surface over an unknown one.
+ */
+export function inkAlpha(ink, alpha) {
+  const rgb = hexToRgb(ink);
+  if (!rgb) return ink;
+  const a = Math.max(0, Math.min(1, Number(alpha) || 0));
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${a})`;
+}

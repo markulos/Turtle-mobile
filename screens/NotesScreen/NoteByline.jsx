@@ -70,7 +70,14 @@ const BYLINE_MAX_FACES = 4;
  */
 export const BYLINE_FACE_ROOM = stackWidth(BYLINE_MAX_FACES + 1, BYLINE_FACE);
 
-export default function NoteByline({ note, style }) {
+/**
+ * @param tone  The colour the NAME is written in. A note card is filled with
+ *   the chosen highlight, so the page's `textSecondary` grey on it reads as a
+ *   different ink rather than as a quiet one — the card passes down the ink its
+ *   own fill chose. Optional, because the card is the only caller that has a
+ *   fill of its own; anywhere else the page's grey is still right.
+ */
+export default function NoteByline({ note, style, tone }) {
   const { theme } = useTheme();
   const { getBaseUrl } = useServer();
   const people = usePondPeople();
@@ -103,7 +110,7 @@ export default function NoteByline({ note, style }) {
       <Text
         numberOfLines={1}
         testID="note-byline-name"
-        style={[styles.name, { color: theme.colors.textSecondary }]}
+        style={[styles.name, { color: tone || theme.colors.textSecondary }]}
       >
         {author.name || 'Member'}
       </Text>

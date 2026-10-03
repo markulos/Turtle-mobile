@@ -92,7 +92,7 @@ import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
 import { TAP_ONLY } from '../../utils/pressBehavior';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
-import { inkOn } from '../../utils/accentColor';
+import { accentGradient, inkAlpha, inkOn } from '../../utils/accentColor';
 // Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
 import { fuzzyRank } from '../../utils/trigram';
 import { noteShareText } from '../../utils/noteShareText';
@@ -1693,6 +1693,13 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
   const isTodo = note.type === 'todo';
   const isDone = !!note.done;
   const styles = noteRowStyles(theme, isDark);
+  // The accent's two ends, for the fill behind the card. Memoised on the colour
+  // alone: this is pure arithmetic over one string, and it would otherwise be
+  // redone for every card on every scroll frame.
+  const cardFill = useMemo(() => accentGradient(theme.colors.accent), [theme.colors.accent]);
+  // Black or white, whichever the accent can actually carry. Everything drawn
+  // ON the card takes its colour from this and not from the page.
+  const ink = inkOn(theme.colors.accent);
   const { getBaseUrl } = useServer();
   // A shared-link note has a cached preview thumbnail (relative server path);
   // resolve it to an absolute URI — getBaseUrl() ends in /api, strip that first.
@@ -1712,6 +1719,22 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
       delayLongPress={350}
       style={styles.card}
     >
+      {/* The fill. A LAYER rather than a backgroundColor because a gradient is
+          a view — absolutely filled behind everything else, so nothing about
+          the card's own layout depends on it and a card with no accent to draw
+          simply has one fewer child.
+
+          `pointerEvents none` so it never takes the press off the card. */}
+      {cardFill ? (
+        <LinearGradient
+          colors={cardFill}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
+        />
+      ) : null}
+
       {/* The card's top line: the key, the note's words, and whatever trailing
           furniture this note has earned — a thumbnail, a share key, a Claude
           key. The footer is NOT in here, and that is the point; see below. */}
@@ -1731,7 +1754,7 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
           </TouchableOpacity>
         ) : (
           <View style={styles.noteIcon}>
-            <Icon name="text" size={14} color={theme.colors.textMuted} />
+            <Icon name="text" size={14} color={inkAlpha(ink, 0.7)} />
           </View>
         )}
 
@@ -1790,7 +1813,7 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
                 cachePolicy="memory-disk"
               />
             ) : (
-              <Icon name="paperclip" size={16} color={theme.colors.textMuted} />
+              <Icon name="paperclip" size={16} color={inkAlpha(ink, 0.7)} />
             )}
             {/* How many files in all, not how many pictures — "2 more things are
                 in here" is the useful thing, and the note itself lists them. */}
@@ -1820,7 +1843,7 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
             accessibilityLabel="Share as text"
             testID={`note-row-share-${note.id}`}
           >
-            <Icon name="share-variant" size={17} color={theme.colors.textSecondary} />
+            <Icon name="share-variant" size={17} color={inkAlpha(ink, 0.8)} />
           </TouchableOpacity>
         )}
 
@@ -1834,7 +1857,9 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
             style={styles.sendBtn}
             accessibilityLabel="Send to Claude"
           >
-            <Icon name="robot-outline" size={18} color={theme.colors.accentInfo} />
+            {/* Was accentInfo — which IS the accent, and so invisible on a card
+                made of it. The key is ink now, like everything else here. */}
+            <Icon name="robot-outline" size={18} color={inkAlpha(ink, 0.8)} />
           </TouchableOpacity>
         )}
       </View>
@@ -1858,7 +1883,7 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
         <Text style={styles.timestamp}>
           {formatRelativeTime(note.createdAt)}
         </Text>
-        <NoteByline note={note} style={styles.footerByline} />
+        <NoteByline note={note} style={styles.footerByline} tone={inkAlpha(ink, 0.8)} />
       </View>
     </TouchableOpacity>
   );
@@ -1894,22 +1919,41 @@ const ICON_COL = 22;
 /** The space between that column and the note's words. */
 const ICON_GAP = 12;
 
-const noteRowStyles = (theme, isDark) => StyleSheet.create({
+/**
+ * A note card is FILLED with the chosen highlight, and everything drawn on it
+ * takes its colour from that fill rather than from the page.
+ *
+ * `inkOn` picks black or white by contrast against the accent, so a pale pink
+ * card gets dark type and a deep violet one gets light type without either
+ * being special-cased. Everything quieter than the title is that SAME ink at
+ * less than full strength — never the app's greys, because grey on orange reads
+ * as a second ink rather than as the first one said softly.
+ *
+ * The furniture that used to be a neutral surface (the note glyph's tile, the
+ * attachment square, the tag chips) becomes a veil of ink too: a grey box on a
+ * coloured card looks like a hole punched in it.
+ */
+const noteRowStyles = (theme, isDark) => {
+  const ink = inkOn(theme.colors.accent);
+  return StyleSheet.create({
   card: {
     paddingVertical: 12,
     paddingHorizontal: 14,
-    // Washed with the chosen highlight rather than left neutral grey: the
-    // accent is the one thing in the app that is the user's own, and a list of
-    // cards is the largest surface it can say so on. The token is mixed opaque
-    // in ThemeContext so the thumbnails and chips ON the card are not tinted a
-    // second time by it.
-    backgroundColor: theme.colors.surfaceAccent,
+    // The flat colour UNDER the gradient layer. It is the accent itself, so a
+    // card is already the right colour on the frame before the gradient paints
+    // and never flashes the page's grey while a long list is recycling rows.
+    backgroundColor: theme.colors.accent,
     borderRadius: 12,
     marginBottom: 8,
+    // The gradient is an absolutely-filled child, so the corners have to be
+    // enforced here or it paints square ones over the card's rounded ones.
+    overflow: 'hidden',
     // A defined edge, not a hairline: in a long list the eye is counting where
-    // one card ends and the next begins, and a 10%-black hairline on a
-    // near-white fill is a line the renderer barely commits to.
+    // one card ends and the next begins. Drawn in INK now rather than in the
+    // accent — an accent-tinted edge on an accent fill is invisible, which is
+    // the one thing this edge may not be.
     ...cardEdge(theme),
+    borderColor: inkAlpha(ink, 0.22),
     ...depth(theme, 'card'),
   },
   // The card's top line. Was the card itself, until the footer moved out of the
@@ -1924,11 +1968,15 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     height: ICON_COL,
     borderRadius: 6,
     borderWidth: 1.5,
-    borderColor: theme.colors.borderStrong,
+    // Ink, not borderStrong: that token is a wash of the accent, which on a
+    // card made of the accent is a box you cannot see.
+    borderColor: inkAlpha(ink, 0.5),
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
   },
+  // A ticked to-do keeps GREEN whatever the card is: that box is a done state,
+  // not a highlight, and it is the one thing here allowed to ignore the accent.
   checkboxDone: {
     backgroundColor: theme.colors.accentSuccess,
     borderColor: theme.colors.accentSuccess,
@@ -1937,11 +1985,10 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     width: ICON_COL,
     height: ICON_COL,
     borderRadius: 6,
-    backgroundColor: theme.colors.surfaceElevated,
+    backgroundColor: inkAlpha(ink, 0.12),
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
-    ...depth(theme, 'control'),
   },
   sendBtn: {
     alignSelf: 'flex-start',
@@ -1961,16 +2008,16 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
   content: {
     fontSize: 15,
     fontWeight: '500',
-    color: theme.colors.textPrimary,
+    color: ink,
     lineHeight: 20,
   },
   contentDone: {
-    color: theme.colors.textMuted,
+    color: inkAlpha(ink, 0.55),
     textDecorationLine: 'line-through',
   },
   description: {
     fontSize: 13,
-    color: theme.colors.textSecondary,
+    color: inkAlpha(ink, 0.78),
     marginTop: 4,
     lineHeight: 18,
   },
@@ -1986,10 +2033,9 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.surfaceElevated,
+    backgroundColor: inkAlpha(ink, 0.12),
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-    ...depth(theme, 'control'),
+    borderColor: inkAlpha(ink, 0.22),
   },
   // Sits ON the picture, so it needs its own contrast rather than the theme's
   // — a light scrim would vanish against a bright photo.
@@ -2016,8 +2062,7 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     width: '100%',
     height: 110,
     borderRadius: 8,
-    backgroundColor: theme.colors.surfaceElevated,
-    ...depth(theme, 'control'),
+    backgroundColor: inkAlpha(ink, 0.12),
   },
   tagRow: {
     flexDirection: 'row',
@@ -2025,26 +2070,29 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     gap: 6,
     marginTop: 6,
   },
+  // The chips were BLUE on a neutral card. On a card that now has a colour of
+  // its own that is a second claim in one place, so they are drawn in the
+  // card's own ink and read as part of it under every highlight.
   tag: {
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,
-    backgroundColor: isDark ? 'rgba(96,165,250,0.12)' : 'rgba(59,130,246,0.10)',
+    backgroundColor: inkAlpha(ink, 0.16),
   },
   tagText: {
     fontSize: 10,
     fontWeight: '500',
-    color: isDark ? '#93c5fd' : '#1d4ed8',
+    color: inkAlpha(ink, 0.92),
     letterSpacing: 0.2,
   },
   moreTags: {
     fontSize: 10,
-    color: theme.colors.textMuted,
+    color: inkAlpha(ink, 0.7),
     alignSelf: 'center',
   },
   timestamp: {
     fontSize: 10,
-    color: theme.colors.textMuted,
+    color: inkAlpha(ink, 0.65),
     letterSpacing: 0.2,
   },
   // The stamp and the byline share one baseline at the bottom of the card. The
@@ -2069,7 +2117,8 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
     marginLeft: 'auto',
     flexShrink: 1,
   },
-});
+  });
+};
 
 // ── Link / media card ───────────────────────────────────────
 // The "special card" for a shared-link note: a big thumbnail (with a play
@@ -2097,6 +2146,8 @@ function InlineVideo({ uri, style }) {
 
 function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare = false, theme, isDark }) {
   const styles = linkCardStyles(theme, isDark);
+  const cardFill = useMemo(() => accentGradient(theme.colors.accent), [theme.colors.accent]);
+  const ink = inkOn(theme.colors.accent);
   const { getBaseUrl } = useServer();
   const url = String(note.content || '').trim();
   const media = classifyMedia(url);
@@ -2139,6 +2190,17 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
 
   return (
     <View style={styles.card}>
+      {/* The accent fill, same as the plain note row: a layer rather than a
+          backgroundColor, because a gradient is a view. */}
+      {cardFill ? (
+        <LinearGradient
+          colors={cardFill}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
+        />
+      ) : null}
       {/* Who shared it — automatic avatar + name strip at the top of the card
           (above the media, like a social post header). */}
       {/* Media region — thumbnail, inline player, or a graceful fallback while
@@ -2220,7 +2282,7 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
           <Text style={styles.timestamp}>{formatRelativeTime(note.createdAt)}</Text>
           {/* Who shared it, at the end of the card like the plain note row —
               just inside the action keys, which keep the actual corner. */}
-          <NoteByline note={note} style={styles.footerByline} />
+          <NoteByline note={note} style={styles.footerByline} tone={inkAlpha(ink, 0.8)} />
           <View style={styles.actions}>
             {/* Edit — opens the composer to add to / rewrite the description that
                 was auto-created from the link's metadata. */}
@@ -2231,7 +2293,7 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
               style={styles.actionBtn}
               accessibilityLabel="Edit description"
             >
-              <Icon name="pencil-outline" size={17} color={theme.colors.textSecondary} />
+              <Icon name="pencil-outline" size={17} color={inkAlpha(ink, 0.8)} />
             </TouchableOpacity>
             {/* Share as text — while a search is running, same as NoteRow. A
                 forwarded article is the case this whole feature exists for, so
@@ -2246,7 +2308,7 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
                 accessibilityLabel="Share as text"
                 testID={`link-card-share-${note.id}`}
               >
-                <Icon name="share-variant" size={17} color={theme.colors.textSecondary} />
+                <Icon name="share-variant" size={17} color={inkAlpha(ink, 0.8)} />
               </TouchableOpacity>
             )}
             {/* Open the original link. */}
@@ -2257,7 +2319,7 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
               style={styles.actionBtn}
               accessibilityLabel="Open original"
             >
-              <Icon name="open-in-new" size={17} color={theme.colors.accentInfo} />
+              <Icon name="open-in-new" size={17} color={ink} />
             </TouchableOpacity>
           </View>
         </View>
@@ -2275,23 +2337,30 @@ const LinkNoteCard = React.memo(LinkNoteCardImpl, (prev, next) =>
   && prev.showShare === next.showShare,
 );
 
-const linkCardStyles = (theme, isDark) => StyleSheet.create({
+const linkCardStyles = (theme, isDark) => {
+  const ink = inkOn(theme.colors.accent);
+  return StyleSheet.create({
   card: {
-    // The same accent wash as the plain note row — the two card kinds sit in
-    // one list and a neutral one among tinted ones reads as a different app.
-    backgroundColor: theme.colors.surfaceAccent,
+    // The same accent fill as the plain note row — the two card kinds sit in
+    // one list and a neutral one among coloured ones reads as a different app.
+    backgroundColor: theme.colors.accent,
     borderRadius: 12,
     marginBottom: 8,
     overflow: 'hidden',
     // Same defined edge as the plain note row — the two card kinds sit in one
-    // list and must read as one family.
+    // list and must read as one family. In ink, because an accent-tinted edge
+    // on an accent fill is no edge at all.
     ...cardEdge(theme),
+    borderColor: inkAlpha(ink, 0.22),
     ...depth(theme, 'card'),
   },
+  // What shows while the thumbnail is still loading, and behind one that never
+  // arrives. A veil of the card's own ink rather than the page's grey, which on
+  // a coloured card looks like a hole punched through it.
   mediaWrap: {
     width: '100%',
     aspectRatio: 16 / 9,
-    backgroundColor: theme.colors.surfaceElevated,
+    backgroundColor: inkAlpha(ink, 0.12),
     position: 'relative',
   },
   media: {
@@ -2345,12 +2414,12 @@ const linkCardStyles = (theme, isDark) => StyleSheet.create({
   title: {
     fontSize: 15,
     fontWeight: '600',
-    color: theme.colors.textPrimary,
+    color: ink,
     lineHeight: 20,
   },
   desc: {
     fontSize: 13,
-    color: theme.colors.textSecondary,
+    color: inkAlpha(ink, 0.78),
     marginTop: 4,
     lineHeight: 18,
   },
@@ -2364,17 +2433,17 @@ const linkCardStyles = (theme, isDark) => StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,
-    backgroundColor: isDark ? 'rgba(96,165,250,0.12)' : 'rgba(59,130,246,0.10)',
+    backgroundColor: inkAlpha(ink, 0.16),
   },
   tagText: {
     fontSize: 10,
     fontWeight: '500',
-    color: isDark ? '#93c5fd' : '#1d4ed8',
+    color: inkAlpha(ink, 0.92),
     letterSpacing: 0.2,
   },
   moreTags: {
     fontSize: 10,
-    color: theme.colors.textMuted,
+    color: inkAlpha(ink, 0.7),
     alignSelf: 'center',
   },
   footer: {
@@ -2391,7 +2460,7 @@ const linkCardStyles = (theme, isDark) => StyleSheet.create({
   },
   timestamp: {
     fontSize: 10,
-    color: theme.colors.textMuted,
+    color: inkAlpha(ink, 0.65),
     letterSpacing: 0.2,
   },
   actions: {
@@ -2403,7 +2472,8 @@ const linkCardStyles = (theme, isDark) => StyleSheet.create({
     padding: 6,
     borderRadius: 8,
   },
-});
+  });
+};
 
 // ── Composer modal ──────────────────────────────────────────
 function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic = null, allTags = [], onClose, onSubmit, onPersistMedia, theme, isDark }) {

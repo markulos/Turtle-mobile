@@ -83,14 +83,59 @@ describe('the footer steps over the leading key by measurement, not by eye', () 
 });
 
 describe('a note card is filled with the chosen highlight', () => {
-  test('both card shapes take the accent wash, not the neutral surface', () => {
-    // A neutral card among tinted ones reads as a different app, and these two
-    // shapes sit in one list.
+  const cardBlock = (factory) => {
+    const from = SRC.indexOf(factory);
+    expect(from).toBeGreaterThan(-1);
+    const block = SRC.slice(from, SRC.indexOf('\n};', from));
+    const card = block.slice(block.indexOf('card: {'));
+    return card.slice(0, card.indexOf('\n  },'));
+  };
+
+  test.each(['const noteRowStyles', 'const linkCardStyles'])(
+    '%s fills the card with the accent itself', (factory) => {
+      // A neutral card among coloured ones reads as a different app, and these
+      // two shapes sit in one list.
+      expect(cardBlock(factory)).toMatch(/backgroundColor: theme\.colors\.accent,/);
+    },
+  );
+
+  test.each(['const noteRowStyles', 'const linkCardStyles'])(
+    '%s clips the gradient to its corners', (factory) => {
+      // The gradient is an absolutely-filled CHILD. Without this it paints
+      // square corners over the card's rounded ones.
+      expect(cardBlock(factory)).toMatch(/overflow: 'hidden'/);
+    },
+  );
+
+  test.each(['const noteRowStyles', 'const linkCardStyles'])(
+    '%s draws its edge in ink, not in the accent', (factory) => {
+      // cardEdge() is a wash of the accent. On a card MADE of the accent that
+      // edge is invisible, which is the one thing it may not be — so the colour
+      // is overridden after the spread.
+      const card = cardBlock(factory);
+      expect(card).toMatch(/\.\.\.cardEdge\(theme\),\s*\n\s*borderColor: inkAlpha\(ink, [\d.]+\),/);
+    },
+  );
+
+  test('both shapes paint the gradient, and it never eats the press', () => {
+    expect((SRC.match(/colors=\{cardFill\}/g) || []).length).toBe(2);
+    expect((SRC.match(/accentGradient\(theme\.colors\.accent\)/g) || []).length).toBe(2);
+    // A fill that swallowed the tap would make every card dead.
+    const layers = SRC.split('colors={cardFill}').slice(1);
+    for (const after of layers) {
+      expect(after.slice(0, after.indexOf('/>'))).toMatch(/pointerEvents="none"/);
+    }
+  });
+
+  test('nothing on a filled card is still coloured by the PAGE', () => {
+    // Grey on orange reads as a second ink rather than as the first one said
+    // quietly, and accentInfo IS the accent — invisible on a card made of it.
     for (const factory of ['const noteRowStyles', 'const linkCardStyles']) {
       const from = SRC.indexOf(factory);
-      const block = SRC.slice(from, SRC.indexOf('\n});', from));
-      const card = block.slice(block.indexOf('card: {'));
-      expect(card.slice(0, card.indexOf('},'))).toMatch(/backgroundColor: theme\.colors\.surfaceAccent/);
+      const block = SRC.slice(from, SRC.indexOf('\n};', from));
+      for (const token of ['textPrimary', 'textSecondary', 'textMuted', 'surfaceElevated']) {
+        expect(block).not.toMatch(new RegExp(`theme\\.colors\\.${token}`));
+      }
     }
   });
 });

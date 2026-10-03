@@ -72,6 +72,8 @@ import GestureProbeOverlay from './components/GestureProbeOverlay';
 import gestureProbe from './utils/gestureProbe';
 import DevProfiler from './components/DevProfiler';
 import PomodoroNotifications from './components/PomodoroNotifications';
+import MessageNotifications from './components/MessageNotifications';
+import { navigationRef, flushPendingNavigation } from './services/navigationRef';
 import PomodoroLiveEffects from './components/PomodoroLiveEffects';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
 import ErrorBoundary, { withBoundary } from './components/ErrorBoundary';
@@ -447,10 +449,18 @@ function AppContent() {
     <>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <NavigationContainer
+        // The handle a notification tap steers by — it has no component to
+        // navigate from. See services/navigationRef.
+        ref={navigationRef}
         // Dev probe: tell the probe WHICH screen is focused. Its labels only
         // cover instrumented gestures (all of them in the vault today), so a
         // freeze anywhere else filed as a bare "app" with nothing to go on.
-        onReady={() => gestureProbe.setScope('Tasks')}
+        onReady={() => {
+          gestureProbe.setScope('Tasks');
+          // A tap that launched the app from cold was handled before this
+          // existed, and parked the tab it wanted. This is where it lands.
+          flushPendingNavigation();
+        }}
         onStateChange={(state) => {
           if (!state) return;
           const route = state.routes?.[state.index];
@@ -560,6 +570,12 @@ export default function App() {
                         {/* Interactive pomodoro end notifications (Start break /
                             Start focus buttons). Renders nothing. */}
                         <ErrorBoundary label="pomodoro notifications" fallback={null}><PomodoroNotifications /></ErrorBoundary>
+                        {/* Tapping a message push opens that conversation
+                            instead of dropping you on the last tab you used.
+                            Root-mounted because the tab a thread lives on is
+                            lazy, and a cold start's tap arrives before it.
+                            Renders nothing. */}
+                        <ErrorBoundary label="message notifications" fallback={null}><MessageNotifications /></ErrorBoundary>
                         {/* The iOS Live Activity and the completion confetti,
                             driven from here rather than from inside the lazy
                             Turtle tab — so a focus block started on the desktop
