@@ -252,3 +252,96 @@ describe('DownloadsProvider pomodoro view', () => {
     await waitFor(() => expect(latest).toBeNull());
   });
 });
+
+/**
+ * RECONNECTING IS A CATCH-UP.
+ *
+ * Every sync ping on this socket is fire-and-forget: `message:new`,
+ * `tasks:changed`, `notes:changed`, the media bump. socket.io replays none of
+ * them, and the app deliberately disconnects whenever it backgrounds — so
+ * everything that happened in that window is gone.
+ *
+ * The bug that made this worth pinning: a direct message arrived while the
+ * phone was asleep. The PUSH landed (that goes through APNs, nothing to do
+ * with this socket), the user opened the app with the thread already mounted,
+ * and the thread sat there showing the conversation as it was — because
+ * nothing had told it otherwise. Leaving the chat and coming back re-ran its
+ * mount fetch, which is exactly the "I have to reload it" workaround.
+ */
+function SignalsProbe() {
+  const { messagesVersion, messagesPing, tasksVersion, notesVersion } = useSyncSignals();
+  return (
+    <Text testID="signals">
+      {JSON.stringify({ messagesVersion, messagesPing, tasksVersion, notesVersion })}
+    </Text>
+  );
+}
+
+describe('a reconnect catches up on everything the socket missed', () => {
+  const signals = (view) => JSON.parse(view.getByTestId('signals').props.children);
+
+  const boot = async () => {
+    const socket = makeSocket();
+    mockIo.mockReturnValue(socket);
+    const view = await render(
+      <DownloadsProvider>
+        <SignalsProbe />
+      </DownloadsProvider>
+    );
+    return { socket, view };
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIo.mockReset();
+    mockApiGet.mockResolvedValue({ jobs: [] });
+    mockAuth = {
+      isAuthenticated: true,
+      token: 'token-a',
+      authIdentity: 'sub:account-a',
+      authGeneration: 'generation-a',
+    };
+  });
+
+  test('the FIRST connect bumps nothing — every screen already loads on mount', async () => {
+    const { socket, view } = await boot();
+    await act(async () => { socket.handler('connect')(); });
+    expect(signals(view)).toMatchObject({ messagesVersion: 0, tasksVersion: 0, notesVersion: 0 });
+  });
+
+  test('a RECONNECT bumps the counters, so a mounted screen refetches', async () => {
+    const { socket, view } = await boot();
+    await act(async () => { socket.handler('connect')(); });
+    await act(async () => { socket.handler('connect')(); });
+    const after = signals(view);
+    expect(after.messagesVersion).toBe(1);
+    expect(after.tasksVersion).toBe(1);
+    expect(after.notesVersion).toBe(1);
+  });
+
+  test('it CLEARS the last message ping, or the catch-up skips the open thread', async () => {
+    // The thread only refetches when the ping names the person it is showing.
+    // A stale ping naming somebody else would make a reconnect bump arrive
+    // with the wrong name on it and be filtered straight out — the catch-up
+    // would fire and the one conversation being looked at would not reload.
+    const { socket, view } = await boot();
+    await act(async () => { socket.handler('connect')(); });
+    await act(async () => { socket.handler('message:new')({ withUserId: 'someone-else', at: 5 }); });
+    expect(signals(view).messagesPing).toMatchObject({ withUserId: 'someone-else' });
+
+    await act(async () => { socket.handler('connect')(); });
+    expect(signals(view).messagesPing).toBeNull();
+    expect(signals(view).messagesVersion).toBe(2);
+  });
+
+  test('a live message still names who it is from', async () => {
+    // The catch-up clears the name; an ordinary ping must not, or every
+    // message in the pond would cost every open thread a round trip.
+    const { socket, view } = await boot();
+    await act(async () => { socket.handler('message:new')({ withUserId: 'friend-1', at: 7 }); });
+    expect(signals(view)).toMatchObject({
+      messagesVersion: 1,
+      messagesPing: { withUserId: 'friend-1', at: 7 },
+    });
+  });
+});

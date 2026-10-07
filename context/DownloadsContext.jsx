@@ -164,7 +164,43 @@ export function DownloadsProvider({ children }) {
       randomizationFactor: 0.5,
     });
     socketRef.current = socket;
-    socket.on('connect', () => { if (isCurrent()) refreshRef.current(); });
+
+    /**
+     * EVERY SYNC PING IS LIVE-ONLY. `tasks:changed`, `notes:changed`,
+     * `message:new` and the media ping are fire-and-forget — socket.io does
+     * not replay what was emitted while we were disconnected, so anything that
+     * happened in that window is simply gone.
+     *
+     * We disconnect on purpose whenever the app backgrounds (battery), and the
+     * network drops a websocket on its own often enough besides. So a RECONNECT
+     * has to be treated as "catch up on everything", or a surface that is
+     * already mounted sits there showing what it had before — which is exactly
+     * the "I had to leave the chat and come back" bug: the push arrived (that
+     * goes through APNs, not the socket), but the open thread was never told.
+     *
+     * `messagesPing` is CLEARED rather than left alone. The thread only
+     * refetches when the ping names the person it is showing, so a stale ping
+     * naming somebody else would make this catch-up skip the very conversation
+     * being looked at. A null ping means "something happened, we do not know
+     * with whom", which every listener takes at face value.
+     */
+    const catchUp = () => {
+      setMediaVersion((v) => v + 1);
+      setTasksVersion((v) => v + 1);
+      setNotesVersion((v) => v + 1);
+      setMessagesPing(null);
+      setMessagesVersion((v) => v + 1);
+    };
+
+    // First connect needs no catch-up: every screen loads on mount anyway, and
+    // bumping here would make each one fetch twice on launch.
+    let connectedBefore = false;
+    socket.on('connect', () => {
+      if (!isCurrent()) return;
+      refreshRef.current();
+      if (connectedBefore) catchUp();
+      connectedBefore = true;
+    });
 
     socket.on('download:job', (job) => {
       if (!accepts(job)) return;
@@ -266,31 +302,20 @@ export function DownloadsProvider({ children }) {
   // Battery: drop the socket while backgrounded, reconnect on return (same
   // pattern as the Claude session socket). Only the stable 'background' /
   // 'active' states — 'inactive' (app-switcher peek) is ignored so a quick
-  // peek doesn't churn the connection. On reconnect the 'connect' handler
-  // already re-pulls /downloads; bump mediaVersion too so media added while
-  // backgrounded triggers the gallery's windowed soft reload.
+  // peek doesn't churn the connection.
+  //
+  // The CATCH-UP that follows is not here any more: it hangs off the socket's
+  // own 'connect' event instead. Coming back from the background is only one
+  // of the ways the connection drops — a websocket also dies on a network
+  // blip, a tunnel reconnect, or the pond restarting, and all of those lose
+  // exactly the same pings while the app is wide open in front of you. Doing
+  // it on reconnect covers every one; doing it here covered only this one.
   useEffect(() => {
-    let wasBackgrounded = false;
     const sub = AppState.addEventListener('change', (s) => {
       const sock = socketRef.current;
       if (!sock) return;
-      if (s === 'background') {
-        wasBackgrounded = true;
-        sock.disconnect();
-      } else if (s === 'active' && !sock.connected) {
-        sock.connect();
-        if (wasBackgrounded) {
-          wasBackgrounded = false;
-          setMediaVersion((v) => v + 1);
-          // Same reason, for the sync pings: the socket was DOWN while
-          // backgrounded and there is no replay for tasks:changed /
-          // notes:changed — a change made on the desktop in that window is
-          // simply gone. pomodoro-state IS replayed on connect, so it needs no
-          // nudge. Bumping the counters makes coming back to the app a catch-up.
-          setTasksVersion((v) => v + 1);
-          setNotesVersion((v) => v + 1);
-        }
-      }
+      if (s === 'background') sock.disconnect();
+      else if (s === 'active' && !sock.connected) sock.connect();
     });
     return () => sub?.remove();
   }, []);
