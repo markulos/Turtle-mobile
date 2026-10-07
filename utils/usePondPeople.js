@@ -23,7 +23,14 @@
 import { useEffect, useState } from 'react';
 import { useServer } from '../context/ServerContext';
 
-/** baseUrl → Map(id → { userId, name, avatarUrl }). Resolved answers only. */
+/**
+ * baseUrl → { people: Map(id → { userId, name, avatarUrl }), meId }.
+ *
+ * `meId` rides along because /me is ALREADY fetched here — the map needs my own
+ * name and face in it, since /friends is deliberately everyone-but-me. Which of
+ * those ids is mine was being thrown away, and the alternative for a caller
+ * that needs it is a second request for an answer this module already had.
+ */
 const cache = new Map();
 /** baseUrl → the in-flight promise, so N cards mounting together share one. */
 const inFlight = new Map();
@@ -57,34 +64,55 @@ async function fetchPeople(api) {
   }
   const mine = personOf(me?.user);
   if (mine) map.set(mine.userId, mine);
-  return map;
+  return { people: map, meId: mine ? mine.userId : null };
 }
 
-export default function usePondPeople() {
+/**
+ * The shared resolve, as a hook: whatever is cached now, and a subscription to
+ * the one in-flight fetch. Both public hooks below are a projection of it, so
+ * asking for my id costs nothing on top of asking for the roster.
+ */
+function usePond() {
   const { api, getBaseUrl } = useServer();
   const key = getBaseUrl();
   // Seeded from the cache, so a card mounting after the first one never renders
   // a frame of nameless discs.
-  const [people, setPeople] = useState(() => cache.get(key) || EMPTY);
+  const [entry, setEntry] = useState(() => cache.get(key) || null);
 
   useEffect(() => {
     const have = cache.get(key);
-    if (have) { setPeople(have); return undefined; }
+    if (have) { setEntry(have); return undefined; }
 
     let alive = true;
     let promise = inFlight.get(key);
     if (!promise) {
       promise = fetchPeople(api).then(
-        (map) => { cache.set(key, map); inFlight.delete(key); return map; },
+        (resolved) => { cache.set(key, resolved); inFlight.delete(key); return resolved; },
         (e) => { inFlight.delete(key); throw e; },
       );
       inFlight.set(key, promise);
     }
-    promise.then((map) => { if (alive) setPeople(map); }).catch(() => { /* decoration */ });
+    promise.then((resolved) => { if (alive) setEntry(resolved); }).catch(() => { /* decoration */ });
     return () => { alive = false; };
   }, [api, key]);
 
-  return people;
+  return entry;
+}
+
+export default function usePondPeople() {
+  return usePond()?.people || EMPTY;
+}
+
+/**
+ * My own user id, or null until /me has answered.
+ *
+ * For deciding what a screen may OFFER, never for deciding what is allowed —
+ * the pond is the only thing that settles that. Treat null as "do not know
+ * yet" rather than as "not me": hiding a control its owner needs is worse than
+ * briefly showing one the server would ignore.
+ */
+export function useMyUserId() {
+  return usePond()?.meId || null;
 }
 
 /** Forget what we know — for tests, and for a sign-out that changes who is who. */

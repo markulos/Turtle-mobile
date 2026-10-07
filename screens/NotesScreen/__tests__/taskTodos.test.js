@@ -149,6 +149,49 @@ describe('todoTaskPayload', () => {
     expect(todoTaskPayload({ content: 'x' }).completed).toBeUndefined();
     expect(todoTaskPayload({ content: 'x', done: true }).completed).toBe(true);
   });
+
+  /**
+   * Who is on the task. The server REPLACES the stored list with whatever
+   * arrives, so the difference between "no list" and "an empty list" is the
+   * difference between leaving a shared to-do alone and taking everybody off
+   * it — on an edit that was only ever meant to fix a typo.
+   */
+  describe('involvedUsers', () => {
+    it('is absent when the caller did not pass one', () => {
+      expect(todoTaskPayload({ content: 'x' })).not.toHaveProperty('involvedUsers');
+      expect(todoTaskPayload({ content: 'x', involvedUsers: undefined }))
+        .not.toHaveProperty('involvedUsers');
+      // Not an array is not an instruction either.
+      expect(todoTaskPayload({ content: 'x', involvedUsers: 'u1' }))
+        .not.toHaveProperty('involvedUsers');
+    });
+
+    it('sends an EMPTY list, because taking everyone off is a real edit', () => {
+      expect(todoTaskPayload({ content: 'x', involvedUsers: [] }).involvedUsers).toEqual([]);
+    });
+
+    it('sends the ids it was given', () => {
+      expect(todoTaskPayload({ content: 'x', involvedUsers: ['u1', 'u2'] }).involvedUsers)
+        .toEqual(['u1', 'u2']);
+    });
+
+    it('drops duplicates and anything that is not an id', () => {
+      const out = todoTaskPayload({
+        content: 'x',
+        involvedUsers: ['u1', 'u1', ' u2 ', '', '   ', null, undefined, 7, {}],
+      });
+      expect(out.involvedUsers).toEqual(['u1', 'u2']);
+    });
+
+    it('rides beside attachments rather than inside meta', () => {
+      // Participants are a COLUMN on the task; meta is the JSON blob a
+      // recurring task keeps its ticks in. Folding them together would mean a
+      // people change rewrote that blob.
+      const out = todoTaskPayload({ content: 'x', involvedUsers: ['u1'], mediaIds: ['7'] });
+      expect(out.involvedUsers).toEqual(['u1']);
+      expect(out.meta).toEqual({ mediaIds: ['7'] });
+    });
+  });
 });
 
 describe('inboxCountLabel', () => {

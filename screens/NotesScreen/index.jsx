@@ -112,6 +112,11 @@ import useNoteThumbs from './useNoteThumbs';
 import {
   inboxCountLabel, isInboxTodo, isTaskTodo, mergeNotesAndTasks, orderTodos, todoTaskPayload,
 } from './taskTodos';
+// Who else is on a to-do. The SAME picker the calendar's task form uses — a
+// to-do written here is a task there, so the two must not offer two different
+// ways to put somebody on one.
+import PeoplePicker from '../TasksScreen/components/PeoplePicker';
+import { useMyUserId } from '../../utils/usePondPeople';
 // Adding files from the phone: the two pickers, the vault upload, and the
 // rules about how many a note may carry.
 import {
@@ -489,8 +494,8 @@ export default function NotesScreen() {
    * No due date: capture is the point, and deciding when is a separate act you
    * do on the calendar. That is what puts it in the inbox.
    */
-  const createTodo = async ({ content, description, tags, mediaIds }) => {
-    const payload = todoTaskPayload({ content, description, tags, mediaIds });
+  const createTodo = async ({ content, description, tags, mediaIds, involvedUsers }) => {
+    const payload = todoTaskPayload({ content, description, tags, mediaIds, involvedUsers });
     if (!payload.title) return false;
     // Optimistic: the row exists on screen before the pond answers, keyed by a
     // local id the reconcile below replaces.
@@ -499,6 +504,9 @@ export default function NotesScreen() {
       id: localId, title: payload.title, description: payload.description,
       tags: payload.tags, completed: false, createdAt: Date.now(),
       dueDate: null, itemType: 'task', meta: payload.meta || {}, pending: true,
+      // Carried onto the optimistic row so the byline shows the people it was
+      // just given, instead of blanking until the refresh lands.
+      involvedUsers: payload.involvedUsers || [],
     }, ...cur]);
     try {
       const r = await sendOrQueue(api, {
@@ -557,15 +565,18 @@ export default function NotesScreen() {
   };
 
   /** Edit a to-do — a PATCH on the task it is. */
-  const editTodo = async (id, { content, description, tags, mediaIds }, prevMeta) => {
-    const payload = todoTaskPayload({ content, description, tags, mediaIds }, prevMeta);
+  const editTodo = async (id, { content, description, tags, mediaIds, involvedUsers }, prevMeta) => {
+    const payload = todoTaskPayload({ content, description, tags, mediaIds, involvedUsers }, prevMeta);
     if (!payload.title) return false;
     let before = null;
     setTasks((cur) => cur.map((t) => {
       if (t.id !== id) return t;
       before = t;
       return { ...t, title: payload.title, description: payload.description, tags: payload.tags,
-        meta: payload.meta || t.meta };
+        meta: payload.meta || t.meta,
+        // Only when the composer sent a list. Defaulting to [] here would wipe
+        // the people off a task whenever a participant edited its text.
+        involvedUsers: payload.involvedUsers || t.involvedUsers };
     }));
     try {
       const r = await sendOrQueue(api, {
@@ -2444,6 +2455,10 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
   const [tags, setTags] = useState([]);
   const [tagDraft, setTagDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  // Who else is on this to-do, as pond user ids. Only a TO-DO has them: it is a
+  // task, and participants are a task's idea — a plain note is shared a
+  // different way and does not go near the tasks endpoint.
+  const [involvedUsers, setInvolvedUsers] = useState([]);
   // The note's attachments, as vault media ids. Seeded from the note being
   // edited and appended to as uploads land — the strip below renders whatever
   // is in here, so a picture appears the moment the vault has it.
@@ -2460,6 +2475,22 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
   const tagsRef = useRef(tags);
   tagsRef.current = tags;
   const { api, getBaseUrl } = useServer();
+  const meId = useMyUserId();
+  /**
+   * May this composer offer to change who is on the task?
+   *
+   * WHO IS ON A TASK IS THE OWNER'S TO SET — the pond's tasks route lists
+   * `involvedUsers` among its owner-only keys and silently drops it from a
+   * participant's PATCH, reporting it back as `ignored`. So a participant
+   * editing a to-do shared with them would get a people control that looked
+   * live, accepted a change, saved without error and changed nothing.
+   *
+   * An unresolved `meId` counts as allowed. It resolves from a cache that is
+   * usually already warm, and hiding the control from the owner for a frame is
+   * worse than briefly showing one whose change the pond would have ignored.
+   */
+  const taskOwnerId = isTaskTodo(initialNote) ? (initialNote?.sharedBy?.userId || null) : null;
+  const mayEditPeople = !taskOwnerId || !meId || taskOwnerId === meId;
   const styles = composerStyles(theme, isDark);
   // The page runs edge to edge, so it owns its own status-bar clearance.
   const insets = useSafeAreaInsets();
@@ -2669,6 +2700,10 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
       mediaIdsRef.current = seeded;
       setMediaIds(seeded);
       setUploads([]);
+      // The people already on the task being edited; nobody, for a new one.
+      setInvolvedUsers(Array.isArray(initialNote?.involvedUsers)
+        ? initialNote.involvedUsers.filter((x) => typeof x === 'string' && x)
+        : []);
     }
   }, [visible, initialNote, initialMode, activeTopic]);
 
@@ -2877,7 +2912,17 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
     // them persisted as they landed (see commitMediaIds), so this is a no-op
     // there; a brand-new note has no id to persist against, so the create is
     // the only chance to link what was uploaded while it was being written.
-    await onSubmit({ content, description, type, tags: finalTags, mediaIds: mediaIdsRef.current });
+    await onSubmit({
+      content,
+      description,
+      type,
+      tags: finalTags,
+      mediaIds: mediaIdsRef.current,
+      // Sent only when this composer was actually offering the control. Absent
+      // means "leave the task's people alone" — sending [] from a participant's
+      // edit, or from a plain note, would read as "take everyone off".
+      ...(type === 'todo' && mayEditPeople ? { involvedUsers } : null),
+    });
     setBusy(false);
   };
 
@@ -3185,6 +3230,29 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
             </View>
           )}
 
+          {/* Who else is on it. TO-DOS ONLY: a to-do written here IS a task on
+              the calendar, and participants are a task's idea — reminders go
+              to them, it lands on their list, and the pond notifies whoever is
+              newly added. A plain note has no such row to write to.
+
+              Hidden outright for a participant rather than shown disabled: the
+              pond ignores an involvedUsers change from anyone but the owner, so
+              a live-looking control here would save cleanly and do nothing. */}
+          {mode === 'todo' && mayEditPeople && (
+            <View style={styles.peopleBox}>
+              <Text style={styles.peopleLabel}>People on this to-do</Text>
+              <PeoplePicker
+                selected={involvedUsers}
+                onChange={setInvolvedUsers}
+                // Pond members only. A GUEST is a name and a phone number that
+                // rides in the task's meta and gets its reminder as a text —
+                // real, but it belongs with the reminder settings that make it
+                // mean anything, and those live on the calendar's form.
+                allowGuests={false}
+              />
+            </View>
+          )}
+
           {/* Tags — selected chips + inline new-tag input, then a row of the
               existing tags to tap and add. */}
           <View style={styles.tagBox}>
@@ -3447,6 +3515,26 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
   scrollBody: { paddingBottom: 4 },
   // Tag editor — a bordered box holding the selected-tag chips + the inline
   // new-tag input, with the existing-tag suggestions scrolling underneath.
+  // Same box as the tags below it — two settings of the same rank, so they read
+  // as a pair rather than as one setting and one feature.
+  peopleBox: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 10,
+    ...depth(theme, 'card'),
+  },
+  peopleLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: theme.colors.textTertiary,
+    marginBottom: 6,
+  },
   tagBox: {
     backgroundColor: theme.colors.surface,
     borderRadius: 10,

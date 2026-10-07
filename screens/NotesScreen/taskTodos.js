@@ -124,14 +124,28 @@ export function orderTodos(list) {
  * `mediaIds` is folded into meta rather than sent as a column, and only when
  * there are some — a PATCH that always carried `meta` would clobber the
  * completedDates a recurring task keeps there.
+ *
+ * `involvedUsers` — who else is on the task — is sent ONLY when the caller
+ * passed an array, for the same reason `mediaIds` is: the server REPLACES the
+ * stored list with whatever arrives, so a caller that never tracked
+ * participants would strip them off a shared task on an ordinary text edit.
+ * An EMPTY array is a real instruction ("take everyone off") and is sent; the
+ * absence of one means "leave this alone", and they are not the same thing.
  */
-export function todoTaskPayload({ content, description, tags, mediaIds, done }, prevMeta) {
+export function todoTaskPayload({ content, description, tags, mediaIds, done, involvedUsers }, prevMeta) {
   const payload = {
     title: String(content || '').trim(),
     description: String(description || '').trim(),
     tags: Array.isArray(tags) ? tags : [],
   };
   if (done !== undefined) payload.completed = !!done;
+  if (Array.isArray(involvedUsers)) {
+    // Ids only, de-duplicated: the picker is controlled by id, and the server
+    // drops anything that is not a non-empty string anyway.
+    payload.involvedUsers = [...new Set(
+      involvedUsers.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()),
+    )];
+  }
   if (Array.isArray(mediaIds) && mediaIds.length > 0) {
     payload.meta = { ...(prevMeta && typeof prevMeta === 'object' ? prevMeta : {}), mediaIds };
   }
