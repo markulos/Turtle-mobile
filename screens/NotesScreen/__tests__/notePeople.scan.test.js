@@ -67,9 +67,9 @@ describe('who may change who is on it', () => {
 });
 
 describe('absent is not the same as empty', () => {
-  test('the composer sends the list only when it was offering the control', () => {
+  test('the composer sends them only when it was offering the controls', () => {
     const submit = region('const handleSubmit = async', 'setBusy(false);');
-    expect(submit).toMatch(/\.\.\.\(type === 'todo' && mayEditPeople \? \{ involvedUsers \} : null\)/);
+    expect(submit).toMatch(/\.\.\.\(type === 'todo' && mayEditPeople \? \{ involvedUsers, readOnly \} : null\)/);
     // An unconditional `involvedUsers,` in the payload is the bug: it would
     // send [] for every plain note and every participant edit.
     expect(submit).not.toMatch(/^\s*involvedUsers,\s*$/m);
@@ -95,5 +95,32 @@ describe('absent is not the same as empty', () => {
   test('a new to-do shows its people before the refresh lands', () => {
     const body = region('const createTodo = async', 'try {');
     expect(body).toMatch(/involvedUsers: payload\.involvedUsers \|\| \[\]/);
+  });
+});
+
+/**
+ * The owner's opt-out. The pond's default is collaborative — being put on
+ * something means being able to work on it — so this switch is the exception,
+ * and it has to be possible to express "I did not touch this" distinctly from
+ * "I turned it off".
+ */
+describe('locking a to-do to its owner', () => {
+  test('the lock is offered to the owner, beside the people it governs', () => {
+    expect(SRC).toMatch(/const \[readOnly, setReadOnly\] = useState\(false\);/);
+    // Inside the people box, so it cannot be shown without the list it is
+    // about, and only once somebody is actually on it.
+    expect(SRC).toMatch(/\{involvedUsers\.length > 0 && \(/);
+    expect(SRC).toMatch(/accessibilityRole="switch"/);
+  });
+
+  test('it is seeded from the item, so an edit does not silently unlock it', () => {
+    expect(SRC).toMatch(/setReadOnly\(!!initialNote\?\.readOnly\);/);
+  });
+
+  test('an edit leaves the flag alone when the composer did not send one', () => {
+    // `readOnly: !!payload.readOnly` on the optimistic row would read an
+    // absent field as "unlocked" and flicker a locked to-do open.
+    const body = region('const editTodo = async', 'try {');
+    expect(body).toMatch(/readOnly: payload\.readOnly === undefined \? t\.readOnly : payload\.readOnly/);
   });
 });

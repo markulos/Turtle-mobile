@@ -494,8 +494,8 @@ export default function NotesScreen() {
    * No due date: capture is the point, and deciding when is a separate act you
    * do on the calendar. That is what puts it in the inbox.
    */
-  const createTodo = async ({ content, description, tags, mediaIds, involvedUsers }) => {
-    const payload = todoTaskPayload({ content, description, tags, mediaIds, involvedUsers });
+  const createTodo = async ({ content, description, tags, mediaIds, involvedUsers, readOnly }) => {
+    const payload = todoTaskPayload({ content, description, tags, mediaIds, involvedUsers, readOnly });
     if (!payload.title) return false;
     // Optimistic: the row exists on screen before the pond answers, keyed by a
     // local id the reconcile below replaces.
@@ -507,6 +507,7 @@ export default function NotesScreen() {
       // Carried onto the optimistic row so the byline shows the people it was
       // just given, instead of blanking until the refresh lands.
       involvedUsers: payload.involvedUsers || [],
+      readOnly: !!payload.readOnly,
     }, ...cur]);
     try {
       const r = await sendOrQueue(api, {
@@ -565,8 +566,8 @@ export default function NotesScreen() {
   };
 
   /** Edit a to-do — a PATCH on the task it is. */
-  const editTodo = async (id, { content, description, tags, mediaIds, involvedUsers }, prevMeta) => {
-    const payload = todoTaskPayload({ content, description, tags, mediaIds, involvedUsers }, prevMeta);
+  const editTodo = async (id, { content, description, tags, mediaIds, involvedUsers, readOnly }, prevMeta) => {
+    const payload = todoTaskPayload({ content, description, tags, mediaIds, involvedUsers, readOnly }, prevMeta);
     if (!payload.title) return false;
     let before = null;
     setTasks((cur) => cur.map((t) => {
@@ -576,7 +577,8 @@ export default function NotesScreen() {
         meta: payload.meta || t.meta,
         // Only when the composer sent a list. Defaulting to [] here would wipe
         // the people off a task whenever a participant edited its text.
-        involvedUsers: payload.involvedUsers || t.involvedUsers };
+        involvedUsers: payload.involvedUsers || t.involvedUsers,
+        readOnly: payload.readOnly === undefined ? t.readOnly : payload.readOnly };
     }));
     try {
       const r = await sendOrQueue(api, {
@@ -2459,6 +2461,10 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
   // task, and participants are a task's idea — a plain note is shared a
   // different way and does not go near the tasks endpoint.
   const [involvedUsers, setInvolvedUsers] = useState([]);
+  // Has the owner closed this to-do to the people on it? Default false, which
+  // is also the pond's default — being put on something means being able to
+  // work on it, and this is the exception.
+  const [readOnly, setReadOnly] = useState(false);
   // The note's attachments, as vault media ids. Seeded from the note being
   // edited and appended to as uploads land — the strip below renders whatever
   // is in here, so a picture appears the moment the vault has it.
@@ -2704,6 +2710,7 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
       setInvolvedUsers(Array.isArray(initialNote?.involvedUsers)
         ? initialNote.involvedUsers.filter((x) => typeof x === 'string' && x)
         : []);
+      setReadOnly(!!initialNote?.readOnly);
     }
   }, [visible, initialNote, initialMode, activeTopic]);
 
@@ -2921,7 +2928,7 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
       // Sent only when this composer was actually offering the control. Absent
       // means "leave the task's people alone" — sending [] from a participant's
       // edit, or from a plain note, would read as "take everyone off".
-      ...(type === 'todo' && mayEditPeople ? { involvedUsers } : null),
+      ...(type === 'todo' && mayEditPeople ? { involvedUsers, readOnly } : null),
     });
     setBusy(false);
   };
@@ -3250,6 +3257,34 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
                 // mean anything, and those live on the calendar's form.
                 allowGuests={false}
               />
+              {/* The owner's opt-out, and only worth showing once somebody is
+                  actually on it — a lock on a to-do nobody shares is a control
+                  that cannot do anything.
+
+                  Phrased as what it TAKES AWAY rather than as "read only":
+                  the default is that the people on a to-do work on it, so the
+                  switch is the exception and should read like one. */}
+              {involvedUsers.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => { tapHaptic(); setReadOnly((v) => !v); }}
+                  activeOpacity={0.75}
+                  style={styles.lockRow}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: readOnly }}
+                  accessibilityLabel="Only I can edit this to-do"
+                >
+                  <Icon
+                    name={readOnly ? 'lock-outline' : 'lock-open-variant-outline'}
+                    size={16}
+                    color={readOnly ? theme.colors.accent : theme.colors.textTertiary}
+                  />
+                  <Text style={styles.lockText} numberOfLines={2}>
+                    {readOnly
+                      ? 'Only you can edit this — they can still see and tick it'
+                      : 'They can edit this to-do'}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -3527,6 +3562,16 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     marginBottom: 10,
     ...depth(theme, 'card'),
   },
+  lockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
+  },
+  lockText: { flex: 1, fontSize: 12, color: theme.colors.textSecondary },
   peopleLabel: {
     fontSize: 11,
     fontWeight: '700',

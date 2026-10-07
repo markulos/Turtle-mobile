@@ -72,6 +72,10 @@ export function taskAsTodo(task) {
       ? { userId: task.userId, name: task.ownerName || null, avatarUrl: null }
       : null,
     involvedUsers: Array.isArray(task.involvedUsers) ? task.involvedUsers : [],
+    // Has the owner closed this one to the people on it? Absent means no —
+    // the pond's default is collaborative, so an old row with no flag at all
+    // reads as open, which is what it is.
+    readOnly: !!task.readOnly,
     // A notes-only decoration a task genuinely does not have.
     thumbUrl: null,
     // What makes this a task rather than only a note.
@@ -132,7 +136,7 @@ export function orderTodos(list) {
  * An EMPTY array is a real instruction ("take everyone off") and is sent; the
  * absence of one means "leave this alone", and they are not the same thing.
  */
-export function todoTaskPayload({ content, description, tags, mediaIds, done, involvedUsers }, prevMeta) {
+export function todoTaskPayload({ content, description, tags, mediaIds, done, involvedUsers, readOnly }, prevMeta) {
   const payload = {
     title: String(content || '').trim(),
     description: String(description || '').trim(),
@@ -146,6 +150,10 @@ export function todoTaskPayload({ content, description, tags, mediaIds, done, in
       involvedUsers.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()),
     )];
   }
+  // Owner-only on the pond, and sent only when the caller actually set it —
+  // the same "absent is not a value" rule as involvedUsers. A participant's
+  // edit never carries it, so the pond has nothing to report back as ignored.
+  if (typeof readOnly === 'boolean') payload.readOnly = readOnly;
   if (Array.isArray(mediaIds) && mediaIds.length > 0) {
     payload.meta = { ...(prevMeta && typeof prevMeta === 'object' ? prevMeta : {}), mediaIds };
   }

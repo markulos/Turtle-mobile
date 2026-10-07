@@ -192,6 +192,28 @@ describe('todoTaskPayload', () => {
       expect(out.meta).toEqual({ mediaIds: ['7'] });
     });
   });
+
+  /**
+   * The owner's opt-out. Absent must stay distinguishable from false: the
+   * pond treats a sent `false` as "open this up", and a participant's edit
+   * must not carry either.
+   */
+  describe('readOnly', () => {
+    it('is absent unless the caller set it', () => {
+      expect(todoTaskPayload({ content: 'x' })).not.toHaveProperty('readOnly');
+      expect(todoTaskPayload({ content: 'x', readOnly: undefined })).not.toHaveProperty('readOnly');
+      expect(todoTaskPayload({ content: 'x', readOnly: null })).not.toHaveProperty('readOnly');
+    });
+
+    it('sends both states, because unlocking is an edit too', () => {
+      expect(todoTaskPayload({ content: 'x', readOnly: true }).readOnly).toBe(true);
+      expect(todoTaskPayload({ content: 'x', readOnly: false }).readOnly).toBe(false);
+    });
+
+    it('ignores a truthy non-boolean rather than guessing', () => {
+      expect(todoTaskPayload({ content: 'x', readOnly: 'yes' })).not.toHaveProperty('readOnly');
+    });
+  });
 });
 
 describe('inboxCountLabel', () => {
