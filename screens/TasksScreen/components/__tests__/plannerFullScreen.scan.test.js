@@ -1,29 +1,30 @@
 import fs from 'fs';
 
 /**
- * THE RAISED DAY PLANNER IS THE WHOLE SCREEN — notch and dock respected.
+ * THE RAISED DAY PLANNER COVERS THE SCREEN — by overlaying it, not by
+ * rearranging it.
  *
- * Pulled all the way up, the sheet used to stop about a hundred points short
- * of the top: it lives inside the view pager, and the Planner's own header
- * chrome was in the layout above it. A sheet cannot paint over a header it is
- * nested under, so the header is what moves — it leaves the layout while the
- * planner is raised and the pager grows into the space, carrying the sheet to
- * the top of the screen.
+ * The sheet lives two levels inside the Planner's horizontal view pager, which
+ * clips its children, so it cannot paint over the screen's own header. Two
+ * earlier passes solved that by taking the header OUT OF THE LAYOUT while the
+ * planner was up. Both worked and both cost the same thing: the pager
+ * re-lays-out, the month grid re-scales to its new area, and it all happens
+ * again in reverse on the way down — "the strange offset", then "hiding and
+ * unhiding creates lag".
  *
- * Three things hold this together, in two files, and each one on its own is
- * enough to break it:
+ * So the sheet is PORTALLED into a host over the whole screen
+ * (components/ScreenPortal). What this file pins is that the cure has not
+ * quietly been replaced by the disease again:
  *
- *  1. The header (and its rule, and the filter chips) are gated on the raised
- *     flag, or the sheet has nowhere to grow into.
- *  2. The flag flips at the START of a raise and the END of a dock. Told at
- *     the settle instead, the page would grow under a sheet already parked at
- *     the top and jerk it upward by the header's height in one frame.
- *  3. The top stays under the hood (the root's safe-area padding) and the foot
- *     clears the floating dock (panelBottomInset, never a hand-tuned number —
- *     tabBarLayout.js documents this very sheet getting that wrong once).
+ *  1. The sheet renders through the portal, and the host is the LAST thing in
+ *     the screen's root — paint order is tree order.
+ *  2. NOTHING is hidden or resized for it: no gate on the header chrome, no
+ *     reserve added to the page, no frozen measurement.
+ *  3. Its geometry is the window's — the hood cleared at the top
+ *     (panelTopInset), the floating dock at the foot (panelBottomInset).
  *
- * A source scan because none of it is visible in a render tree: it is layout,
- * and this repo has no device in CI (see noteCardFooter.scan.test.js).
+ * A source scan because all of it is layout, and this repo has no device in CI
+ * (see noteCardFooter.scan.test.js for the same reasoning).
  */
 const read = (p) => fs.readFileSync(p, 'utf8');
 
@@ -35,6 +36,7 @@ const blankComments = (src) => src
 
 const SCREEN = blankComments(read('screens/TasksScreen/index.jsx'));
 const CAL = blankComments(read('screens/TasksScreen/components/CalendarView.jsx'));
+const PORTAL = blankComments(read('components/ScreenPortal.jsx'));
 
 const region = (src, fromNeedle, toNeedle) => {
   const from = src.indexOf(fromNeedle);
@@ -44,99 +46,89 @@ const region = (src, fromNeedle, toNeedle) => {
   return src.slice(from, to);
 };
 
-describe('the header gets out of the way', () => {
-  test('the chrome, its rule and the filter chips are all gated on the raise', () => {
-    // One gate over a MEASURED wrapper that holds the header block and its
-    // groove — the measurement is what the page is handed back (see below).
-    const gate = SCREEN.indexOf('{!dayPlannerOpen && (');
-    expect(gate).toBeGreaterThan(-1);
-    const wrapper = SCREEN.slice(gate, SCREEN.indexOf('{/* Project-picker overlay host', gate));
-    expect(wrapper).toMatch(/setPlannerChromeH/);
-    expect(wrapper).toMatch(/<View style=\{styles\.headerChrome\}>/);
-    expect(wrapper).toMatch(/<View style=\{styles\.headerRule\} \/>/);
-    // Chips too: a band between the notch and a "full screen" sheet is not
-    // full screen.
-    expect(SCREEN).toMatch(/\{!dayPlannerOpen && \(hasActiveFilters \|\| selectedProject !== 'All'\) && \(/);
+describe('the sheet is portalled over the screen', () => {
+  test('the card itself goes through the portal', () => {
+    expect(CAL).toMatch(/<ScreenPortal id="planner-day-sheet">/);
+    // The card, immediately inside it — not some wrapper that stayed behind.
+    expect(CAL).toMatch(/<ScreenPortal id="planner-day-sheet">\s*<Reanimated\.View style=\{\[sheetStyles\.sheet/);
   });
 
-  test('nothing is stranded: the pager is locked while it is up anyway', () => {
+  test('the host is the LAST child of the screen root, inside the provider', () => {
+    const root = region(SCREEN, '<ScreenPortalProvider>', '</ScreenPortalProvider>');
+    const host = root.indexOf('<ScreenPortalHost />');
+    expect(host).toBeGreaterThan(-1);
+    // Nothing of the screen after it: paint order is tree order, and "over
+    // everything" is the entire point.
+    expect(root.slice(host)).toMatch(/^<ScreenPortalHost \/>\s*<\/View>\s*$/);
+  });
+
+  test('a touch that misses the card still reaches the screen', () => {
+    // The host spans everything; without this the calendar behind it would be
+    // dead to the touch.
+    expect(PORTAL).toMatch(/pointerEvents="box-none"/);
+  });
+
+  test('the portal does not re-render the screen to deliver an update', () => {
+    // The whole screen re-rendering per sheet update would be a worse version
+    // of the lag this replaced — only the host subscribes.
+    expect(PORTAL).toMatch(/listeners/);
+    expect(PORTAL).toMatch(/useLayoutEffect/);
+  });
+});
+
+describe('nothing is hidden or resized for it', () => {
+  test('the header chrome, its rule and the chips are NOT gated on the planner', () => {
+    expect(SCREEN).not.toMatch(/\{!dayPlannerOpen && \(\s*<View/);
+    expect(SCREEN).not.toMatch(/\{!dayPlannerOpen && <View style=\{styles\.headerRule\}/);
+    expect(SCREEN).not.toMatch(/\{!dayPlannerOpen && \(hasActiveFilters/);
+  });
+
+  test('the calendar page is an ordinary page', () => {
+    expect(SCREEN).not.toMatch(/plannerReserve/);
+    expect(SCREEN).not.toMatch(/topReserve/);
+    expect(CAL).not.toMatch(/topReserve/);
+  });
+
+  test('the pager measures itself normally again', () => {
+    const onLayout = region(SCREEN, 'const { width, height } = e.nativeEvent.layout;', 'style={styles.viewPager}');
+    expect(onLayout).not.toMatch(/dayPlannerOpen/);
+  });
+
+  test('the flag it reports is only the pager lock now', () => {
+    const uses = SCREEN.split('dayPlannerOpen').length - 1;
+    // The state, the ref-free setter call site, and the pager's scrollEnabled.
+    // Any more than that and something is keying layout off it again.
+    expect(uses).toBeLessThanOrEqual(3);
     expect(SCREEN).toMatch(/scrollEnabled=\{!dayPlannerOpen && !boardsDrilled\}/);
   });
 
-  test('the top of the screen is still under the hood, not through it', () => {
-    // The sheet's "top" is the page's top, which is the root's padding edge.
-    expect(SCREEN).toMatch(/styles\.container, \{ paddingTop: insets\.top \}/);
-  });
-});
-
-describe('when the parent is told', () => {
-  test('a raise is announced BEFORE the spring, a dock at its settle', () => {
+  test('the parent is told at the settle, as it was before all this', () => {
     const snap = region(CAL, 'const snapSheet = useCallback((raise) => {', '}, [sheet, notifyPlanner]);');
-    const early = snap.indexOf('if (raise) notifyPlanner(true);');
-    const spring = snap.indexOf('withSpring');
-    expect(early).toBeGreaterThan(-1);
-    // Order is the whole trick: the page has to grow while the sheet is still
-    // at the bottom, where its position is measured from the page's bottom
-    // edge and therefore does not move.
-    expect(early).toBeLessThan(spring);
-    // And the settle still reports, which is what brings the header back.
     expect(snap).toMatch(/if \(finished\) runOnJS\(notifyPlanner\)\(raise\)/);
-  });
-
-  test('a finger on the handle counts as the start of a raise', () => {
+    // No eager notify: there is no layout to prepare any more.
+    expect(snap).not.toMatch(/if \(raise\) notifyPlanner/);
     const pan = region(CAL, 'const headerPan = useMemo(() => Gesture.Pan()', '.onUpdate(');
-    // Only from docked — a pull DOWN from raised must not announce a raise.
-    expect(pan).toMatch(/if \(sheet\.value <= 0\) runOnJS\(notifyPlanner\)\(true\)/);
+    expect(pan).not.toMatch(/notifyPlanner/);
   });
 });
 
-describe('the foot clears the floating dock', () => {
-  test('from the dock helper, not a hand-tuned number', () => {
+describe('the card reckons with the window, the hood and the dock', () => {
+  test('its top is the hood plus the standard breath', () => {
+    expect(CAL).toMatch(/const sheetTopInset = panelTopInset\(insets\.top\)/);
+    expect(CAL).toMatch(/\{ top: sheetTopInset \}/);
+    // The old constant is gone: it measured from a header the card now covers.
+    expect(CAL).not.toMatch(/const SHEET_RAISED_GAP = /);
+  });
+
+  test('its travel is measured from the WINDOW, not from the page', () => {
+    expect(CAL).toMatch(/const \{ height: windowH \} = useWindowDimensions\(\)/);
+    expect(CAL).toMatch(/containerH\.value = windowH/);
+    // And the same inset comes off the travel, or the docked peek drifts.
+    expect(CAL).toMatch(/containerH\.value - headerH\.value - dockH - sheetTopInsetSV\.value/);
+  });
+
+  test('its foot clears the floating dock, from the helper', () => {
     expect(CAL).toMatch(/const sheetBottomInset = panelBottomInset\(insets\.bottom, tabBarH > 0\)/);
-    expect(CAL).toMatch(/bottomInset=\{sheetBottomInset\}/);
-  });
-
-  test('and that is what the sheet\'s scroller actually pads with', () => {
     expect(CAL).toMatch(/paddingBottom: Math\.max\(bottomInset, keyboardHeight \+ 20\)/);
-    // The number it replaced. 100 points is not where the dock is.
-    expect(CAL).not.toMatch(/Math\.max\(100, keyboardHeight/);
-  });
-});
-
-/**
- * The calendar page behind the glass must not MOVE when the sheet comes up.
- *
- * The first pass let the page measure its new height from the pager, which
- * lands a frame after the render that dropped the chrome: for that frame the
- * page was still docked-height while the calendar inside it had already been
- * pushed down, so the month grid re-scaled (its cells grow to fill whatever
- * area they are given) and then re-scaled back. That is the offset the owner
- * reported, and these three lines are what cancel it.
- */
-describe('nothing behind the sheet moves', () => {
-  test('the page is TOLD its new height, in the same commit as the margin', () => {
-    expect(SCREEN).toMatch(/height: pagerSize\.height \+ plannerReserve/);
-    expect(SCREEN).toMatch(/topReserve=\{plannerReserve\}/);
-  });
-
-  test('the calendar is pushed down by exactly what the page gained', () => {
-    expect(CAL).toMatch(/topReserve > 0 && \{ marginTop: topReserve \}/);
-    // A MARGIN, not padding: the sheet is absolutely positioned and must not
-    // be moved by it.
-    expect(CAL).not.toMatch(/paddingTop: topReserve/);
-  });
-
-  test('the pager stops measuring itself while the planner is up', () => {
-    const onLayout = region(SCREEN, 'const { width, height } = e.nativeEvent.layout;', 'style={styles.viewPager}');
-    // Adopting the taller measurement would add the reserve a second time.
-    expect(onLayout).toMatch(/if \(dayPlannerOpen\) \{/);
-    expect(onLayout).toMatch(/\{ \.\.\.p, width \}/);
-  });
-
-  test('the reserve is measured, never guessed', () => {
-    expect(SCREEN).toMatch(/const plannerReserve = dayPlannerOpen/);
-    expect(SCREEN).toMatch(/setFilterChipsH/);
-    // No hand-tuned header height anywhere in the sum.
-    expect(SCREEN).not.toMatch(/plannerReserve = dayPlannerOpen \? \d/);
   });
 });

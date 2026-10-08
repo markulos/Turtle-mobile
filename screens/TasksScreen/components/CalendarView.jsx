@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback, useContext } from 'react';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { dockOccupied, panelBottomInset } from '../../../components/tabBarLayout';
+import { dockOccupied, panelBottomInset, panelTopInset } from '../../../components/tabBarLayout';
+import { ScreenPortal } from '../../../components/ScreenPortal';
 import {
   View,
   Text,
@@ -10,6 +11,7 @@ import {
   ScrollView,
   FlatList,
   Dimensions,
+  useWindowDimensions,
   LayoutAnimation,
   Platform,
   UIManager,
@@ -154,15 +156,13 @@ const MONTH_HEIGHT = MONTH_CHROME_HEIGHT + 6 * CELL_HEIGHT;
 // reserve is the sheet header's measured height (see `peekReserve`); this is
 // only what's used for the frames before that measurement lands.
 const SHEET_PEEK_RESERVE = 80;
-// The air above the RAISED day-planner card — now a breath under the HOOD
-// rather than under the screen header, which stands down while the planner is
-// up (TasksScreen's dayPlannerOpen says why, including the one time this was
-// tried and undone). The sheet's container is the pager page, whose top is the
-// root's safe-area padding edge, so 12pt here lands the card just below the
-// status bar and the notch in it — comfortably past the app's own PANEL_TOP_GAP
-// of 8. It is subtracted from the sheet's travel as well as added to its `top`
-// — see sheetStyle.
-const SHEET_RAISED_GAP = 12;
+// There was a SHEET_RAISED_GAP here — the air between the screen header and
+// the raised card, from when the card stopped below that header. The card is
+// PORTALLED over the whole screen now (components/ScreenPortal), so the only
+// thing above it is the hood, and what it clears is `panelTopInset(insets.top)`
+// — the status bar plus the app's standard 8pt breath, from the one helper
+// every full-screen panel uses. Per render rather than a constant, because the
+// hood is a property of the phone and not of this file.
 // No reserved strip at the top of the calendar viewport: the up-caret hint
 // floats TRANSPARENTLY over the month title, exactly like the down-caret floats
 // over the next month below. A reserved band read as an opaque header strip and
@@ -2171,19 +2171,6 @@ export const CalendarView = ({
   // "Pending Tasks" line goes there instead of unfolding the backlog under
   // itself; see the strip for why.
   onOpenInbox,
-  /**
-   * Height the PAGE gained when the screen's chrome stood down for the raised
-   * planner — pushed back onto the calendar so the month stays put.
-   *
-   * The sheet needs the page to reach the top of the screen; the calendar
-   * behind it does not want to move at all. Both are true at once because the
-   * page grows by this much and the calendar is pushed down by the same
-   * amount: the month's own area comes out exactly the size it was, so its
-   * cells never re-scale and its scroll offset never has to be re-anchored.
-   * The sheet is absolutely positioned, so a margin on its sibling cannot
-   * touch it.
-   */
-  topReserve = 0,
 }) => {
   const { theme, timeFormat, showCalendarDayTasks, calendarFreeScroll } = useTheme();
   const use24h = timeFormat === '24h';
@@ -2359,6 +2346,18 @@ export const CalendarView = ({
   // also covers the no-dock case (the calendar renders outside a tab
   // navigator too, where the home indicator is still there to clear).
   const sheetBottomInset = panelBottomInset(insets.bottom, tabBarH > 0);
+  // Where the RAISED card's top edge lands. Its host is an absolute fill of
+  // the screen and so covers the status bar; the card clears the hood itself,
+  // with the formula every other full-screen panel in the app uses.
+  const sheetTopInset = panelTopInset(insets.top);
+  // The same number where the gesture worklets can read it (a plain prop is
+  // not available on the UI thread).
+  const sheetTopInsetSV = useSharedValue(sheetTopInset);
+  useEffect(() => { sheetTopInsetSV.value = sheetTopInset; }, [sheetTopInset, sheetTopInsetSV]);
+  // The card's container is that host — the whole WINDOW, not this page.
+  // Reactive, so a rotation recomputes the travel.
+  const { height: windowH } = useWindowDimensions();
+  useEffect(() => { containerH.value = windowH; }, [windowH, containerH]);
 
   const sheetStyle = useAnimatedStyle(() => {
     // Closed, the sheet rests with its header peeking at the bottom — minus the
@@ -2370,17 +2369,17 @@ export const CalendarView = ({
     // its whole header ABOVE the dock; the horizontal list below it is free to
     // tuck under the dock until you pull up.
     //
-    // SHEET_RAISED_GAP comes off the travel because the sheet's own `top` is
+    // The hood inset comes off the travel because the sheet's own `top` is
     // already offset by it: the two have to agree or the docked peek drifts
-    // down by exactly that gap.
-    const travel = Math.max(0, containerH.value - headerH.value - dockH - SHEET_RAISED_GAP);
+    // down by exactly that much. containerH is the WINDOW's height — the
+    // sheet's host covers the screen, not this page.
+    const travel = Math.max(0, containerH.value - headerH.value - dockH - sheetTopInsetSV.value);
     return { transform: [{ translateY: travel * (1 - sheet.value) }] };
   });
-  // The sheet is a CARD at both ends of the travel now — it stops below the
-  // header rather than becoming the page — so the corners stay rounded the
-  // whole way. Only the top hairline goes: raised, the card's top edge sits a
-  // few points under the header's own rule, and two parallel lines that close
-  // to each other read as a mistake. The border goes by COLOUR, not width:
+  // The sheet is a CARD at both ends of the travel — glass over the screen,
+  // not a page — so the corners stay rounded the whole way. Only the top
+  // hairline goes: raised, the card's top edge sits just under the status bar,
+  // and a line drawn there reads as a mistake. The border goes by COLOUR, not width:
   // width is layout, and changing it mid-spring would move the header (and with
   // it headerH, and with it the travel the spring is animating against).
   const sheetBorderOn = theme.mode === 'dark' ? SHEET_BORDER.dark : SHEET_BORDER.light;
@@ -2484,20 +2483,15 @@ export const CalendarView = ({
   // `raise=true` → panel up (docked false); `raise=false` → docked.
   const snapSheet = useCallback((raise) => {
     dockedRef.current = !raise;
-    // Going UP is announced first, coming DOWN at the settle.
+    // Parent notify rides the spring's completion (see notifyPlanner) so the
+    // heavy TasksScreen re-render lands after the settle, not during it — the
+    // local side is a ref, so NOTHING re-renders as the spring starts.
     //
-    // Not symmetry for its own sake. The parent drops its own header while the
-    // planner is up, which is what lets this sheet have the whole screen, and
-    // that changes the page's height: told at the settle, the page would grow
-    // under a sheet already parked at the top and snatch it upward by the
-    // header's height in one frame. Announced first, the page grows while the
-    // sheet is still at the bottom — where its position is measured from the
-    // page's BOTTOM edge (see sheetStyle's travel), so nothing moves — and the
-    // spring then carries it to a top that is already the screen's.
-    //
-    // Coming down keeps the old rule: the header returns once the sheet is
-    // home, so the heavy re-render never lands mid-spring.
-    if (raise) notifyPlanner(true);
+    // It used to have to fire EARLY on the way up, when the parent dropped its
+    // header to make room: the page's height changed, so it had to change
+    // before the sheet arrived at the top. The sheet is portalled now and the
+    // page is untouched, so there is nothing to prepare and the one honest
+    // rule is back.
     sheet.value = withSpring(raise ? 1 : 0, SHEET_SPRING, (finished) => {
       'worklet';
       if (finished) runOnJS(notifyPlanner)(raise);
@@ -2532,28 +2526,18 @@ export const CalendarView = ({
     .activeOffsetY([-8, 8])
     .onStart(() => {
       sheetStart.value = sheet.value;
-      // Grabbing the handle while DOCKED can only mean up, and the parent
-      // needs to know before the sheet moves, not after it lands: it takes
-      // its own header out of the layout while the planner is up, which is
-      // what gives this sheet the whole screen (see claimsFullScreen). Told
-      // at the settle instead, the page would grow under a sheet already
-      // parked at the top and jerk it up by the header's height.
-      //
-      // Safe to be eager: a grab that goes nowhere springs back to docked and
-      // the settle below reports false, so the header comes straight back.
-      if (sheet.value <= 0) runOnJS(notifyPlanner)(true);
     })
     .onUpdate((e) => {
       // The SAME travel sheetStyle uses, dock and raised-gap included. It used
       // to leave both out, so a drag moved the sheet slightly further than the
       // finger and the card crept ahead of your thumb over a long pull.
-      const travel = Math.max(1, containerH.value - headerH.value - dockH - SHEET_RAISED_GAP);
+      const travel = Math.max(1, containerH.value - headerH.value - dockH - sheetTopInsetSV.value);
       // Drag up (negative translationY) raises the sheet toward 1.
       const next = sheetStart.value - e.translationY / travel;
       sheet.value = Math.min(1, Math.max(0, next));
     })
     .onEnd((e) => {
-      const travel = Math.max(1, containerH.value - headerH.value - dockH - SHEET_RAISED_GAP);
+      const travel = Math.max(1, containerH.value - headerH.value - dockH - sheetTopInsetSV.value);
       // Project a little along the fling so a fast flick commits even
       // from past the midpoint.
       const normalizedV = -e.velocityY / travel;
@@ -3524,11 +3508,7 @@ export const CalendarView = ({
           out as the sheet rises to cover it (calendarStyle) so nothing
           shows through the sheet's rounded top corners at full travel. */}
       <Reanimated.View
-        // marginTop, not padding: a margin on this flow child is invisible to
-        // the absolutely-positioned sheet below, and Yoga's padding-vs-absolute
-        // behaviour is the one thing this file already refuses to rely on (see
-        // calendarContent's own note about the caret hints).
-        style={[styles.calendarContent, calendarStyle, topReserve > 0 && { marginTop: topReserve }]}
+        style={[styles.calendarContent, calendarStyle]}
         onLayout={(e) => setCalAreaH(e.nativeEvent.layout.height)}
       >
           {/* Minimal chrome — the whole collapsible top header, the
@@ -3680,7 +3660,20 @@ export const CalendarView = ({
           calendar). The header is wrapped in a Pan GestureDetector so
           it can be dragged up/down by the finger; a plain tap still
           toggles via the TouchableOpacity onPress. */}
-      <Reanimated.View style={[sheetStyles.sheet, sheetStyle, sheetShapeStyle]}>
+      {/* ── Portalled, so it can cover the screen ────────────────────────
+          The card is rendered by a host over the whole screen rather than
+          here, because here is two levels inside a clipping ScrollView and a
+          pull-up that becomes the screen has to paint over the Planner's own
+          header. Nothing about it moves up with it: its state, its gesture and
+          its props stay in this component, and the page behind it is not
+          touched at all — no hiding, no re-layout, which is what the two
+          earlier attempts cost (see components/ScreenPortal.jsx).
+
+          Its geometry is the WINDOW's: `top` is the hood plus a breath
+          (panelTopInset) and the travel is measured from the window's height,
+          so docked it still peeks above the floating dock. */}
+      <ScreenPortal id="planner-day-sheet">
+      <Reanimated.View style={[sheetStyles.sheet, sheetStyle, sheetShapeStyle, { top: sheetTopInset }]}>
         {/* The chat composer's frost, in dark grey: a transparent sheet whose
             surface is a BlurView + a translucent tint (sheetFrost), so the
             calendar behind reads softly through it. Sections inside stay
@@ -3907,6 +3900,7 @@ export const CalendarView = ({
         </ScrollView.Context.Provider>
         </VirtualizedListContextResetter>
       </Reanimated.View>
+      </ScreenPortal>
 
       {/* The finder's own wheel is NOT here — it is handed to the panel and
           mounted inside its Modal (see the `overlays` prop below). Left as a
@@ -4396,13 +4390,11 @@ const createStyles = (theme) => StyleSheet.create({
   // visible at the bottom) and raised. overflow:hidden clips the body to the
   // rounded top corners.
   //
-  // `top` is SHEET_RAISED_GAP, not 0: raised, the card stops that far below the
-  // screen header instead of swallowing it, which is what leaves the view pill
-  // and the Boards key reachable while you plan a day. sheetStyle takes the
-  // same gap off the travel so the docked peek is unmoved.
+  // `top` is set per render, not here: it is the HOOD's height plus a breath
+  // (panelTopInset), which this stylesheet cannot know. sheetStyle takes the
+  // same number off the travel, so the docked peek is unmoved by it.
   sheet: {
     position: 'absolute',
-    top: SHEET_RAISED_GAP,
     left: 0,
     right: 0,
     bottom: 0,
