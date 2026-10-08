@@ -62,6 +62,11 @@ export default function TrackActionsSheet({
   onShare,
   onRename,
   onAddToPlaylist,
+  /** () => void — file this track into the Voice recordings folder, or take it
+   *  back out. `isRecording` says which way it goes. Optional: a surface that
+   *  cannot file (a track someone else shared) simply omits it. */
+  onToggleRecording,
+  isRecording = false,
   onTranscribe,
   onDelete,
   onClose,
@@ -299,6 +304,22 @@ export default function TrackActionsSheet({
                 setPage('playlists');
               }}
             />
+            {/* Voice recordings. A FOLDER, not a playlist, and the label says
+                the consequence rather than the mechanism: what goes in there
+                leaves the music library and stops playing with everything
+                else. Directly under "Add to playlist" because they are the
+                two filing actions, and this is the one that MOVES the track
+                rather than also listing it. */}
+            {onToggleRecording ? (
+              <ActionRow
+                testID="track-toggle-recording"
+                icon={isRecording ? 'music-note' : 'microphone'}
+                label={isRecording ? 'Move back to music' : 'Move to Voice recordings'}
+                color={c.textPrimary}
+                style={rowBorder}
+                onPress={run(onToggleRecording)}
+              />
+            ) : null}
             {/* Transcribe. Above the destructive row and below the filing
                 ones, because it is a thing you DO to a track rather than a
                 thing you do with the library. */}

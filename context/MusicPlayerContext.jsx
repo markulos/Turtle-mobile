@@ -17,6 +17,7 @@ import { useAuth } from './AuthContext';
 import { useMediaVersion } from './DownloadsContext';
 import { useServer } from './ServerContext';
 import { buildMusicQueue } from '../services/musicTrackMapper';
+import { partitionVoiceRecordings } from '../utils/voiceRecordings';
 import { musicPlayerService } from '../services/musicPlayerService';
 
 const MusicPlayerContext = createContext(null);
@@ -25,7 +26,20 @@ export function MusicPlayerProvider({ children }) {
   const { isAuthenticated, authIdentity, authGeneration } = useAuth();
   const { mediaVersion } = useMediaVersion();
   const { api, getBaseUrl, getMediaBaseUrl } = useServer();
+  /**
+   * THE MUSIC LIBRARY — and deliberately not every audio row in the vault.
+   *
+   * Voice recordings are filed out of it (utils/voiceRecordings). This is the
+   * one place that exclusion happens, and it has to be here rather than in the
+   * list: `playMedia` builds the play queue out of THIS array, so a recording
+   * left in it would still be played by press-play-and-walk — invisible in the
+   * list and audible between two songs, which is worse than not filing it.
+   */
   const [tracks, setTracks] = useState([]);
+  /** The recordings themselves, for the section that owns them. They play in a
+   *  queue of their own through `playRows`, the same way a track someone else
+   *  shared does. */
+  const [recordings, setRecordings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
   const [setupError, setSetupError] = useState(null);
@@ -81,7 +95,13 @@ export function MusicPlayerProvider({ children }) {
           '/media/gallery?kind=audio&limit=300&order=desc&sortBy=upload'
         );
         if (!isCurrentRequest()) return;
-        setTracks(Array.isArray(response?.items) ? response.items : []);
+        const rows = Array.isArray(response?.items) ? response.items : [];
+        // One request, two lists: the gallery has no idea about this
+        // distinction and does not need to — a recording is an audio row with
+        // a tag on it.
+        const { music, recordings: filed } = partitionVoiceRecordings(rows);
+        setTracks(music);
+        setRecordings(filed);
         setLibraryError(null);
       } catch (refreshError) {
         if (!isCurrentRequest()) return;
@@ -152,6 +172,7 @@ export function MusicPlayerProvider({ children }) {
 
     if (!isAuthenticated) {
       setTracks([]);
+      setRecordings([]);
       setSetupError(null);
       setLibraryError(null);
       setCommandError(null);
@@ -299,6 +320,7 @@ export function MusicPlayerProvider({ children }) {
   const value = useMemo(
     () => ({
       tracks,
+      recordings,
       loading,
       ready,
       error,
@@ -320,6 +342,7 @@ export function MusicPlayerProvider({ children }) {
     }),
     [
       tracks,
+      recordings,
       loading,
       ready,
       error,

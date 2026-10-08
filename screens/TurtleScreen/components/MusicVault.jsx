@@ -28,6 +28,10 @@ import {
   TRANSCRIBED_PLAYLIST, pendingRowForMedia, transcribedMediaIds, transcriptRowForMedia,
 } from '../../../utils/transcriptionRecordings';
 import { captionAt } from '../../../utils/followAlong';
+import {
+  VOICE_RECORDINGS_LABEL, recordingCountLabel, tagsWithVoiceRecording,
+  tagsWithoutVoiceRecording, isVoiceRecording, audioTags,
+} from '../../../utils/voiceRecordings';
 // The vault's ONE search: the same pill, the same lift, the same result rows
 // the Boards and Files tabs use. Music had no search at all, which meant the
 // only route to a track was to scroll the whole library.
@@ -35,16 +39,12 @@ import { VaultResultRow, VaultSearchDock, useVaultSearch, PICKER_GAP } from './V
 import { rankTracks, trackCountLabel } from './trackSearch';
 
 // Tags double as playlists for audio: the vault already models "a named group of
-// media" as a tag, so a music playlist is just a tag on an audio row. This reads
-// one row's tags out of the JSON column the gallery returns.
-const tagsOf = (row) => {
-  try {
-    const parsed = JSON.parse(row?.tags || '[]');
-    return Array.isArray(parsed) ? parsed.filter((t) => typeof t === 'string') : [];
-  } catch {
-    return [];
-  }
-};
+// media" as a tag, so a music playlist is just a tag on an audio row.
+//
+// The parser itself lives in utils/voiceRecordings, which has to read the same
+// column to answer "is this a recording" — two parsers for one JSON string is
+// how the playlist a track shows and the section it lands in start disagreeing.
+const tagsOf = audioTags;
 
 // The music player's single tint. `accent` is the user's chosen highlight
 // colour, folded into the palette by ThemeContext — so the player follows
@@ -86,6 +86,14 @@ export default function MusicVault({
   const insets = useSafeAreaInsets();
   const {
     tracks,
+    // Audio filed OUT of the library: it is not in `tracks`, so it is not in
+    // the play-all queue either (MusicPlayerContext says why that is the right
+    // place for the rule). Named apart from the transcription `recordings`
+    // state below, which is a list of JOBS and a different thing entirely.
+    // Defaulted: this page is mounted against a mocked provider in tests, and
+    // a consumer that hard-crashes on an older provider shape is a consumer
+    // that cannot be dropped into one.
+    recordings: voiceRecordings = [],
     loading,
     ready,
     error,
@@ -175,8 +183,15 @@ export default function MusicVault({
   const [sheetId, setSheetId] = useState(null);
   const [sheetBusy, setSheetBusy] = useState(false);
   const sheetTrack = useMemo(
-    () => visibleTracks.find((t) => String(t.id) === String(sheetId)) || null,
-    [visibleTracks, sheetId]
+    // The library first, then the recordings: the ⋯ menu is reachable from
+    // inside the Voice recordings folder, and those tracks are deliberately
+    // NOT in the library. Resolving against the library alone is how that menu
+    // silently opens nothing — which would make the folder a one-way trip,
+    // since "Move back to music" lives in it.
+    () => visibleTracks.find((t) => String(t.id) === String(sheetId))
+      || voiceRecordings.find((t) => String(t.id) === String(sheetId))
+      || null,
+    [visibleTracks, voiceRecordings, sheetId]
   );
   const closeSheet = useCallback(() => setSheetId(null), []);
 
@@ -351,6 +366,9 @@ export default function MusicVault({
   }, [api]);
   useEffect(() => { refreshPondTracks(); }, [refreshPondTracks]);
 
+  // The Voice recordings section — a pushed page like Playlists, holding the
+  // audio that is NOT in the library.
+  const [recordingsOpen, setRecordingsOpen] = useState(false);
   const [playlistsOpen, setPlaylistsOpen] = useState(false);
   const [openPlaylist, setOpenPlaylist] = useState(null);
   const closePlaylists = useCallback(() => {
@@ -551,6 +569,43 @@ export default function MusicVault({
     [sheetTrack, api, refreshLibrary, closeSheet]
   );
 
+  /**
+   * ⋯ → Move to / out of Voice recordings.
+   *
+   * The same single write a playlist add is — the tags endpoint REPLACES the
+   * list, so what goes up is the row's own tags with this one added or taken
+   * off. What makes it more than a playlist is where the tag is read: the
+   * library is built without these rows (MusicPlayerContext), so the move
+   * takes the track out of the music list AND out of the play queue in one go.
+   *
+   * The refresh is what moves the row on screen, so there is no optimistic
+   * copy to keep in step here: one list owns the answer.
+   */
+  const sheetToggleRecording = useCallback(() => {
+    const item = sheetTrack;
+    if (!item) return;
+    const filed = isVoiceRecording(item);
+    closeSheet();
+    const next = filed ? tagsWithoutVoiceRecording(item) : tagsWithVoiceRecording(item);
+    sendOrQueue(api, {
+      method: 'put',
+      path: `/media/${item.id}/tags`,
+      body: { tags: next },
+      label: filed ? 'Move back to music' : `Move to ${VOICE_RECORDINGS_LABEL}`,
+    })
+      .then(({ queued }) => { if (!queued) refreshLibrary(); })
+      .catch((e) => {
+        console.warn('[MusicVault] recordings move failed:', e?.message || e);
+        Alert.alert(
+          VOICE_RECORDINGS_LABEL,
+          filed
+            ? `Could not move “${titleOf(item)}” back to your music.`
+            : `Could not move “${titleOf(item)}” to ${VOICE_RECORDINGS_LABEL}.`,
+        );
+        refreshLibrary();
+      });
+  }, [sheetTrack, api, refreshLibrary, closeSheet]);
+
   // ⋯ → Transcribe. Opens the transcription page with this track queued: the
   // options and the job list are the same ones the library's own Transcribe
   // row shows, so there is one place where a transcription is watched no
@@ -710,7 +765,15 @@ export default function MusicVault({
   });
   const { searching, displayQuery, displayItems: displayTracks } = search;
 
-  const renderTrack = useCallback(({ item }) => {
+  /**
+   * One track row, for the library and for every page that lists tracks.
+   *
+   * `queue` is for a list the PLAYER does not own — the voice recordings,
+   * which are deliberately not in its library (see MusicPlayerContext). Left
+   * out, the queue is built from the library exactly as before, so a tap in
+   * the library still walks the library.
+   */
+  const renderTrack = useCallback(({ item, queue, onOptions }) => {
     // Active is decided by the PLAYING id, not by list position, so the same row
     // highlights correctly in the library and inside a playlist.
     const active = String(item.id) === String(activeTrack?.mediaId);
@@ -722,7 +785,7 @@ export default function MusicVault({
         {...TAP_ONLY}
         activeOpacity={0.7}
         disabled={!ready}
-        onPress={() => playTrack(item)}
+        onPress={() => playTrack(item, queue)}
         style={styles.row}
       >
         <View style={[styles.art, trackStyles.artTint]}>
@@ -769,7 +832,12 @@ export default function MusicVault({
           accessibilityRole="button"
           accessibilityLabel={`Options for ${titleOf(item)}`}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
-          onPress={() => setSheetId(String(item.id))}
+          // `onOptions` is for a row on a PUSHED page: the actions sheet is an
+          // in-tree overlay on this screen, and an EdgeSwipePage is a Modal —
+          // so a sheet opened from inside one renders underneath it and looks
+          // like a dead button. The page stands down first instead (the same
+          // move openTranscribe makes, for the same reason).
+          onPress={() => (onOptions ? onOptions(String(item.id)) : setSheetId(String(item.id)))}
           style={styles.moreBtn}
         >
           <Icon name="dots-horizontal" size={22} color={c.textTertiary} />
@@ -829,6 +897,39 @@ export default function MusicVault({
   // list, with a chevron marking each as a push rather than a play.
   const headerRows = useCallback(() => (
     <>
+      {/* ── Voice recordings ───────────────────────────────────────────────
+          A FOLDER, not a playlist: what is in here is not in the library
+          above it and not in the queue press-play builds, which is the whole
+          point — your own voice should not turn up between two songs. The
+          only way to it is this row.
+
+          Always shown, even empty, unlike "Shared with you": this one is a
+          destination you file things INTO, so it has to be visible before it
+          has anything in it, and its subtitle says how to put something
+          there. */}
+      <TouchableOpacity
+        {...TAP_ONLY}
+        testID="music-voice-recordings-row"
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={`${VOICE_RECORDINGS_LABEL}, ${voiceRecordings.length}`}
+        onPress={() => { tapHaptic(); setRecordingsOpen(true); }}
+        style={styles.row}
+      >
+        <View style={[styles.art, trackStyles.artTint]}>
+          <Icon name="microphone" size={22} color={MUSIC_TINT(c)} />
+        </View>
+        <View style={trackStyles.body}>
+          <Text style={trackStyles.titleIdle} numberOfLines={1}>{VOICE_RECORDINGS_LABEL}</Text>
+          <Text style={trackStyles.source} numberOfLines={1}>
+            {voiceRecordings.length === 0
+              ? 'Empty — move one here from its ⋯ menu'
+              : `${recordingCountLabel(voiceRecordings.length)} · kept out of your music`}
+          </Text>
+        </View>
+        <Icon name="chevron-right" size={22} color={c.textTertiary} />
+      </TouchableOpacity>
+
       <TouchableOpacity
         {...TAP_ONLY}
         activeOpacity={0.7}
@@ -909,7 +1010,8 @@ export default function MusicVault({
         <Icon name="chevron-right" size={22} color={c.textTertiary} />
       </TouchableOpacity>
     </>
-  ), [c, trackStyles, playlists.length, openTranscribe, transcribeSubtitle, pondTracks.length]);
+  ), [c, trackStyles, playlists.length, openTranscribe, transcribeSubtitle, pondTracks.length,
+    voiceRecordings.length]);
 
   const renderPlaylistRow = useCallback(({ item }) => {
     // Through the same accessor the page below uses, so a playlist's count and
@@ -1235,6 +1337,59 @@ export default function MusicVault({
         </View>
       </EdgeSwipePage>
 
+      {/* ── Voice recordings, pushed over the library ───────────────────────
+          The folder's own page, and the ONLY way to these tracks: they are not
+          in the library list and not in the queue it plays. A tap here plays
+          them as their own queue (`playRows` via renderTrack's `queue`), so
+          Next walks the recordings and never wanders into the music.
+
+          Each row keeps its ⋯ menu, which is where "Move back to music" is —
+          a folder you cannot take something out of is a trap. */}
+      <EdgeSwipePage visible={recordingsOpen} onClose={() => setRecordingsOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
+          <View style={styles.pageHeader}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Back to all songs"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              onPress={() => { tapHaptic(); setRecordingsOpen(false); }}
+              style={styles.pageBackBtn}
+            >
+              <Icon name="chevron-left" size={28} color={c.textPrimary} />
+            </TouchableOpacity>
+            <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>
+              {VOICE_RECORDINGS_LABEL}
+            </Text>
+          </View>
+          <FlatList
+            testID="voice-recordings-list"
+            data={voiceRecordings}
+            keyExtractor={(t) => String(t.id)}
+            renderItem={({ item }) => renderTrack({
+              item,
+              queue: voiceRecordings,
+              // Standing down to show the menu lands you in the library — which
+              // is where the track itself goes if you pick "Move back to music",
+              // so the two agree.
+              onOptions: (id) => { setRecordingsOpen(false); setSheetId(id); },
+            })}
+            extraData={`${current}:${isPlaying}:${ready}:${voiceRecordings.length}`}
+            contentContainerStyle={{ paddingBottom: (nowBarH || 150) + 16 }}
+            ItemSeparatorComponent={() => <View style={styles.trackSep} />}
+            ListEmptyComponent={(
+              <View style={styles.pageEmpty}>
+                <Icon name="microphone-outline" size={40} color={c.textTertiary} />
+                <Text style={{ color: c.textSecondary, marginTop: 12, textAlign: 'center' }}>
+                  Nothing filed here yet. Open a track's ⋯ menu in your music and
+                  move it to {VOICE_RECORDINGS_LABEL} — it leaves the library and
+                  stops playing with everything else.
+                </Text>
+              </View>
+            )}
+          />
+        </View>
+      </EdgeSwipePage>
+
       {/* Playlists, pushed over the library. Level 1 lists the playlists; level
           2 lists one playlist's tracks. A left-edge swipe backs out — from a
           playlist to the playlist list, and from there to all songs — matching
@@ -1409,6 +1564,8 @@ export default function MusicVault({
         onShare={sheetShare}
         onRename={sheetRename}
         onAddToPlaylist={sheetAddToPlaylist}
+        onToggleRecording={sheetToggleRecording}
+        isRecording={!!sheetTrack && isVoiceRecording(sheetTrack)}
         onTranscribe={sheetTranscribe}
         onDelete={sheetDelete}
         onClose={closeSheet}

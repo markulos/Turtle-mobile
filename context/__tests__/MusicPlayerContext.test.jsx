@@ -67,6 +67,7 @@ function Probe({ visible = true }) {
     <View>
       <Text testID="count">{music.tracks.length}</Text>
       <Text testID="first-track">{music.tracks[0]?.id || ''}</Text>
+      <Text testID="recordings">{music.recordings.map((t) => t.id).join(',')}</Text>
       <Text testID="error">{music.error || ''}</Text>
       <Text testID="setup-error">{music.setupError || ''}</Text>
       <Text testID="library-error">{music.libraryError || ''}</Text>
@@ -74,6 +75,12 @@ function Probe({ visible = true }) {
       <Text testID="ready">{String(music.ready)}</Text>
       <Text testID="position">{music.position}</Text>
       <Button title="play-two" onPress={() => music.playMedia('two')} />
+      <Button title="play-one" onPress={() => music.playMedia('one')} />
+      <Button title="play-memo" onPress={() => music.playMedia('memo')} />
+      <Button
+        title="play-recordings"
+        onPress={() => music.playRows(music.recordings, 'memo')}
+      />
       <Button title="refresh" onPress={() => music.refreshLibrary()} />
       <Button title="toggle" onPress={() => music.togglePlayback()} />
       <Button title="previous" onPress={() => music.previous()} />
@@ -493,5 +500,110 @@ describe('MusicPlayerProvider', () => {
     expect(musicPlayerService.clear.mock.invocationCallOrder[0]).toBeLessThan(
       musicPlayerService.playQueue.mock.invocationCallOrder[0]
     );
+  });
+
+  /**
+   * ── Voice recordings are not in the music library ────────────────────────
+   *
+   * The owner's requirement in one sentence: audio filed as a voice recording
+   * "does not remain within the main music directory (does not play when
+   * playing all) — only accessed within the recordings section".
+   *
+   * The list is the easy half. The half worth a test is the QUEUE: this
+   * context is where it is built, so a recording left in `tracks` would still
+   * be played by press-play-and-walk — invisible in the list and audible
+   * between two songs.
+   */
+  describe('voice recordings', () => {
+    const LIBRARY_WITH_MEMO = {
+      items: [
+        { id: 'one', filename: 'one.mp3', rawUrl: '/media/one.mp3', tags: '["Jazz"]' },
+        { id: 'memo', filename: 'memo.m4a', rawUrl: '/media/memo.m4a', tags: '["Voice recordings"]' },
+        { id: 'two', filename: 'two.mp3', rawUrl: '/media/two.mp3' },
+      ],
+    };
+
+    test('a filed recording leaves the library and lands in its own list', async () => {
+      mockApiGet.mockResolvedValue(LIBRARY_WITH_MEMO);
+      const view = await render(
+        <MusicPlayerProvider>
+          <Probe />
+        </MusicPlayerProvider>
+      );
+      await waitFor(() => expect(view.getByTestId('count').props.children).toBe(2));
+      expect(view.getByTestId('recordings').props.children).toBe('memo');
+      // One request for both lists — the gallery knows nothing about this.
+      expect(mockApiGet).toHaveBeenCalledTimes(1);
+    });
+
+    test('it is NOT in the queue the library plays', async () => {
+      mockApiGet.mockResolvedValue(LIBRARY_WITH_MEMO);
+      const view = await render(
+        <MusicPlayerProvider>
+          <Probe />
+        </MusicPlayerProvider>
+      );
+      await waitFor(() => expect(view.getByTestId('count').props.children).toBe(2));
+
+      await act(async () => { fireEvent.press(view.getByText('play-one')); });
+
+      await waitFor(() => expect(musicPlayerService.playQueue).toHaveBeenCalledTimes(1));
+      const [queue] = musicPlayerService.playQueue.mock.calls[0];
+      // THE assertion: press play on the music and your own voice is not in
+      // what Next will walk to.
+      expect(queue.map((item) => item.mediaId)).toEqual(['one', 'two']);
+    });
+
+    test('asking the library to play one by id does nothing', async () => {
+      mockApiGet.mockResolvedValue(LIBRARY_WITH_MEMO);
+      const view = await render(
+        <MusicPlayerProvider>
+          <Probe />
+        </MusicPlayerProvider>
+      );
+      await waitFor(() => expect(view.getByTestId('count').props.children).toBe(2));
+
+      await act(async () => { fireEvent.press(view.getByText('play-memo')); });
+
+      // Not playable from the library — which is what "only accessed within
+      // the recordings section" means at this layer. The section plays it by
+      // handing over its own rows (below).
+      expect(musicPlayerService.playQueue).not.toHaveBeenCalled();
+    });
+
+    test('the section plays it, in a queue of its own', async () => {
+      mockApiGet.mockResolvedValue(LIBRARY_WITH_MEMO);
+      const view = await render(
+        <MusicPlayerProvider>
+          <Probe />
+        </MusicPlayerProvider>
+      );
+      await waitFor(() => expect(view.getByTestId('count').props.children).toBe(2));
+
+      await act(async () => { fireEvent.press(view.getByText('play-recordings')); });
+
+      await waitFor(() => expect(musicPlayerService.playQueue).toHaveBeenCalledTimes(1));
+      const [queue, startIndex] = musicPlayerService.playQueue.mock.calls[0];
+      expect(queue.map((item) => item.mediaId)).toEqual(['memo']);
+      expect(startIndex).toBe(0);
+    });
+
+    test('signing out empties both lists', async () => {
+      mockApiGet.mockResolvedValue(LIBRARY_WITH_MEMO);
+      const view = await render(
+        <MusicPlayerProvider>
+          <Probe />
+        </MusicPlayerProvider>
+      );
+      await waitFor(() => expect(view.getByTestId('recordings').props.children).toBe('memo'));
+
+      mockAuthenticated = false;
+      await view.rerender(
+        <MusicPlayerProvider>
+          <Probe />
+        </MusicPlayerProvider>
+      );
+      await waitFor(() => expect(view.getByTestId('recordings').props.children).toBe(''));
+    });
   });
 });

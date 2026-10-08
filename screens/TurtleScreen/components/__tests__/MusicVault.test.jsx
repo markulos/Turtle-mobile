@@ -17,6 +17,7 @@ const mockTogglePlayback = jest.fn();
 const mockPrevious = jest.fn();
 const mockNext = jest.fn();
 const mockSeekTo = jest.fn();
+const mockPlayRows = jest.fn();
 const mockRefreshLibrary = jest.fn();
 const mockRetrySetup = jest.fn();
 const mockApi = {
@@ -45,7 +46,13 @@ const mockMusicPlayer = {
   isPlaying: true,
   position: 45,
   duration: 180,
+  // Audio filed OUT of the library (see utils/voiceRecordings): the provider
+  // hands these over separately, and the page is the only way to them.
+  recordings: [
+    { id: 'memo', filename: 'Voice memo.m4a', rawUrl: '/media/memo.m4a', tags: '["Voice recordings"]' },
+  ],
   playMedia: mockPlayMedia,
+  playRows: mockPlayRows,
   togglePlayback: mockTogglePlayback,
   previous: mockPrevious,
   next: mockNext,
@@ -189,6 +196,67 @@ describe('MusicVault', () => {
     await fireEvent.press(view.getByText('Retry player'));
 
     expect(mockRetrySetup).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ── The Voice recordings folder ──────────────────────────────────────────
+   *
+   * What goes in it is not in the library and not in the queue the library
+   * plays (the provider enforces that — see MusicPlayerContext's own tests).
+   * What this page owes is the other half of the promise: a way IN to those
+   * tracks, a way to play them without touching the music, and a way back out
+   * of the folder again.
+   */
+  describe('voice recordings', () => {
+    test('the library offers the folder, with what is in it', async () => {
+      const view = await render(<MusicVault onClose={jest.fn()} />);
+      const row = view.getByTestId('music-voice-recordings-row');
+      expect(row).toBeTruthy();
+      // The row says the consequence, not just the count.
+      expect(view.getByText(/1 recording · kept out of your music/)).toBeTruthy();
+      // And the recording itself is NOT in the library list behind it.
+      expect(view.queryByText('Voice memo')).toBeNull();
+    });
+
+    test('opening it lists the recordings', async () => {
+      const view = await render(<MusicVault onClose={jest.fn()} />);
+      await fireEvent.press(view.getByTestId('music-voice-recordings-row'));
+      expect(view.getByTestId('voice-recordings-list')).toBeTruthy();
+      expect(view.getByText('Voice memo')).toBeTruthy();
+    });
+
+    test('playing one inside the folder uses its OWN queue', async () => {
+      const view = await render(<MusicVault onClose={jest.fn()} />);
+      await fireEvent.press(view.getByTestId('music-voice-recordings-row'));
+      await fireEvent.press(view.getByText('Voice memo'));
+      // playRows, not playMedia: the library's queue does not contain it, and
+      // Next must walk the recordings rather than wander into the music.
+      expect(mockPlayRows).toHaveBeenCalledTimes(1);
+      const [rows, startId] = mockPlayRows.mock.calls[0];
+      expect(rows.map((r) => r.id)).toEqual(['memo']);
+      expect(startId).toBe('memo');
+      expect(mockPlayMedia).not.toHaveBeenCalled();
+    });
+
+    test('a track in the music can be moved into the folder', async () => {
+      const view = await render(<MusicVault onClose={jest.fn()} />);
+      await fireEvent.press(view.getByLabelText('Options for First'));
+      await fireEvent.press(view.getByTestId('track-toggle-recording'));
+      // The same single tag write a playlist add is — the tags endpoint
+      // REPLACES the list, so the row's own tags ride along with it.
+      expect(mockApi.put).toHaveBeenCalledWith('/media/one/tags', {
+        tags: ['Chill', 'Voice recordings'],
+      });
+    });
+
+    test('and a recording can be moved back out of it', async () => {
+      const view = await render(<MusicVault onClose={jest.fn()} />);
+      await fireEvent.press(view.getByTestId('music-voice-recordings-row'));
+      await fireEvent.press(view.getByLabelText('Options for Voice memo'));
+      await fireEvent.press(view.getByTestId('track-toggle-recording'));
+      // Back to the music: the tag comes off and nothing else changes.
+      expect(mockApi.put).toHaveBeenCalledWith('/media/memo/tags', { tags: [] });
+    });
   });
 
   test('opens the per-track options card from the row button', async () => {
