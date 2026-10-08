@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback, useContext } from 'react';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { dockOccupied } from '../../../components/tabBarLayout';
+import { dockOccupied, panelBottomInset } from '../../../components/tabBarLayout';
 import {
   View,
   Text,
@@ -154,13 +154,14 @@ const MONTH_HEIGHT = MONTH_CHROME_HEIGHT + 6 * CELL_HEIGHT;
 // reserve is the sheet header's measured height (see `peekReserve`); this is
 // only what's used for the frames before that measurement lands.
 const SHEET_PEEK_RESERVE = 80;
-// The air between the screen header and the RAISED day-planner card. The sheet
-// used to travel all the way to the top of its container; the header then had
-// to stand down to avoid being covered, which cost you the view pill and the
-// Boards key for as long as you were planning a day. Stopping the card short
-// instead keeps both, and the gap is what tells you this is a card over the
-// page rather than a new screen. It is subtracted from the sheet's travel as
-// well as added to its `top` — see sheetStyle.
+// The air above the RAISED day-planner card — now a breath under the HOOD
+// rather than under the screen header, which stands down while the planner is
+// up (TasksScreen's dayPlannerOpen says why, including the one time this was
+// tried and undone). The sheet's container is the pager page, whose top is the
+// root's safe-area padding edge, so 12pt here lands the card just below the
+// status bar and the notch in it — comfortably past the app's own PANEL_TOP_GAP
+// of 8. It is subtracted from the sheet's travel as well as added to its `top`
+// — see sheetStyle.
 const SHEET_RAISED_GAP = 12;
 // No reserved strip at the top of the calendar viewport: the up-caret hint
 // floats TRANSPARENTLY over the month title, exactly like the down-caret floats
@@ -637,12 +638,12 @@ export const weekSelectInk = (theme) => inkOn(weekSelectBg(theme));
 
 // ── The TO-DO List sheet takes the PAGE's side ──────────────────────────────
 // It used to be its own dark room in both app themes — a white-on-black pane
-// over a white page. That was a defensible call while the pane covered the
-// whole screen and had to be legible over any month colour behind it, but the
-// sheet is a CARD now: it stops below the header (SHEET_RAISED_GAP) with the
-// page visible around it, and a black card on a white page is a hole. So the
-// pane follows the app theme — WHITE on a light theme, the same dark grey as
-// before on a dark one.
+// over a white page. That was a defensible call while the pane was its own
+// screen, but it is a CARD now — glass over the page it belongs to, with the
+// month reading softly through it — and a black card on a white page is a
+// hole. So the pane follows the app theme: WHITE on a light theme, the same
+// dark grey as before on a dark one. (It reaches the top of the screen again
+// at full travel, but as the same card: rounded corners, frost and all.)
 //
 // The surface is still the chat composer's frost: BlurView at composer
 // strength under a translucent tint, so what's behind reads softly through.
@@ -1285,6 +1286,13 @@ const DayPane = React.memo(function DayPane({
   refreshing,
   onRefresh,
   keyboardHeight,
+  // What the sheet's scroller must keep clear at the bottom. The dock FLOATS
+  // over this sheet — it reserves no layout space — and the sheet is full
+  // screen now, so the last card would sit behind the capsule without it.
+  // Computed by the parent from dockOccupied, never hand-tuned (see
+  // components/tabBarLayout, which exists because this very sheet got it
+  // wrong once).
+  bottomInset,
 }) {
   const scrollRef = useRef(null);
   const dayStr = toDateString(date);
@@ -1562,7 +1570,7 @@ const DayPane = React.memo(function DayPane({
       <ScrollView
         ref={scrollRef}
         style={styles.taskList}
-        contentContainerStyle={{ paddingBottom: Math.max(100, keyboardHeight + 20) }}
+        contentContainerStyle={{ paddingBottom: Math.max(bottomInset, keyboardHeight + 20) }}
         // Let taps on the suggestion rows register on the FIRST tap while the
         // keyboard is up (default would just dismiss the keyboard instead).
         keyboardShouldPersistTaps="handled"
@@ -2332,6 +2340,13 @@ export const CalendarView = ({
   // as the floor, for the frames before the header has been measured.
   const peekReserve = Math.max(SHEET_PEEK_RESERVE, sheetHeaderH) + dockH;
 
+  // What the RAISED sheet keeps clear at its foot. The sheet fills the page
+  // and the dock floats over it, so this is the dock's real occupancy plus a
+  // breath — the same helper every other panel in the app ends above, which
+  // also covers the no-dock case (the calendar renders outside a tab
+  // navigator too, where the home indicator is still there to clear).
+  const sheetBottomInset = panelBottomInset(insets.bottom, tabBarH > 0);
+
   const sheetStyle = useAnimatedStyle(() => {
     // Closed, the sheet rests with its header peeking at the bottom — minus the
     // floating tab card's height, or the card would sit ON the peek and make
@@ -2456,9 +2471,20 @@ export const CalendarView = ({
   // `raise=true` → panel up (docked false); `raise=false` → docked.
   const snapSheet = useCallback((raise) => {
     dockedRef.current = !raise;
-    // Parent notify rides the spring's completion (see notifyPlanner) so the
-    // heavy TasksScreen re-render lands after the settle, not during it. The
-    // local side is now a ref, so NOTHING re-renders as the spring starts.
+    // Going UP is announced first, coming DOWN at the settle.
+    //
+    // Not symmetry for its own sake. The parent drops its own header while the
+    // planner is up, which is what lets this sheet have the whole screen, and
+    // that changes the page's height: told at the settle, the page would grow
+    // under a sheet already parked at the top and snatch it upward by the
+    // header's height in one frame. Announced first, the page grows while the
+    // sheet is still at the bottom — where its position is measured from the
+    // page's BOTTOM edge (see sheetStyle's travel), so nothing moves — and the
+    // spring then carries it to a top that is already the screen's.
+    //
+    // Coming down keeps the old rule: the header returns once the sheet is
+    // home, so the heavy re-render never lands mid-spring.
+    if (raise) notifyPlanner(true);
     sheet.value = withSpring(raise ? 1 : 0, SHEET_SPRING, (finished) => {
       'worklet';
       if (finished) runOnJS(notifyPlanner)(raise);
@@ -2493,6 +2519,16 @@ export const CalendarView = ({
     .activeOffsetY([-8, 8])
     .onStart(() => {
       sheetStart.value = sheet.value;
+      // Grabbing the handle while DOCKED can only mean up, and the parent
+      // needs to know before the sheet moves, not after it lands: it takes
+      // its own header out of the layout while the planner is up, which is
+      // what gives this sheet the whole screen (see claimsFullScreen). Told
+      // at the settle instead, the page would grow under a sheet already
+      // parked at the top and jerk it up by the header's height.
+      //
+      // Safe to be eager: a grab that goes nowhere springs back to docked and
+      // the settle below reports false, so the header comes straight back.
+      if (sheet.value <= 0) runOnJS(notifyPlanner)(true);
     })
     .onUpdate((e) => {
       // The SAME travel sheetStyle uses, dock and raised-gap included. It used
@@ -3442,6 +3478,7 @@ export const CalendarView = ({
       refreshing={refreshing}
       onRefresh={onRefresh}
       keyboardHeight={keyboardHeight}
+      bottomInset={sheetBottomInset}
       onStartPomodoro={onStartPomodoro}
       onOpenPomodoro={onOpenPomodoro}
       memberOf={memberOf}

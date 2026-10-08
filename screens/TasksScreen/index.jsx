@@ -693,20 +693,37 @@ export default function TasksScreen() {
   // The boards tree lives on its OWN page (a pageSheet Modal) — opened from
   // the "All Boards" button at the very bottom of the Upcoming agenda.
   const [boardsPageOpen, setBoardsPageOpen] = useState(false);
-  // True while the calendar's day-schedule planner (bottom sheet) is raised.
-  // When open, the calendar⇄list pager is locked so horizontal swipes page
-  // between DAYS inside the planner instead of switching to the list view —
-  // and the header below stands down, so the planner opens ALL THE WAY to the
-  // top of the screen instead of stopping under two rows of keys it can't use
-  // anyway (the pager is locked; the planner has its own + key).
+  /**
+   * True while the calendar's day-schedule planner (bottom sheet) is raised.
+   *
+   * It does two jobs, and the second one is the sheet's whole height:
+   *
+   *  1. The pager is locked, so a horizontal swipe pages between DAYS inside
+   *     the planner instead of switching to another view.
+   *  2. The header chrome stands down. The sheet lives INSIDE the pager, so it
+   *     cannot paint over a header it is nested under — the header leaving the
+   *     layout is what lets the pager grow and the sheet reach the top of the
+   *     screen. The notch is still clear: the root takes `insets.top`.
+   *
+   * ─── This was undone once, on purpose ─────────────────────────────────────
+   * `d6d7aa6` made the planner open to the top and a later pass took it back
+   * out, with a comment that is worth keeping the substance of: the view pill
+   * and the Boards key are how you get OUT of the day you are planning, and
+   * taking them away buys height with navigation.
+   *
+   * Reinstated at the owner's explicit request (2026-10-08: "move all the way
+   * up, so it is seen in fullscreen"), and the objection is answered rather
+   * than ignored: the pager those keys drive is locked while the sheet is up
+   * anyway, the sheet's own header is a pull-down and a tap-to-dock, and the
+   * chrome is back the frame it docks. What is genuinely lost is a one-tap
+   * jump to another view from a RAISED planner — that now costs a dock first.
+   *
+   * The flag flips at the START of a raise and at the END of a dock. Both
+   * halves matter: see snapSheet in CalendarView, where growing the page under
+   * a sheet already parked at the top would snatch it upward by a header's
+   * height in a single frame.
+   */
   const [dayPlannerOpen, setDayPlannerOpen] = useState(false);
-  // The header does NOT stand down when the planner opens — it used to
-  // unmount, then (briefly) fold away on a timing curve, and both were wrong
-  // for the same reason: the view pill and the Boards key are how you get OUT
-  // of the day you are planning, and taking them away to win a header's worth
-  // of height traded navigation for space. `dayPlannerOpen` now does one job,
-  // locking the pager so a horizontal swipe pages between DAYS. The planner
-  // stops below the header instead — see SHEET_RAISED_GAP in CalendarView.
 
   // ── Agenda ⇄ Calendar ⇄ Boards horizontal pager ──────────────────────
   // THREE views side by side in a paging ScrollView, swiped between exactly
@@ -3141,9 +3158,24 @@ export default function TasksScreen() {
           track, no pill, and a hairline at the foot with a breath of room
           above it, so the chrome ends on a line rather than trailing off.
 
-          It stays up through everything, the day planner included: it is the
-          only way between the three views, and the planner is a sheet over the
-          page rather than a replacement for it. */}
+          ── It stands down for the raised day planner ───────────────────────
+          Everywhere else it stays up: it is the way between the four views.
+          But the planner is a PULL-UP that is meant to become the day, and
+          with this chrome in the layout it could only ever reach a hundred
+          points short of the top — the one thing it was asked to stop doing.
+          So while the planner is raised the header leaves the layout and the
+          pager grows into the space, which is what carries the sheet to the
+          top of the screen. The safe area is the root's padding, so "the top"
+          is still under the notch, never through it.
+
+          Nothing is stranded by it: the pager is locked while the planner is
+          up anyway (scrollEnabled below), the sheet's own header is how you
+          put it down, and the chrome comes back the moment it is docked.
+
+          `dayPlannerOpen` flips at the START of a raise and at the END of a
+          dock — see CalendarView's snapSheet for why that asymmetry is the
+          whole trick. */}
+      {!dayPlannerOpen && (
       <View style={styles.headerChrome}>
         <View style={styles.headerTitleRow}>
           {/* THE TITLE IS THE BOARD PICKER. The scope it names is the one thing
@@ -3276,7 +3308,10 @@ export default function TasksScreen() {
           })}
         </ScrollView>
       </View>
-      <View style={styles.headerRule} />
+      )}
+      {/* The groove goes with the chrome it belongs to — a rule under nothing
+          is a line across the top of the planner. */}
+      {!dayPlannerOpen && <View style={styles.headerRule} />}
 
       {/* Project-picker overlay host. The picker (rendered at the bottom of
           this host) is an absolute overlay pinned just below the header.
@@ -3292,8 +3327,14 @@ export default function TasksScreen() {
       {/* Active Filters. The BOARD scope rides here too now: the header key
           that used to state it is gone, and a silently-filtered agenda with
           nothing on screen saying so is the one thing that change must not
-          cost. Tapping the chip clears the scope, the way the others do. */}
-      {(hasActiveFilters || selectedProject !== 'All') && (
+          cost. Tapping the chip clears the scope, the way the others do.
+
+          Hidden under the raised planner, with the header above it: it would
+          otherwise be a band of chips between the notch and a sheet that is
+          supposed to be the whole screen. The sheet is not silently narrowed
+          by what it hides — the day it shows is filtered by the same scope,
+          and the chips are back the moment the sheet is docked. */}
+      {!dayPlannerOpen && (hasActiveFilters || selectedProject !== 'All') && (
         <View style={styles.activeFiltersBar}>
           <Animated.ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {selectedProject !== 'All' && (
