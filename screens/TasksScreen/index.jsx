@@ -3934,6 +3934,11 @@ export default function TasksScreen() {
           onOpenPomodoro={openPomodoro}
           onTaskPress={openDetail}
           onTaskLongPress={openEditForm}
+          // The day sheet's "Pending Tasks" line leaves for the Inbox page
+          // rather than unfolding the backlog inside the sheet. 'boards' is
+          // that page's internal name — see utils/viewPages, where the label
+          // "Inbox" and the mode string are deliberately different things.
+          onOpenInbox={() => goToView('boards')}
           onInspectTask={(task, dateStr) => setInspector({ id: task.id, date: dateStr || null })}
           onToggleComplete={handleToggleComplete}
           onStartPomodoro={startPomodoroFor}

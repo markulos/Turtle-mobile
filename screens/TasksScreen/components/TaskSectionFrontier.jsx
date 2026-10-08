@@ -3,12 +3,11 @@ import { InteractionManager, StyleSheet, Text, TouchableOpacity, View } from 're
 import { TaskCardSkeletonCluster } from './TaskCardSkeleton';
 
 export const DAY_SECTION_BATCH = 20;
-// How many cards a LAZY section paints on its very first frame. A section that
-// mounts on a tap (the Pending strip's expand) is only as fast as its first
-// render, and these cards are not cheap — so open with a screenful and let the
-// rest stream in. Sized to overfill a phone viewport so the growth is never
-// visible as a gap.
-export const DAY_SECTION_FIRST_PAINT = 6;
+// There was a DAY_SECTION_FIRST_PAINT here — the small first batch the day
+// sheet's Pending list opened with. That list is gone (the Pending line is a
+// door to the Inbox now, which is what it cost on a real backlog), and with it
+// the only caller, so the constant went too. `initialBatch` below still takes
+// any number a future lazy section wants.
 
 export function TaskSectionFrontier({
   items,

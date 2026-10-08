@@ -62,7 +62,7 @@ import { needsCreateRow } from '../utils/taskSearch';
 import TaskFinderOverlay from './TaskFinderOverlay';
 // (HatchBackdrop's import went with the task-card hatch. The month grid's
 // today marker uses the local DiagonalHatch below, not this component.)
-import { TaskSectionFrontier, DAY_SECTION_FIRST_PAINT } from './TaskSectionFrontier';
+import { TaskSectionFrontier } from './TaskSectionFrontier';
 import { WheelTimePicker } from './WheelTimePicker';
 import { tapHaptic } from '../../../utils/haptics';
 import { useTapOnly } from '../../../utils/pressBehavior';
@@ -1228,8 +1228,9 @@ const DayPane = React.memo(function DayPane({
   boardColor,
   nowMinutes,
   pendingTasks,
-  untimedCollapsed,
-  onToggleUntimedCollapsed,
+  // () => void — the Pending Tasks line's destination. It used to unfold the
+  // backlog inside this sheet; now it hands over to the Inbox page.
+  onOpenInbox,
   scheduleCollapsed,
   onToggleScheduleCollapsed,
   onTaskPress,
@@ -1749,81 +1750,37 @@ const DayPane = React.memo(function DayPane({
 
         {/* Pending / All-Day strip — shown BELOW the day's schedule so the timed
             plan reads first and the backlog sits underneath it. */}
+        {/* ── The backlog is a DOOR, not a drawer ───────────────────────────
+            This line used to unfold the whole pending list underneath itself:
+            every overdue and undated task in the library, as full ScheduleCards
+            with avatars, focus state and a schedule key each, mounted inside a
+            sheet that is already carrying a 24-hour grid. On a phone with a
+            real backlog that one tap was the slowest thing in the app, and it
+            dropped the sheet's own scrolling with it.
+
+            So it hands over to the INBOX instead, where the backlog is the
+            whole page and has room to be one. The count stays — it is the
+            reason you would go — and the chevron now points the way out
+            rather than down. */}
         {stripTasks.length > 0 && (
           <View style={styles.untimedSection}>
-            {/* marginBottom matches the scheduled/To-Do header→first-card gap now
-                that Pending renders as the same large cards. */}
             <TouchableOpacity
               style={[styles.untimedHeader, { marginBottom: 10 }]}
-              onPress={onToggleUntimedCollapsed}
+              onPress={() => { tapHaptic(); onOpenInbox?.(); }}
+              disabled={!onOpenInbox}
               activeOpacity={0.7}
               accessibilityRole="button"
-              accessibilityLabel={`Pending tasks, ${stripTasks.length}, ${untimedCollapsed ? 'collapsed' : 'expanded'}`}
+              accessibilityLabel={`Pending tasks, ${stripTasks.length}. Opens the inbox.`}
+              testID="day-pending-open-inbox"
             >
               <Text style={styles.untimedLabel}>Pending Tasks</Text>
               <Text style={styles.untimedCount}>{stripTasks.length}</Text>
               <Icon
-                name={untimedCollapsed ? 'chevron-down' : 'chevron-up'}
+                name="chevron-right"
                 size={18}
                 color={theme.colors.textTertiary}
               />
             </TouchableOpacity>
-            {/* Planner rows again; the time column carries the due date (or
-                "no date") and the trailing key stamps the viewed day onto the
-                task — moving it into this day's To-Do. */}
-            {!untimedCollapsed && (
-              <TaskSectionFrontier
-                items={stripTasks}
-                sectionLabel="Pending"
-                theme={theme}
-                // This section MOUNTS on a tap, so its first frame is the whole
-                // felt cost of opening it: paint a screenful now, stream the
-                // backlog in on idle frames after.
-                initialBatch={DAY_SECTION_FIRST_PAINT}
-                autoGrow
-                renderItem={(task) => {
-                  const done = task.completed || isOccurrenceCompleted(task, dayStr);
-                  return (
-                    <ScheduleCard
-                      key={task.id}
-                      task={task}
-                      theme={theme}
-                      timeLabel={task.dueDate ? task.dueDate.slice(5).replace('-', '/') : 'no date'}
-                      range=""
-                      color={boardTint(task, boardColor)}
-                      done={done}
-                      onPress={onTaskInspect || onTaskPress}
-                      onLongPress={onTaskLongPress}
-                      onToggle={(it) => onToggleComplete?.(it.id, dayStr)}
-                      people={rosterFor(task)}
-                      onPeoplePress={onPeoplePress}
-                      pomodoro={pomodoroFor?.(task.id)}
-                      // Starting a block on a backlog task is the strongest
-                      // statement there is that it is not backlog any more, so
-                      // the key both dates it to TODAY and stamps the minute you
-                      // began — see utils/focusStart. The calendar key beside it
-                      // still does the half of that you may want on its own:
-                      // file it for the day you are looking at without starting
-                      // anything.
-                      onStartPomodoro={onStartPomodoro}
-                      onOpenPomodoro={onOpenPomodoro}
-                      trailing={!done ? (
-                        <TouchableOpacity
-                          onPressIn={() => tapHaptic()}
-                          onPress={() => onUpdateTask?.(task.id, { dueDate: dayStr, time: null })}
-                          hitSlop={{ top: 9, bottom: 9, left: 9, right: 9 }}
-                          accessibilityRole="button"
-                          accessibilityLabel={isViewingToday ? 'Add this task to today' : 'Add this task to the selected day'}
-                          style={styles.addTodayBtn}
-                        >
-                          <Icon name="calendar-arrow-right" size={16} color={theme.colors.primary} />
-                        </TouchableOpacity>
-                      ) : undefined}
-                    />
-                  );
-                }}
-              />
-            )}
           </View>
         )}
       </ScrollView>
@@ -2202,6 +2159,10 @@ export const CalendarView = ({
   onNotifyReschedule,
   // (task) => void — tapping a task's owner badge opens that person's profile.
   onOwnerPress,
+  // () => void — leave the calendar for the Inbox page. The day sheet's
+  // "Pending Tasks" line goes there instead of unfolding the backlog under
+  // itself; see the strip for why.
+  onOpenInbox,
 }) => {
   const { theme, timeFormat, showCalendarDayTasks, calendarFreeScroll } = useTheme();
   const use24h = timeFormat === '24h';
@@ -2287,12 +2248,6 @@ export const CalendarView = ({
     setIsSearching(false);
     setSearchQuery('');
   }, [selectedDate]);
-
-  // Whether the "All Day" / Open-tasks list strip is collapsed. Defaults
-  // COLLAPSED so the day's tasks open tidy — you see the header + count and
-  // tap to expand the list, rather than a long list unfurled on first open.
-  // Tap the header to fold/unfold; the mode toggle also sets it per mode.
-  const [untimedCollapsed, setUntimedCollapsed] = useState(true);
 
   // Tapping a task block hands it UP with the day it was tapped on: the
   // screen mounts the inspector above every other layer in the app.
@@ -2516,6 +2471,19 @@ export const CalendarView = ({
   const commitSheet = useCallback((raise) => {
     dockedRef.current = !raise;
   }, []);
+
+  /**
+   * Leave for the Inbox, from the day sheet's Pending Tasks line.
+   *
+   * The sheet is DOCKED on the way out, and that is not cosmetic: the parent
+   * locks the calendar⇄page pager while the sheet is raised
+   * (onPlannerOpenChange), so a sheet left up on a page you are no longer
+   * looking at would leave the Inbox unable to swipe back.
+   */
+  const openInboxFromDay = useCallback(() => {
+    snapSheet(false);
+    onOpenInbox?.();
+  }, [snapSheet, onOpenInbox]);
 
   // Pan gesture on the header. activeOffsetY means a short tap (no
   // vertical travel) is NOT captured — it falls through to the header's
@@ -2834,11 +2802,6 @@ export const CalendarView = ({
   // Fold/unfold the "All Day" untimed strip. Native LayoutAnimation
   // gives the height change a smooth ease without us animating a
   // measured height ourselves.
-  const toggleUntimedCollapsed = useCallback(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setUntimedCollapsed(prev => !prev);
-  }, []);
-
   // Schedule view mode: COLLAPSED (default) = a compact stack of just the
   // timed tasks with the inter-task gaps shown as a number; EXPANDED = the
   // full 24-hour hour grid. Shared across panes so the choice persists as you
@@ -3447,8 +3410,7 @@ export const CalendarView = ({
       boardColor={boardColor}
       nowMinutes={nowMinutes}
       pendingTasks={pendingTasks}
-      untimedCollapsed={untimedCollapsed}
-      onToggleUntimedCollapsed={toggleUntimedCollapsed}
+      onOpenInbox={openInboxFromDay}
       scheduleCollapsed={scheduleCollapsed}
       onToggleScheduleCollapsed={toggleScheduleCollapsed}
       onTaskPress={onTaskPress}
@@ -3488,8 +3450,8 @@ export const CalendarView = ({
     />
   ), [
     selectedStr, tasks, getDayTasks, todayStr,
-    multiUser, sheetTheme, sheetStyles, use24h, boardColor, nowMinutes, pendingTasks, untimedCollapsed,
-    toggleUntimedCollapsed, scheduleCollapsed, toggleScheduleCollapsed,
+    multiUser, sheetTheme, sheetStyles, use24h, boardColor, nowMinutes, pendingTasks, openInboxFromDay,
+    scheduleCollapsed, toggleScheduleCollapsed,
     onTaskPress, openInspector, onTaskLongPress, onToggleComplete, onStartPomodoro, onOpenPomodoro, onUpdateTask, openTaskTimeEditor,
     onOwnerPress, memberOf, onPeoplePress, pomodoroFor, openAddTaskAt,
     isAddingTask, newTaskTitle, handleAddTask, handleCancelAdd, pendingTime, clearPendingTime,
@@ -4772,25 +4734,6 @@ const createStyles = (theme) => StyleSheet.create({
     color: theme.colors.textTertiary,
     marginLeft: 6,
     marginRight: 'auto',
-  },
-  // Round "add to today's To-Do" button sitting as the right accessory on a
-  // Pending TimelineTaskRow card. Reads as a tappable control (bordered surface
-  // disc) without competing with the card's title.
-  // Sized to the FACES beside it (PERSON is 22), not to itself: the bottom row
-  // is as tall as its tallest child, and at 34 this one key was making every
-  // Pending card taller than every other card in the app. The 44 pt target
-  // comes from hitSlop, as it does on every other small control here.
-  addTodayBtn: {
-    marginLeft: 10,
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-    ...depth(theme, 'control'),
   },
   // Smaller priority chip used inside compact rows / blocks where the
   // larger priorityIndicator would crowd the title.
