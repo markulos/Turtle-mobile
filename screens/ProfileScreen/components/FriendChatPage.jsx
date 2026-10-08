@@ -328,6 +328,25 @@ export default function FriendChatPage({
     uploads.current.delete(key);
   }, []);
 
+  /**
+   * A picked photo, full size, before it is sent.
+   *
+   * The same viewer a SENT photo opens in, fed from the local files — there is
+   * nothing to resolve, and nothing that depends on the upload having finished,
+   * so a photo still on its way to the vault opens just as well as one that
+   * landed. Paging walks the strip, which is what you want when the question is
+   * "which of these three did I mean?".
+   */
+  const draftFrames = useMemo(() => photos.map((p) => ({
+    key: p.key,
+    uri: p.uri,
+    previewUri: p.uri,
+    name: p.asset?.fileName || null,
+  })), [photos]);
+  const viewDraftPhoto = useCallback((index) => {
+    openPhotos(draftFrames, index);
+  }, [draftFrames, openPhotos]);
+
   const addPhotos = useCallback(async () => {
     const room = attachmentRoom(photos);
     if (room <= 0) return;
@@ -687,7 +706,14 @@ export default function FriendChatPage({
             placeholder={photos.length > 0
               ? 'Say something about it, or just send…'
               : `Message ${friend?.name || ''}…`}
-            topSlot={<MessageDraftPhotos items={photos} theme={theme} onRemove={removePhoto} />}
+            topSlot={(
+              <MessageDraftPhotos
+                items={photos}
+                theme={theme}
+                onView={viewDraftPhoto}
+                onRemove={removePhoto}
+              />
+            )}
             actions={(
               <MessageAttachKey
                 ids={photos}

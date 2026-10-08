@@ -208,7 +208,9 @@ export default function NoteAttachments({ mediaIds, theme, isDark, onOpenImage, 
                       <ExpoImage
                         source={{ uri: thumb }}
                         style={styles.chipThumb}
-                        contentFit="cover"
+                        // Never `cover`: a document's cover page is tall, and
+                        // cropping it to a 34pt square cuts the title off it.
+                        contentFit="contain"
                         cachePolicy="memory-disk"
                       />
                     ) : (

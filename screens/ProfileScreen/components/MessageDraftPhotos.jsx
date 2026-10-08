@@ -16,8 +16,21 @@
  * The cost is stated rather than hidden: a photo picked and then removed, or a
  * draft abandoned, stays in the vault. That is where photos live, so it is an
  * upload rather than a leak — and the remove key says exactly that.
+ *
+ * ── Hold one to look at it before you send it ──────────────────────────────
+ * A 56pt tile tells you WHICH photo it is, not whether it is the right one, and
+ * the last moment a wrong photo can be taken off the message is before Send.
+ * So a tile opens full size on a hold (or a tap) in the same viewer a sent
+ * photo opens in. The magnifier badge is the visible half of the gesture.
+ *
+ * ── A tile is the shape of its photo ───────────────────────────────────────
+ * These were 56pt SQUARES drawn with `contentFit: cover`, which cropped every
+ * photo to fit — a wide shot lost its sides, a portrait lost its head and feet,
+ * which is the one thing a thumbnail must not do (global styling rule). The
+ * height is fixed and the WIDTH comes from the photo's own ratio, learned on
+ * load, capped so one panorama cannot take the whole row.
  */
-import React from 'react';
+import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -25,6 +38,18 @@ import { tapHaptic } from '../../../utils/haptics';
 import { attachmentRoom, MAX_MESSAGE_ATTACHMENTS } from '../../../utils/messageAttachments';
 
 const THUMB = 56;
+/** The widest a tile may get — twice its height. Beyond that one panorama
+ *  would push everything else off the row. */
+const THUMB_MAX_W = THUMB * 2;
+/** And the narrowest, so a very tall photo still has room for the two keys
+ *  that sit on it. */
+const THUMB_MIN_W = 38;
+
+/** The tile width that keeps a photo at its own aspect ratio. */
+export function thumbWidthFor(width, height) {
+  if (!(width > 0) || !(height > 0)) return THUMB;
+  return Math.round(Math.min(Math.max((width / height) * THUMB, THUMB_MIN_W), THUMB_MAX_W));
+}
 
 /**
  * One picked photo. `uri` is the LOCAL file the picker gave us, kept as the
@@ -32,21 +57,54 @@ const THUMB = 56;
  * paints instantly and does not depend on the vault having generated a thumbnail
  * for a photo uploaded three seconds ago.
  */
-function DraftThumb({ item, theme, onRemove }) {
+function DraftThumb({ item, theme, onView, onRemove }) {
   const c = theme.colors;
+  // Square until the photo reports its own size — the picker gives us no
+  // dimensions, and a tile that starts at its final width would need them.
+  const [width, setWidth] = useState(THUMB);
+  const onLoad = useCallback((e) => {
+    const src = e?.source;
+    if (src) setWidth(thumbWidthFor(src.width, src.height));
+  }, []);
+
   return (
-    <View style={[styles.thumb, { borderColor: item.error ? c.accentError : c.border, backgroundColor: c.surfaceElevated }]}>
-      <ExpoImage source={{ uri: item.uri }} style={StyleSheet.absoluteFillObject} contentFit="cover" transition={80} />
+    <View style={[styles.thumb, { width, borderColor: item.error ? c.accentError : c.border, backgroundColor: c.surfaceElevated }]}>
+      {/* The whole tile is the way in. A hold is what Mark asked for; a tap
+          does the same thing, since the only other target on a 56pt tile is
+          the remove key, which sits on top of this with its own hit slop. */}
+      <Pressable
+        onPress={onView}
+        onLongPress={onView}
+        style={StyleSheet.absoluteFillObject}
+        accessibilityRole="imagebutton"
+        accessibilityLabel="View this photo full size"
+        accessibilityHint="Opens it before you send it"
+        testID={`draft-photo-view-${item.key}`}
+      >
+        <ExpoImage
+          source={{ uri: item.uri }}
+          style={StyleSheet.absoluteFillObject}
+          contentFit="contain"
+          transition={80}
+          onLoad={onLoad}
+          accessible={false}
+        />
+      </Pressable>
       {item.uploading ? (
-        <View style={[StyleSheet.absoluteFillObject, styles.veil]}>
+        <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.veil]}>
           <ActivityIndicator size="small" color="#fff" />
         </View>
       ) : null}
       {item.error ? (
-        <View style={[StyleSheet.absoluteFillObject, styles.veil]}>
+        <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.veil]}>
           <Icon name="alert-circle-outline" size={18} color="#fff" />
         </View>
       ) : null}
+      {/* The gesture, made visible. Not a target of its own: the tile already
+          is one, and a second key on 56pt is mostly a way to miss the first. */}
+      <View pointerEvents="none" style={styles.peek}>
+        <Icon name="magnify" size={10} color="#fff" />
+      </View>
       <Pressable
         onPressIn={() => tapHaptic()}
         onPress={() => onRemove(item.key)}
@@ -64,14 +122,20 @@ function DraftThumb({ item, theme, onRemove }) {
   );
 }
 
-export default function MessageDraftPhotos({ items, theme, onRemove }) {
+export default function MessageDraftPhotos({ items, theme, onView, onRemove }) {
   if (!items || items.length === 0) return null;
   const failed = items.filter((i) => i.error);
   return (
     <View testID="message-draft-photos">
       <View style={styles.row}>
-        {items.map((item) => (
-          <DraftThumb key={item.key} item={item} theme={theme} onRemove={onRemove} />
+        {items.map((item, i) => (
+          <DraftThumb
+            key={item.key}
+            item={item}
+            theme={theme}
+            onView={onView ? () => onView(i) : undefined}
+            onRemove={onRemove}
+          />
         ))}
       </View>
       {failed.length > 0 ? (
@@ -112,11 +176,18 @@ export function MessageAttachKey({ ids, theme, disabled, onPress }) {
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingBottom: 2 },
+  // Width is set per tile from the photo's ratio — only the height is fixed.
   thumb: {
-    width: THUMB, height: THUMB, borderRadius: 10, overflow: 'hidden',
+    height: THUMB, borderRadius: 10, overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
   },
   veil: { alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)' },
+  peek: {
+    position: 'absolute', left: 2, bottom: 2,
+    width: 15, height: 15, borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
   remove: {
     position: 'absolute', top: 2, right: 2,
     width: 17, height: 17, borderRadius: 9,

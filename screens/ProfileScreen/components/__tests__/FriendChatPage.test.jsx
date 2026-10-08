@@ -532,12 +532,7 @@ describe('a photo in a message', () => {
 
   test("draws a photo THEY sent, addressed by id", async () => {
     mockApi.get.mockResolvedValue({ success: true, messages: [withPhoto({ mine: false })] });
-    const view = await render(<FriendChatPage {...props()} />);
-    // eslint-disable-next-line no-console
-    console.log('DEBUG getCalls=', mockApi.get.mock.calls.length,
-      'screenNull=', screen.toJSON() === null,
-      'viewNull=', view.toJSON() === null,
-      'view=', JSON.stringify(view.toJSON()).slice(0, 300));
+    await render(<FriendChatPage {...props()} />);
     await screen.findByTestId('message-photo-media_abc');
     expect(uris()).toContain('http://pond/api/media/display/media_abc');
   });
