@@ -96,6 +96,10 @@ import { inkOn } from '../../utils/accentColor';
 // Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
 import { fuzzyRank } from '../../utils/trigram';
 import { noteShareText } from '../../utils/noteShareText';
+import {
+  adoptServerPinnedNotes, pinnedNotesKnown, sortPinnedFirst, toggleNotePin,
+  unpinNote, usePinnedNoteIds,
+} from '../../utils/pinnedNotes';
 // Tab predicates + the feedback tag vocabulary (pure, unit-tested separately).
 import { APP_TAGS, PLATFORM_TAGS, isFeedbackNote, matchesFilter } from './feedbackFilter';
 // The note's own files — fetched from its media ids and shown in the note,
@@ -299,6 +303,25 @@ export default function NotesScreen() {
   // Stable identity, or FlatList tears down and rebuilds every separator in the
   // list on each render of this screen.
   const noteSeparator = useCallback(() => <View style={styles.noteSeparator} />, [styles]);
+
+  // ── Pins ────────────────────────────────────────────────
+  // The notes held at the top of the list, whatever the date says. Kept on the
+  // device AND on the pond (utils/pinnedNotes says why both), so a pin is
+  // instant here and still true on another phone.
+  const pinnedIds = usePinnedNoteIds();
+  const pinnedSet = useMemo(() => new Set(pinnedIds), [pinnedIds]);
+  // A fresh install — or a second phone — learns its pins from the pond. One
+  // GET, once, and a gap-fill only: it cannot overwrite pins this device
+  // already has (see adoptServerPinnedNotes), so a pin made here seconds ago
+  // never comes back undone by an answer that was already in flight.
+  useEffect(() => {
+    if (pinnedNotesKnown()) return undefined;
+    let alive = true;
+    api.get('/me')
+      .then((r) => { if (alive) adoptServerPinnedNotes(r?.user?.settings); })
+      .catch(() => { /* pins stay this device's own until the next open */ });
+    return () => { alive = false; };
+  }, [api]);
 
   // ── Data ────────────────────────────────────────────────
   // Two sources, ONE list. `notes` is the notes table (plain notes now — the
@@ -711,6 +734,11 @@ export default function NotesScreen() {
 
   // Raw delete (no confirm) — the action sheet below is the deliberate step.
   const performDelete = async (note) => {
+    // A deleted note takes its pin with it — the one case where a pin goes
+    // without being unpinned. Only once the delete has actually landed: a pin
+    // dropped up front would be lost for good by a delete that then failed and
+    // put the note back.
+    const dropPin = () => { if (pinnedSet.has(String(note.id))) void unpinNote(note.id, api); };
     if (isTaskTodo(note)) {
       const before = tasks.find((t) => t.id === note.id);
       setTasks((cur) => cur.filter((t) => t.id !== note.id));
@@ -719,6 +747,7 @@ export default function NotesScreen() {
           method: 'delete', path: `/tasks/${note.id}`,
           key: `task-delete:${note.id}`, label: 'todo delete',
         });
+        dropPin();
       } catch (e) {
         if (before) setTasks((cur) => (cur.some((t) => t.id === note.id) ? cur : [before, ...cur]));
         Alert.alert('Delete failed', e.message || String(e));
@@ -728,6 +757,7 @@ export default function NotesScreen() {
     setNotes((cur) => cur.filter((n) => n.id !== note.id));
     try {
       const r = await sendOrQueue(api, { method: 'delete', path: `/turtle/notes/${note.id}`, key: `note-delete:${note.id}`, label: 'note delete' });
+      dropPin();
       // Totals changed — the tabs read the server count, not the loaded rows.
       if (!r.queued) void refreshCounts();
     } catch (e) {
@@ -769,12 +799,30 @@ export default function NotesScreen() {
     }
   }, []);
 
+  /**
+   * Pin this note to the top of the list, or let it back into the timeline.
+   *
+   * The write is local-first (see utils/pinnedNotes), so the row has already
+   * moved by the time the pond hears about it — and a pin made with no pond in
+   * reach still holds on this phone.
+   */
+  const togglePin = useCallback(async (note) => {
+    if (!note?.id) return;
+    impactHaptic('light');
+    await toggleNotePin(note.id, api);
+  }, [api]);
+
   const showNoteActions = (note) => {
+    const pinned = pinnedSet.has(String(note.id));
     Alert.alert(
       note.type === 'todo' ? 'Todo' : 'Note',
       note.content?.slice(0, 80) || '',
       [
         { text: 'Edit', onPress: () => { setEditingNote(note); setComposerOpen(true); } },
+        // Above Share and Delete: it is the action you will reach for most on a
+        // note you are holding, and the only one of the three that is reversible
+        // with the same press.
+        { text: pinned ? 'Unpin from top' : 'Pin to top', onPress: () => togglePin(note) },
         { text: 'Share as text', onPress: () => shareNoteAsText(note) },
         { text: 'Delete', style: 'destructive', onPress: () => performDelete(note) },
         { text: 'Cancel', style: 'cancel' },
@@ -1036,9 +1084,14 @@ export default function NotesScreen() {
     // the calendar, on the day it matters; an undated one you will only ever
     // meet here, so sorting it below a month of scheduled work is how an inbox
     // becomes a place things go to be forgotten.
-    if (filterKey === FILTER_TODO || filterKey === FILTER_FEEDBACK) return orderTodos(list);
-    return list;
-  }, [visibleNotes, selectedTopic]);
+    // Pinned notes come last in this pipeline and first on the screen: a pin
+    // outranks both the inbox-first rule and the date, which is the whole
+    // point of one. Within the pinned group the tab's own order is kept.
+    const ordered = (filterKey === FILTER_TODO || filterKey === FILTER_FEEDBACK)
+      ? orderTodos(list)
+      : list;
+    return sortPinnedFirst(ordered, pinnedSet);
+  }, [visibleNotes, selectedTopic, pinnedSet]);
   const renderPageBody = (filterKey) => {
     const data = listFor(filterKey);
     // Empty state now rides as ListEmptyComponent so the scrolling header
@@ -1124,6 +1177,8 @@ export default function NotesScreen() {
                 onLongPress={showNoteActions}
                 onShareAsText={shareNoteAsText}
                 showShare={searchActive}
+                pinned={pinnedSet.has(String(item.id))}
+                onTogglePin={togglePin}
                 theme={theme}
                 isDark={isDark}
               />
@@ -1142,6 +1197,8 @@ export default function NotesScreen() {
               onSendToClaude={sendTodoToClaude}
               onShareAsText={shareNoteAsText}
               showShare={searchActive}
+              pinned={pinnedSet.has(String(item.id))}
+              onTogglePin={togglePin}
               attachThumb={attach?.uri || null}
               attachCount={attach?.count || 0}
               theme={theme}
@@ -1716,7 +1773,7 @@ const topicSearchStyles = (theme, isDark) => StyleSheet.create({
 });
 
 // ── Note row ────────────────────────────────────────────────
-function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude, onShareAsText, showShare = false, attachThumb, attachCount = 0, theme, isDark }) {
+function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude, onShareAsText, showShare = false, pinned = false, onTogglePin, attachThumb, attachCount = 0, theme, isDark }) {
   const isTodo = note.type === 'todo';
   const isDone = !!note.done;
   const styles = noteRowStyles(theme, isDark);
@@ -1829,6 +1886,27 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
           </View>
         )}
 
+        {/* The pin, on the note it is holding up.
+            A marker AND the way back: the long press that pinned it can unpin
+            it, but a pin you can see and cannot release reads as something the
+            app did to you rather than something you did. Shown only when
+            pinned — an empty pin outline on every row would be a column of
+            buttons nobody asked for. */}
+        {pinned && (
+          <TouchableOpacity
+            onPressIn={() => tapHaptic()}
+            onPress={() => onTogglePin?.(note)}
+            disabled={!onTogglePin}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.pinBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Unpin from the top"
+            testID={`note-row-pin-${note.id}`}
+          >
+            <Icon name="pin" size={15} color={theme.colors.accentPrimary} />
+          </TouchableOpacity>
+        )}
+
         {/* Share as text — a key on the row itself, not just in the long-press
             sheet, and only while a SEARCH is running. Searching is the "find the
             thing and send it" flow, so that is where a one-tap send earns the
@@ -1905,7 +1983,11 @@ const NoteRow = React.memo(NoteRowImpl, (prev, next) =>
   // or loses its first character, and nothing else about the row changes with
   // it. Left out, the share key would only appear on rows that happened to
   // re-render for some other reason — which looks exactly like a broken button.
-  && prev.showShare === next.showShare,
+  && prev.showShare === next.showShare
+  // And the pin, for exactly that reason once more: pinning changes the LIST's
+  // order but not the note object, so without this the row would move to the
+  // top still wearing no pin.
+  && prev.pinned === next.pinned,
 );
 
 /**
@@ -1990,6 +2072,14 @@ const noteRowStyles = (theme, isDark) => StyleSheet.create({
   // Same box as sendBtn, so a to-do carrying both keys spaces them evenly and a
   // note carrying only this one sits where the Claude key would have.
   shareBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 2,
+    marginLeft: 8,
+    padding: 4,
+  },
+  // The same column the share and Claude keys use, so a row's trailing keys
+  // line up down the list however many of them a given note has earned.
+  pinBtn: {
     alignSelf: 'flex-start',
     marginTop: 2,
     marginLeft: 8,
@@ -2133,7 +2223,7 @@ function InlineVideo({ uri, style }) {
   );
 }
 
-function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare = false, theme, isDark }) {
+function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare = false, pinned = false, onTogglePin, theme, isDark }) {
   const styles = linkCardStyles(theme, isDark);
   const { getBaseUrl } = useServer();
   const url = String(note.content || '').trim();
@@ -2260,6 +2350,21 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
               just inside the action keys, which keep the actual corner. */}
           <NoteByline note={note} style={styles.footerByline} />
           <View style={styles.actions}>
+            {/* The pin — marker and release, same as the plain note row. */}
+            {pinned && (
+              <TouchableOpacity
+                onPressIn={() => tapHaptic()}
+                onPress={() => onTogglePin?.(note)}
+                disabled={!onTogglePin}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.actionBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Unpin from the top"
+                testID={`link-card-pin-${note.id}`}
+              >
+                <Icon name="pin" size={16} color={theme.colors.accentPrimary} />
+              </TouchableOpacity>
+            )}
             {/* Edit — opens the composer to add to / rewrite the description that
                 was auto-created from the link's metadata. */}
             <TouchableOpacity
@@ -2310,7 +2415,9 @@ const LinkNoteCard = React.memo(LinkNoteCardImpl, (prev, next) =>
   prev.note === next.note && prev.isDark === next.isDark
   // As on NoteRow: this flips with the search field, and nothing else about the
   // card changes with it, so leaving it out would strand the key off-screen.
-  && prev.showShare === next.showShare,
+  && prev.showShare === next.showShare
+  // And the pin, which moves the card without changing the note object.
+  && prev.pinned === next.pinned,
 );
 
 const linkCardStyles = (theme, isDark) => StyleSheet.create({
