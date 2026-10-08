@@ -2171,6 +2171,19 @@ export const CalendarView = ({
   // "Pending Tasks" line goes there instead of unfolding the backlog under
   // itself; see the strip for why.
   onOpenInbox,
+  /**
+   * Height the PAGE gained when the screen's chrome stood down for the raised
+   * planner — pushed back onto the calendar so the month stays put.
+   *
+   * The sheet needs the page to reach the top of the screen; the calendar
+   * behind it does not want to move at all. Both are true at once because the
+   * page grows by this much and the calendar is pushed down by the same
+   * amount: the month's own area comes out exactly the size it was, so its
+   * cells never re-scale and its scroll offset never has to be re-anchored.
+   * The sheet is absolutely positioned, so a margin on its sibling cannot
+   * touch it.
+   */
+  topReserve = 0,
 }) => {
   const { theme, timeFormat, showCalendarDayTasks, calendarFreeScroll } = useTheme();
   const use24h = timeFormat === '24h';
@@ -3511,7 +3524,11 @@ export const CalendarView = ({
           out as the sheet rises to cover it (calendarStyle) so nothing
           shows through the sheet's rounded top corners at full travel. */}
       <Reanimated.View
-        style={[styles.calendarContent, calendarStyle]}
+        // marginTop, not padding: a margin on this flow child is invisible to
+        // the absolutely-positioned sheet below, and Yoga's padding-vs-absolute
+        // behaviour is the one thing this file already refuses to rely on (see
+        // calendarContent's own note about the caret hints).
+        style={[styles.calendarContent, calendarStyle, topReserve > 0 && { marginTop: topReserve }]}
         onLayout={(e) => setCalAreaH(e.nativeEvent.layout.height)}
       >
           {/* Minimal chrome — the whole collapsible top header, the

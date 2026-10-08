@@ -46,8 +46,14 @@ const region = (src, fromNeedle, toNeedle) => {
 
 describe('the header gets out of the way', () => {
   test('the chrome, its rule and the filter chips are all gated on the raise', () => {
-    expect(SCREEN).toMatch(/\{!dayPlannerOpen && \(\s*<View style=\{styles\.headerChrome\}>/);
-    expect(SCREEN).toMatch(/\{!dayPlannerOpen && <View style=\{styles\.headerRule\} \/>\}/);
+    // One gate over a MEASURED wrapper that holds the header block and its
+    // groove — the measurement is what the page is handed back (see below).
+    const gate = SCREEN.indexOf('{!dayPlannerOpen && (');
+    expect(gate).toBeGreaterThan(-1);
+    const wrapper = SCREEN.slice(gate, SCREEN.indexOf('{/* Project-picker overlay host', gate));
+    expect(wrapper).toMatch(/setPlannerChromeH/);
+    expect(wrapper).toMatch(/<View style=\{styles\.headerChrome\}>/);
+    expect(wrapper).toMatch(/<View style=\{styles\.headerRule\} \/>/);
     // Chips too: a band between the notch and a "full screen" sheet is not
     // full screen.
     expect(SCREEN).toMatch(/\{!dayPlannerOpen && \(hasActiveFilters \|\| selectedProject !== 'All'\) && \(/);
@@ -94,5 +100,43 @@ describe('the foot clears the floating dock', () => {
     expect(CAL).toMatch(/paddingBottom: Math\.max\(bottomInset, keyboardHeight \+ 20\)/);
     // The number it replaced. 100 points is not where the dock is.
     expect(CAL).not.toMatch(/Math\.max\(100, keyboardHeight/);
+  });
+});
+
+/**
+ * The calendar page behind the glass must not MOVE when the sheet comes up.
+ *
+ * The first pass let the page measure its new height from the pager, which
+ * lands a frame after the render that dropped the chrome: for that frame the
+ * page was still docked-height while the calendar inside it had already been
+ * pushed down, so the month grid re-scaled (its cells grow to fill whatever
+ * area they are given) and then re-scaled back. That is the offset the owner
+ * reported, and these three lines are what cancel it.
+ */
+describe('nothing behind the sheet moves', () => {
+  test('the page is TOLD its new height, in the same commit as the margin', () => {
+    expect(SCREEN).toMatch(/height: pagerSize\.height \+ plannerReserve/);
+    expect(SCREEN).toMatch(/topReserve=\{plannerReserve\}/);
+  });
+
+  test('the calendar is pushed down by exactly what the page gained', () => {
+    expect(CAL).toMatch(/topReserve > 0 && \{ marginTop: topReserve \}/);
+    // A MARGIN, not padding: the sheet is absolutely positioned and must not
+    // be moved by it.
+    expect(CAL).not.toMatch(/paddingTop: topReserve/);
+  });
+
+  test('the pager stops measuring itself while the planner is up', () => {
+    const onLayout = region(SCREEN, 'const { width, height } = e.nativeEvent.layout;', 'style={styles.viewPager}');
+    // Adopting the taller measurement would add the reserve a second time.
+    expect(onLayout).toMatch(/if \(dayPlannerOpen\) \{/);
+    expect(onLayout).toMatch(/\{ \.\.\.p, width \}/);
+  });
+
+  test('the reserve is measured, never guessed', () => {
+    expect(SCREEN).toMatch(/const plannerReserve = dayPlannerOpen/);
+    expect(SCREEN).toMatch(/setFilterChipsH/);
+    // No hand-tuned header height anywhere in the sum.
+    expect(SCREEN).not.toMatch(/plannerReserve = dayPlannerOpen \? \d/);
   });
 });

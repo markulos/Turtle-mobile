@@ -724,6 +724,41 @@ export default function TasksScreen() {
    * height in a single frame.
    */
   const [dayPlannerOpen, setDayPlannerOpen] = useState(false);
+  // The height of the chrome the raised planner takes over: the header block
+  // (title row, view pills, keys, its groove) and the filter chips under it.
+  // Measured while they are on screen and remembered while they are not —
+  // which is the only time it is used.
+  const [plannerChromeH, setPlannerChromeH] = useState(0);
+  const [filterChipsH, setFilterChipsH] = useState(0);
+  /**
+   * What the calendar page is owed while the planner is raised.
+   *
+   * ─── Why the page is given a number instead of just measuring itself ──────
+   *
+   * Dropping the chrome makes the pager taller, and the page measured itself
+   * from the pager. That measurement lands a FRAME LATER than the render that
+   * dropped the chrome, so for one frame the page still had its docked height
+   * while the calendar inside it had already been pushed down — the month grid
+   * re-scaled to the smaller area (its cells grow to fill whatever it is
+   * given), then re-scaled back when the real height arrived. That two-step
+   * was the "strange offset" behind the glass.
+   *
+   * So the page is told: docked height + exactly what the chrome gave up, in
+   * the same commit as the margin that pushes the calendar down by the same
+   * amount. The two cancel, the month's own area never changes size, and
+   * nothing behind the sheet moves at all. The pager's onLayout is frozen
+   * while the planner is up (see below) so it cannot add the same height twice.
+   */
+  // `hasActiveFilters` is derived further down (it reads the tag/owner
+  // selections), so the chips are asked about by the same two conditions it
+  // uses rather than reaching forward to a const that is not declared yet.
+  const plannerReserve = dayPlannerOpen
+    ? plannerChromeH + (
+      (selectedTags.length > 0 || selectedOwners.length > 0 || selectedProject !== 'All')
+        ? filterChipsH
+        : 0
+    )
+    : 0;
 
   // ── Agenda ⇄ Calendar ⇄ Boards horizontal pager ──────────────────────
   // THREE views side by side in a paging ScrollView, swiped between exactly
@@ -3176,6 +3211,17 @@ export default function TasksScreen() {
           dock — see CalendarView's snapSheet for why that asymmetry is the
           whole trick. */}
       {!dayPlannerOpen && (
+      <View
+        // MEASURED, because the calendar page behind the raised planner has to
+        // be handed back exactly what this chrome gives up — see
+        // `plannerReserve`. An unstyled wrapper: a View neither shrinks nor
+        // grows by default, so it is the height of the two rows inside it and
+        // the layout is unchanged.
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          setPlannerChromeH((prev) => (Math.abs(prev - h) >= 1 ? h : prev));
+        }}
+      >
       <View style={styles.headerChrome}>
         <View style={styles.headerTitleRow}>
           {/* THE TITLE IS THE BOARD PICKER. The scope it names is the one thing
@@ -3308,10 +3354,12 @@ export default function TasksScreen() {
           })}
         </ScrollView>
       </View>
+      {/* The groove is inside the measured wrapper: it is part of what the
+          planner reclaims, and a rule under nothing is a line across the top
+          of the sheet. */}
+      <View style={styles.headerRule} />
+      </View>
       )}
-      {/* The groove goes with the chrome it belongs to — a rule under nothing
-          is a line across the top of the planner. */}
-      {!dayPlannerOpen && <View style={styles.headerRule} />}
 
       {/* Project-picker overlay host. The picker (rendered at the bottom of
           this host) is an absolute overlay pinned just below the header.
@@ -3335,7 +3383,13 @@ export default function TasksScreen() {
           by what it hides — the day it shows is filtered by the same scope,
           and the chips are back the moment the sheet is docked. */}
       {!dayPlannerOpen && (hasActiveFilters || selectedProject !== 'All') && (
-        <View style={styles.activeFiltersBar}>
+        <View
+          style={styles.activeFiltersBar}
+          onLayout={(e) => {
+            const h = Math.round(e.nativeEvent.layout.height);
+            setFilterChipsH((prev) => (Math.abs(prev - h) >= 1 ? h : prev));
+          }}
+        >
           <Animated.ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {selectedProject !== 'All' && (
               <View style={[styles.filterChip, styles.tagFilterChip]}>
@@ -3635,6 +3689,16 @@ export default function TasksScreen() {
         )}
         onLayout={(e) => {
           const { width, height } = e.nativeEvent.layout;
+          // FROZEN while the planner is raised. This view is taller then (the
+          // chrome has left the layout), and the calendar page is already
+          // being handed that difference as `plannerReserve` — adopting the
+          // taller measurement here would add it a second time, and the page
+          // would overshoot the screen by a header's height. The width is
+          // still taken: a rotation mid-planner is a real width change.
+          if (dayPlannerOpen) {
+            setPagerSize((p) => (p.width === width ? p : { ...p, width }));
+            return;
+          }
           setPagerSize((p) => (p.width === width && p.height === height ? p : { width, height }));
         }}
         style={styles.viewPager}
@@ -3956,8 +4020,14 @@ export default function TasksScreen() {
           </View>
         </View>
         </View>
-        {/* Page 1 — Calendar. The middle, so it is one swipe from either side. */}
-        <View style={{ width: pagerSize.width, height: pagerSize.height }}>
+        {/* Page 1 — Calendar. The middle, so it is one swipe from either side.
+            Taller by `plannerReserve` while the planner is raised: that is the
+            chrome's height, handed to the page so the sheet inside it can
+            reach the top of the screen. Computed rather than measured so it
+            lands in the SAME commit as the margin that holds the month still
+            (see CalendarView's topReserve) — a frame where only one of the two
+            had arrived is exactly the offset this fixes. */}
+        <View style={{ width: pagerSize.width, height: pagerSize.height + plannerReserve }}>
         <CalendarView
           tasks={doneTasks}
           selectedProject={selectedProject}
@@ -3980,6 +4050,9 @@ export default function TasksScreen() {
           // that page's internal name — see utils/viewPages, where the label
           // "Inbox" and the mode string are deliberately different things.
           onOpenInbox={() => goToView('boards')}
+          // The height the page just gained, so the month grid can stay
+          // exactly where it was instead of re-scaling behind the glass.
+          topReserve={plannerReserve}
           onInspectTask={(task, dateStr) => setInspector({ id: task.id, date: dateStr || null })}
           onToggleComplete={handleToggleComplete}
           onStartPomodoro={startPomodoroFor}
