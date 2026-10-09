@@ -7,10 +7,13 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { TAP_ONLY } from '../../../utils/pressBehavior';
+import { tapHaptic } from '../../../utils/haptics';
 import PhotoVaultBoardCard from './PhotoVaultBoardCard';
 import SharedWithYouStrip from './SharedWithYouStrip';
 import {
@@ -94,6 +97,9 @@ const PhotoVaultBoardsPage = forwardRef(({
   boards,
   allPhotos,
   onOpenAllPhotos,
+  /** () => void — open the canvases. Optional: a host that has no canvas
+   *  page simply does not offer the row. */
+  onOpenCanvases,
   loading,
   error,
   hasLoadedAlbums = false,
@@ -301,6 +307,39 @@ const PhotoVaultBoardsPage = forwardRef(({
         </View>
       ) : null}
 
+      {/* The canvases. A fixed entry point like All Photos above — not a
+          board, and never filtered by the search, so it stands down while one
+          is running for the same reason its neighbours do.
+
+          It is here because a canvas is the freeform cousin of these boards:
+          the same vault media, arranged by hand instead of by tag. Arranged
+          on the desktop, that is — the phone's page is a view of them. */}
+      {onOpenCanvases && !displayQuery ? (
+        <TouchableOpacity
+          {...TAP_ONLY}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="Canvases"
+          testID="vault-canvases-row"
+          onPress={() => { tapHaptic(); onOpenCanvases(); }}
+          style={[styles.canvasRow, {
+            backgroundColor: theme.colors.surfaceElevated,
+            borderColor: theme.colors.border,
+          }]}
+        >
+          <Icon name="shape-outline" size={20} color={theme.colors.accentInfo || theme.colors.textSecondary} />
+          <View style={styles.canvasRowBody}>
+            <Text style={[styles.canvasRowTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+              Canvases
+            </Text>
+            <Text style={[styles.canvasRowMeta, { color: theme.colors.textTertiary }]} numberOfLines={1}>
+              The walls you arrange on the desktop
+            </Text>
+          </View>
+          <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
+        </TouchableOpacity>
+      ) : null}
+
       {/* Boards other people gave me. Hidden while SEARCHING for the same
           reason All Photos is — the search filters my own boards, so leaving
           an unfiltered strip above the results would put things on screen that
@@ -455,6 +494,20 @@ const PhotoVaultBoardsPage = forwardRef(({
 
 const styles = StyleSheet.create({
   page: { flex: 1 },
+  // A row, not a card: the boards below are pictures and this is a door.
+  canvasRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  canvasRowBody: { flex: 1, minWidth: 0 },
+  canvasRowTitle: { fontSize: 15, fontWeight: '600' },
+  canvasRowMeta: { fontSize: 12, marginTop: 1 },
   // Over the list, not above it. zIndex keeps it on top of the boards it is
   // sliding away from; the list's own paddingTop holds the space it occupies
   // at rest, so nothing jumps when it is shown.

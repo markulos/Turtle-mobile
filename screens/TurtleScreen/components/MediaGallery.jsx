@@ -107,6 +107,7 @@ import Reanimated, {
 import TimelineScrubber from './TimelineScrubber';
 import { dockOccupied } from '../../../components/tabBarLayout';
 import MusicVault from './MusicVault';
+import CanvasBoardsPage from './CanvasBoardsPage';
 import FilesVault from './FilesVault/FilesVault';
 import FolderPage from './FilesVault/FolderPage';
 import { isDocument } from './FilesVault/filesUtils';
@@ -342,6 +343,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // swipe to close), opened by tapping a board.
   const [pagerTab, setPagerTab] = useState('albums');   // 'albums' | 'music'
   const [photosOpen, setPhotosOpen] = useState(false);
+  // The canvases, pushed from the Boards page's own row. Its own flag rather
+  // than a mode of the photos page: they are different pages with different
+  // chrome, and sharing one would mean every photos-page guard growing an
+  // "unless it is a canvas" clause.
+  const [canvasesOpen, setCanvasesOpen] = useState(false);
   // Derived, not stored. Roughly forty guards below read
   // `activeTab === 'uploads'` to mean "the photo grid is on screen" — fetching,
   // video preview, scroll bookkeeping, viewability. Deriving it keeps every one
@@ -4847,6 +4853,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               boards={boardModels}
               allPhotos={allPhotosBoard}
               onOpenAllPhotos={openAllPhotos}
+              // The canvases: the same vault media arranged by hand on the
+              // desktop. A pushed page, like Photos is.
+              onOpenCanvases={() => setCanvasesOpen(true)}
               loading={isAlbumsLoading}
               error={albumsLoadError}
               hasLoadedAlbums={hasLoadedAlbums}
@@ -5017,6 +5026,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           EdgeSwipePage renders nothing, this full-screen View doesn't swallow
           taps meant for the pager beneath. */}
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 40 }]} pointerEvents="box-none">
+      {/* The canvases. In the same over-the-pager layer as the photos page,
+          and `overlay` for the same reason it is: this vault can itself be
+          presented inside a Modal, and iOS will not put a second sibling
+          Modal over an open one. */}
+      <CanvasBoardsPage visible={canvasesOpen} onClose={() => setCanvasesOpen(false)} />
       <EdgeSwipePage overlay visible={photosOpen} onClose={closePhotosPage} swipeEnabled={!isSelectMode}>
         <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
           {/* Photos page header — the board title, its edit menu and the photo
