@@ -2167,6 +2167,16 @@ export const CalendarView = ({
   onNotifyReschedule,
   // (task) => void — tapping a task's owner badge opens that person's profile.
   onOwnerPress,
+  /**
+   * Is the calendar the page on screen?
+   *
+   * The sheet is portalled over the WHOLE screen now, which means it is no
+   * longer carried off by the pager when you swipe to Agenda or Inbox — it
+   * would simply sit there on top of them. So it is mounted only while this
+   * page is the one being shown. Defaults true for any host that has only
+   * this view to show.
+   */
+  active = true,
   // () => void — leave the calendar for the Inbox page. The day sheet's
   // "Pending Tasks" line goes there instead of unfolding the backlog under
   // itself; see the strip for why.
@@ -3497,7 +3507,13 @@ export const CalendarView = ({
   return (
     <View
       style={styles.container}
-      onLayout={(e) => { containerH.value = e.nativeEvent.layout.height; }}
+      // No containerH write here any more. The sheet is portalled over the
+      // whole screen, so its travel is measured from the WINDOW (see the
+      // effect beside sheetTopInset) — and this page is shorter than the
+      // window by the safe area plus the Planner's header. Writing the page's
+      // height into the same shared value parked the docked card that much
+      // too high: the peek showed its week strip and the first task instead
+      // of just its header.
     >
       {/* No collapsible top header — the month/year title now lives
           inside each calendar page (left-aligned, web-app styled).
@@ -3672,6 +3688,11 @@ export const CalendarView = ({
           Its geometry is the WINDOW's: `top` is the hood plus a breath
           (panelTopInset) and the travel is measured from the window's height,
           so docked it still peeks above the floating dock. */}
+      {/* Only while the calendar is the page on screen — see `active`. Not
+          hidden-but-mounted: a sheet left in the host over the Agenda is
+          still a touch target over it, and the day pager behind it would go
+          on tracking a day you cannot see. */}
+      {active ? (
       <ScreenPortal id="planner-day-sheet">
       <Reanimated.View style={[sheetStyles.sheet, sheetStyle, sheetShapeStyle, { top: sheetTopInset }]}>
         {/* The chat composer's frost, in dark grey: a transparent sheet whose
@@ -3901,6 +3922,7 @@ export const CalendarView = ({
         </VirtualizedListContextResetter>
       </Reanimated.View>
       </ScreenPortal>
+      ) : null}
 
       {/* The finder's own wheel is NOT here — it is handed to the panel and
           mounted inside its Modal (see the `overlays` prop below). Left as a

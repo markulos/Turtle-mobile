@@ -3978,6 +3978,10 @@ export default function TasksScreen() {
           // that page's internal name — see utils/viewPages, where the label
           // "Inbox" and the mode string are deliberately different things.
           onOpenInbox={() => goToView('boards')}
+          // The day sheet hangs in a host over the whole screen, so it has to
+          // be told when this page is no longer the one being looked at —
+          // otherwise it stays up over the Agenda and the Inbox.
+          active={viewMode === 'calendar'}
           onInspectTask={(task, dateStr) => setInspector({ id: task.id, date: dateStr || null })}
           onToggleComplete={handleToggleComplete}
           onStartPomodoro={startPomodoroFor}

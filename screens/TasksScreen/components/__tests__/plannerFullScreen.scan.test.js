@@ -62,6 +62,24 @@ describe('the sheet is portalled over the screen', () => {
     expect(root.slice(host)).toMatch(/^<ScreenPortalHost \/>\s*<\/View>\s*$/);
   });
 
+  test('it is mounted only while the calendar is the page on screen', () => {
+    // Portalled, it is no longer carried off by the pager — so it has to be
+    // told, or it sits on top of the Agenda and the Inbox.
+    expect(CAL).toMatch(/\{active \? \(\s*<ScreenPortal id="planner-day-sheet">/);
+    expect(SCREEN).toMatch(/active=\{viewMode === 'calendar'\}/);
+  });
+
+  test('ONE thing decides how far the card travels: the window', () => {
+    // The page used to write its own height here, and the page is shorter
+    // than the window by the safe area plus the header — which parked the
+    // docked card that much too high, showing its week strip and first task
+    // instead of just its header.
+    const writes = CAL.match(/containerH\.value = /g) || [];
+    expect(writes).toHaveLength(1);
+    expect(CAL).toMatch(/containerH\.value = windowH/);
+    expect(CAL).not.toMatch(/containerH\.value = e\.nativeEvent/);
+  });
+
   test('a touch that misses the card still reaches the screen', () => {
     // The host spans everything; without this the calendar behind it would be
     // dead to the touch.
