@@ -766,6 +766,35 @@ export default function MusicVault({
   const { searching, displayQuery, displayItems: displayTracks } = search;
 
   /**
+   * What a list on this page must keep clear at its foot.
+   *
+   * With a track loaded that is the TRANSPORT BAR, whose own measured height
+   * already includes the padding lifting it over the floating dock — so
+   * reserving the bar reserves both. With nothing playing there is no bar,
+   * and the dock is what is left to clear.
+   *
+   * The `|| 150` covers the single frame before the bar's onLayout lands.
+   */
+  const listPadBottom = nowTrack
+    ? (nowBarH || 150) + 16
+    : Math.max(insets.bottom, bottomInset) + 24;
+
+  /**
+   * …and the LIBRARY list needs the lift on top of that.
+   *
+   * The lifting layer is permanently `lift` taller than the page — its
+   * negative bottom margin is static, so the rise into search is a pure
+   * transform. Any list inside it therefore hangs that far BELOW the screen,
+   * and its last `lift` points of content can never be scrolled into view:
+   * the end of the music list stuck behind the player and the dock, however
+   * far you pulled. The Files page is built from this same template and has
+   * always added it; this one never did.
+   *
+   * The pushed pages below are not in that layer and must NOT add it.
+   */
+  const libraryPadBottom = listPadBottom + lift;
+
+  /**
    * One track row, for the library and for every page that lists tracks.
    *
    * `queue` is for a list the PLAYER does not own — the voice recordings,
@@ -1137,14 +1166,8 @@ export default function MusicVault({
             </Text>
           ) : null}
           extraData={`${current}:${isPlaying}:${ready}:${playlists.length}:${searching}`}
-          // With a track loaded, reserve the transport bar's real height plus a
-          // gap so the last row rests clear of it rather than under it. Falls
-          // back to a sane estimate for the single frame before onLayout lands.
-          contentContainerStyle={{
-            paddingBottom: nowTrack
-              ? (nowBarH || 150) + 16
-              : Math.max(insets.bottom, bottomInset) + 24,
-          }}
+          // The transport bar, the dock, AND the lift — see libraryPadBottom.
+          contentContainerStyle={{ paddingBottom: libraryPadBottom }}
           ItemSeparatorComponent={() => <View style={styles.trackSep} />}
         />
       )}
@@ -1280,7 +1303,7 @@ export default function MusicVault({
           <FlatList
             data={pondTracks}
             keyExtractor={(t) => String(t.shareId)}
-            contentContainerStyle={{ paddingBottom: (nowBarH || 150) + 16 }}
+            contentContainerStyle={{ paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             extraData={`${current}:${isPlaying}:${ready}`}
             ListEmptyComponent={(
@@ -1374,7 +1397,7 @@ export default function MusicVault({
               onOptions: (id) => { setRecordingsOpen(false); setSheetId(id); },
             })}
             extraData={`${current}:${isPlaying}:${ready}:${voiceRecordings.length}`}
-            contentContainerStyle={{ paddingBottom: (nowBarH || 150) + 16 }}
+            contentContainerStyle={{ paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             ListEmptyComponent={(
               <View style={styles.pageEmpty}>
@@ -1419,7 +1442,7 @@ export default function MusicVault({
             data={playlists}
             keyExtractor={(name) => name}
             renderItem={renderPlaylistRow}
-            contentContainerStyle={{ paddingBottom: (nowBarH || 150) + 16 }}
+            contentContainerStyle={{ paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             ListEmptyComponent={(
               <View style={styles.pageEmpty}>
@@ -1459,7 +1482,7 @@ export default function MusicVault({
                 keyExtractor={(t) => String(t.id)}
                 renderItem={renderTrack}
                 extraData={`${activeTrack?.mediaId}:${isPlaying}:${ready}`}
-                contentContainerStyle={{ paddingBottom: (nowBarH || 150) + 16 }}
+                contentContainerStyle={{ paddingBottom: listPadBottom }}
                 ItemSeparatorComponent={() => <View style={styles.trackSep} />}
               />
             </View>
@@ -1489,7 +1512,7 @@ export default function MusicVault({
             </Text>
           </View>
           <ScrollView
-            contentContainerStyle={{ padding: 16, paddingBottom: (nowBarH || 150) + 24 }}
+            contentContainerStyle={{ padding: 16, paddingBottom: listPadBottom + 8 }}
             keyboardShouldPersistTaps="handled"
           >
             <TranscriptionPanel

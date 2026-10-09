@@ -199,6 +199,68 @@ describe('MusicVault', () => {
   });
 
   /**
+   * ── You can scroll to the END of the library ─────────────────────────────
+   *
+   * The page's lifting layer is permanently `lift` taller than the screen (a
+   * static negative bottom margin, so the rise into search is a pure
+   * transform). The library list lives in it, which means it hangs that far
+   * BELOW the screen and its last `lift` points can never be scrolled into
+   * view — the end of the list stuck behind the player and the dock however
+   * hard you pulled. The Files page, from the same template, has always added
+   * it back; this page never did.
+   */
+  describe('the foot of the library list', () => {
+    /** The scroller's own contentContainerStyle, flattened. */
+    const padOf = (view) => {
+      let pad = null;
+      const walk = (node) => {
+        if (!node || typeof node !== 'object' || pad !== null) return;
+        const style = node.props?.contentContainerStyle;
+        if (style) {
+          const flat = Array.isArray(style) ? Object.assign({}, ...style.filter(Boolean)) : style;
+          if (typeof flat.paddingBottom === 'number') { pad = flat.paddingBottom; return; }
+        }
+        (node.children || []).forEach(walk);
+      };
+      walk(view.toJSON());
+      return pad;
+    };
+
+    test('clears the lift, so the last track can be reached at all', async () => {
+      // The vault header is 160 tall and the page keeps 40 once it has slid
+      // away: 120 points of list hanging below the screen.
+      const lifted = await render(
+        <MusicVault onClose={jest.fn()} topInset={160} searchTopInset={40} />,
+      );
+      const flat = await render(<MusicVault onClose={jest.fn()} topInset={40} searchTopInset={40} />);
+      expect(padOf(lifted)).toBe(padOf(flat) + 120);
+    });
+
+    test('reserves the transport bar when a track is loaded', async () => {
+      // activeTrack is 'two', which IS in the library, so the bar is up.
+      const view = await render(<MusicVault onClose={jest.fn()} bottomInset={96} />);
+      // The bar has not been measured in this environment (no layout), so the
+      // reserve is the documented fallback — what matters is that it is the
+      // BAR being reserved, which already includes the dock, and not the bare
+      // dock inset.
+      expect(padOf(view)).toBe(150 + 16);
+    });
+
+    test('reserves the dock when nothing is playing', async () => {
+      const previous = mockMusicPlayer.activeTrack;
+      mockMusicPlayer.activeTrack = null;
+      try {
+        const view = await render(<MusicVault onClose={jest.fn()} bottomInset={96} />);
+        // No bar to clear, so the floating dock is what is left — and it is
+        // the host's measured dock height, never a hand-tuned number.
+        expect(padOf(view)).toBe(96 + 24);
+      } finally {
+        mockMusicPlayer.activeTrack = previous;
+      }
+    });
+  });
+
+  /**
    * ── The Voice recordings folder ──────────────────────────────────────────
    *
    * What goes in it is not in the library and not in the queue the library
