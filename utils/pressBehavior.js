@@ -66,6 +66,43 @@ export const TAP_ONLY_PRESSABLE = {
 /** How far a finger may drift and still be a tap, in points. */
 export const TAP_SLOP = 10;
 
+/**
+ * ── And what counts as a DOUBLE tap ────────────────────────────────────────
+ *
+ * The same rule one level up, and it needs stating because the gesture
+ * library's defaults do not: a `Gesture.Tap()` with `numberOfTaps(2)` allows
+ * half a second between touches and, unless told otherwise, ANY amount of
+ * travel during them. On a surface whose main gesture is scrolling, two quick
+ * flicks are two touches inside half a second that each travelled a long way
+ * — and the double-tap fires. That is the note composer raising the keyboard
+ * in the middle of a scroll.
+ *
+ * So a double tap is two touches that are QUICK, CLOSE TOGETHER IN TIME, and
+ * STATIONARY. The slack is larger than TAP_SLOP on purpose: a fast second
+ * touch lands a few points off the first, and 16pt still fails any scroll
+ * worth the name (the shortest flick that moves content visibly is well past
+ * it).
+ *
+ * Numbers, not a configured gesture object: this module is deliberately
+ * dependency-free — it lived in ThemeContext once, which reaches AsyncStorage
+ * at import and broke an unrelated test — so it must not import the gesture
+ * library. Spread them at the call site:
+ *
+ *   Gesture.Tap()
+ *     .numberOfTaps(2)
+ *     .maxDuration(DOUBLE_TAP.maxDuration)
+ *     .maxDelay(DOUBLE_TAP.maxDelay)
+ *     .maxDistance(DOUBLE_TAP.maxDistance)
+ */
+export const DOUBLE_TAP = {
+  /** How long one of the two touches may last. */
+  maxDuration: 260,
+  /** How long the gap between them may be. */
+  maxDelay: 260,
+  /** How far either may travel. Past this it was a scroll. */
+  maxDistance: 16,
+};
+
 /** Did the finger travel far enough to be a gesture rather than a tap? */
 export function movedBeyond(start, end, slop = TAP_SLOP) {
   if (!start || !end) return false;

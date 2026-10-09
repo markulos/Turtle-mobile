@@ -82,7 +82,10 @@ describe('both row shapes know they are pinned', () => {
   });
 
   test.each(cases)('%s is handed the pin by the list', (name) => {
-    const tag = SRC.indexOf(`<${name}\n`);
+    // Newline-agnostic on purpose: this repo checks out with CRLF on Windows,
+    // and a scan with a bare `\n` in its needle passes or fails depending on
+    // which machine last wrote the file.
+    const tag = SRC.search(new RegExp(`<${name}\\s*\\r?\\n`));
     if (tag < 0) throw new Error(`<${name} …> is not rendered by the list any more`);
     const props = SRC.slice(tag, SRC.indexOf('/>', tag));
     expect(props).toMatch(/pinned=\{pinnedSet\.has\(String\(item\.id\)\)\}/);

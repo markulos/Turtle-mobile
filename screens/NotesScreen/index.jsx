@@ -90,7 +90,7 @@ import { useSyncSignals } from '../../context/DownloadsContext';
 import { useOpenTarget } from '../../context/OpenTargetContext';
 import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
-import { TAP_ONLY } from '../../utils/pressBehavior';
+import { DOUBLE_TAP, TAP_ONLY } from '../../utils/pressBehavior';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
 import { inkOn } from '../../utils/accentColor';
 // Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
@@ -2895,7 +2895,15 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
   }, []);
   const doubleTap = useMemo(() => Gesture.Tap()
     .numberOfTaps(2)
-    .maxDuration(260)
+    // The limits are the point, not decoration. This gesture sits on the
+    // page's SCROLLER: with the library's defaults — half a second between
+    // touches and no limit at all on how far either travels — two scroll
+    // flicks ARE a double tap, and reading down a long note popped the
+    // keyboard open underneath you. DOUBLE_TAP is the app's answer to "two
+    // touches, quick, and still"; utils/pressBehavior says why each number.
+    .maxDuration(DOUBLE_TAP.maxDuration)
+    .maxDelay(DOUBLE_TAP.maxDelay)
+    .maxDistance(DOUBLE_TAP.maxDistance)
     .onEnd(() => { 'worklet'; runOnJS(toggleKeyboard)(); }), [toggleKeyboard]);
 
   // The page is full-screen and its body scrolls, so only the bottom TOOLBAR

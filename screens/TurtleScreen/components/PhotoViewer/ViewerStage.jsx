@@ -64,6 +64,7 @@ import {
   shouldOpenDetails,
   splitZoomPan,
 } from '../../../../utils/viewerGestureMath';
+import { DOUBLE_TAP } from '../../../../utils/pressBehavior';
 import {
   DOUBLE_TAP_SCALE,
   MIN_SCALE,
@@ -389,13 +390,16 @@ export default function ViewerStage({
       });
 
     // ── taps ──────────────────────────────────────────────────────────────
+    // The three limits that make this a double TAP and not a pair of flicks
+    // are the app's, not this file's — utils/pressBehavior says why each one
+    // is the number it is. They were written out here first; the note
+    // composer then shipped the same gesture without them and popped its
+    // keyboard open mid-scroll, which is what made them a shared rule.
     const doubleTap = Gesture.Tap()
       .numberOfTaps(2)
-      .maxDuration(260)
-      .maxDelay(260)
-      // A tap is a POINT event; 16pt is deliberate slack for a fast double-
-      // tap's second touch, and still fails any short swipe.
-      .maxDistance(16)
+      .maxDuration(DOUBLE_TAP.maxDuration)
+      .maxDelay(DOUBLE_TAP.maxDelay)
+      .maxDistance(DOUBLE_TAP.maxDistance)
       .onEnd((e) => {
         'worklet';
         if (!sv.zoomEnabled.value || sv.settling.value) return;
