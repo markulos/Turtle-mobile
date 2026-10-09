@@ -49,8 +49,12 @@ const region = (src, fromNeedle, toNeedle) => {
 describe('the sheet is portalled over the screen', () => {
   test('the card itself goes through the portal', () => {
     expect(CAL).toMatch(/<ScreenPortal id="planner-day-sheet">/);
-    // The card, immediately inside it — not some wrapper that stayed behind.
-    expect(CAL).toMatch(/<ScreenPortal id="planner-day-sheet">\s*<Reanimated\.View style=\{\[sheetStyles\.sheet/);
+    // Portal → the card's sliding page → the card. Nothing else between them:
+    // anything that stayed behind would be a piece of the sheet still nailed
+    // to the view pager.
+    const inside = region(CAL, '<ScreenPortal id="planner-day-sheet">', 'sheetShapeStyle');
+    expect(inside).toMatch(/<Animated\.View/);
+    expect(inside).toMatch(/<Reanimated\.View style=\{\[sheetStyles\.sheet/);
   });
 
   test('the host is the LAST child of the screen root, inside the provider', () => {
@@ -62,11 +66,23 @@ describe('the sheet is portalled over the screen', () => {
     expect(root.slice(host)).toMatch(/^<ScreenPortalHost \/>\s*<\/View>\s*$/);
   });
 
-  test('it is mounted only while the calendar is the page on screen', () => {
-    // Portalled, it is no longer carried off by the pager — so it has to be
-    // told, or it sits on top of the Agenda and the Inbox.
-    expect(CAL).toMatch(/\{active \? \(\s*<ScreenPortal id="planner-day-sheet">/);
-    expect(SCREEN).toMatch(/active=\{viewMode === 'calendar'\}/);
+  test('it RIDES the pager rather than being switched on and off', () => {
+    // Mounting it on the settled view was the first answer: the card blinked
+    // in and out a beat after the swipe instead of leaving with its page.
+    expect(CAL).not.toMatch(/\{active \? \(/);
+    expect(SCREEN).not.toMatch(/active=\{viewMode === 'calendar'\}/);
+    // The host interpolates the pager's own offset…
+    expect(SCREEN).toMatch(/const plannerSlideX = useMemo\(/);
+    expect(SCREEN).toMatch(/slideX=\{plannerSlideX\}/);
+    // …and the card's page is translated by it, natively.
+    expect(CAL).toMatch(/transform: \[\{ translateX: slideX \}\]/);
+  });
+
+  test('the sliding page does not swallow the touches it covers', () => {
+    const page = region(CAL, '<ScreenPortal id="planner-day-sheet">', '<Reanimated.View style={[sheetStyles.sheet');
+    expect(page).toMatch(/pointerEvents="box-none"/);
+    // It is an absolute fill, because the card positions itself against it.
+    expect(page).toMatch(/StyleSheet\.absoluteFill/);
   });
 
   test('ONE thing decides how far the card travels: the window', () => {

@@ -2168,15 +2168,20 @@ export const CalendarView = ({
   // (task) => void — tapping a task's owner badge opens that person's profile.
   onOwnerPress,
   /**
-   * Is the calendar the page on screen?
+   * An Animated node for the day card's horizontal position: 0 while the
+   * calendar is the page on screen, ±a page width as the pager carries that
+   * page away.
    *
-   * The sheet is portalled over the WHOLE screen now, which means it is no
-   * longer carried off by the pager when you swipe to Agenda or Inbox — it
-   * would simply sit there on top of them. So it is mounted only while this
-   * page is the one being shown. Defaults true for any host that has only
-   * this view to show.
+   * The card is portalled over the whole screen (so it can cover the host's
+   * header when raised), which takes it out of the pager that used to carry
+   * it. This hands it back: it rides the same scroll offset the host's view
+   * pill does, natively, so it leaves and arrives WITH the calendar instead
+   * of being switched on and off around the swipe.
+   *
+   * Optional — a host that shows the calendar on its own passes nothing and
+   * the card simply stays put.
    */
-  active = true,
+  slideX,
   // () => void — leave the calendar for the Inbox page. The day sheet's
   // "Pending Tasks" line goes there instead of unfolding the backlog under
   // itself; see the strip for why.
@@ -3688,12 +3693,20 @@ export const CalendarView = ({
           Its geometry is the WINDOW's: `top` is the hood plus a breath
           (panelTopInset) and the travel is measured from the window's height,
           so docked it still peeks above the floating dock. */}
-      {/* Only while the calendar is the page on screen — see `active`. Not
-          hidden-but-mounted: a sheet left in the host over the Agenda is
-          still a touch target over it, and the day pager behind it would go
-          on tracking a day you cannot see. */}
-      {active ? (
       <ScreenPortal id="planner-day-sheet">
+      {/* The card's page. An absolute fill because the card positions itself
+          against it, box-none so a touch that misses the card still reaches
+          whatever is under the host — and translated by `slideX`, which is
+          what keeps the card on the calendar's page while the pager moves.
+          A plain Animated.View, not a Reanimated one: the host's offset is an
+          Animated value driven natively by its ScrollView, and the card's own
+          vertical travel is a Reanimated style on the view inside this one.
+          Two animations, two systems, both on the native thread, neither
+          touching the other's transform. */}
+      <Animated.View
+        pointerEvents="box-none"
+        style={[StyleSheet.absoluteFill, slideX ? { transform: [{ translateX: slideX }] } : null]}
+      >
       <Reanimated.View style={[sheetStyles.sheet, sheetStyle, sheetShapeStyle, { top: sheetTopInset }]}>
         {/* The chat composer's frost, in dark grey: a transparent sheet whose
             surface is a BlurView + a translucent tint (sheetFrost), so the
@@ -3921,8 +3934,8 @@ export const CalendarView = ({
         </ScrollView.Context.Provider>
         </VirtualizedListContextResetter>
       </Reanimated.View>
+      </Animated.View>
       </ScreenPortal>
-      ) : null}
 
       {/* The finder's own wheel is NOT here — it is handed to the panel and
           mounted inside its Modal (see the `overlays` prop below). Left as a

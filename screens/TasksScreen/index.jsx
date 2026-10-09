@@ -2952,6 +2952,31 @@ export default function TasksScreen() {
     outputRange: tabBoxes.map((b) => b.width),
     extrapolate: 'clamp',
   });
+  /**
+   * How far the day planner's card is from home.
+   *
+   * The card is portalled over the whole screen so it can cover this header
+   * when it is pulled up — which also means the pager no longer carries it
+   * away when you swipe to another view. Mounting and unmounting it on the
+   * settled view was the first answer and it was a bad one: the card blinked
+   * in and out a beat after the swipe, instead of leaving with the page it
+   * belongs to.
+   *
+   * So it RIDES the pager. Zero on the calendar, a page-width to the right
+   * when the Agenda is in, a page-width to the left for the pages after it —
+   * the same interpolation of the same scroll offset the header pill uses,
+   * which means it is driven natively and tracks the finger 1:1 rather than
+   * lagging it on the JS thread.
+   */
+  const plannerSlideX = useMemo(() => {
+    const w = Math.max(1, pagerSize.width);
+    const home = viewIndex('calendar') * w;
+    return pagerScrollX.interpolate({
+      inputRange: [home - w, home, home + w],
+      outputRange: [w, 0, -w],
+      extrapolate: 'clamp',
+    });
+  }, [pagerScrollX, pagerSize.width]);
   // Keep the live tab on screen once the row is wider than the header. Only
   // when it actually overflows, and never animated on the first settle.
   const tabScrollRef = useRef(null);
@@ -3978,10 +4003,11 @@ export default function TasksScreen() {
           // that page's internal name — see utils/viewPages, where the label
           // "Inbox" and the mode string are deliberately different things.
           onOpenInbox={() => goToView('boards')}
-          // The day sheet hangs in a host over the whole screen, so it has to
-          // be told when this page is no longer the one being looked at —
-          // otherwise it stays up over the Agenda and the Inbox.
-          active={viewMode === 'calendar'}
+          // The day sheet hangs in a host over the whole screen, so it is
+          // given the pager's own offset to ride: it sits on the calendar's
+          // page and slides away with it, rather than being switched off a
+          // beat after the swipe.
+          slideX={plannerSlideX}
           onInspectTask={(task, dateStr) => setInspector({ id: task.id, date: dateStr || null })}
           onToggleComplete={handleToggleComplete}
           onStartPomodoro={startPomodoroFor}
