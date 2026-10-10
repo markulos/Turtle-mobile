@@ -19,16 +19,12 @@
 import {
   MAX_BOARDS,
   MAX_ITEMS,
-  MAX_ZOOM,
-  MIN_ZOOM,
   boardBounds,
   cleanName,
   decodeBoards,
-  fitView,
   itemAtPoint,
   itemCountLabel,
   stacked,
-  toWorld,
 } from '../canvasDoc';
 
 const item = (over = {}) => ({ id: 'i1', kind: 'media', ref: 'm1', x: 0, y: 0, w: 100, h: 100, z: 0, ...over });
@@ -138,31 +134,9 @@ describe('framing a board on a phone', () => {
     expect(boardBounds(null)).toBeNull();
   });
 
-  it('fits a desktop-sized wall onto a phone, centred', () => {
-    // A 4000×3000 arrangement on a 390×700 screen.
-    const view = fitView({ x: 0, y: 0, w: 4000, h: 3000 }, { w: 390, h: 700 });
-    expect(view.scale).toBeCloseTo((390 - 48) / 4000, 4);
-    // The middle of the board lands in the middle of the screen.
-    expect(2000 * view.scale + view.x).toBeCloseTo(195, 3);
-    expect(1500 * view.scale + view.y).toBeCloseTo(350, 3);
-  });
-
-  it('will not zoom past the limits in either direction', () => {
-    const huge = fitView({ x: 0, y: 0, w: 1e6, h: 1e6 }, { w: 390, h: 700 });
-    expect(huge.scale).toBe(MIN_ZOOM);
-    const tiny = fitView({ x: 0, y: 0, w: 1, h: 1 }, { w: 390, h: 700 });
-    expect(tiny.scale).toBe(MAX_ZOOM);
-  });
-
-  it('leaves an empty board at 1:1 rather than inventing a zoom', () => {
-    expect(fitView(null, { w: 390, h: 700 })).toEqual({ scale: 1, x: 195, y: 350 });
-  });
-
-  it('survives a viewport it has not been measured into yet', () => {
-    const view = fitView({ x: 0, y: 0, w: 100, h: 100 }, { w: 0, h: 0 });
-    expect(Number.isFinite(view.scale)).toBe(true);
-    expect(Number.isFinite(view.x)).toBe(true);
-  });
+  // The scale and the offsets that go with these bounds are the VIEW's, and
+  // they live in utils/__tests__/canvasView.test.js — one model, tested where
+  // it is written.
 });
 
 describe('what the finger landed on', () => {
@@ -187,24 +161,11 @@ describe('what the finger landed on', () => {
     expect(itemAtPoint({ items: [] }, { x: 0, y: 0 })).toBeNull();
   });
 
-  it('turns a screen point into a world point, whatever the zoom', () => {
-    // The inverse of the stage's transform: translate, then scale.
-    expect(toWorld({ x: 100, y: 50 }, { scale: 1, x: 0, y: 0 })).toEqual({ x: 100, y: 50 });
-    expect(toWorld({ x: 100, y: 50 }, { scale: 2, x: 20, y: 10 })).toEqual({ x: 40, y: 20 });
-    expect(toWorld({ x: 0, y: 0 }, { scale: 0.5, x: -50, y: -25 })).toEqual({ x: 100, y: 50 });
-  });
-
-  it('survives a view it has no numbers for', () => {
-    expect(toWorld({ x: 10, y: 10 }, null)).toEqual({ x: 10, y: 10 });
-    expect(toWorld(null, { scale: 0 })).toEqual({ x: 0, y: 0 });
-  });
-
   it('finds the item a tap at a zoomed-out scale lands on', () => {
-    // The whole point of working in world units: at 0.2 zoom the front item
-    // occupies 40 screen points, and the tap has to still resolve.
-    const view = { scale: 0.2, x: 10, y: 10 };
-    const world = toWorld({ x: 10 + 150 * 0.2, y: 10 + 150 * 0.2 }, view);
-    expect(itemAtPoint(b, world).id).toBe('front');
+    // Hit-testing happens in WORLD units for exactly this reason: at a tenth
+    // of full size the front item is 20 points across on the glass, and the
+    // tap still has to resolve to it.
+    expect(itemAtPoint(b, { x: 150, y: 150 }).id).toBe('front');
   });
 });
 

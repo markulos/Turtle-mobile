@@ -85,13 +85,21 @@ it('addresses a picture by id, through the display tier', async () => {
   expect(img.props.source.uri).toBe('http://pond.local/api/media/display/media_abc');
 });
 
-it('places each item where the board says, in world units', async () => {
-  const view = await draw([item({ id: 'a', x: 120, y: -40, w: 200, h: 150 })]);
-  const node = view.getByTestId('canvas-item-a');
-  // The parent frame carries the box; the transform on the world above it is
-  // what turns these into screen points.
-  const flat = Object.assign({}, ...[].concat(node.props.style).filter(Boolean));
-  expect(flat).toMatchObject({ left: 120, top: -40, width: 200, height: 150 });
+it('places each item relative to the board\'s CENTRE', async () => {
+  // Two items spanning x 0..300 and y 0..100, so the centre is (150, 50) and
+  // the placement is each item's own offset from it. Centre-relative is the
+  // whole reason zooming out lands the board in the middle of the screen
+  // rather than wherever a scroll offset happened to be — utils/canvasView.
+  const view = await draw([
+    item({ id: 'left', x: 0, y: 0, w: 100, h: 100 }),
+    item({ id: 'right', x: 200, y: 0, w: 100, h: 100 }),
+  ]);
+  const boxOf = (id) => Object.assign(
+    {},
+    ...[].concat(view.getByTestId(`canvas-item-${id}`).props.style).filter(Boolean),
+  );
+  expect(boxOf('left')).toMatchObject({ left: -150, top: -50, width: 100, height: 100 });
+  expect(boxOf('right')).toMatchObject({ left: 50, top: -50, width: 100, height: 100 });
 });
 
 it('says what a note or a task is by its cached label', async () => {

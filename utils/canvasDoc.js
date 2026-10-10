@@ -150,36 +150,12 @@ export function boardBounds(board) {
 }
 
 /** How far the phone may zoom. The floor is low because a board laid out on a
- *  27-inch monitor has to fit in a hand; the ceiling is for reading a label. */
+ *  27-inch monitor has to fit in a hand; the ceiling is for reading a label.
+ *
+ *  The VIEW's own limits are narrower and live in utils/canvasView: the floor
+ *  a board actually gets is its fit, which these two bound. */
 export const MIN_ZOOM = 0.08;
 export const MAX_ZOOM = 4;
-
-/**
- * The view that puts a whole board on the screen.
- *
- * Returns the scale and the translation to apply to the world, in that order
- * (scale about the origin, then translate), so the board's bounds land centred
- * in the viewport with a margin. This is the single most important thing the
- * phone does differently from the desktop: a canvas is authored at desktop
- * scale, and opening one at 1:1 on a phone shows you one corner of one photo
- * with no way to tell what you are looking at.
- *
- * An empty board gets the identity view — there is nothing to fit, and
- * inventing a zoom for it would make the first item you add appear at some
- * arbitrary size.
- */
-export function fitView(bounds, viewport, { margin = 24 } = {}) {
-  const vw = Math.max(1, finite(viewport?.w, 1));
-  const vh = Math.max(1, finite(viewport?.h, 1));
-  if (!bounds) return { scale: 1, x: vw / 2, y: vh / 2 };
-  const usableW = Math.max(1, vw - margin * 2);
-  const usableH = Math.max(1, vh - margin * 2);
-  const scale = clamp(Math.min(usableW / bounds.w, usableH / bounds.h), MIN_ZOOM, MAX_ZOOM);
-  // Centre the bounds' MIDDLE in the viewport's middle.
-  const cx = bounds.x + bounds.w / 2;
-  const cy = bounds.y + bounds.h / 2;
-  return { scale, x: vw / 2 - cx * scale, y: vh / 2 - cy * scale };
-}
 
 /**
  * The item under a point, in WORLD coordinates — topmost first.
@@ -202,21 +178,6 @@ export function itemAtPoint(board, point) {
     if (x >= i.x && x <= i.x + i.w && y >= i.y && y <= i.y + i.h) return i;
   }
   return null;
-}
-
-/**
- * A point on the SCREEN, in world coordinates.
- *
- * The inverse of the stage's transform (translate, then scale about the
- * origin). Written down because getting it backwards puts the tap somewhere
- * plausible but wrong — near the item at low zoom, nowhere near it at high.
- */
-export function toWorld(point, view) {
-  const scale = finite(view?.scale, 1) || 1;
-  return {
-    x: (finite(point?.x, 0) - finite(view?.x, 0)) / scale,
-    y: (finite(point?.y, 0) - finite(view?.y, 0)) / scale,
-  };
 }
 
 /** "12 items" / "1 item" / "Empty" — what a board's row says it holds. */

@@ -40,13 +40,23 @@ import Reanimated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withDecay,
   withTiming,
 } from 'react-native-reanimated';
 import { DOUBLE_TAP, TAP_SLOP } from '../../../utils/pressBehavior';
 import { impactHaptic, tapHaptic } from '../../../utils/haptics';
+import { boardBounds, itemAtPoint, stacked } from '../../../utils/canvasDoc';
 import {
-  MAX_ZOOM, MIN_ZOOM, boardBounds, fitView, itemAtPoint, stacked, toWorld,
-} from '../../../utils/canvasDoc';
+  MAX_SCALE, doubleTapScale, fitScale, panLimits, screenToWorld,
+} from '../../../utils/canvasView';
+import { clamp, focalTranslate, rubberClamp, rubberScale } from '../../../utils/zoomMath';
+
+/** Deceleration for a flung board. The photo viewer's number — a canvas that
+ *  coasts differently from the picture viewer in the same app is a canvas
+ *  that feels like a different app. */
+const DECAY = 0.993;
+/** How long a spring back from a rubber-banded edge takes. */
+const SETTLE_MS = 220;
 
 /** The dot grid the desktop frets its canvas with, at canvas scale. */
 const DOT_PITCH = 40;
@@ -59,12 +69,15 @@ const DOT_PITCH = 40;
  * reason the wall can be dragged about for free: one transform moves
  * everything, and no item re-lays-out while it does.
  */
-function CanvasItemView({ item, origin, theme }) {
+function CanvasItemView({ item, centre, origin, theme }) {
   const c = theme.colors;
+  // Placed against the board's CENTRE, not its origin: the stage's transform
+  // puts that centre at the middle of the screen, which is what makes an
+  // offset of zero mean "centred" (utils/canvasView has the model).
   const box = {
     position: 'absolute',
-    left: item.x,
-    top: item.y,
+    left: item.x - centre.x,
+    top: item.y - centre.y,
     width: item.w,
     height: item.h,
   };
@@ -132,96 +145,241 @@ function CanvasItemView({ item, origin, theme }) {
 export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
   const c = theme.colors;
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  const [settled, setSettled] = useState(false);
 
   const items = useMemo(() => stacked(board), [board]);
   const bounds = useMemo(() => boardBounds(board), [board]);
+  /** What the view is measured from — see the model in utils/canvasView. */
+  const centre = useMemo(() => (bounds
+    ? { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 }
+    : { x: 0, y: 0 }), [bounds]);
 
-  // The live view. Shared values, so a drag is a UI-thread transform and the
-  // JS thread is never in the loop — a board of two hundred items pans at the
-  // same speed as an empty one.
+  /**
+   * The live view: an offset from CENTRED, and a scale about the centre.
+   *
+   * Shared values, so a drag is a transform on the UI thread and the JS
+   * thread is never in the loop — a board of two hundred items pans at the
+   * same speed as an empty one. Zero means "the board is centred", which is
+   * what makes zooming out land it in the middle every time (utils/canvasView
+   * writes the model out).
+   */
   const scale = useSharedValue(1);
   const tx = useSharedValue(0);
   const ty = useSharedValue(0);
-  // What they were when the current gesture began.
-  const startScale = useSharedValue(1);
-  const startX = useSharedValue(0);
-  const startY = useSharedValue(0);
-  const [settled, setSettled] = useState(false);
 
-  /** Put the whole board on the screen. The first thing that happens, and
-   *  what a double-tap goes back to. */
+  // Geometry the worklets need, mirrored where the UI thread can read it.
+  const minScale = useSharedValue(1);
+  const vw = useSharedValue(0);
+  const vh = useSharedValue(0);
+  const boardW = useSharedValue(0);
+  const boardH = useSharedValue(0);
+
+  // Per-gesture bookkeeping. The pan and the pinch keep SEPARATE baselines:
+  // sharing them is the classic jump — the pinch rewrites the pan's origin
+  // mid-gesture and the board leaps the moment a second finger lands.
+  const panFromX = useSharedValue(0);
+  const panFromY = useSharedValue(0);
+  const panTransX = useSharedValue(0);
+  const panTransY = useSharedValue(0);
+  const rebase = useSharedValue(0);
+  const pinchFromScale = useSharedValue(1);
+  const pinchOriginX = useSharedValue(0);
+  const pinchOriginY = useSharedValue(0);
+
+  /** The pan limits at a given scale, on the UI thread. Half the overflow,
+   *  and zero on an axis that still fits — which pins that axis centred
+   *  rather than letting the board drift in empty space. */
+  const limitsFor = useCallback((s) => {
+    'worklet';
+    // The same function the tests measure and the fit uses — worklet-safe on
+    // purpose, so the UI thread is not reimplementing it in a second place.
+    return panLimits(
+      { w: boardW.value, h: boardH.value },
+      { w: vw.value, h: vh.value },
+      s,
+    );
+  }, [boardH, boardW, vh, vw]);
+
+  /** Bring the view back inside its bounds and its zoom range. Every gesture
+   *  ends here: one place that guarantees a board cannot be left off-screen
+   *  or inside-out. */
+  const settle = useCallback(() => {
+    'worklet';
+    const next = Math.min(Math.max(scale.value, minScale.value), MAX_SCALE);
+    if (next !== scale.value) scale.value = withTiming(next, { duration: SETTLE_MS });
+    const lim = limitsFor(next);
+    const restX = clamp(tx.value, lim.x);
+    const restY = clamp(ty.value, lim.y);
+    if (restX !== tx.value) tx.value = withTiming(restX, { duration: SETTLE_MS });
+    if (restY !== ty.value) ty.value = withTiming(restY, { duration: SETTLE_MS });
+  }, [limitsFor, minScale, scale, tx, ty]);
+
+  /** Put the whole board on the screen: centred, at the fit. */
   const fit = useCallback((size, animated) => {
-    const view = fitView(bounds, size);
+    const s = fitScale(bounds, size);
+    minScale.value = s;
     if (animated) {
-      scale.value = withTiming(view.scale, { duration: 220 });
-      tx.value = withTiming(view.x, { duration: 220 });
-      ty.value = withTiming(view.y, { duration: 220 });
+      scale.value = withTiming(s, { duration: SETTLE_MS });
+      tx.value = withTiming(0, { duration: SETTLE_MS });
+      ty.value = withTiming(0, { duration: SETTLE_MS });
     } else {
-      scale.value = view.scale;
-      tx.value = view.x;
-      ty.value = view.y;
+      scale.value = s;
+      tx.value = 0;
+      ty.value = 0;
     }
-  }, [bounds, scale, tx, ty]);
+  }, [bounds, minScale, scale, tx, ty]);
 
   const onLayout = useCallback((e) => {
     const { width, height } = e.nativeEvent.layout;
+    vw.value = width;
+    vh.value = height;
+    boardW.value = bounds ? bounds.w : 0;
+    boardH.value = bounds ? bounds.h : 0;
     setViewport((prev) => {
       if (prev.w === width && prev.h === height) return prev;
-      // Fit on the first real measurement, and again if the window changes
+      // Fit on the first real measurement, and again when the window changes
       // shape (a rotation) — a board framed for portrait is off-screen in
       // landscape.
       fit({ w: width, h: height }, false);
       return { w: width, h: height };
     });
     setSettled(true);
-  }, [fit]);
+  }, [bounds, boardH, boardW, fit, vh, vw]);
 
+  /**
+   * Drag the board, with momentum and an edge that gives.
+   *
+   * Three things make this a surface rather than a slider, and all three are
+   * what the photo viewer already does:
+   *   - past the edge the drag only partly applies (rubberClamp) and springs
+   *     back on release, so the end of the board announces itself;
+   *   - a flick keeps going (withDecay), clamped to the same bounds, so a big
+   *     wall can be crossed in one throw;
+   *   - the baseline is RE-TAKEN whenever the number of fingers changes, so
+   *     landing or lifting a second finger mid-drag does not jump.
+   */
   const pan = useMemo(() => Gesture.Pan()
     .averageTouches(true)
-    .onStart(() => { startX.value = tx.value; startY.value = ty.value; })
+    .onStart(() => {
+      panFromX.value = tx.value;
+      panFromY.value = ty.value;
+      panTransX.value = 0;
+      panTransY.value = 0;
+      rebase.value = 0;
+    })
+    .onTouchesDown(() => { rebase.value = 1; })
+    .onTouchesUp(() => { rebase.value = 1; })
     .onUpdate((e) => {
-      tx.value = startX.value + e.translationX;
-      ty.value = startY.value + e.translationY;
-    }), [startX, startY, tx, ty]);
+      if (rebase.value) {
+        // A finger arrived or left: measure again from here, or the board
+        // jumps by however far the centroid moved when it did.
+        panFromX.value = tx.value;
+        panFromY.value = ty.value;
+        panTransX.value = e.translationX;
+        panTransY.value = e.translationY;
+        rebase.value = 0;
+      }
+      // While two fingers are down the PINCH owns the translation — it has
+      // to, because the point under the fingers must stay under them. Letting
+      // the pan write as well is the double-count that makes a two-finger
+      // zoom slide away from the hand.
+      if (e.numberOfPointers > 1) return;
+      const lim = limitsFor(scale.value);
+      tx.value = rubberClamp(panFromX.value + (e.translationX - panTransX.value), lim.x);
+      ty.value = rubberClamp(panFromY.value + (e.translationY - panTransY.value), lim.y);
+    })
+    .onEnd((e) => {
+      const lim = limitsFor(scale.value);
+      // Inside the bounds a flick coasts; outside them there is nothing to
+      // coast to and the settle below springs it back.
+      if (Math.abs(tx.value) <= lim.x) {
+        tx.value = withDecay({ velocity: e.velocityX, clamp: [-lim.x, lim.x], deceleration: DECAY });
+      }
+      if (Math.abs(ty.value) <= lim.y) {
+        ty.value = withDecay({ velocity: e.velocityY, clamp: [-lim.y, lim.y], deceleration: DECAY });
+      }
+      settle();
+    }), [limitsFor, panFromX, panFromY, panTransX, panTransY, rebase, scale, settle, tx, ty]);
 
+  /**
+   * Pinch: the point under your fingers stays under your fingers.
+   *
+   * It owns the translation for the duration, which is what keeps that true
+   * when the fingers also MOVE — a two-finger drag-and-zoom is one gesture,
+   * not two. Past either zoom limit the pinch gives rather than stopping
+   * dead, and the end springs it back (rubberScale, as the photo viewer).
+   */
   const pinch = useMemo(() => Gesture.Pinch()
-    .onStart(() => { startScale.value = scale.value; startX.value = tx.value; startY.value = ty.value; })
+    .onStart((e) => {
+      pinchFromScale.value = scale.value;
+      const fx = e.focalX - vw.value / 2;
+      const fy = e.focalY - vh.value / 2;
+      // The world point under the focus, in centre-relative units — the thing
+      // that has to stay put.
+      pinchOriginX.value = (fx - tx.value) / scale.value;
+      pinchOriginY.value = (fy - ty.value) / scale.value;
+    })
     .onUpdate((e) => {
-      const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, startScale.value * e.scale));
-      // Zoom about the FOCAL point, so the board grows under the fingers
-      // rather than away from them: the world point beneath the focus has to
-      // stay beneath it.
-      const k = next / startScale.value;
-      tx.value = e.focalX - (e.focalX - startX.value) * k;
-      ty.value = e.focalY - (e.focalY - startY.value) * k;
+      const next = rubberScale(pinchFromScale.value * e.scale, minScale.value, MAX_SCALE);
+      const fx = e.focalX - vw.value / 2;
+      const fy = e.focalY - vh.value / 2;
       scale.value = next;
-    }), [scale, startScale, startX, startY, tx, ty]);
+      tx.value = focalTranslate(fx, pinchOriginX.value, next);
+      ty.value = focalTranslate(fy, pinchOriginY.value, next);
+    })
+    .onEnd(() => {
+      settle();
+      // A finger may still be down with the pan mid-gesture; re-baselining
+      // here means it picks up from where the pinch left the board.
+      rebase.value = 1;
+    }), [minScale, pinchFromScale, pinchOriginX, pinchOriginY, rebase, scale, settle, tx, ty, vh, vw]);
 
-  const refit = useCallback(() => {
-    impactHaptic('light');
-    fit(viewport, true);
-  }, [fit, viewport]);
+  /**
+   * Double-tap: in on what you tapped, out to the whole board.
+   *
+   * Toggling, the way every photo viewer does — and zooming IN about the tap
+   * rather than the centre, so the thing you tapped is the thing you get.
+   */
+  const zoomAbout = useCallback((px, py) => {
+    'worklet';
+    const target = doubleTapScale(scale.value, minScale.value, MAX_SCALE);
+    const fx = px - vw.value / 2;
+    const fy = py - vh.value / 2;
+    const originX = (fx - tx.value) / scale.value;
+    const originY = (fy - ty.value) / scale.value;
+    const lim = limitsFor(target);
+    scale.value = withTiming(target, { duration: SETTLE_MS });
+    tx.value = withTiming(clamp(focalTranslate(fx, originX, target), lim.x), { duration: SETTLE_MS });
+    ty.value = withTiming(clamp(focalTranslate(fy, originY, target), lim.y), { duration: SETTLE_MS });
+  }, [limitsFor, minScale, scale, tx, ty, vh, vw]);
+
+  const thud = useCallback(() => impactHaptic('light'), []);
 
   /**
    * A tap landed at this point on the SCREEN — open whatever is under it.
    *
-   * Hit-testing at the stage rather than hanging a handler on every item:
-   * a touch handler on an image fires at the end of a DRAG as readily as a
-   * tap, which is the app's "a tap is not a gesture" rule broken once per
-   * item. The gesture below has already decided the finger held still; this
-   * only has to answer WHICH item, and that is arithmetic (utils/canvasDoc,
-   * under test).
+   * Hit-testing at the stage rather than hanging a handler on every item: a
+   * touch handler on an image fires at the end of a DRAG as readily as a tap,
+   * which is the app's "a tap is not a gesture" rule broken once per item.
+   * The gesture has already decided the finger held still; this only has to
+   * answer WHICH item, and that is arithmetic (utils/canvasDoc, under test).
    */
   const openAt = useCallback((px, py) => {
     if (!onOpenMedia) return;
-    const world = toWorld({ x: px, y: py }, { scale: scale.value, x: tx.value, y: ty.value });
+    const world = screenToWorld({ x: px, y: py }, {
+      viewport,
+      bounds,
+      scale: scale.value,
+      x: tx.value,
+      y: ty.value,
+    });
     const hit = itemAtPoint(board, world);
     // Only a picture opens. A note or a task would want its own screen, and
     // this version does not pretend to be a way into them.
     if (hit?.kind !== 'media') return;
     tapHaptic();
     onOpenMedia(hit);
-  }, [board, onOpenMedia, scale, tx, ty]);
+  }, [board, bounds, onOpenMedia, scale, tx, ty, viewport]);
 
   const singleTap = useMemo(() => Gesture.Tap()
     .numberOfTaps(1)
@@ -238,20 +396,25 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
   const doubleTap = useMemo(() => Gesture.Tap()
     .numberOfTaps(2)
     // The house rule — two touches, quick and STILL. Without the distance
-    // limit a two-flick pan would re-fit the board out from under the hand
-    // that was moving it (utils/pressBehavior says why these numbers).
+    // limit a two-flick pan would zoom the board out from under the hand that
+    // was moving it (utils/pressBehavior says why these numbers).
     .maxDuration(DOUBLE_TAP.maxDuration)
     .maxDelay(DOUBLE_TAP.maxDelay)
     .maxDistance(DOUBLE_TAP.maxDistance)
-    .onEnd(() => { 'worklet'; runOnJS(refit)(); }), [refit]);
+    .onEnd((e, success) => {
+      'worklet';
+      if (!success) return;
+      zoomAbout(e.x, e.y);
+      runOnJS(thud)();
+    }), [thud, zoomAbout]);
 
   /**
    * Pan and pinch together, the taps racing them.
    *
-   * The same composition the photo viewer uses: Exclusive puts the single tap
-   * BEHIND the double tap, so fitting the board does not also open whatever
-   * was under your second touch. Both taps fail the moment a finger travels,
-   * which is what leaves the pan free.
+   * The composition the photo viewer uses, for the same reasons: Simultaneous
+   * lets one two-finger gesture scale AND move, and Exclusive puts the single
+   * tap behind the double tap so a zoom does not also open whatever was under
+   * the second touch.
    */
   const gesture = useMemo(
     () => Gesture.Race(
@@ -261,10 +424,16 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
     [doubleTap, singleTap, pan, pinch],
   );
 
+  /**
+   * The transform, in the order the model names: to the viewport's centre,
+   * then the view's offset, then scale about that point. The items inside are
+   * placed relative to the BOARD's centre (the world layer below), which is
+   * what makes "no offset" mean "centred".
+   */
   const worldStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateX: tx.value },
-      { translateY: ty.value },
+      { translateX: vw.value / 2 + tx.value },
+      { translateY: vh.value / 2 + ty.value },
       { scale: scale.value },
     ],
   }));
@@ -279,8 +448,8 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
             <View
               pointerEvents="none"
               style={[styles.fret, {
-                left: bounds.x - DOT_PITCH,
-                top: bounds.y - DOT_PITCH,
+                left: bounds.x - centre.x - DOT_PITCH,
+                top: bounds.y - centre.y - DOT_PITCH,
                 width: bounds.w + DOT_PITCH * 2,
                 height: bounds.h + DOT_PITCH * 2,
                 borderColor: c.border,
@@ -291,6 +460,7 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
             <CanvasItemView
               key={item.id}
               item={item}
+              centre={centre}
               origin={origin}
               theme={theme}
             />
