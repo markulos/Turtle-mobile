@@ -14,11 +14,16 @@ import {
   DOUBLE_TAP_FACTOR,
   FIT_MARGIN,
   MAX_SCALE,
+  PREVIEW_PX,
   doubleTapScale,
   fitScale,
   focalFromCentre,
+  itemsInRect,
+  mediaUrlFor,
   panLimits,
   screenToWorld,
+  tierFor,
+  visibleWorldRect,
 } from '../canvasView';
 
 const PHONE = { w: 390, h: 700 };
@@ -128,5 +133,94 @@ describe('where a double-tap goes', () => {
     expect(doubleTapScale(2, 2, MAX_SCALE)).toBe(MAX_SCALE);
     // And a board whose fit IS the ceiling has nowhere to go but back.
     expect(doubleTapScale(MAX_SCALE, MAX_SCALE)).toBe(MAX_SCALE);
+  });
+});
+
+/**
+ * ─── Loading the right amount ──────────────────────────────────────────────
+ *
+ * The two things that decide how much work opening a canvas is: which SIZE of
+ * each picture gets fetched, and how many of them get mounted at all. Both are
+ * arithmetic, and both are invisible when wrong — the board still appears, it
+ * just took a third of a megabyte and a full-size decode per thumbnail to do
+ * it.
+ */
+describe('which size of a picture to fetch', () => {
+  const PHOTO = 220; // the default world width of a placed photo
+
+  it('is the small tier for a board that is fitted on a phone', () => {
+    // A wall-sized board fits at about a tenth, so a photo is ~20 points.
+    expect(tierFor(PHOTO, 0.1, 3)).toBe('preview');
+  });
+
+  it('is still the small tier at life size on a retina screen', () => {
+    // 220pt × 3 = 660 device pixels, inside the 768 the preview tier carries.
+    expect(tierFor(PHOTO, 1, 3)).toBe('preview');
+  });
+
+  it('steps up only once the item really is bigger than that', () => {
+    expect(tierFor(PHOTO, 2, 3)).toBe('display');
+    // A big item needs it sooner than a small one — it is the drawn size that
+    // decides, not the zoom.
+    expect(tierFor(1200, 0.5, 2)).toBe('display');
+    expect(tierFor(60, 4, 3)).toBe('preview');
+  });
+
+  it('does not flip back and forth right at the boundary', () => {
+    const atEdge = PREVIEW_PX / 3; // exactly 768 device pixels at 3×
+    expect(tierFor(atEdge, 1, 3)).toBe('preview');
+    // A hair over is still the small tier — the slack is what stops a pinch
+    // hovering at the line from re-fetching every frame.
+    expect(tierFor(atEdge * 1.1, 1, 3)).toBe('preview');
+    expect(tierFor(atEdge * 1.3, 1, 3)).toBe('display');
+  });
+
+  it('builds a capability URL for whichever tier', () => {
+    expect(mediaUrlFor('http://pond', 'm1', 'preview')).toBe('http://pond/api/media/preview/m1');
+    expect(mediaUrlFor('http://pond', 'm1', 'display')).toBe('http://pond/api/media/display/m1');
+    // Anything unknown falls back to the cheap one rather than the expensive.
+    expect(mediaUrlFor('http://pond', 'm 1', 'nonsense')).toBe('http://pond/api/media/preview/m%201');
+  });
+});
+
+describe('how much of the board to mount', () => {
+  const VIEWPORT = { w: 400, h: 400 };
+  const CENTRE = { x: 0, y: 0 };
+  const grid = [
+    { id: 'middle', x: -50, y: -50, w: 100, h: 100 },
+    { id: 'near', x: 300, y: 0, w: 100, h: 100 },
+    { id: 'far', x: 5000, y: 5000, w: 100, h: 100 },
+  ];
+
+  it('sees the whole board when it is fitted — nothing is saved, and should not be', () => {
+    // Everything is on screen at the fit, so culling must be a no-op there.
+    const rect = visibleWorldRect({ viewport: VIEWPORT, centre: CENTRE, scale: 0.02, x: 0, y: 0 });
+    expect(itemsInRect(grid, rect).map((i) => i.id)).toEqual(['middle', 'near', 'far']);
+  });
+
+  it('leaves the far side of a wall unmounted when you are zoomed into a corner', () => {
+    const rect = visibleWorldRect({ viewport: VIEWPORT, centre: CENTRE, scale: 2, x: 0, y: 0 });
+    const ids = itemsInRect(grid, rect).map((i) => i.id);
+    expect(ids).toContain('middle');
+    expect(ids).not.toContain('far');
+  });
+
+  it('keeps what is just off the edge, so a pan does not reveal holes', () => {
+    // 'near' is outside the viewport at this zoom but inside the margin.
+    const rect = visibleWorldRect({ viewport: VIEWPORT, centre: CENTRE, scale: 1, x: 0, y: 0 });
+    expect(itemsInRect(grid, rect).map((i) => i.id)).toContain('near');
+  });
+
+  it('follows the offset, not just the zoom', () => {
+    // Pan a long way right: the middle leaves, and nothing else is near.
+    const rect = visibleWorldRect({ viewport: VIEWPORT, centre: CENTRE, scale: 2, x: -4000, y: 0 });
+    expect(itemsInRect(grid, rect).map((i) => i.id)).not.toContain('middle');
+  });
+
+  it('mounts everything when it has not been measured yet', () => {
+    // No viewport, no opinion — an empty board is the one thing this must
+    // never produce.
+    expect(visibleWorldRect({ viewport: { w: 0, h: 0 }, centre: CENTRE, scale: 1, x: 0, y: 0 })).toBeNull();
+    expect(itemsInRect(grid, null)).toHaveLength(3);
   });
 });

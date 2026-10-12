@@ -79,10 +79,16 @@ it('draws them back to front, whatever order they are stored in', async () => {
   expect(ids).toEqual(['canvas-item-back', 'canvas-item-mid', 'canvas-item-top']);
 });
 
-it('addresses a picture by id, through the display tier', async () => {
+it('fetches the size the item is actually DRAWN at, not the biggest one', async () => {
   const view = await draw([item({ ref: 'media_abc' })]);
   const [img] = nodesOfType(view, 'ExpoImage');
-  expect(img.props.source.uri).toBe('http://pond.local/api/media/display/media_abc');
+  // A canvas item on a fitted board is a thumbnail on the glass. The 1600px
+  // tier would be a third of a megabyte and a full-size decode to paint it,
+  // times every item on the board — see tierFor.
+  expect(img.props.source.uri).toBe('http://pond.local/api/media/preview/media_abc');
+  // And the view is kept across a tier change, so zooming in swaps the file
+  // without blinking through an empty frame.
+  expect(img.props.recyclingKey).toBe('canvas:i1');
 });
 
 it('places each item relative to the board\'s CENTRE', async () => {

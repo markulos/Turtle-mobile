@@ -32,7 +32,7 @@
  * placed rather than pretending to be a blank sheet.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, PixelRatio, StyleSheet, Text, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -47,7 +47,8 @@ import { DOUBLE_TAP, TAP_SLOP } from '../../../utils/pressBehavior';
 import { impactHaptic, tapHaptic } from '../../../utils/haptics';
 import { boardBounds, itemAtPoint, stacked } from '../../../utils/canvasDoc';
 import {
-  MAX_SCALE, doubleTapScale, fitScale, panLimits, screenToWorld,
+  MAX_SCALE, doubleTapScale, fitScale, itemsInRect, mediaUrlFor, panLimits,
+  screenToWorld, tierFor, visibleWorldRect,
 } from '../../../utils/canvasView';
 import { clamp, focalTranslate, rubberClamp, rubberScale } from '../../../utils/zoomMath';
 
@@ -61,6 +62,10 @@ const SETTLE_MS = 220;
 /** The dot grid the desktop frets its canvas with, at canvas scale. */
 const DOT_PITCH = 40;
 
+/** The device's pixel density, read once: it is a property of the screen, not
+ *  of a render, and it decides which size of each picture is worth fetching. */
+const DPR = PixelRatio.get();
+
 /**
  * One item.
  *
@@ -69,7 +74,7 @@ const DOT_PITCH = 40;
  * reason the wall can be dragged about for free: one transform moves
  * everything, and no item re-lays-out while it does.
  */
-function CanvasItemView({ item, centre, origin, theme }) {
+function CanvasItemViewImpl({ item, centre, origin, theme, tier }) {
   const c = theme.colors;
   // Placed against the board's CENTRE, not its origin: the stage's transform
   // puts that centre at the middle of the screen, which is what makes an
@@ -89,10 +94,14 @@ function CanvasItemView({ item, centre, origin, theme }) {
         style={[box, styles.mediaFrame, { borderColor: c.border, backgroundColor: c.surfaceElevated }]}
       >
         <ExpoImage
-          // The display tier, by id — a capability URL that resolves media
-          // someone else shared with you too, which the by-ids listing does
-          // not. Exactly what the desktop's <img> loads.
-          source={{ uri: `${origin}/api/media/display/${encodeURIComponent(item.ref)}` }}
+          // Addressed by id, at the size this item is actually drawn — see
+          // tierFor. A capability URL, which is also what resolves media
+          // someone else shared with you (the by-ids listing would not).
+          source={{ uri: mediaUrlFor(origin, item.ref, tier) }}
+          // Keeps the view (and the picture already in it) when the tier
+          // changes, so zooming in swaps to the bigger file without blinking
+          // through an empty frame first.
+          recyclingKey={`canvas:${item.id}`}
           style={StyleSheet.absoluteFill}
           // The board's author chose this frame's shape; filling it is what
           // the desktop does and what makes a moodboard read as one.
@@ -142,12 +151,30 @@ function CanvasItemView({ item, centre, origin, theme }) {
   );
 }
 
+/**
+ * Memoised, and that is load-bearing: the stage re-renders when a gesture
+ * SETTLES (to re-pick tiers and re-cull), and without this every item on the
+ * board would re-render with it. The props are all stable identities bar the
+ * tier, so in practice only the items whose picture should change do.
+ */
+const CanvasItemView = React.memo(CanvasItemViewImpl);
+
 export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
   const c = theme.colors;
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const [settled, setSettled] = useState(false);
 
   const items = useMemo(() => stacked(board), [board]);
+  /**
+   * The view as it was when the last gesture SETTLED.
+   *
+   * Not the live one: the live scale and offset are shared values on the UI
+   * thread precisely so panning costs the JS thread nothing, and reading them
+   * per frame to re-pick a picture would hand all of that back. Settled is
+   * also the right moment — nobody needs a sharper photo in the middle of a
+   * fling, and swapping tiers mid-pinch is just thrash.
+   */
+  const [rest, setRest] = useState({ scale: 1, x: 0, y: 0 });
   const bounds = useMemo(() => boardBounds(board), [board]);
   /** What the view is measured from — see the model in utils/canvasView. */
   const centre = useMemo(() => (bounds
@@ -212,7 +239,10 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
     const restY = clamp(ty.value, lim.y);
     if (restX !== tx.value) tx.value = withTiming(restX, { duration: SETTLE_MS });
     if (restY !== ty.value) ty.value = withTiming(restY, { duration: SETTLE_MS });
-  }, [limitsFor, minScale, scale, tx, ty]);
+    // Where the board came to rest, for the tier and the culling. One hop to
+    // JS per gesture, not per frame.
+    runOnJS(publishRest)(next, restX, restY);
+  }, [limitsFor, minScale, publishRest, scale, tx, ty]);
 
   /** Put the whole board on the screen: centred, at the fit. */
   const fit = useCallback((size, animated) => {
@@ -227,7 +257,8 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
       tx.value = 0;
       ty.value = 0;
     }
-  }, [bounds, minScale, scale, tx, ty]);
+    publishRest(s, 0, 0);
+  }, [bounds, minScale, publishRest, scale, tx, ty]);
 
   const onLayout = useCallback((e) => {
     const { width, height } = e.nativeEvent.layout;
@@ -290,16 +321,25 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
     })
     .onEnd((e) => {
       const lim = limitsFor(scale.value);
+      // Where a flick ENDS is not where it was released, and that is what the
+      // culling and the picture sizes are chosen from — so the publish rides
+      // the decay's completion rather than firing here with a position the
+      // board is about to coast away from. (publishRest ignores a repeat, so
+      // both axes reporting costs nothing.)
+      const landed = (finished) => {
+        'worklet';
+        if (finished) runOnJS(publishRest)(scale.value, tx.value, ty.value);
+      };
       // Inside the bounds a flick coasts; outside them there is nothing to
       // coast to and the settle below springs it back.
       if (Math.abs(tx.value) <= lim.x) {
-        tx.value = withDecay({ velocity: e.velocityX, clamp: [-lim.x, lim.x], deceleration: DECAY });
+        tx.value = withDecay({ velocity: e.velocityX, clamp: [-lim.x, lim.x], deceleration: DECAY }, landed);
       }
       if (Math.abs(ty.value) <= lim.y) {
-        ty.value = withDecay({ velocity: e.velocityY, clamp: [-lim.y, lim.y], deceleration: DECAY });
+        ty.value = withDecay({ velocity: e.velocityY, clamp: [-lim.y, lim.y], deceleration: DECAY }, landed);
       }
       settle();
-    }), [limitsFor, panFromX, panFromY, panTransX, panTransY, rebase, scale, settle, tx, ty]);
+    }), [limitsFor, panFromX, panFromY, panTransX, panTransY, publishRest, rebase, scale, settle, tx, ty]);
 
   /**
    * Pinch: the point under your fingers stays under your fingers.
@@ -348,12 +388,26 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
     const originX = (fx - tx.value) / scale.value;
     const originY = (fy - ty.value) / scale.value;
     const lim = limitsFor(target);
+    const nextX = clamp(focalTranslate(fx, originX, target), lim.x);
+    const nextY = clamp(focalTranslate(fy, originY, target), lim.y);
     scale.value = withTiming(target, { duration: SETTLE_MS });
-    tx.value = withTiming(clamp(focalTranslate(fx, originX, target), lim.x), { duration: SETTLE_MS });
-    ty.value = withTiming(clamp(focalTranslate(fy, originY, target), lim.y), { duration: SETTLE_MS });
-  }, [limitsFor, minScale, scale, tx, ty, vh, vw]);
+    tx.value = withTiming(nextX, { duration: SETTLE_MS });
+    ty.value = withTiming(nextY, { duration: SETTLE_MS });
+    runOnJS(publishRest)(target, nextX, nextY);
+  }, [limitsFor, minScale, publishRest, scale, tx, ty, vh, vw]);
 
   const thud = useCallback(() => impactHaptic('light'), []);
+
+  /** The settle hands the view back to React, once, when the hand stops. */
+  const publishRest = useCallback((s, px, py) => {
+    setRest((prev) => (
+      // A gesture that changed nothing (a tap on bare canvas, a settle that
+      // was already at rest) must not re-render the board.
+      Math.abs(prev.scale - s) < 1e-4 && Math.abs(prev.x - px) < 0.5 && Math.abs(prev.y - py) < 0.5
+        ? prev
+        : { scale: s, x: px, y: py }
+    ));
+  }, []);
 
   /**
    * A tap landed at this point on the SCREEN — open whatever is under it.
@@ -425,6 +479,22 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
   );
 
   /**
+   * What is worth mounting: the items in view, plus most of a screen in every
+   * direction so the next pan finds them already there.
+   *
+   * At the fit this is the whole board, which is correct — at the fit every
+   * item IS on screen. Zoomed into a corner of a two-hundred-item wall it is
+   * the difference between decoding four pictures and decoding two hundred.
+   */
+  const drawn = useMemo(() => itemsInRect(items, visibleWorldRect({
+    viewport,
+    centre,
+    scale: rest.scale,
+    x: rest.x,
+    y: rest.y,
+  })), [centre, items, rest, viewport]);
+
+  /**
    * The transform, in the order the model names: to the viewport's centre,
    * then the view's offset, then scale about that point. The items inside are
    * placed relative to the BOARD's centre (the world layer below), which is
@@ -456,13 +526,14 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
               }]}
             />
           ) : null}
-          {items.map((item) => (
+          {drawn.map((item) => (
             <CanvasItemView
               key={item.id}
               item={item}
               centre={centre}
               origin={origin}
               theme={theme}
+              tier={tierFor(item.w, rest.scale, DPR)}
             />
           ))}
         </Reanimated.View>
