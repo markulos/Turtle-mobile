@@ -2,6 +2,7 @@
  * filesUtils — the pure half of the Files tab: colours, labels, sorting and
  * breadcrumb collapsing. No React, no network; everything here is unit-tested.
  */
+import { fileIconForName } from '../../../../utils/fileBadge';
 
 /**
  * Mirrors boardColor (ConversationsOverlay.jsx) code-unit for code-unit, so a folder
@@ -50,20 +51,11 @@ export function isPdf(item) {
   return /\.pdf$/i.test(name);
 }
 
-const EXT_ICON = {
-  pdf: 'file-pdf-box',
-  doc: 'file-word-box', docx: 'file-word-box', odt: 'file-word-box', rtf: 'file-word-box',
-  xls: 'file-excel-box', xlsx: 'file-excel-box', ods: 'file-excel-box', csv: 'file-delimited-outline',
-  ppt: 'file-powerpoint-box', pptx: 'file-powerpoint-box', odp: 'file-powerpoint-box',
-  zip: 'folder-zip-outline',
-  json: 'code-json',
-  md: 'language-markdown',
-  txt: 'file-document-outline',
-};
+/** The icon for a vault row. The map itself lives in utils/fileBadge beside
+ *  the badge words, because the canvas needs the same answer from a bare
+ *  filename and two copies of it is how a .csv ends up with two faces. */
 export function documentIcon(item) {
-  const name = String(item?.originalName || item?.filename || '');
-  const ext = (name.split('.').pop() || '').toLowerCase();
-  return EXT_ICON[ext] || 'file-outline';
+  return fileIconForName(item?.originalName || item?.filename || '');
 }
 
 /** Files › … › Parent › Name: keep the first, the last two, and an ellipsis between. */

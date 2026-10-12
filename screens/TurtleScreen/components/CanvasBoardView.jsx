@@ -24,12 +24,13 @@
  * the zoom is one transform on their parent. No new dependency, nothing
  * native, and the phone gets it over the air.
  *
- * ─── What a phone cannot show ──────────────────────────────────────────────
+ * ─── Files on the wall ─────────────────────────────────────────────────────
  *
- * A PDF item on the desktop renders its live page through a web PDF engine.
- * There is no such engine here without a native dependency, so a PDF shows as
- * its own card with the page number — honest about being a document you
- * placed rather than pretending to be a blank sheet.
+ * Not every media item is a picture. A PDF draws the page it is turned to and
+ * anything else with nothing to show — a .zip, a spreadsheet — draws a card
+ * with its name and format on it. Both live in CanvasFileItem, which also
+ * records why they must exist: the variant endpoint these items used to be
+ * painted from serves IMAGES ONLY, so a document was a blank frame.
  */
 import React, { useCallback, useLayoutEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, PixelRatio, StyleSheet, Text, View } from 'react-native';
@@ -48,9 +49,11 @@ import { impactHaptic, tapHaptic } from '../../../utils/haptics';
 import { boardBounds, itemAtPoint, stacked } from '../../../utils/canvasDoc';
 import {
   MAX_SCALE, doubleTapScale, fitScale, itemsInRect, mediaUrlFor, panLimits,
-  screenToWorld, tierFor, visibleWorldRect,
+  rawFileUrl, screenToWorld, tierFor, visibleWorldRect,
 } from '../../../utils/canvasView';
 import { clamp, focalTranslate, rubberClamp, rubberScale } from '../../../utils/zoomMath';
+import { isKnownNonPicture, isPdfName } from '../../../utils/fileBadge';
+import { CanvasFileCard, CanvasPdfPage } from './CanvasFileItem';
 
 /** Deceleration for a flung board. The photo viewer's number — a canvas that
  *  coasts differently from the picture viewer in the same app is a canvas
@@ -88,29 +91,46 @@ function CanvasItemViewImpl({ item, centre, origin, theme, tier }) {
   };
 
   if (item.kind === 'media') {
+    const name = item.label || '';
     return (
       <View
         testID={`canvas-item-${item.id}`}
         style={[box, styles.mediaFrame, { borderColor: c.border, backgroundColor: c.surfaceElevated }]}
+        accessible={!!name}
+        accessibilityLabel={name || undefined}
       >
-        <ExpoImage
-          // Addressed by id, at the size this item is actually drawn — see
-          // tierFor. A capability URL, which is also what resolves media
-          // someone else shared with you (the by-ids listing would not).
-          source={{ uri: mediaUrlFor(origin, item.ref, tier) }}
-          // Keeps the view (and the picture already in it) when the tier
-          // changes, so zooming in swaps to the bigger file without blinking
-          // through an empty frame first.
-          recyclingKey={`canvas:${item.id}`}
-          style={StyleSheet.absoluteFill}
-          // The board's author chose this frame's shape; filling it is what
-          // the desktop does and what makes a moodboard read as one.
-          contentFit="cover"
-          transition={120}
-          cachePolicy="memory-disk"
-          accessible={!!item.label}
-          accessibilityLabel={item.label || undefined}
-        />
+        {/* Which of the three this is comes off the item's cached LABEL, which
+            is all a board carries — the same question the server answers by
+            extension when it decides what to store, and the same way the
+            desktop decides. No lookup, so the board still paints before any
+            request returns. */}
+        {isPdfName(name) ? (
+          <CanvasPdfPage
+            src={rawFileUrl(origin, item.ref, name)}
+            page={item.page || 1}
+            name={name}
+            theme={theme}
+          />
+        ) : isKnownNonPicture(name) ? (
+          <CanvasFileCard name={name} theme={theme} />
+        ) : (
+          <ExpoImage
+            // Addressed by id, at the size this item is actually drawn — see
+            // tierFor. A capability URL, which is also what resolves media
+            // someone else shared with you (the by-ids listing would not).
+            source={{ uri: mediaUrlFor(origin, item.ref, tier) }}
+            // Keeps the view (and the picture already in it) when the tier
+            // changes, so zooming in swaps to the bigger file without blinking
+            // through an empty frame first.
+            recyclingKey={`canvas:${item.id}`}
+            style={StyleSheet.absoluteFill}
+            // The board's author chose this frame's shape; filling it is what
+            // the desktop does and what makes a moodboard read as one.
+            contentFit="cover"
+            transition={120}
+            cachePolicy="memory-disk"
+          />
+        )}
         {item.page ? (
           <View style={[styles.pageChip, { backgroundColor: c.surface, borderColor: c.border }]}>
             <Icon name="file-document-outline" size={11} color={c.textSecondary} />

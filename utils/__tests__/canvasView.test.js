@@ -20,7 +20,9 @@ import {
   focalFromCentre,
   itemsInRect,
   mediaUrlFor,
+  openPlanFor,
   panLimits,
+  rawFileUrl,
   screenToWorld,
   tierFor,
   visibleWorldRect,
@@ -180,6 +182,86 @@ describe('which size of a picture to fetch', () => {
     expect(mediaUrlFor('http://pond', 'm1', 'display')).toBe('http://pond/api/media/display/m1');
     // Anything unknown falls back to the cheap one rather than the expensive.
     expect(mediaUrlFor('http://pond', 'm 1', 'nonsense')).toBe('http://pond/api/media/preview/m%201');
+  });
+});
+
+/**
+ * The FILE's own bytes — what a PDF page is drawn from, and what the share
+ * sheet is handed. Neither can come from the tiers above: those endpoints
+ * serve resized variants of IMAGES and answer 400 for a document, which is
+ * exactly how a PDF on a board came to be a blank frame.
+ */
+describe('where a file itself lives', () => {
+  it('addresses the stored file by id and its own extension', () => {
+    expect(rawFileUrl('http://pond', 'media_1', 'Lease.pdf'))
+      .toBe('http://pond/api/media/raw/media_1.pdf');
+    // Lower-cased, because the stored name is: the extension is the server's,
+    // not the one the person happened to type.
+    expect(rawFileUrl('http://pond', 'media_1', 'DRAFT_GF.PDF'))
+      .toBe('http://pond/api/media/raw/media_1.pdf');
+    // Not only PDFs — the share path wants a .docx to arrive as a .docx.
+    expect(rawFileUrl('http://pond', 'media_2', 'notes.docx'))
+      .toBe('http://pond/api/media/raw/media_2.docx');
+  });
+
+  it('is a pond-relative path when there is no origin, which is what a vault row carries', () => {
+    expect(rawFileUrl('', 'media_1', 'Lease.pdf')).toBe('/api/media/raw/media_1.pdf');
+  });
+
+  it('survives a name with nothing to take an extension from', () => {
+    expect(rawFileUrl('http://pond', 'media_3', 'Scan')).toBe('http://pond/api/media/raw/media_3');
+    expect(rawFileUrl('http://pond', 'media_3', '')).toBe('http://pond/api/media/raw/media_3');
+    // A query string is not an extension (a URL-ish label).
+    expect(rawFileUrl('http://pond', 'media_4', 'plan.pdf?v=2'))
+      .toBe('http://pond/api/media/raw/media_4.pdf');
+    // The id is escaped, as the tiers above escape theirs.
+    expect(rawFileUrl('http://pond', 'm 5', 'a.pdf')).toBe('http://pond/api/media/raw/m%205.pdf');
+  });
+});
+
+/**
+ * Where a tap goes. All three used to go to the picture viewer, pointed at an
+ * endpoint that answers 400 for a document — so tapping a PDF opened a viewer
+ * that could never paint anything.
+ */
+describe('what a tap on an item opens', () => {
+  const WITH = { canRender: true };
+  const WITHOUT = { canRender: false };
+
+  it('sends a PDF to the reader when there is one', () => {
+    expect(openPlanFor('Lease.pdf', WITH)).toBe('read');
+  });
+
+  /**
+   * And to the share sheet when there is NOT — Quick Look can read a PDF even
+   * when this binary cannot, so the document still opens. Falling through to
+   * the picture viewer is what used to happen and it showed nothing.
+   */
+  it('sends a PDF to the share sheet when the binary cannot draw one', () => {
+    expect(openPlanFor('Lease.pdf', WITHOUT)).toBe('share');
+  });
+
+  it('sends any other document out to the system sheet, renderer or not', () => {
+    expect(openPlanFor('notes.docx', WITH)).toBe('share');
+    expect(openPlanFor('budget.xlsx', WITHOUT)).toBe('share');
+    expect(openPlanFor('assets.zip', WITH)).toBe('share');
+    expect(openPlanFor('walkthrough.mp4', WITH)).toBe('share');
+  });
+
+  it('opens a picture full screen', () => {
+    expect(openPlanFor('render.jpg', WITH)).toBe('view');
+    expect(openPlanFor('IMG_0042.HEIC', WITH)).toBe('view');
+  });
+
+  it('treats an item it cannot judge as a picture, which is what it almost always is', () => {
+    expect(openPlanFor('', WITH)).toBe('view');
+    expect(openPlanFor('Pasted 2026-10-09', WITH)).toBe('view');
+    expect(openPlanFor(null, WITH)).toBe('view');
+  });
+
+  it('needs no options at all — a board that never asked about the renderer', () => {
+    expect(openPlanFor('Lease.pdf')).toBe('share');
+    expect(openPlanFor('render.png')).toBe('view');
   });
 });
 

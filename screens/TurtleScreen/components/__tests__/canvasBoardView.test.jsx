@@ -20,7 +20,30 @@ jest.mock('../../../../utils/haptics', () => ({
   tapHaptic: jest.fn(), impactHaptic: jest.fn(), notifyHaptic: jest.fn(), markGesture: jest.fn(),
 }));
 
+/**
+ * The native renderer, stood in for — and switchable.
+ *
+ * Mocked at utils/pdfRenderer (the seam) rather than at react-native-pdf
+ * itself, because what matters here is what the canvas draws when the answer
+ * is NULL: a binary that never bundled the module is the real case the OTA
+ * has to survive, and it cannot be reached by reloading this component (two
+ * copies of React in one test is its own failure). The require guard itself
+ * is covered in FilesVault/__tests__/PdfViewer.test.jsx.
+ */
+let mockHasRenderer = true;
+jest.mock('../../../../utils/pdfRenderer', () => ({
+  getPdfModule: () => {
+    if (!mockHasRenderer) return null;
+    const React = require('react');
+    const { View } = require('react-native');
+    return (props) => React.createElement(View, props);
+  },
+  canRenderPdf: () => mockHasRenderer,
+}));
+
 import CanvasBoardView from '../CanvasBoardView';
+
+beforeEach(() => { mockHasRenderer = true; });
 
 const theme = {
   colors: {
@@ -118,9 +141,95 @@ it('says what a note or a task is by its cached label', async () => {
   expect(view.getByText('Call the joiner')).toBeTruthy();
 });
 
-it('owns up to a PDF page rather than drawing a blank sheet', async () => {
-  const view = await draw([item({ id: 'p', page: 7 })]);
+/**
+ * ─── Files on the wall ─────────────────────────────────────────────────────
+ *
+ * These are the regression. Every media item used to be an <Image> on
+ * /api/media/preview/<id>, which serves resized variants of IMAGES ONLY — a
+ * PDF is stored as `type: 'document'` and gets a 400 — so a document on a
+ * board was a blank bordered rectangle. The old test here passed an item with
+ * `page: 7` and asserted only the chip, so the empty frame underneath it went
+ * unnoticed; a PDF on page 1 (which is what a dropped document IS, and what
+ * decodeBoards records by leaving `page` off entirely) had nothing at all.
+ */
+it('draws the real page of a PDF, from the document bytes', async () => {
+  const view = await draw([item({ id: 'p', ref: 'media_doc1', label: 'Lease.pdf' })]);
+  const page = view.getByTestId('canvas-pdf-page');
+  // The raw file, NOT the variant endpoint: derivable from the id with no
+  // lookup, because the stored file is named <id><ext>.
+  expect(page.props.source.uri).toBe('http://pond.local/api/media/raw/media_doc1.pdf');
+  // No `page` on the item means page one — a document someone never turned.
+  expect(page.props.page).toBe(1);
+  // Never cropped: a page is fitted WHOLE in the box the desktop gave it.
+  // (fitPolicy 2 = fit both axes.) Half a page of text is not a smaller page
+  // of text, it is a mistake.
+  expect(page.props.fitPolicy).toBe(2);
+  // One page standing in for a document, not a reader: the reader is a tap
+  // away, and a native view with its own pan and page-flick would fight the
+  // board for every gesture.
+  expect(page.props.singlePage).toBe(true);
+  expect(page.props.scrollEnabled).toBe(false);
+  // And no picture was asked for at the endpoint that would 400.
+  expect(nodesOfType(view, 'ExpoImage')).toHaveLength(0);
+});
+
+it('draws the page the board was turned to, and says which it is', async () => {
+  const view = await draw([item({ id: 'p', label: 'Report.pdf', page: 7 })]);
+  expect(view.getByTestId('canvas-pdf-page').props.page).toBe(7);
   expect(view.getByText('p7')).toBeTruthy();
+});
+
+it('cards a file it cannot draw, naming it, instead of an empty frame', async () => {
+  const view = await draw([
+    item({ id: 'z', label: 'Site assets.zip' }),
+    item({ id: 'x', label: 'budget.xlsx' }),
+  ]);
+  // The format and the name — which file, and what kind.
+  expect(view.getByText('ZIP')).toBeTruthy();
+  expect(view.getByText('Site assets')).toBeTruthy();
+  expect(view.getByText('XLS')).toBeTruthy();
+  expect(view.getByText('budget')).toBeTruthy();
+  expect(nodesOfType(view, 'ExpoImage')).toHaveLength(0);
+});
+
+/**
+ * A video is in the same boat as a document and this is easy to get wrong:
+ * the pond DOES make a poster frame for one, but not at the variant endpoint,
+ * which 400s for a video and says so in its own hint.
+ */
+it('cards a video rather than leaving the frame blank', async () => {
+  const view = await draw([item({ id: 'v', label: 'Walkthrough.mp4' })]);
+  expect(view.getByText('MP4')).toBeTruthy();
+  expect(nodesOfType(view, 'ExpoImage')).toHaveLength(0);
+});
+
+/**
+ * The degradation that has to be honest.
+ *
+ * This JS ships over the air to whatever binary is installed, so the renderer
+ * can be absent. Drawing page 1 then — or the cover of a document someone
+ * turned to page 7 — would be a quiet lie about what they are looking at. A
+ * card is not: it says which document, and which page it is meant to be on.
+ */
+it('cards a PDF, with its page, when the binary has no renderer', async () => {
+  mockHasRenderer = false;
+  const view = await draw([item({ id: 'p', label: 'Report.pdf', page: 7 })]);
+  expect(view.queryByTestId('canvas-pdf-page')).toBeNull();
+  expect(view.getByText('PDF')).toBeTruthy();
+  expect(view.getByText('Report')).toBeTruthy();
+  // The chip still says which page this item stands for.
+  expect(view.getByText('p7')).toBeTruthy();
+});
+
+/**
+ * The asymmetry that keeps this fix from costing anything: with no extension
+ * to judge by, the item is still tried as a picture. A card over a photo
+ * whose label was never cached would HIDE it.
+ */
+it('still tries the picture when the label says nothing about the format', async () => {
+  const view = await draw([item({ id: 'u', ref: 'media_abc', label: '' })]);
+  const [img] = nodesOfType(view, 'ExpoImage');
+  expect(img.props.source.uri).toBe('http://pond.local/api/media/preview/media_abc');
 });
 
 it('says so when the board is empty', async () => {

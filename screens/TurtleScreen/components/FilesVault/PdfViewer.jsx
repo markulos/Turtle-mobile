@@ -21,12 +21,10 @@
  * a document you have already opened renders straight from disk and works with
  * the pond unreachable.
  *
- * react-native-pdf is required LAZILY and defensively (the pattern
- * systemFilePick.js and MediaGallery's react-native-share use): its native
- * module only exists in a build that bundled it, so a top-level import would
- * take down the runtime on an older binary running this JS as an OTA update.
- * Absent → we fall through to the share sheet, which is exactly where this
- * document used to open anyway.
+ * react-native-pdf is required LAZILY and defensively — utils/pdfRenderer
+ * explains why and is shared with the canvas, which draws a board's PDF item
+ * the same way. Absent → we fall through to the share sheet, which is exactly
+ * where this document used to open anyway.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -40,36 +38,18 @@ import { ensureLocalCopy, shareDocument } from './documentOpen';
 import { messageOf } from './filesUtils';
 import PdfIndexPanel from './PdfIndexPanel';
 import { flattenOutline } from './pdfOutline';
+import { getPdfModule } from '../../../../utils/pdfRenderer';
 
 // 0 = fit width, 2 = fit both (whole page). react-native-pdf's own fitPolicy
 // values; named here so the toggle below reads as what it does.
 const FIT_WIDTH = 0;
 const FIT_PAGE = 2;
 
-let _checked = false;
-let _Pdf = null;
-const getPdf = () => {
-  if (_checked) return _Pdf;
-  _checked = true;
-  try {
-    const mod = require('react-native-pdf');
-    _Pdf = mod?.default || mod || null;
-  } catch {
-    _Pdf = null;
-  }
-  return _Pdf;
-};
-
-/** Tests mount this module more than once with different module state. */
-export function __resetPdfModuleForTests() {
-  _checked = false;
-  _Pdf = null;
-}
-
-/** Is there a renderer in this binary? FolderPage asks before routing here. */
-export function canRenderPdf() {
-  return !!getPdf();
-}
+// The lazy, defensive require lives in utils/pdfRenderer — the canvas draws
+// pages too and the guard is not worth having twice. Re-exported because
+// FolderPage asks `canRenderPdf()` before routing a row here, and has always
+// asked this module.
+export { canRenderPdf, __resetPdfModuleForTests } from '../../../../utils/pdfRenderer';
 
 function BarKey({ icon, label, onPress, disabled, theme, testID }) {
   const c = theme.colors;
@@ -94,7 +74,7 @@ export default function PdfViewer({ visible, item, onClose, getFullUrl, theme })
   const c = theme.colors;
   const danger = c.accentError || '#e5484d';
   const insets = useSafeAreaInsets();
-  const Pdf = getPdf();
+  const Pdf = getPdfModule();
   // Reading is a full-screen job: the dock goes while this page is up and
   // comes back when it closes (the hold is released on unmount, so a swipe
   // back returns it as reliably as the chevron does). This is also why the

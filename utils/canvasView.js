@@ -44,6 +44,7 @@ import {
   MAX_ZOOM as DOC_MAX_ZOOM,
   MIN_ZOOM as DOC_MIN_ZOOM,
 } from './canvasDoc';
+import { isKnownNonPicture, isPdfName } from './fileBadge';
 import { panBound } from './zoomMath';
 
 /** Air left around a fitted board, in screen points. */
@@ -180,6 +181,52 @@ export function tierFor(worldWidth, scale, pixelRatio = 1) {
  *  serves these unauthenticated by id. */
 export function mediaUrlFor(origin, ref, tier) {
   return `${String(origin || '')}/api/media/${tier === 'display' ? 'display' : 'preview'}/${encodeURIComponent(String(ref || ''))}`;
+}
+
+/**
+ * Where a FILE's own bytes live — the PDF the page is drawn from, and the
+ * document the share sheet is handed.
+ *
+ * From the media id alone, with no lookup, which is what lets a canvas item
+ * paint without a request per item: the upload names the stored file
+ * `<id><ext>` (server/routes/media.js) and the pond serves that directory at
+ * /api/media/raw, so the name is derivable. The web's pdfPages.rawPdfUrl is
+ * the same URL and its comment records what this replaced — /api/media/by-ids
+ * answers with the ORIGINAL filename ("Lease.pdf"), not the stored one, so
+ * asking it for the path produced nothing and the item sat on a spinner.
+ *
+ * The extension comes off the item's cached label rather than being hardcoded
+ * to .pdf, because the share path wants a .docx to arrive as a .docx.
+ * Unauthenticated, like the variant endpoints above and for the same reason —
+ * which is why the renderer can fetch it with no header of its own.
+ */
+export function rawFileUrl(origin, ref, name) {
+  const clean = String(name || '').trim().split(/[?#]/, 1)[0];
+  const dot = clean.lastIndexOf('.');
+  const ext = dot > 0 ? clean.slice(dot).toLowerCase() : '';
+  return `${String(origin || '')}/api/media/raw/${encodeURIComponent(String(ref || ''))}${ext}`;
+}
+
+/**
+ * What a tap on an item should DO — the three endings, decided once.
+ *
+ * Here rather than in the page for the reason the board's hit-testing is in
+ * canvasDoc: which of three things an item is, is a question with one right
+ * answer and no rendering in it, and a view is a bad place to keep one.
+ *
+ *   'read'  — a PDF, and this binary can draw one: the vault's reader, with
+ *             the whole document and its contents list. The board only ever
+ *             showed the single page the item was turned to.
+ *   'share' — any other document, and a PDF with no renderer: out to the
+ *             system share sheet, which previews a .docx and we do not.
+ *   'view'  — a picture, full screen.
+ *
+ * Everything unknown ends at 'view' deliberately — see isKnownNonPicture for
+ * why an unlabelled item is treated as a photo rather than a file.
+ */
+export function openPlanFor(name, { canRender = false } = {}) {
+  if (isPdfName(name)) return canRender ? 'read' : 'share';
+  return isKnownNonPicture(name) ? 'share' : 'view';
 }
 
 /**

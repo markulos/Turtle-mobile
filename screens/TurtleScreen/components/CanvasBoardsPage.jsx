@@ -30,9 +30,14 @@ import { useServer } from '../../../context/ServerContext';
 import { TAP_ONLY } from '../../../utils/pressBehavior';
 import { tapHaptic } from '../../../utils/haptics';
 import { itemCountLabel } from '../../../utils/canvasDoc';
+import { openPlanFor, rawFileUrl } from '../../../utils/canvasView';
+import { isPdfName } from '../../../utils/fileBadge';
+import { canRenderPdf } from '../../../utils/pdfRenderer';
 import { useCanvasBoards } from '../../../utils/useCanvasBoards';
 import EdgeSwipePage from './EdgeSwipePage';
 import CanvasBoardView from './CanvasBoardView';
+import PdfViewer from './FilesVault/PdfViewer';
+import { shareDocument } from './FilesVault/documentOpen';
 import AttachmentViewer from '../../../components/AttachmentViewer';
 
 /** "Tuesday" / "12 Mar" — enough to tell which canvas you were last on. */
@@ -69,11 +74,58 @@ export default function CanvasBoardsPage({ visible, onClose }) {
   // One picture, full screen. The viewer takes URLs, so nothing here has to
   // route through the media vault's own gallery.
   const [viewer, setViewer] = useState(null);
-  const openMedia = useCallback((item) => {
+  /** The document a tap sent to the vault's reader, as a vault row. */
+  const [reading, setReading] = useState(null);
+
+  /**
+   * A canvas item, as the vault's own document code expects one.
+   *
+   * The reader and the share sheet both take a media ROW (`ensureLocalCopy`
+   * wants an id to cache under and a `rawUrl` to fetch), and a canvas item is
+   * a far smaller thing — an id and a cached label. Everything else is
+   * derivable: the stored file is named `<id><ext>` and lives under
+   * /api/media/raw, which is what utils/canvasView's rawFileUrl is built on.
+   */
+  const asVaultRow = useCallback((item) => {
+    const name = item.label || 'Document';
+    return {
+      id: item.ref,
+      originalName: name,
+      filename: name,
+      rawUrl: rawFileUrl('', item.ref, name),
+      mimeType: isPdfName(name) ? 'application/pdf' : 'application/octet-stream',
+    };
+  }, []);
+
+  /**
+   * A tap on an item, to wherever that item goes (openPlanFor decides, and
+   * says why).
+   *
+   * This used to send all three kinds to the picture viewer, pointed at the
+   * variant endpoint — which answers 400 for anything that is not an image, so
+   * tapping a document opened a viewer that could never paint.
+   */
+  const openMedia = useCallback(async (item) => {
     if (!item?.ref) return;
+    const name = item.label || '';
+    const plan = openPlanFor(name, { canRender: canRenderPdf() });
+
+    if (plan === 'read') {
+      setReading(asVaultRow(item));
+      return;
+    }
+    if (plan === 'share') {
+      try {
+        await shareDocument(asVaultRow(item), { getFullUrl: (p) => `${origin}${p}` });
+      } catch {
+        // The sheet refusing, or the pond being unreachable. Nothing to
+        // recover and nothing worth a modal on a board you are browsing.
+      }
+      return;
+    }
     const uri = `${origin}/api/media/display/${encodeURIComponent(item.ref)}`;
     setViewer({ images: [{ key: item.id, uri, previewUri: uri, name: item.label || null }], index: 0 });
-  }, [origin]);
+  }, [asVaultRow, origin]);
 
   const renderBoard = useCallback(({ item }) => (
     <TouchableOpacity
@@ -147,7 +199,10 @@ export default function CanvasBoardsPage({ visible, onClose }) {
             construction the Music vault's playlists use, and `overlay` for the
             same reason: iOS will not present a second sibling Modal over an
             open one. */}
-        <EdgeSwipePage overlay visible={!!open} onClose={() => setOpenId(null)}>
+        {/* The board stops answering the back-swipe while the reader is over
+            it: the reader has its own, and two pages taking one gesture means
+            the board closes out from under the document. */}
+        <EdgeSwipePage overlay visible={!!open} onClose={() => setOpenId(null)} swipeEnabled={!reading}>
           <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
             <View style={styles.header}>
               <TouchableOpacity
@@ -186,6 +241,18 @@ export default function CanvasBoardsPage({ visible, onClose }) {
             index={viewer?.index || 0}
             onClose={() => setViewer(null)}
           />
+
+          {/* The vault's reader, over the board — mounted only once a document
+              has been tapped, so a board of photos never pays for it. */}
+          {reading ? (
+            <PdfViewer
+              visible
+              item={reading}
+              onClose={() => setReading(null)}
+              getFullUrl={(p) => `${origin}${p}`}
+              theme={theme}
+            />
+          ) : null}
         </EdgeSwipePage>
       </View>
     </EdgeSwipePage>
