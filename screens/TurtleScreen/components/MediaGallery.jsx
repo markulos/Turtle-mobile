@@ -108,6 +108,9 @@ import TimelineScrubber from './TimelineScrubber';
 import { dockOccupied } from '../../../components/tabBarLayout';
 import MusicVault from './MusicVault';
 import CanvasBoardsPage from './CanvasBoardsPage';
+import AlbumPickerSheet from './AlbumPickerSheet';
+import VaultImagePicker from './VaultImagePicker';
+import { commonAlbums, tagsToAdd } from '../../../utils/albumPicker';
 import FilesVault from './FilesVault/FilesVault';
 import FolderPage from './FilesVault/FolderPage';
 import { isDocument } from './FilesVault/filesUtils';
@@ -3385,6 +3388,112 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // keyed by id so changeBulkTags can read/patch them without the grid's map.
   const externalBulkItemsRef = useRef(new Map());
 
+  /**
+   * ── Put photos in an album ────────────────────────────────────────────
+   *
+   * An album IS a registered tag on this pond (utils/albumPicker says why),
+   * so filing is the same bulk write the tag sheet makes — and everything it
+   * already does well comes along: the grid updates on the tap, the write
+   * rides the offline queue, and a failure puts the tags back.
+   *
+   * What is different is the question. The tag sheet asks you to think in
+   * tags; this asks "which album?", offers the ones you have, and makes a new
+   * one from whatever you type — which is the thing Photos does and the thing
+   * people actually want from a photo.
+   */
+  const [albumPickerFor, setAlbumPickerFor] = useState(null);
+  const [albumPickerBusy, setAlbumPickerBusy] = useState(false);
+
+  /**
+   * The albums the picker offers: the real ones, with their counts.
+   *
+   * From the list the vault has already fetched — the picker must not make a
+   * request of its own, or opening it on a slow pond shows an empty sheet
+   * over a library that plainly has albums in it.
+   */
+  const albumNamesForPicker = useMemo(() => (globalAlbums || [])
+    .filter((name) => typeof name === 'string' && name.trim())
+    .map((name) => ({ name, count: Number(albumCounts?.[name]) || 0 })), [albumCounts, globalAlbums]);
+
+  /**
+   * ── New album, from the albums page ───────────────────────────────────
+   *
+   * Pick the photos, then name it — and the naming is the SAME sheet that
+   * files a photo into an album anywhere else, so "new album" and "add to
+   * album" are one flow with one answer rather than two that drift apart.
+   *
+   * Not Alert.prompt for the name, which is the obvious way and the wrong
+   * one: Android does not have it, and this app has already been bitten by
+   * exactly that (see AlbumActionsSheet's header, which moved its rename
+   * inline for the same reason).
+   *
+   * Photos-first rather than name-first is also the only order that can work
+   * here. An album exists on this pond because a photo carries its name as a
+   * tag, so there is no empty album to make first — it is created by its
+   * first filing, and the sheet says as much.
+   */
+  const [pickingForNewAlbum, setPickingForNewAlbum] = useState(false);
+  const startNewAlbum = useCallback(() => setPickingForNewAlbum(true), []);
+
+  const openAlbumPickerFor = useCallback((items) => {
+    const list = (items || []).filter(Boolean);
+    if (list.length === 0) return;
+    setAlbumPickerFor(list);
+  }, []);
+
+  /** The grid's selection, by the same door. */
+  const openAlbumPickerForSelection = useCallback(() => {
+    const ids = Array.from(selectedGridItemsRef.current || []);
+    if (ids.length === 0) return;
+    const byId = displayById();
+    openAlbumPickerFor(ids.map((id) => byId.get(id)).filter(Boolean));
+  }, [displayById, openAlbumPickerFor]);
+
+  const closeAlbumPicker = useCallback(() => {
+    setAlbumPickerFor(null);
+    setAlbumPickerBusy(false);
+  }, []);
+
+  const addToAlbum = useCallback(async (name) => {
+    const items = albumPickerFor || [];
+    const add = tagsToAdd(name, commonAlbums(items, tagsOf));
+    // Everything already in it: nothing to write, and nothing to invalidate.
+    if (items.length === 0 || add.length === 0) { closeAlbumPicker(); return; }
+    const ids = items.map((it) => it.id);
+    const snapshot = {};
+    const tagsById = {};
+    for (const it of items) {
+      const before = tagsOf(it);
+      snapshot[it.id] = before;
+      tagsById[it.id] = before.includes(add[0]) ? before : [...before, add[0]];
+    }
+    // On screen first — the photo is in the album the moment you tap it.
+    applyTagsLocally(tagsById);
+    setAlbumPickerBusy(true);
+    try {
+      const r = await sendOrQueue(api, {
+        method: 'put',
+        path: '/media/tags/bulk',
+        body: { ids, add, remove: [] },
+        label: `Add to ${add[0]}`,
+      });
+      if (!r.queued && (!r.result || !r.result.success)) {
+        throw new Error(r.result?.error || 'album write failed');
+      }
+      // The ALBUM list is what changed shape: a new album exists, or an
+      // existing one has a different count and a different cover. The pond
+      // drops its own album cache on a tag write, so asking again now is what
+      // makes the album appear without a pull-to-refresh.
+      if (!r.queued) fetchAlbums();
+    } catch (e) {
+      console.warn('[MediaGallery] album add failed:', e?.message || e);
+      applyTagsLocally(snapshot);
+      Alert.alert('Not added', `Could not put ${ids.length === 1 ? 'that photo' : 'those photos'} in “${add[0]}”.`);
+    } finally {
+      closeAlbumPicker();
+    }
+  }, [albumPickerFor, api, applyTagsLocally, closeAlbumPicker, fetchAlbums]);
+
   const openBulkTags = useCallback(() => {
     const ids = Array.from(selectedGridItemsRef.current || []);
     if (ids.length === 0) return;
@@ -4692,6 +4801,27 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                   Tag
                 </Text>
               </TouchableOpacity>
+
+              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.borderStrong, marginHorizontal: 8 }} />
+
+              {/* Album, beside Tag, because the two write the SAME row — an
+                  album is a registered tag on this pond — and only differ in
+                  the question they ask. Tag asks you to think in a filing
+                  system; this asks the one thing people actually have in mind
+                  about a photo, and will make the album if it is new. */}
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
+                disabled={selectedGridItems.size === 0}
+                onPress={openAlbumPickerForSelection}
+                accessibilityRole="button"
+                accessibilityLabel="Add to album"
+                testID="selection-add-to-album"
+              >
+                <Icon name="image-plus" size={20} color={theme.colors.primary} />
+                <Text style={{ color: theme.colors.primary, fontWeight: 'bold', fontSize: 15 }}>
+                  Album
+                </Text>
+              </TouchableOpacity>
               
               <View style={{ width: 1, height: 20, backgroundColor: theme.colors.borderStrong, marginHorizontal: 8 }} />
               
@@ -4856,6 +4986,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               // The canvases: the same vault media arranged by hand on the
               // desktop. A pushed page, like Photos is.
               onOpenCanvases={() => setCanvasesOpen(true)}
+              // New album: name it, then pick what goes in it.
+              onNewAlbum={startNewAlbum}
               loading={isAlbumsLoading}
               error={albumsLoadError}
               hasLoadedAlbums={hasLoadedAlbums}
@@ -5031,6 +5163,36 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           presented inside a Modal, and iOS will not put a second sibling
           Modal over an open one. */}
       <CanvasBoardsPage visible={canvasesOpen} onClose={() => setCanvasesOpen(false)} />
+
+      {/* Choosing the photos for a new album. The vault's picker, not the
+          phone's: the library is on the pond, and half of it was never on
+          this phone at all. What comes back goes straight to the album sheet,
+          which is where it gets its name. */}
+      <VaultImagePicker
+        visible={pickingForNewAlbum}
+        onClose={() => setPickingForNewAlbum(false)}
+        onPick={(items) => {
+          setPickingForNewAlbum(false);
+          openAlbumPickerFor(items);
+        }}
+        theme={theme}
+        api={api}
+        getFullUrl={getFullUrl}
+        maxSelection={200}
+      />
+
+      {/* Which album? Over the grid and over the photos page, because it is
+          opened from both. */}
+      <AlbumPickerSheet
+        visible={!!albumPickerFor}
+        albums={albumNamesForPicker}
+        count={(albumPickerFor || []).length}
+        inAlbums={commonAlbums(albumPickerFor || [], tagsOf)}
+        busy={albumPickerBusy}
+        onPick={addToAlbum}
+        onClose={closeAlbumPicker}
+        theme={theme}
+      />
       <EdgeSwipePage overlay visible={photosOpen} onClose={closePhotosPage} swipeEnabled={!isSelectMode}>
         <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
           {/* Photos page header — the board title, its edit menu and the photo

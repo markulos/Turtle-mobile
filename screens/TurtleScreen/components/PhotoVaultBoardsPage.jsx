@@ -100,6 +100,9 @@ const PhotoVaultBoardsPage = forwardRef(({
   /** () => void — open the canvases. Optional: a host that has no canvas
    *  page simply does not offer the row. */
   onOpenCanvases,
+  /** () => void — start a new album: name it, then pick what goes in it.
+   *  Optional, same as above. */
+  onNewAlbum,
   loading,
   error,
   hasLoadedAlbums = false,
@@ -305,6 +308,39 @@ const PhotoVaultBoardsPage = forwardRef(({
             onLongPress={NOOP}
           />
         </View>
+      ) : null}
+
+      {/* New album. First of the fixed entries, because making one is the
+          thing you came to this page to do that the grid below cannot offer.
+
+          It names the album and then asks what goes in it, which is the order
+          Photos uses — and here it is also the only order that can work: an
+          album on this pond exists because a photo carries its name as a tag,
+          so there is no such thing as an empty one to create first. */}
+      {onNewAlbum && !displayQuery ? (
+        <TouchableOpacity
+          {...TAP_ONLY}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="New album"
+          testID="vault-new-album-row"
+          onPress={() => { tapHaptic(); onNewAlbum(); }}
+          style={[styles.canvasRow, {
+            backgroundColor: theme.colors.surfaceElevated,
+            borderColor: theme.colors.border,
+          }]}
+        >
+          <Icon name="plus-box-outline" size={20} color={theme.colors.accentInfo || theme.colors.textSecondary} />
+          <View style={styles.canvasRowBody}>
+            <Text style={[styles.canvasRowTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+              New album
+            </Text>
+            <Text style={[styles.canvasRowMeta, { color: theme.colors.textTertiary }]} numberOfLines={1}>
+              Name it, then choose the photos
+            </Text>
+          </View>
+          <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
+        </TouchableOpacity>
       ) : null}
 
       {/* The canvases. A fixed entry point like All Photos above — not a
