@@ -12,7 +12,7 @@
  * could write one back.
  */
 import React from 'react';
-import { render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
 jest.mock('expo-image', () => ({ Image: 'ExpoImage' }));
@@ -126,6 +126,54 @@ it('owns up to a PDF page rather than drawing a blank sheet', async () => {
 it('says so when the board is empty', async () => {
   const view = await draw([]);
   expect(view.getByText(/Nothing on this canvas yet/)).toBeTruthy();
+});
+
+/**
+ * ─── Being MEASURED is the moment it used to fall over ─────────────────────
+ *
+ * Mounting a canvas is only half of it. The board is framed from the stage's
+ * first layout, and that is where the work happens: the viewport goes into
+ * state, the fit runs, and the resting view is published for the picture tiers
+ * and the culling to read.
+ *
+ * It shipped once with the fit called from INSIDE the viewport's state
+ * updater. A state updater has to be pure — React may call it more than once
+ * for one update — so publishing from in there is a setState during a render,
+ * which React 19 throws on: the app died a beat after a canvas opened. Every
+ * test above passed through it, because without a layout event none of that
+ * code ever ran.
+ */
+describe('when the stage is measured', () => {
+  const measure = async (view, w = 390, h = 700) => {
+    await act(async () => {
+      fireEvent(view.getByTestId('canvas-stage'), 'layout', {
+        nativeEvent: { layout: { x: 0, y: 0, width: w, height: h } },
+      });
+    });
+  };
+
+  it('frames the board without taking the screen down', async () => {
+    const view = await draw([item({ id: 'a' }), item({ id: 'b', x: 400, y: 0 })]);
+    await measure(view);
+    // Still here, still drawing — the assertion is really "it did not throw".
+    expect(view.getByTestId('canvas-item-a')).toBeTruthy();
+    expect(view.getByTestId('canvas-stage')).toBeTruthy();
+  });
+
+  it('survives being measured again at the same size, and at a new one', async () => {
+    // Re-layout happens constantly (keyboard, rotation, the page settling).
+    const view = await draw([item({ id: 'a' })]);
+    await measure(view);
+    await measure(view);
+    await measure(view, 700, 390);
+    expect(view.getByTestId('canvas-item-a')).toBeTruthy();
+  });
+
+  it('is measured fine with nothing on the board', async () => {
+    const view = await draw([]);
+    await measure(view);
+    expect(view.getByText(/Nothing on this canvas yet/)).toBeTruthy();
+  });
 });
 
 it('offers nothing that could move an item', async () => {

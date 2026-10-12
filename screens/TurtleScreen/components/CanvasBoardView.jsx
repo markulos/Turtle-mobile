@@ -31,7 +31,7 @@
  * its own card with the page number — honest about being a document you
  * placed rather than pretending to be a blank sheet.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, PixelRatio, StyleSheet, Text, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -213,6 +213,38 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
   const pinchOriginX = useSharedValue(0);
   const pinchOriginY = useSharedValue(0);
 
+  /**
+   * The settle hands the view back to React, once, when the hand stops.
+   *
+   * DECLARED HERE, above everything that lists it as a dependency. A `const`
+   * read from a dependency array before its own declaration is a temporal
+   * dead zone — a ReferenceError thrown while rendering, which is a blank
+   * screen and not a warning. It was below the gestures once and that is
+   * exactly what it did.
+   */
+  const publishRest = useCallback((s, px, py) => {
+    setRest((prev) => (
+      // A gesture that changed nothing (a tap on bare canvas, a settle that
+      // was already at rest) must not re-render the board.
+      Math.abs(prev.scale - s) < 1e-4 && Math.abs(prev.x - px) < 0.5 && Math.abs(prev.y - py) < 0.5
+        ? prev
+        : { scale: s, x: px, y: py }
+    ));
+  }, []);
+
+  /**
+   * Where a flick ENDS is not where it was released, and the culling and the
+   * picture sizes are chosen from where it ends — so this rides the decay's
+   * COMPLETION rather than the release. Named and hoisted rather than written
+   * inside the gesture: a worklet declared inside another worklet is a thing
+   * to avoid asking of the toolchain when one named callback will do.
+   * publishRest ignores a repeat, so both axes reporting costs nothing.
+   */
+  const landed = useCallback((finished) => {
+    'worklet';
+    if (finished) runOnJS(publishRest)(scale.value, tx.value, ty.value);
+  }, [publishRest, scale, tx, ty]);
+
   /** The pan limits at a given scale, on the UI thread. Half the overflow,
    *  and zero on an axis that still fits — which pins that axis centred
    *  rather than letting the board drift in empty space. */
@@ -260,22 +292,41 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
     publishRest(s, 0, 0);
   }, [bounds, minScale, publishRest, scale, tx, ty]);
 
+  /**
+   * Measuring is ALL this does.
+   *
+   * It used to fit the board from inside the state updater below, which was
+   * survivable while fitting only wrote shared values — and stopped being so
+   * the moment the fit also published the resting view for the tiers and the
+   * culling. A state updater must be PURE: React is free to call it more than
+   * once for a single update, and a setState from inside one is an update
+   * during a render, which is a crash rather than a warning. That is what took
+   * the app down a beat after a canvas opened.
+   */
   const onLayout = useCallback((e) => {
     const { width, height } = e.nativeEvent.layout;
-    vw.value = width;
-    vh.value = height;
+    setViewport((prev) => (prev.w === width && prev.h === height ? prev : { w: width, h: height }));
+  }, []);
+
+  /**
+   * Everything that FOLLOWS a measurement: the numbers the gesture worklets
+   * read, and the fit itself.
+   *
+   * A layout effect, not an ordinary one, so the board is framed before the
+   * frame is shown — an ordinary effect runs after paint and you would see a
+   * frame of unfitted wall. It re-runs when the viewport changes shape (a
+   * rotation: a board framed for portrait is off-screen in landscape) and when
+   * the BOARD changes, which is what frames the next one you open.
+   */
+  useLayoutEffect(() => {
+    vw.value = viewport.w;
+    vh.value = viewport.h;
     boardW.value = bounds ? bounds.w : 0;
     boardH.value = bounds ? bounds.h : 0;
-    setViewport((prev) => {
-      if (prev.w === width && prev.h === height) return prev;
-      // Fit on the first real measurement, and again when the window changes
-      // shape (a rotation) — a board framed for portrait is off-screen in
-      // landscape.
-      fit({ w: width, h: height }, false);
-      return { w: width, h: height };
-    });
+    if (!(viewport.w > 0) || !(viewport.h > 0)) return;
+    fit(viewport, false);
     setSettled(true);
-  }, [bounds, boardH, boardW, fit, vh, vw]);
+  }, [bounds, boardH, boardW, fit, vh, viewport, vw]);
 
   /**
    * Drag the board, with momentum and an edge that gives.
@@ -321,17 +372,9 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
     })
     .onEnd((e) => {
       const lim = limitsFor(scale.value);
-      // Where a flick ENDS is not where it was released, and that is what the
-      // culling and the picture sizes are chosen from — so the publish rides
-      // the decay's completion rather than firing here with a position the
-      // board is about to coast away from. (publishRest ignores a repeat, so
-      // both axes reporting costs nothing.)
-      const landed = (finished) => {
-        'worklet';
-        if (finished) runOnJS(publishRest)(scale.value, tx.value, ty.value);
-      };
       // Inside the bounds a flick coasts; outside them there is nothing to
-      // coast to and the settle below springs it back.
+      // coast to and the settle below springs it back. `landed` publishes
+      // where it actually comes to rest — see its declaration above.
       if (Math.abs(tx.value) <= lim.x) {
         tx.value = withDecay({ velocity: e.velocityX, clamp: [-lim.x, lim.x], deceleration: DECAY }, landed);
       }
@@ -339,7 +382,7 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
         ty.value = withDecay({ velocity: e.velocityY, clamp: [-lim.y, lim.y], deceleration: DECAY }, landed);
       }
       settle();
-    }), [limitsFor, panFromX, panFromY, panTransX, panTransY, publishRest, rebase, scale, settle, tx, ty]);
+    }), [landed, limitsFor, panFromX, panFromY, panTransX, panTransY, rebase, scale, settle, tx, ty]);
 
   /**
    * Pinch: the point under your fingers stays under your fingers.
@@ -397,17 +440,6 @@ export default function CanvasBoardView({ board, origin, theme, onOpenMedia }) {
   }, [limitsFor, minScale, publishRest, scale, tx, ty, vh, vw]);
 
   const thud = useCallback(() => impactHaptic('light'), []);
-
-  /** The settle hands the view back to React, once, when the hand stops. */
-  const publishRest = useCallback((s, px, py) => {
-    setRest((prev) => (
-      // A gesture that changed nothing (a tap on bare canvas, a settle that
-      // was already at rest) must not re-render the board.
-      Math.abs(prev.scale - s) < 1e-4 && Math.abs(prev.x - px) < 0.5 && Math.abs(prev.y - py) < 0.5
-        ? prev
-        : { scale: s, x: px, y: py }
-    ));
-  }, []);
 
   /**
    * A tap landed at this point on the SCREEN — open whatever is under it.
