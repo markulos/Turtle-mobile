@@ -1733,8 +1733,13 @@ const DayPane = React.memo(function DayPane({
                     range=""
                     color={boardTint(task, boardColor)}
                     done={done}
-                    onPress={onTaskInspect || onTaskPress}
-                    onLongPress={onTaskLongPress}
+                    // Same order as the timed rows above: a plain tap edits,
+                    // a long press inspects. These two were the other way
+                    // round, so the one list where a task is most likely to
+                    // still need writing was the one list a tap would not let
+                    // you write in.
+                    onPress={onTaskLongPress || onTaskPress}
+                    onLongPress={onTaskInspect || onTaskPress}
                     onToggle={(it) => onToggleComplete?.(it.id, dayStr)}
                     people={rosterFor(task)}
                     onPeoplePress={onPeoplePress}
