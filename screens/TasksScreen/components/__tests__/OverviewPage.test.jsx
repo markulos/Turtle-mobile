@@ -226,6 +226,106 @@ describe('deleting a board from its own page', () => {
   });
 });
 
+/**
+ * THE BOARD'S TAGS ARE A FILTER, NOT A READOUT.
+ *
+ * They were a block of cards in the board's body, between the figures and the
+ * list: one card per tag with a count and a progress track, scrolled past on
+ * the way to the tasks every time. They answered a question nobody arrived
+ * with, and on a board with a few tags they pushed the list itself off the
+ * first screen. Behind the funnel key they are what they always were — a way
+ * to narrow this list.
+ */
+describe('a board’s tags, behind the filter key', () => {
+  const TAGGED = [
+    task({ id: 'a', title: 'Draw the plan', tags: ['Design'] }),
+    task({ id: 'b', title: 'Ring the bank', tags: ['Admin bits'] }),
+    task({ id: 'c', title: 'Sign it off', tags: ['Design'], completed: true }),
+  ];
+  const openTagged = (over = {}) => openBoard({ tasks: TAGGED, ...over });
+  const openTagPage = async (user) => { await user.press(screen.getByTestId('board-tags-key')); };
+
+  test('the body holds the list, not a block of tag cards', async () => {
+    await openTagged();
+    expect(screen.queryByTestId('board-tag-pick-Design')).toBeNull();
+    // The heading that led the block is gone with it.
+    expect(screen.queryByText('Tags')).toBeNull();
+    expect(screen.getByText('To do · 2')).toBeTruthy();
+  });
+
+  test('the key is there on a board with tags, and not on one without', async () => {
+    await openTagged();
+    expect(screen.getByTestId('board-tags-key')).toBeTruthy();
+    // A key that opens an empty list is a promise of something to pick.
+    await openBoard();
+    expect(screen.queryByTestId('board-tags-key')).toBeNull();
+  });
+
+  test('picking one narrows the lists, and the headings follow', async () => {
+    const { user } = await openTagged();
+    await openTagPage(user);
+    await user.press(screen.getByTestId('board-tag-pick-Design'));
+
+    expect(screen.getByText('To do · 1')).toBeTruthy();
+    expect(screen.getByTestId('overview-task-a')).toBeTruthy();
+    expect(screen.queryByTestId('overview-task-b')).toBeNull();
+    expect(screen.getByText('Done · 1')).toBeTruthy();
+  });
+
+  test('the tag list is counted off the WHOLE board, so the others stay reachable', async () => {
+    // Counted off the filtered list it would collapse to the one tag picked,
+    // and there would be no way back to the rest.
+    const { user } = await openTagged();
+    await openTagPage(user);
+    await user.press(screen.getByTestId('board-tag-pick-Design'));
+    await openTagPage(user);
+
+    expect(screen.getByTestId('board-tag-pick-Admin bits')).toBeTruthy();
+    expect(screen.getByLabelText('Design, 1 of 2 done')).toBeTruthy();
+  });
+
+  test('the scope says itself on the page, and clears on a tap', async () => {
+    // A filter you cannot see is a list quietly lying about what is on the board.
+    const { user } = await openTagged();
+    await openTagPage(user);
+    await user.press(screen.getByTestId('board-tag-pick-Design'));
+
+    expect(screen.getByLabelText('Filtered to Design. Change or clear it.')).toBeTruthy();
+    await user.press(screen.getByTestId('board-tag-scope'));
+    await user.press(screen.getByTestId('board-tag-pick-all'));
+    expect(screen.queryByTestId('board-tag-scope')).toBeNull();
+    expect(screen.getByText('To do · 2')).toBeTruthy();
+  });
+
+  test('a second tap on the lit tag clears it — the same gesture in and out', async () => {
+    const { user } = await openTagged();
+    await openTagPage(user);
+    await user.press(screen.getByTestId('board-tag-pick-Design'));
+    await openTagPage(user);
+    await user.press(screen.getByTestId('board-tag-pick-Design'));
+
+    expect(screen.queryByTestId('board-tag-scope')).toBeNull();
+    expect(screen.getByText('To do · 2')).toBeTruthy();
+  });
+
+  test('leaving the board drops the filter with it', async () => {
+    // The next board may not even have the tag this one was scoped to.
+    const { user } = await openTagged();
+    await openTagPage(user);
+    await user.press(screen.getByTestId('board-tag-pick-Design'));
+    // The shell behind it carries a Back key too; the drill-down's is the one
+    // mounted last.
+    const backs = screen.getAllByLabelText('Back');
+    await user.press(backs[backs.length - 1]);
+    await settleBoards();
+    await user.press(screen.getByTestId('overview-board-Admin'));
+    await settleBoards();
+
+    expect(screen.queryByTestId('board-tag-scope')).toBeNull();
+    expect(screen.getByText('To do · 2')).toBeTruthy();
+  });
+});
+
 describe('the board finder', () => {
   test('filters the lists as you type, headings included', async () => {
     await openBoard();

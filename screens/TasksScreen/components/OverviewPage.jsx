@@ -754,6 +754,75 @@ function PageHeader({ title, onBack, right, theme, onRename }) {
   );
 }
 
+/**
+ * The board's tags, as the filter they always were.
+ *
+ * Same rows as the block that used to sit in the board's body — name, done /
+ * total, a hairline track — only now a tap on one narrows the list behind this
+ * page instead of simply being read. "All tags" leads, because getting back
+ * out of a filter has to be at least as easy as getting into one.
+ */
+function BoardTagsPage({ rows, selected, pal, theme, onBack, onPick }) {
+  const c = theme.colors;
+  const total = rows.reduce((n, r) => n + r.total, 0);
+  const totalDone = rows.reduce((n, r) => n + r.done, 0);
+  return (
+    <View style={[styles.page, { backgroundColor: c.background }]}>
+      <PageHeader title={`Tags · ${rows.length}`} onBack={onBack} theme={theme} />
+      <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator scrollIndicatorInsets={{ right: 1 }} indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}>
+        <TagPick
+          label="All tags"
+          done={totalDone}
+          total={total}
+          active={!selected}
+          pal={pal}
+          onPress={() => onPick(null)}
+          testID="board-tag-pick-all"
+        />
+        {rows.map((r) => (
+          <TagPick
+            key={r.tag}
+            label={r.tag}
+            done={r.done}
+            total={r.total}
+            active={selected === r.tag}
+            pal={pal}
+            // A second tap on the lit one clears it — the same gesture in and
+            // out, so you never have to find "All tags" to undo a mis-tap.
+            onPress={() => onPick(selected === r.tag ? null : r.tag)}
+            testID={`board-tag-pick-${r.tag}`}
+          />
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+function TagPick({ label, done, total, active, pal, onPress, testID }) {
+  return (
+    <Pressable
+      onPressIn={() => tapHaptic()}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: !!active }}
+      accessibilityLabel={`${label}, ${done} of ${total} done`}
+      testID={testID}
+      style={({ pressed }) => [
+        styles.tagRow,
+        { backgroundColor: pal.card, borderColor: active ? pal.text : pal.edge, borderTopColor: active ? pal.text : pal.edgeTop },
+        pressed && styles.pressed,
+      ]}
+    >
+      <View style={styles.rowTop}>
+        <Text style={[styles.rowName, { color: pal.text }]} numberOfLines={1}>{label}</Text>
+        {active && <Icon name="check" size={16} color={pal.text} />}
+        <Text style={[styles.rowFigure, { color: pal.text }]}>{done}<Text style={[styles.rowFigureTotal, { color: pal.sub }]}>/{total}</Text></Text>
+      </View>
+      <Track done={done} total={total} pal={pal} />
+    </Pressable>
+  );
+}
+
 function TagRows({ rows, pal }) {
   return rows.map((r) => (
     <View key={r.tag} style={[styles.tagRow, { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop }]}>
@@ -773,6 +842,14 @@ function BoardDetail({
   // BY someone else is theirs — the server refuses both, so the page must not
   // offer them.
   onRename, onDelete,
+  // ── The board's tags, which are a FILTER and not a readout ───────────────
+  // They were a block of cards in the body, between the figures and the list:
+  // one card per tag, with a count and a progress track, scrolled past on the
+  // way to the tasks every time. They answered a question nobody had arrived
+  // with, and on a board with half a dozen tags they pushed the list itself
+  // off the first screen. Behind the funnel key they are what they always
+  // were — a way to narrow this list — and the body is the list again.
+  tagCount = 0, tagFilter = null, onOpenTags,
 }) {
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
@@ -795,9 +872,6 @@ function BoardDetail({
     onAddTask(query.trim(), row.name === NO_BOARD ? '' : row.name);
     setQuery('');
   };
-  const tags = new Map();
-  for (const t of tasks) for (const tag of (t.tags || [])) { const e = tags.get(tag) || { total: 0, done: 0 }; e.total += 1; if (t.completed) e.done += 1; tags.set(tag, e); }
-  const tagRows = Array.from(tags.entries()).map(([tag, s]) => ({ tag, ...s })).sort((a, b) => b.total - a.total);
   const c = theme.colors;
   return (
     <View style={[styles.page, { backgroundColor: c.background }]}>
@@ -807,17 +881,44 @@ function BoardDetail({
         theme={theme}
         onRename={onRename}
         right={(
-          <Pressable
-            onPressIn={() => tapHaptic()}
-            onPress={onShow}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel={isShown ? 'Showing on calendar' : `Show ${boardLabel(row.name)} on calendar`}
-            testID="overview-show-board"
-            style={({ pressed }) => [styles.pill, { borderColor: c.borderStrong }, isShown && { backgroundColor: c.textPrimary, borderColor: c.textPrimary }, pressed && styles.pressed]}
-          >
-            <Text style={[styles.pillText, { color: isShown ? c.background : c.textTertiary }]} numberOfLines={1}>{isShown ? 'Showing' : 'Show'}</Text>
-          </Pressable>
+          <View style={styles.topKeys}>
+            {/* The funnel only appears on a board that HAS tags — a key that
+                opens an empty list is a promise of something to pick. */}
+            {tagCount > 0 && !!onOpenTags && (
+              <Pressable
+                onPressIn={() => tapHaptic()}
+                onPress={onOpenTags}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={tagFilter ? `Tags, filtered to ${tagFilter}` : 'Filter by tag'}
+                testID="board-tags-key"
+                style={({ pressed }) => [
+                  styles.iconKey,
+                  { borderColor: c.borderStrong },
+                  !!tagFilter && { backgroundColor: c.textPrimary, borderColor: c.textPrimary },
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Icon name="filter-variant" size={18} color={tagFilter ? c.background : c.textTertiary} />
+                {!!tagFilter && (
+                  <View style={[styles.badge, { backgroundColor: c.background }]}>
+                    <Text style={[styles.badgeText, { color: c.textPrimary }]}>1</Text>
+                  </View>
+                )}
+              </Pressable>
+            )}
+            <Pressable
+              onPressIn={() => tapHaptic()}
+              onPress={onShow}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={isShown ? 'Showing on calendar' : `Show ${boardLabel(row.name)} on calendar`}
+              testID="overview-show-board"
+              style={({ pressed }) => [styles.pill, { borderColor: c.borderStrong }, isShown && { backgroundColor: c.textPrimary, borderColor: c.textPrimary }, pressed && styles.pressed]}
+            >
+              <Text style={[styles.pillText, { color: isShown ? c.background : c.textTertiary }]} numberOfLines={1}>{isShown ? 'Showing' : 'Show'}</Text>
+            </Pressable>
+          </View>
         )}
       />
       <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator scrollIndicatorInsets={{ right: 1 }} indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}>
@@ -827,11 +928,24 @@ function BoardDetail({
           <Tile icon="alert-circle-outline" label="Late" value={row.overdue} caption={row.overdue ? 'past due' : 'nothing late'} pal={pal} accent={row.overdue ? '#F87171' : null} testID="board-tile-late" />
           <Tile icon="calendar-today" label="Today" value={row.today} caption={row.today ? `${row.todayDone} done` : 'nothing due'} pal={pal} testID="board-tile-today" />
         </View>
-        {tagRows.length > 0 && (
-          <>
-            <Text style={[styles.section, { color: c.textTertiary }]}>Tags</Text>
-            <TagRows rows={tagRows} pal={pal} />
-          </>
+        {/* A filter you cannot see is a list that is quietly lying about how
+            much is on this board, so the scope says itself — and the line IS
+            the way out of it. */}
+        {!!tagFilter && (
+          <Pressable
+            onPressIn={() => tapHaptic()}
+            onPress={onOpenTags}
+            accessibilityRole="button"
+            accessibilityLabel={`Filtered to ${tagFilter}. Change or clear it.`}
+            testID="board-tag-scope"
+            style={({ pressed }) => [styles.scopeLine, { borderColor: c.borderStrong }, pressed && styles.pressed]}
+          >
+            <Icon name="tag-outline" size={14} color={c.textTertiary} />
+            <Text style={[styles.scopeText, { color: c.textSecondary || c.textTertiary }]} numberOfLines={1}>
+              {tagFilter}
+            </Text>
+            <Icon name="close-circle" size={15} color={c.textTertiary} />
+          </Pressable>
         )}
 
         <BoardFinder
@@ -951,6 +1065,20 @@ function OverviewPage({
     return allRows.filter((r) => boardLabel(r.name).toLowerCase().includes(q));
   }, [allRows, query]);
   const [board, setBoard] = useState(null);
+  // The open board's tag filter, and the page that sets it. Scoped to the
+  // board: leaving one and opening another must not carry a tag across that
+  // the next board may not even have.
+  const [tagFilter, setTagFilter] = useState(null);
+  const [tagsOpen, setTagsOpen] = useState(false);
+  const openBoardPage = useCallback((name) => {
+    setTagFilter(null);
+    setBoard(name);
+  }, []);
+  const closeBoardPage = useCallback(() => {
+    setTagsOpen(false);
+    setTagFilter(null);
+    setBoard(null);
+  }, []);
   // Which drill-down is up: a tile's list, or the stats page. Both are nested
   // overlays, so the back-swipe stack reads overview → here → back.
   const [scope, setScope] = useState(null);
@@ -986,11 +1114,11 @@ function OverviewPage({
   }, []);
   const cancelAdd = useCallback(() => { setAddingBoard(null); setAddQuery(''); }, []);
   const [statsOpen, setStatsOpen] = useState(false);
-  useEffect(() => { if (!visible) { setBoard(null); setScope(null); setStatsOpen(false); } }, [visible]);
+  useEffect(() => { if (!visible) { closeBoardPage(); setScope(null); setStatsOpen(false); } }, [visible, closeBoardPage]);
   // Report the drill state up. One effect rather than a call at each open /
   // close site: those are five places and counting, and one of them will be
   // missed — leaving the pager locked with nothing on top of it.
-  const drilled = !!board || !!scope || statsOpen;
+  const drilled = !!board || !!scope || statsOpen || tagsOpen;
   useEffect(() => { onDrillChange?.(drilled); }, [drilled, onDrillChange]);
   useEffect(() => () => onDrillChange?.(false), [onDrillChange]);
   // A board found by search, then dropped from the rows by a keystroke, must
@@ -1001,7 +1129,26 @@ function OverviewPage({
   // shared BY someone else belongs to them; the server refuses either write,
   // so the page must not offer a key that cannot work.
   const detailEditable = !!detailRow && detailRow.name !== NO_BOARD && !sharedIn?.[detailRow.name];
-  const detailTasks = useMemo(() => (board ? (tasks || []).filter((t) => t && itemTypeOf(t) === 'task' && (t.project || NO_BOARD) === board) : []), [tasks, board]);
+  // Everything on the board, before the tag filter. The tag ROWS are counted
+  // off this — a tag list that narrowed with the filter would collapse to the
+  // one tag you picked and leave no way back to the others.
+  const detailTasksAll = useMemo(() => (board ? (tasks || []).filter((t) => t && itemTypeOf(t) === 'task' && (t.project || NO_BOARD) === board) : []), [tasks, board]);
+  const detailTagRows = useMemo(() => {
+    const map = new Map();
+    for (const t of detailTasksAll) {
+      for (const tag of (t.tags || [])) {
+        const e = map.get(tag) || { total: 0, done: 0 };
+        e.total += 1;
+        if (t.completed) e.done += 1;
+        map.set(tag, e);
+      }
+    }
+    return Array.from(map.entries()).map(([tag, s]) => ({ tag, ...s })).sort((a, b) => b.total - a.total);
+  }, [detailTasksAll]);
+  const detailTasks = useMemo(
+    () => (tagFilter ? detailTasksAll.filter((t) => (t.tags || []).includes(tagFilter)) : detailTasksAll),
+    [detailTasksAll, tagFilter],
+  );
   const dayLabel = (calendarDate instanceof Date ? calendarDate : new Date()).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
   // Embedded, the shell is nothing: a plain flex box in whatever slot the
@@ -1163,7 +1310,7 @@ function OverviewPage({
                 }}
                 onToggle={() => toggleBoard(row.name)}
                 onManage={onEditBoard}
-                onOpen={() => setBoard(row.name)}
+                onOpen={() => openBoardPage(row.name)}
                 onOpenTask={onOpenTask}
               />
             ))}
@@ -1233,7 +1380,7 @@ function OverviewPage({
 
       {/* Board drill-down: a nested in-tree overlay so the back-swipe stack
           holds (overview → board → back). */}
-      <EdgeSwipePage overlay visible={!!detailRow} onClose={() => setBoard(null)}>
+      <EdgeSwipePage overlay visible={!!detailRow} onClose={closeBoardPage}>
         {detailRow && (
           <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: c.background }}>
             <BoardDetail
@@ -1242,11 +1389,14 @@ function OverviewPage({
               todayStr={todayStr}
               pal={pal}
               theme={theme}
-              onBack={() => setBoard(null)}
+              onBack={closeBoardPage}
               isShown={selectedProject === detailRow.name}
               onShow={() => onSelectBoard(detailRow.name)}
               onOpenTask={onOpenTask}
               onAddTask={onAddTask}
+              tagCount={detailTagRows.length}
+              tagFilter={tagFilter}
+              onOpenTags={() => setTagsOpen(true)}
               onRename={detailEditable && onRenameBoard
                 // The page is looking at `board` by NAME, so a rename has to
                 // move it or the next render finds no row and the page empties
@@ -1254,8 +1404,29 @@ function OverviewPage({
                 ? (next) => { setBoard(next); onRenameBoard(detailRow.name, next); }
                 : undefined}
               onDelete={detailEditable && onDeleteBoard
-                ? () => { setBoard(null); onDeleteBoard(detailRow.name); }
+                ? () => { closeBoardPage(); onDeleteBoard(detailRow.name); }
                 : undefined}
+            />
+          </View>
+        )}
+      </EdgeSwipePage>
+
+      {/* The open board's tag filter. Mounted LAST and OUTSIDE the board's own
+          page, so it covers it rather than being clipped by it — the rule the
+          album picker proved (STYLE-RULES §4) — and so the back-swipe stack
+          reads boards → board → tags → back. */}
+      <EdgeSwipePage overlay visible={tagsOpen && !!detailRow} onClose={() => setTagsOpen(false)}>
+        {tagsOpen && !!detailRow && (
+          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: c.background }}>
+            <BoardTagsPage
+              rows={detailTagRows}
+              selected={tagFilter}
+              pal={pal}
+              theme={theme}
+              onBack={() => setTagsOpen(false)}
+              // Picking is the whole errand, so it closes on the pick — the
+              // board behind is already showing the answer.
+              onPick={(tag) => { setTagFilter(tag); setTagsOpen(false); }}
             />
           </View>
         )}
@@ -1304,6 +1475,14 @@ const styles = StyleSheet.create({
   pill: { height: 32, paddingHorizontal: 12, borderRadius: 9, borderWidth: 1, alignItems: 'center', justifyContent: 'center', maxWidth: 120 },
   pillText: { fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9, textTransform: 'uppercase' },
   body: { paddingHorizontal: 16, paddingTop: 14 },
+  // The "you are filtered" line, which is also the way out of it.
+  scopeLine: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginTop: 14, height: 34, paddingHorizontal: 12,
+    borderRadius: 17, borderWidth: StyleSheet.hairlineWidth,
+    alignSelf: 'flex-start', maxWidth: '100%',
+  },
+  scopeText: { flexShrink: 1, fontSize: 13, fontWeight: '700' },
   deleteRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     marginTop: 26, height: 44, borderRadius: 12,
