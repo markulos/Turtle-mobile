@@ -118,3 +118,28 @@ it('says what to do when there are no albums yet', async () => {
   const view = await draw({ albums: [] });
   expect(view.getByText(/Type a name to make the first one/)).toBeTruthy();
 });
+
+/**
+ * The selection bar has ONE filing key now — Tag and Album were two keys
+ * writing the same row — so the rest of what tagging could do has to be
+ * reachable from here, and only from here.
+ */
+describe('the way through to the tag editor', () => {
+  it('offers it, and hands over when tapped', async () => {
+    const onEditTags = jest.fn();
+    const view = await draw({ onEditTags });
+    await act(async () => { fireEvent.press(view.getByTestId('album-picker-tags')); });
+    expect(onEditTags).toHaveBeenCalled();
+  });
+
+  it('shows no key at all to a caller with no tag editor to offer', async () => {
+    const view = await draw();
+    expect(view.queryByTestId('album-picker-tags')).toBeNull();
+  });
+
+  it('is labelled, not a bare icon — it leaves this sheet for another one', async () => {
+    const view = await draw({ onEditTags: jest.fn() });
+    expect(view.getByText('Tags')).toBeTruthy();
+    expect(view.getByLabelText('Edit tags instead')).toBeTruthy();
+  });
+});

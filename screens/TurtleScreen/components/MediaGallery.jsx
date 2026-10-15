@@ -3435,9 +3435,16 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const [pickingForNewAlbum, setPickingForNewAlbum] = useState(false);
   const startNewAlbum = useCallback(() => setPickingForNewAlbum(true), []);
 
+  // Was the picker opened on the GRID's selection, or on items handed in from
+  // somewhere else (the viewer, the Files tab)? Only the grid has a selection
+  // to clear afterwards, which is the one thing the two tag paths below do
+  // differently — see closeBulkTags.
+  const albumPickerIsSelectionRef = useRef(false);
+
   const openAlbumPickerFor = useCallback((items) => {
     const list = (items || []).filter(Boolean);
     if (list.length === 0) return;
+    albumPickerIsSelectionRef.current = false;
     setAlbumPickerFor(list);
   }, []);
 
@@ -3447,6 +3454,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     if (ids.length === 0) return;
     const byId = displayById();
     openAlbumPickerFor(ids.map((id) => byId.get(id)).filter(Boolean));
+    albumPickerIsSelectionRef.current = true;
   }, [displayById, openAlbumPickerFor]);
 
   const closeAlbumPicker = useCallback(() => {
@@ -3526,6 +3534,27 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     setBulkCommonTags(common || []);
     setBulkTagsOpen(true);
   }, []);
+
+  /**
+   * The album picker's way through to the full tag editor.
+   *
+   * The selection bar has one filing key now, and this is the rest of what it
+   * used to offer: taking a tag OFF, or putting several on, for the same items
+   * the picker is already holding. The picker closes first — two sheets at once
+   * is two scrims and no way back to the one underneath.
+   *
+   * Which door depends on where the picker was opened from, because that is
+   * what decides whether there is a grid selection to clear when the tags
+   * sheet closes (closeBulkTags reads it off externalBulkItemsRef, which only
+   * openBulkTagsFor fills).
+   */
+  const editTagsFromAlbumPicker = useCallback(() => {
+    const items = albumPickerFor || [];
+    const fromSelection = albumPickerIsSelectionRef.current;
+    closeAlbumPicker();
+    if (fromSelection) openBulkTags();
+    else openBulkTagsFor(items);
+  }, [albumPickerFor, closeAlbumPicker, openBulkTags, openBulkTagsFor]);
 
   const changeBulkTags = useCallback((next) => {
     const prev = bulkCommonTagsRef.current;
@@ -4621,15 +4650,14 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               </Text>
             </TouchableOpacity>
 
-            <Animated.View style={[styles.selectBezel, {
-              alignSelf: 'center', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 30, gap: 8,
-            }]}>
-              {/* Live selection count — the bar's actions read against it. */}
+            <Animated.View style={[styles.selectBezel, styles.selectActions]}>
+              {/* Live selection count — the bar's actions read against it. The
+                  one child that does NOT flex: a number is as wide as it is,
+                  and a badge that stretched would read as a fourth key. */}
               <View style={{
                 minWidth: 26, height: 26, borderRadius: 13, paddingHorizontal: 7,
                 alignItems: 'center', justifyContent: 'center',
                 backgroundColor: selectedGridItems.size > 0 ? theme.colors.primary : (theme.mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)'),
-                marginRight: 4,
               }}>
                 <Text style={{
                   fontSize: 13, fontWeight: '700',
@@ -4638,11 +4666,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                   {selectedGridItems.size}
                 </Text>
               </View>
-              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.borderStrong, marginHorizontal: 4 }} />
+              <View style={styles.selectDivider} />
               <TouchableOpacity
                 testID="gallery-share-button"
                 accessibilityLabel="Share selected photos"
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
+                style={[styles.selectAction, { opacity: selectedGridItems.size === 0 ? 0.5 : 1 }]}
                 disabled={selectedGridItems.size === 0}
                 onPress={async () => {
                   // Match native iOS Photos multi-share: download the selected
@@ -4784,49 +4812,43 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 }}
               >
                 <Icon name="share-variant" size={20} color={theme.colors.primary} />
-                <Text style={{ color: theme.colors.primary, fontWeight: 'bold', fontSize: 15 }}>
+                <Text style={[styles.selectActionLabel, { color: theme.colors.primary }]} numberOfLines={1}>
                   Share
                 </Text>
               </TouchableOpacity>
-              
-              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.borderStrong, marginHorizontal: 8 }} />
-              
-              <TouchableOpacity 
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
-                disabled={selectedGridItems.size === 0}
-                onPress={openBulkTags}
-              >
-                <Icon name="tag-multiple" size={20} color={theme.colors.primary} />
-                <Text style={{ color: theme.colors.primary, fontWeight: 'bold', fontSize: 15 }}>
-                  Tag
-                </Text>
-              </TouchableOpacity>
 
-              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.borderStrong, marginHorizontal: 8 }} />
+              <View style={styles.selectDivider} />
 
-              {/* Album, beside Tag, because the two write the SAME row — an
-                  album is a registered tag on this pond — and only differ in
-                  the question they ask. Tag asks you to think in a filing
-                  system; this asks the one thing people actually have in mind
-                  about a photo, and will make the album if it is new. */}
+              {/* ── One filing key, not two ───────────────────────────────
+                  Tag and Album sat side by side here and wrote the SAME row:
+                  an album on this pond IS a registered tag, so the only thing
+                  that differed was the question each one asked. Two keys for
+                  one write is two keys to choose between before you can do the
+                  thing, and it cost the bar the width it needed to fit.
+
+                  So this is the album picker, which asks the question people
+                  actually have about a photo ("which album?") and makes the
+                  album if the name is new — and the tag editor is the key in
+                  ITS header, for the rarer job of taking a tag off or putting
+                  several on. The common answer first, the full one behind it. */}
               <TouchableOpacity
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
+                style={[styles.selectAction, { opacity: selectedGridItems.size === 0 ? 0.5 : 1 }]}
                 disabled={selectedGridItems.size === 0}
                 onPress={openAlbumPickerForSelection}
                 accessibilityRole="button"
-                accessibilityLabel="Add to album"
+                accessibilityLabel="Add to an album, or edit tags"
                 testID="selection-add-to-album"
               >
                 <Icon name="image-plus" size={20} color={theme.colors.primary} />
-                <Text style={{ color: theme.colors.primary, fontWeight: 'bold', fontSize: 15 }}>
+                <Text style={[styles.selectActionLabel, { color: theme.colors.primary }]} numberOfLines={1}>
                   Album
                 </Text>
               </TouchableOpacity>
-              
-              <View style={{ width: 1, height: 20, backgroundColor: theme.colors.borderStrong, marginHorizontal: 8 }} />
-              
-              <TouchableOpacity 
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: selectedGridItems.size === 0 ? 0.5 : 1 }}
+
+              <View style={styles.selectDivider} />
+
+              <TouchableOpacity
+                style={[styles.selectAction, { opacity: selectedGridItems.size === 0 ? 0.5 : 1 }]}
                 disabled={selectedGridItems.size === 0}
                 onPress={() => {
                   Alert.alert(
@@ -4887,7 +4909,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 }}
               >
                 <Icon name="trash-can-outline" size={20} color="#DC2626" />
-                <Text style={{ color: '#DC2626', fontWeight: 'bold', fontSize: 15 }}>
+                <Text style={[styles.selectActionLabel, { color: '#DC2626' }]} numberOfLines={1}>
                   Delete
                 </Text>
               </TouchableOpacity>
@@ -5191,6 +5213,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         busy={albumPickerBusy}
         onPick={addToAlbum}
         onClose={closeAlbumPicker}
+        onEditTags={editTagsFromAlbumPicker}
         theme={theme}
       />
       <EdgeSwipePage overlay visible={photosOpen} onClose={closePhotosPage} swipeEnabled={!isSelectMode}>
@@ -6126,6 +6149,40 @@ const createStyles = (theme) =>
       shadowOpacity: theme.mode === 'dark' ? 0.3 : 0.14,
       shadowRadius: 8,
       elevation: 5,
+    },
+    // ── The bulk-action pill, and why it is measured rather than laid out ──
+    //
+    // It used to be alignSelf:'center' with every action at its natural width,
+    // so the bar was as wide as its contents wanted to be and the phone had no
+    // say — on a 390pt screen the count badge ran off the left edge and Delete
+    // off the right, and the widest action (Delete) was the one you could not
+    // read. A row that cannot fit cannot be fixed by making its padding
+    // smaller; it has to be able to GIVE.
+    //
+    // So the pill stretches to the inset the wrapper gives it, and the actions
+    // divide what is left between them equally. There is no width at which it
+    // can overflow, and the one-line labels ellipsize rather than push.
+    selectActions: {
+      alignSelf: 'stretch',
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+      borderRadius: 30,
+    },
+    selectAction: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingHorizontal: 2,
+    },
+    selectActionLabel: { fontWeight: '700', fontSize: 14 },
+    selectDivider: {
+      width: 1, height: 20,
+      backgroundColor: theme.colors.borderStrong,
+      marginHorizontal: 2,
     },
     container: {
       flex: 1,

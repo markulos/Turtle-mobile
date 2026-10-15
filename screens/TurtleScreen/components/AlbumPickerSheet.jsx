@@ -38,13 +38,23 @@ import { tapHaptic } from '../../../utils/haptics';
 import { albumSuggestions, isNewAlbumName, cleanAlbumName } from '../../../utils/albumPicker';
 
 /**
- * @param albums   [{ name, count }] — what exists already.
- * @param count    how many photos are being filed, for the title.
- * @param inAlbums names the photos are ALREADY in, shown ticked.
+ * ─── Why the tag editor is a key in HERE ──────────────────────────────────
+ *
+ * Because they were two keys in the bulk-action bar writing the same row, and
+ * a bar that cannot fit on the screen is paying for the choice. This sheet
+ * asks the question people actually have, so it leads; the tag editor is the
+ * rarer answer — taking a tag OFF, or putting several on at once — and sits
+ * behind `onEditTags`. Optional: the caller that has no tag editor to offer
+ * simply does not pass one, and no key appears.
+ *
+ * @param albums     [{ name, count }] — what exists already.
+ * @param count      how many photos are being filed, for the title.
+ * @param inAlbums   names the photos are ALREADY in, shown ticked.
+ * @param onEditTags hand the same items to the full tag editor (optional).
  */
 export default function AlbumPickerSheet({
   visible, albums = [], count = 0, inAlbums = [], busy = false,
-  onPick, onClose, theme,
+  onPick, onClose, onEditTags, theme,
 }) {
   const c = theme.colors;
   const insets = useSafeAreaInsets();
@@ -83,6 +93,25 @@ export default function AlbumPickerSheet({
         <View style={styles.headerRow}>
           <Text style={[styles.title, { color: c.textPrimary }]} numberOfLines={1}>{title}</Text>
           {busy ? <ActivityIndicator size="small" color={c.textMuted} /> : null}
+          {/* The other half of what the selection bar's one filing key now
+              covers. A labelled key rather than a bare icon — it leaves this
+              sheet for a different one, and an icon alone would not say so. */}
+          {onEditTags ? (
+            <TouchableOpacity
+              {...TAP_ONLY}
+              activeOpacity={0.7}
+              onPress={() => { tapHaptic(); onEditTags(); }}
+              style={[styles.tagsKey, { borderColor: c.border, backgroundColor: c.surface }]}
+              accessibilityRole="button"
+              accessibilityLabel="Edit tags instead"
+              testID="album-picker-tags"
+            >
+              <Icon name="tag-multiple" size={15} color={c.accentInfo || c.textSecondary} />
+              <Text style={[styles.tagsKeyText, { color: c.accentInfo || c.textSecondary }]} numberOfLines={1}>
+                Tags
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {/* One field, two jobs: filter what you have, or name what you do not.
@@ -202,6 +231,12 @@ const styles = StyleSheet.create({
   grab: { width: 38, height: 4, borderRadius: 2 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 10 },
   title: { flex: 1, fontSize: 17, fontWeight: '700' },
+  tagsKey: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, height: 30, borderRadius: 15,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  tagsKeyText: { fontSize: 13, fontWeight: '700' },
   field: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     borderWidth: StyleSheet.hairlineWidth, borderRadius: 10,
