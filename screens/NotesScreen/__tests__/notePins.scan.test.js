@@ -59,7 +59,11 @@ test('the list is ordered by the pins, after the tab has had its say', () => {
   // rather than being overturned by it.
   expect(list.indexOf('orderTodos')).toBeLessThan(list.indexOf('sortPinnedFirst'));
   // And the set it reads has to be a dependency, or the list never re-sorts.
-  expect(SRC).toMatch(/}, \[visibleNotes, selectedTopic, pinnedSet\]\)/);
+  // The set, not the whole array: `listFor` gains a filter from time to time
+  // (the status scope was the last one), and pinning the exact dependency list
+  // here fails those changes for a reason that has nothing to do with pins.
+  expect(between('const listFor = useCallback(', 'const renderPageBody'))
+    .toMatch(/}, \[[^\]]*\bpinnedSet\b[^\]]*\]\)/);
 });
 
 describe('both row shapes know they are pinned', () => {

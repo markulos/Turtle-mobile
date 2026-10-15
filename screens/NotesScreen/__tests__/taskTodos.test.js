@@ -1,9 +1,13 @@
 // The Notes/Tasks unification. A to-do IS a task now — these are the rules
 // that make one table read correctly as two screens.
 import {
+  TODO_STATUS,
+  TODO_STATUS_DEFAULT,
+  TODO_STATUS_LABELS,
   inboxCountLabel,
   isInboxTodo,
   isTaskTodo,
+  matchesTodoStatus,
   mergeNotesAndTasks,
   orderTodos,
   taskAsTodo,
@@ -257,5 +261,54 @@ describe('taskAsTodo — who is on it', () => {
   it('is an empty list, never undefined, when nobody else is on it', () => {
     expect(taskAsTodo(task({ involvedUsers: undefined })).involvedUsers).toEqual([]);
     expect(taskAsTodo(task({ involvedUsers: 'nonsense' })).involvedUsers).toEqual([]);
+  });
+});
+
+/**
+ * The completion scope. The Notes list leads with what is still waiting; a
+ * ticked to-do is a thing you have finished thinking about, and a list that
+ * opens on a month of them buries the ones that aren't.
+ */
+describe('matchesTodoStatus', () => {
+  const open = { id: 'a', type: 'todo', done: false };
+  const ticked = { id: 'b', type: 'todo', done: true };
+  const plainNote = { id: 'c', type: 'note' };
+
+  it('speaks the Planner\'s keys, and defaults to the open ones', () => {
+    // Same three words on both screens, or one row means two things.
+    expect(TODO_STATUS).toEqual(['todo', 'done', 'all']);
+    expect(TODO_STATUS_DEFAULT).toBe('todo');
+  });
+
+  it('says "Open" rather than "To do" — there is a chip called Todos above it', () => {
+    expect(TODO_STATUS_LABELS).toEqual({ todo: 'Open', done: 'Done', all: 'Everything' });
+  });
+
+  it('keeps only the unticked under the default', () => {
+    expect(matchesTodoStatus(open, 'todo')).toBe(true);
+    expect(matchesTodoStatus(ticked, 'todo')).toBe(false);
+  });
+
+  it('keeps only the ticked under Done', () => {
+    expect(matchesTodoStatus(open, 'done')).toBe(false);
+    expect(matchesTodoStatus(ticked, 'done')).toBe(true);
+  });
+
+  it('keeps everything under Everything', () => {
+    expect(matchesTodoStatus(open, 'all')).toBe(true);
+    expect(matchesTodoStatus(ticked, 'all')).toBe(true);
+  });
+
+  it('reads a plain note as an open item, and never as a finished one', () => {
+    // One rule, not two: a note has never been ticked, so it rides with the
+    // open to-dos and drops out of a list of what has been completed.
+    expect(matchesTodoStatus(plainNote, 'todo')).toBe(true);
+    expect(matchesTodoStatus(plainNote, 'done')).toBe(false);
+    expect(matchesTodoStatus(plainNote, 'all')).toBe(true);
+  });
+
+  it('lets anything through when there is no scope to apply', () => {
+    expect(matchesTodoStatus(open, undefined)).toBe(true);
+    expect(matchesTodoStatus(null, 'todo')).toBe(true);
   });
 });

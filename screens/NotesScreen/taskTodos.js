@@ -95,6 +95,37 @@ export function taskAsTodo(task) {
 export const isTaskTodo = (n) => !!(n && n.__task);
 
 /**
+ * The three ways the list can be scoped by completion.
+ *
+ * The PLANNER'S OWN KEYS on purpose ('todo' | 'done' | 'all', see
+ * TasksScreen/components/PlannerFilterPanel): a to-do is one row in one table
+ * whichever screen you are standing on, so the two screens must not mean
+ * different things by the same word.
+ *
+ * The LABEL differs in one place — 'todo' reads "Open" here, not "To do",
+ * because this panel already has a chip called "Todos" one section above it
+ * and two controls a finger apart should not share a word they do not share a
+ * meaning for. The key is what travels; the label is what fits.
+ */
+export const TODO_STATUS = ['todo', 'done', 'all'];
+export const TODO_STATUS_DEFAULT = 'todo';
+export const TODO_STATUS_LABELS = { todo: 'Open', done: 'Done', all: 'Everything' };
+
+/**
+ * Does this row survive the status scope?
+ *
+ * Reads `done` and nothing else — no check for whether the row is a to-do at
+ * all. That is what makes it one rule rather than two: a plain note has never
+ * been ticked, so it is an OPEN item and rides along with the open to-dos,
+ * and it is not a FINISHED one, so "Done" leaves it behind. Which is also the
+ * honest answer to "show me the completed ones" on a list that mixes both.
+ */
+export function matchesTodoStatus(n, status) {
+  if (!n || !status || status === 'all') return true;
+  return status === 'done' ? !!n.done : !n.done;
+}
+
+/**
  * The inbox: open, and not on a day yet.
  *
  * Completed ones are out because an inbox is a queue of things still to

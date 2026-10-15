@@ -1,5 +1,5 @@
 /**
- * NotesFilterPanel — both of the Notes screen's filters, in one place.
+ * NotesFilterPanel — every one of the Notes screen's filters, in one place.
  *
  * What it replaces was two rails of chips stacked under the title: the KIND
  * (All / Notes / Todos / Feedback) and every TOPIC, all of them on screen all
@@ -17,9 +17,9 @@
  *
  *   · EVERY SECTION STATES ITS ANSWER in its heading, so the panel can be read
  *     without touching anything.
- *   · Every control is the same chip — kind and topic are two filters over one
- *     list, and two filters drawn as different kinds of control read as two
- *     lists.
+ *   · Every control is the same chip — kind, status and topic are three
+ *     filters over one list, and filters drawn as different kinds of control
+ *     read as different lists.
  *   · THE FOOTER SAYS THE COUNT, live, so a chip that empties the list says so
  *     before you leave.
  *   · CLEAR is always there, disabled rather than hidden when there is nothing
@@ -42,6 +42,13 @@ const KIND_ICONS = {
   note: 'note-text-outline',
   todo: 'checkbox-marked-circle-outline',
   feedback: 'message-text-outline',
+};
+
+/** The status chips. Same keys and same icons as the Planner's. */
+const STATUS_ICONS = {
+  todo: 'checkbox-blank-circle-outline',
+  done: 'check-circle-outline',
+  all: 'format-list-bulleted',
 };
 
 /**
@@ -103,6 +110,14 @@ export default function NotesFilterPanel({
   filter,
   onFilterChange,
   counts = {},
+  // Status — which to-dos. 'todo' (open) is the default, so it does NOT count
+  // as a narrowing: a list that hides finished work is the list, not a scope
+  // somebody put on it.
+  statuses = [],
+  statusLabels = {},
+  status,
+  statusDefault = 'todo',
+  onStatusChange,
   // Topic (board). `topics` is [{ topic, count }], already merged with the
   // server's boards by the screen.
   topics = [],
@@ -120,7 +135,8 @@ export default function NotesFilterPanel({
   const insets = useSafeAreaInsets();
   const s = useMemo(() => panelStyles(theme, isDark), [theme, isDark]);
 
-  const scoped = (filter && filter !== 'all') || !!selectedTopic;
+  const scoped = (filter && filter !== 'all') || !!selectedTopic
+    || (!!status && status !== statusDefault);
 
   const close = useCallback(() => { onClose?.(); }, [onClose]);
 
@@ -197,6 +213,30 @@ export default function NotesFilterPanel({
                 theme={theme}
                 isDark={isDark}
                 testID={`notes-filter-kind-${k}`}
+              />
+            ))}
+          </Section>
+
+          {/* Status sits BELOW kind and above topic, in the order the three
+              read as one sentence: which kind of thing, how much of it is
+              still live, and under which board. */}
+          <Section
+            title="Status"
+            value={statusLabels[status] || statusLabels[statusDefault] || 'Open'}
+            theme={theme}
+            isDark={isDark}
+            testID="notes-filter-status"
+          >
+            {statuses.map((k) => (
+              <Chip
+                key={k}
+                label={statusLabels[k] || k}
+                icon={STATUS_ICONS[k]}
+                active={status === k}
+                onPress={() => onStatusChange?.(k)}
+                theme={theme}
+                isDark={isDark}
+                testID={`notes-filter-status-${k}`}
               />
             ))}
           </Section>

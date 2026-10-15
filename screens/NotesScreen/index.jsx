@@ -114,7 +114,9 @@ import useNoteThumbs from './useNoteThumbs';
 // To-dos ARE tasks. The Todos tab is a view over the tasks table, not a second
 // store beside it — see taskTodos for why, and for the inbox rule.
 import {
-  inboxCountLabel, isInboxTodo, isTaskTodo, mergeNotesAndTasks, orderTodos, todoTaskPayload,
+  TODO_STATUS, TODO_STATUS_DEFAULT, TODO_STATUS_LABELS,
+  inboxCountLabel, isInboxTodo, isTaskTodo, matchesTodoStatus, mergeNotesAndTasks,
+  orderTodos, todoTaskPayload,
 } from './taskTodos';
 // Who else is on a to-do. The SAME picker the calendar's task form uses — a
 // to-do written here is a task there, so the two must not offer two different
@@ -347,6 +349,11 @@ export default function NotesScreen() {
 
   // ── UI state ────────────────────────────────────────────
   const [filter, setFilter] = useState(FILTER_ALL);
+  // Completion scope, the Planner's own three keys. Defaults to OPEN, like the
+  // Planner does: a ticked to-do is a thing you have finished thinking about,
+  // and a list that leads with a month of them buries the ones still waiting.
+  // Nothing is lost — "Done" and "Everything" are one tap away in the panel.
+  const [todoStatus, setTodoStatus] = useState(TODO_STATUS_DEFAULT);
   // Topic browsing — null = all topics. Mirrors the web Topics sidebar; ANDs with
   // the type filter above. A topic = the parent segment of a `parent/child` tag.
   const [selectedTopic, setSelectedTopic] = useState(null);
@@ -982,6 +989,7 @@ export default function NotesScreen() {
   const visible = useMemo(() => {
     let list = timeline;
     if (filter !== FILTER_ALL) list = list.filter((n) => matchesFilter(n, filter));
+    if (todoStatus !== 'all') list = list.filter((n) => matchesTodoStatus(n, todoStatus));
     if (selectedTopic === UNTAGGED) {
       list = list.filter((n) => !Array.isArray(n.tags) || n.tags.length === 0);
     } else if (selectedTopic) {
@@ -990,7 +998,7 @@ export default function NotesScreen() {
         && n.tags.some((t) => t === sel || String(t).startsWith(sel + '/')));
     }
     return list;
-  }, [timeline, filter, selectedTopic]);
+  }, [timeline, filter, todoStatus, selectedTopic]);
 
   // Tab counts. The list is paged, so counting loaded rows undercounts until
   // the whole library has been scrolled — the server's grouped COUNT is the
@@ -1006,6 +1014,10 @@ export default function NotesScreen() {
     let feedback = 0;
     let localNotes = 0;
     for (const n of timeline) {
+      // Counted through the SAME status scope the list is drawn through. A
+      // badge that tallies rows the chip beside it will not show is worse than
+      // no badge: it reads as a list that failed to load the rest.
+      if (!matchesTodoStatus(n, todoStatus)) continue;
       if ((n.type || 'note') === 'todo') {
         todo += 1;
         if (isFeedbackNote(n)) feedback += 1;
@@ -1013,9 +1025,14 @@ export default function NotesScreen() {
         localNotes += 1;
       }
     }
-    const note = typeof serverCounts?.note === 'number' ? serverCounts.note : localNotes;
+    // The server's figure counts the notes table, which carries no completion
+    // to scope by — every plain note is open, so it survives "Open" whole and
+    // "Done" leaves none of it. Only then is it still the better number.
+    const note = todoStatus === 'done'
+      ? 0
+      : (typeof serverCounts?.note === 'number' ? serverCounts.note : localNotes);
     return { all: note + todo, note, todo, feedback };
-  }, [timeline, serverCounts]);
+  }, [timeline, serverCounts, todoStatus]);
 
   // ── What the header says, and what the filter key is holding ─────────────
   // The two filters used to state themselves by being on screen: two rails of
@@ -1024,14 +1041,22 @@ export default function NotesScreen() {
   // thing this change must not cost.
   const kindScoped = filter !== FILTER_ALL;
   const topicScoped = !!selectedTopic;
-  const activeFilterCount = (kindScoped ? 1 : 0) + (topicScoped ? 1 : 0);
+  // Open-only is the resting state of this list, not something done TO it, so
+  // it neither lights the key nor adds to its badge — the same rule the
+  // Planner's own status keys follow. Done / Everything do both.
+  const statusScoped = todoStatus !== TODO_STATUS_DEFAULT;
+  const activeFilterCount = (kindScoped ? 1 : 0) + (statusScoped ? 1 : 0) + (topicScoped ? 1 : 0);
   const kindLabel = FILTER_LABELS[filter] || filter;
   const topicLabel = !selectedTopic
     ? null
     : selectedTopic === UNTAGGED ? 'Untagged' : selectedTopic;
   // The title's second half. Never blank and never a bare sentinel: with
   // nothing on it reads "All", which is a scope, not a truncation.
-  const scopeLabel = [kindScoped ? kindLabel : null, topicLabel].filter(Boolean).join(' · ') || 'All';
+  const scopeLabel = [
+    kindScoped ? kindLabel : null,
+    statusScoped ? TODO_STATUS_LABELS[todoStatus] : null,
+    topicLabel,
+  ].filter(Boolean).join(' · ') || 'All';
   // The one tally on the screen, so it has to be the best number available for
   // what is actually being shown. Without a topic that is the KIND's count,
   // which is the server's grouped COUNT for notes and an exact local tally for
@@ -1073,6 +1098,7 @@ export default function NotesScreen() {
   const listFor = useCallback((filterKey) => {
     let list = visibleNotes;
     if (filterKey !== FILTER_ALL) list = list.filter((n) => matchesFilter(n, filterKey));
+    if (todoStatus !== 'all') list = list.filter((n) => matchesTodoStatus(n, todoStatus));
     if (selectedTopic === UNTAGGED) {
       list = list.filter((n) => !Array.isArray(n.tags) || n.tags.length === 0);
     } else if (selectedTopic) {
@@ -1091,29 +1117,36 @@ export default function NotesScreen() {
       ? orderTodos(list)
       : list;
     return sortPinnedFirst(ordered, pinnedSet);
-  }, [visibleNotes, selectedTopic, pinnedSet]);
+  }, [visibleNotes, todoStatus, selectedTopic, pinnedSet]);
   const renderPageBody = (filterKey) => {
     const data = listFor(filterKey);
     // Empty state now rides as ListEmptyComponent so the scrolling header
     // (ListHeaderComponent) still shows above it — an empty tab keeps its
     // banner/pill/rail instead of collapsing to a bare centred message.
-    const emptyIcon = filterKey === FILTER_FEEDBACK ? 'message-text-outline'
-      : filterKey === FILTER_TODO ? 'checkbox-blank-outline'
-        : 'note-text-outline';
-    const emptyTitle = filterKey === FILTER_FEEDBACK ? 'No feedback yet'
-      : filterKey === FILTER_TODO ? 'No todos yet'
-        : filterKey === FILTER_NOTE ? 'No notes yet'
-          : 'Nothing here yet';
+    const emptyIcon = todoStatus === 'done' ? 'check-circle-outline'
+      : filterKey === FILTER_FEEDBACK ? 'message-text-outline'
+        : filterKey === FILTER_TODO ? 'checkbox-blank-outline'
+          : 'note-text-outline';
+    // Under a status scope the emptiness is the SCOPE'S, not the library's —
+    // "No todos yet" over a Done filter tells you the opposite of the truth
+    // when there are fifty open ones a tap away.
+    const emptyTitle = todoStatus === 'done' ? 'Nothing finished here yet'
+      : filterKey === FILTER_FEEDBACK ? 'No feedback yet'
+        : filterKey === FILTER_TODO ? 'No todos yet'
+          : filterKey === FILTER_NOTE ? 'No notes yet'
+            : 'Nothing here yet';
     const empty = (
       <View style={styles.center}>
         <Icon name={emptyIcon} size={36} color={theme.colors.textMuted} />
         <Text style={styles.emptyTitle}>{emptyTitle}</Text>
         <Text style={styles.emptyHint}>
-          {filterKey === FILTER_FEEDBACK
-            // The other writer is the dev gesture probe, which posts here too —
-            // worth saying, because that's where probe findings now land.
-            ? 'Tap ＋ to write app feedback. The gesture probe files its findings here too.'
-            : 'Tap ＋ to add one, or use /note · /todo in Turtle chat.'}
+          {todoStatus === 'done'
+            ? 'Tick something off, or switch Status to Open in the filters.'
+            : filterKey === FILTER_FEEDBACK
+              // The other writer is the dev gesture probe, which posts here too —
+              // worth saying, because that's where probe findings now land.
+              ? 'Tap ＋ to write app feedback. The gesture probe files its findings here too.'
+              : 'Tap ＋ to add one, or use /note · /todo in Turtle chat.'}
         </Text>
       </View>
     );
@@ -1420,6 +1453,11 @@ export default function NotesScreen() {
         filter={filter}
         onFilterChange={setFilter}
         counts={counts}
+        statuses={TODO_STATUS}
+        statusLabels={TODO_STATUS_LABELS}
+        status={todoStatus}
+        statusDefault={TODO_STATUS_DEFAULT}
+        onStatusChange={setTodoStatus}
         topics={railTopics}
         selectedTopic={selectedTopic}
         onSelectTopic={setSelectedTopic}
@@ -1429,7 +1467,13 @@ export default function NotesScreen() {
         // under it — the panel stays open behind, and a pick lands on it.
         onOpenTopicSearch={() => setTopicSearchOpen(true)}
         matchCount={scopeCount}
-        onClearAll={() => { setFilter(FILTER_ALL); setSelectedTopic(null); }}
+        // Clear puts status back to OPEN, not to Everything: clearing a filter
+        // restores the default, and showing finished work is not it.
+        onClearAll={() => {
+          setFilter(FILTER_ALL);
+          setTodoStatus(TODO_STATUS_DEFAULT);
+          setSelectedTopic(null);
+        }}
       />
 
       {/* Board/topic search — full-screen picker over every topic, sub-topic
