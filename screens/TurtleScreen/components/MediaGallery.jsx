@@ -5203,19 +5203,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         maxSelection={200}
       />
 
-      {/* Which album? Over the grid and over the photos page, because it is
-          opened from both. */}
-      <AlbumPickerSheet
-        visible={!!albumPickerFor}
-        albums={albumNamesForPicker}
-        count={(albumPickerFor || []).length}
-        inAlbums={commonAlbums(albumPickerFor || [], tagsOf)}
-        busy={albumPickerBusy}
-        onPick={addToAlbum}
-        onClose={closeAlbumPicker}
-        onEditTags={editTagsFromAlbumPicker}
-        theme={theme}
-      />
+      {/* (The album picker is mounted at the SCREEN ROOT, with the tags sheet
+          — see the bottom of this component. It used to sit here, one sibling
+          ABOVE the photos page, so the page it was opened from painted over
+          it.) */}
       <EdgeSwipePage overlay visible={photosOpen} onClose={closePhotosPage} swipeEnabled={!isSelectMode}>
         <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
           {/* Photos page header — the board title, its edit menu and the photo
@@ -6053,6 +6044,24 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           bottomInset={Math.max(tabBarH, insets.bottom) + 12}
         />
       )}
+
+      {/* Which album? Opened from the selection bar and from the viewer, so —
+          same rule as the tags sheet above (STYLE-RULES §4) — it is mounted at
+          the SCREEN ROOT with its own zIndex, not beside the page that raised
+          it. It used to sit one sibling above the photos page and was painted
+          over by it: a sheet you press for and cannot see. */}
+      <AlbumPickerSheet
+        visible={!!albumPickerFor}
+        albums={albumNamesForPicker}
+        count={(albumPickerFor || []).length}
+        inAlbums={commonAlbums(albumPickerFor || [], tagsOf)}
+        busy={albumPickerBusy}
+        onPick={addToAlbum}
+        onClose={closeAlbumPicker}
+        onEditTags={editTagsFromAlbumPicker}
+        bottomInset={Math.max(tabBarH, insets.bottom)}
+        theme={theme}
+      />
     </View>
     </DevProfiler>
   );

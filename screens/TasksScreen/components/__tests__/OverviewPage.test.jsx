@@ -94,6 +94,94 @@ describe('a board’s task list', () => {
   });
 });
 
+/**
+ * THE BOARD'S PAGE IS WHERE THE BOARD IS EDITED.
+ *
+ * Renaming it used to mean a sheet that listed every board you have, which is
+ * an odd answer to a question about one of them. The page is about this board,
+ * so its name is renamed where that name already is: the header, tapped.
+ */
+describe('renaming a board from its own header', () => {
+  const rename = async (user, next) => {
+    await user.press(screen.getByTestId('page-title-key'));
+    await act(async () => { fireEvent.changeText(screen.getByTestId('page-title-field'), next); });
+    await act(async () => { fireEvent(screen.getByTestId('page-title-field'), 'submitEditing'); });
+  };
+
+  test('the title is a key, and it says so', async () => {
+    await openBoard({ onRenameBoard: jest.fn() });
+    expect(screen.getByLabelText('Admin. Tap to rename.')).toBeTruthy();
+  });
+
+  test('tapping it turns the name into a field; Return saves', async () => {
+    const onRenameBoard = jest.fn();
+    const { user } = await openBoard({ onRenameBoard });
+    await rename(user, 'Paperwork');
+    expect(onRenameBoard).toHaveBeenCalledWith('Admin', 'Paperwork');
+  });
+
+  test('the page follows the board to its new name', async () => {
+    // It is looking at the board BY NAME. Without moving with it the next
+    // render finds no row and the page empties out underneath you.
+    const onRenameBoard = jest.fn();
+    const { user } = await openBoard({
+      onRenameBoard,
+      boards: ['Admin', 'Paperwork'],
+      tasks: [task({ id: 'p1', project: 'Paperwork', title: 'Ring the bank' })],
+    });
+    await rename(user, 'Paperwork');
+    // The key names the board it is on, so this IS the page's own title.
+    expect(screen.getByLabelText('Paperwork. Tap to rename.')).toBeTruthy();
+  });
+
+  test('an empty or unchanged name is a way out of the field, not a write', async () => {
+    const onRenameBoard = jest.fn();
+    const { user } = await openBoard({ onRenameBoard });
+    await rename(user, '   ');
+    await rename(user, 'Admin');
+    expect(onRenameBoard).not.toHaveBeenCalled();
+  });
+
+  test('a board shared BY someone else offers no rename — the server refuses it', async () => {
+    await openBoard({ onRenameBoard: jest.fn(), sharedIn: { Admin: 'Sam' } });
+    expect(screen.queryByTestId('page-title-key')).toBeNull();
+    // Still the board's page — it just does not offer a write the pond would
+    // turn down.
+    expect(screen.getByTestId('overview-show-board')).toBeTruthy();
+  });
+
+  test('with no handler the title is plain text again', async () => {
+    await openBoard();
+    expect(screen.queryByTestId('page-title-key')).toBeNull();
+  });
+});
+
+/**
+ * Deleting moved here with the pencil. The pencil was the only door to it, and
+ * the pencil opens this page now — so without this the ability would simply
+ * have closed.
+ */
+describe('deleting a board from its own page', () => {
+  test('the row is at the end of the page, and names the board', async () => {
+    const onDeleteBoard = jest.fn();
+    const { user } = await openBoard({ onDeleteBoard });
+    expect(screen.getByLabelText('Delete the board Admin')).toBeTruthy();
+    await user.press(screen.getByTestId('board-delete'));
+    expect(onDeleteBoard).toHaveBeenCalledWith('Admin');
+  });
+
+  test('it leaves the page on the way out — there is nothing left to look at', async () => {
+    const { user } = await openBoard({ onDeleteBoard: jest.fn() });
+    await user.press(screen.getByTestId('board-delete'));
+    expect(screen.queryByTestId('overview-show-board')).toBeNull();
+  });
+
+  test('a board shared by someone else cannot be deleted here either', async () => {
+    await openBoard({ onDeleteBoard: jest.fn(), sharedIn: { Admin: 'Sam' } });
+    expect(screen.queryByTestId('board-delete')).toBeNull();
+  });
+});
+
 describe('the board finder', () => {
   test('filters the lists as you type, headings included', async () => {
     await openBoard();
@@ -390,8 +478,8 @@ describe('boards open together, and close on their own', () => {
     const user = userEvent.setup();
     await render(<OverviewPage {...baseProps({ embedded: true, boards: ['Admin', 'Garden'] })} />);
 
-    await user.press(screen.getByTestId('overview-board-Admin'));
-    await user.press(screen.getByTestId('overview-board-Garden'));
+    await expandBoard(user, 'Admin');
+    await expandBoard(user, 'Garden');
 
     expect(screen.getByTestId('overview-board-body-Admin')).toBeTruthy();
     expect(screen.getByTestId('overview-board-body-Garden')).toBeTruthy();
@@ -401,9 +489,9 @@ describe('boards open together, and close on their own', () => {
     const user = userEvent.setup();
     await render(<OverviewPage {...baseProps({ embedded: true, boards: ['Admin', 'Garden'] })} />);
 
-    await user.press(screen.getByTestId('overview-board-Admin'));
-    await user.press(screen.getByTestId('overview-board-Garden'));
-    await user.press(screen.getByTestId('overview-board-Admin'));
+    await expandBoard(user, 'Admin');
+    await expandBoard(user, 'Garden');
+    await expandBoard(user, 'Admin');
 
     // Admin's body stays MOUNTED while it rolls shut — there would be nothing
     // left to animate otherwise — so the state it reports is what to assert on.
@@ -412,22 +500,64 @@ describe('boards open together, and close on their own', () => {
   });
 });
 
-describe('a board’s own two verbs', () => {
-  test('the pencil opens that board’s settings, and names which board', async () => {
-    const onEditBoard = jest.fn();
+/**
+ * A BOARD TILE IS A DOOR TO THAT BOARD.
+ *
+ * Its head used to unfold the tile, which made the board's name the one thing
+ * on the card that did not take you to the board. The preview is still there —
+ * it is what the chevron is for — but the tap everybody tries first now lands
+ * on the board's own page, and so does the pencil beside the name: "edit this
+ * board" is a question about one board, and it used to be answered with a
+ * sheet listing every board there is.
+ */
+describe('a board tile is a door', () => {
+  const headerOf = (name) => screen.getByTestId(`overview-board-${name}`);
+
+  test('the head opens the board, rather than unfolding the tile', async () => {
     const user = userEvent.setup();
-    await render(<OverviewPage {...baseProps({ embedded: true, onEditBoard })} />);
-    await user.press(screen.getByTestId('overview-board-edit-Admin'));
-    expect(onEditBoard).toHaveBeenCalledWith('Admin');
+    await render(<OverviewPage {...baseProps({ embedded: true })} />);
+    await user.press(headerOf('Admin'));
+    await settleBoards();
+    // The board's own page, by the key only it carries.
+    expect(screen.getByTestId('overview-show-board')).toBeTruthy();
+    // And the tile underneath did NOT unfold on the way.
+    expect(headerOf('Admin').props.accessibilityState.expanded).toBe(false);
   });
 
-  // They sit inside the header's own Pressable, so the inner key has to take
-  // the touch — otherwise the pencil would also toggle the board under it.
-  test('pressing a verb does not toggle the board it sits on', async () => {
+  test('the pencil opens the same page — editing happens there now', async () => {
     const user = userEvent.setup();
     await render(<OverviewPage {...baseProps({ embedded: true, onEditBoard: jest.fn() })} />);
     await user.press(screen.getByTestId('overview-board-edit-Admin'));
-    expect(screen.getByTestId('overview-board-Admin').props.accessibilityState.expanded).toBe(false);
+    await settleBoards();
+    expect(screen.getByTestId('overview-show-board')).toBeTruthy();
+  });
+
+  test('the chevron still unfolds it, and nothing else does', async () => {
+    const user = userEvent.setup();
+    await render(<OverviewPage {...baseProps({ embedded: true })} />);
+    await expandBoard(user, 'Admin');
+    expect(headerOf('Admin').props.accessibilityState.expanded).toBe(true);
+    expect(screen.getByTestId('overview-board-body-Admin')).toBeTruthy();
+  });
+
+  // The verbs sit INSIDE the head's own Pressable, so the inner key has to
+  // take the touch — otherwise the chevron would also open the board under it.
+  test('the chevron does not open the board it sits on', async () => {
+    const user = userEvent.setup();
+    await render(<OverviewPage {...baseProps({ embedded: true })} />);
+    await expandBoard(user, 'Admin');
+    expect(screen.queryByTestId('overview-show-board')).toBeNull();
+  });
+
+  // The all-boards manager — add one, see them all — is a different question
+  // from "this board", so it keeps a door of its own rather than taking the
+  // tap that belongs to the board.
+  test('a long press still reaches the all-boards manager', async () => {
+    const onEditBoard = jest.fn();
+    const user = userEvent.setup();
+    await render(<OverviewPage {...baseProps({ embedded: true, onEditBoard })} />);
+    await user.longPress(headerOf('Admin'));
+    expect(onEditBoard).toHaveBeenCalledWith('Admin');
   });
 
   test('the plus opens a box on that board, and opens the board to show it', async () => {
@@ -595,7 +725,7 @@ describe('a board actually opens', () => {
   test('it measures in a pass of its own before it rolls', async () => {
     const user = userEvent.setup();
     await render(<OverviewPage {...baseProps({ embedded: true })} />);
-    await user.press(screen.getByTestId('overview-board-Admin'));
+    await user.press(screen.getByTestId('overview-board-peek-Admin'));
 
     // Unmeasured: a measuring pass, NOT the collapsing box — a height read
     // inside the clip is a height that never arrives.
@@ -606,7 +736,7 @@ describe('a board actually opens', () => {
   test('…and the measuring pass is out of flow, so nothing moves for it', async () => {
     const user = userEvent.setup();
     await render(<OverviewPage {...baseProps({ embedded: true })} />);
-    await user.press(screen.getByTestId('overview-board-Admin'));
+    await user.press(screen.getByTestId('overview-board-peek-Admin'));
 
     const box = StyleSheet.flatten(screen.getByTestId('board-measuring').props.style);
     expect(box.position).toBe('absolute');
@@ -619,7 +749,7 @@ describe('a board actually opens', () => {
   test('once it reports a height, the collapsing box takes over', async () => {
     const user = userEvent.setup();
     await render(<OverviewPage {...baseProps({ embedded: true })} />);
-    await user.press(screen.getByTestId('overview-board-Admin'));
+    await user.press(screen.getByTestId('overview-board-peek-Admin'));
     await layout('board-measuring', 180);
 
     expect(screen.getByTestId('board-collapsible')).toBeTruthy();
@@ -630,7 +760,7 @@ describe('a board actually opens', () => {
     const user = userEvent.setup();
     const props = baseProps({ embedded: true, tasks: [task({ id: 'a', project: 'Admin' })] });
     await render(<OverviewPage {...props} />);
-    await user.press(screen.getByTestId('overview-board-Admin'));
+    await user.press(screen.getByTestId('overview-board-peek-Admin'));
 
     expect(screen.getByTestId('overview-board-task-a')).toBeTruthy();
     await layout('board-measuring', 180);
@@ -642,16 +772,16 @@ describe('a board actually opens', () => {
   test('a second open does not measure again', async () => {
     const user = userEvent.setup();
     await render(<OverviewPage {...baseProps({ embedded: true })} />);
-    await user.press(screen.getByTestId('overview-board-Admin'));
+    await user.press(screen.getByTestId('overview-board-peek-Admin'));
     await layout('board-measuring', 180);
     expect(screen.getByTestId('board-collapsible')).toBeTruthy();
 
     // Shut it. The body stays MOUNTED while it rolls, so the state the header
     // reports is what to assert on.
-    await user.press(screen.getByTestId('overview-board-Admin'));
+    await user.press(screen.getByTestId('overview-board-peek-Admin'));
     expect(screen.getByTestId('overview-board-Admin').props.accessibilityState.expanded).toBe(false);
 
-    await user.press(screen.getByTestId('overview-board-Admin'));
+    await user.press(screen.getByTestId('overview-board-peek-Admin'));
     expect(screen.queryByTestId('board-measuring')).toBeNull();
     expect(screen.getByTestId('board-collapsible')).toBeTruthy();
   });
@@ -719,8 +849,11 @@ async function settleBoards(height = 180) {
 }
 
 /** Open a board and let it settle, which is what a phone does in one frame. */
+// The CHEVRON unfolds a tile now; the head around it opens the board. Every
+// test that wants the preview goes through here, so there is one place to
+// change when the peek moves again.
 async function expandBoard(user, name) {
-  await user.press(screen.getByTestId(`overview-board-${name}`));
+  await user.press(screen.getByTestId(`overview-board-peek-${name}`));
   await settleBoards();
 }
 

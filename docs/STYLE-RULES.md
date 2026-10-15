@@ -389,9 +389,17 @@ repo skill (loaded before any UI work) and by review.
   `PhotoViewer/__tests__/ViewerSheetFooter.test.jsx`.
 - Dark sheets are FROSTED: rgba(10,10,12,.55) over a dark BlurView so what is underneath shows through,
   softened; white text, pills invert to white / black text.
-- The TAGS sheet, whenever it is open, sits above EVERY other overlay on the screen (selection bar,
-  filter sheet, headers, chrome): mount it LAST in the screen root with its own zIndex (ViewerSheet
-  carries 1000), never inside a page or bar that another overlay can outrank.
+- **A CARD OR PANEL THAT OPENS ON A PRESS COVERS EVERYTHING ELSE ON THE SCREEN.** It is the answer to the
+  thing you just tapped, so nothing that was already there may paint over it — not the page that raised
+  it, not a header, not a selection bar, not the floating dock. Mount it LAST in the SCREEN ROOT with its
+  own zIndex in the top band (1000, what ViewerSheet carries); give it `bottomInset` so its footer still
+  clears the dock; and lift it on the keyboard (next bullet) rather than letting the keyboard cover the
+  field it opened for. The TAGS sheet is the oldest instance of this rule and the ALBUM PICKER is the one
+  that proved it the hard way: it was mounted one sibling ABOVE the photos page, so the page you pressed
+  "Album" on painted straight over it — a sheet you ask for and cannot see. THE TELL is a mount site
+  inside the page or the bar that raised it: a parent's zIndex or `overflow: hidden` outranks and clips
+  whatever the overlay itself carries, so the fix is never a bigger number on the child. Two overlays in
+  the same band must never be up together — the one that hands over closes itself first.
 - Keyboard-aware sheets: no KeyboardAvoidingView. The sheet listens to the keyboard and — ONLY IF the
   keyboard would COVER the field it opened for (measure the field, compare with the keyboard's top) —
   jumps to EXPANDED, lifts by the keyboard height on a native-driver transform and caps its height below

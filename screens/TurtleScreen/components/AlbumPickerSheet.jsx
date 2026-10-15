@@ -27,8 +27,10 @@
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TouchableOpacity, View,
+  ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TouchableOpacity,
+  useWindowDimensions, View,
 } from 'react-native';
+import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AppTextInput from '../../../components/AppTextInput';
@@ -51,14 +53,41 @@ import { albumSuggestions, isNewAlbumName, cleanAlbumName } from '../../../utils
  * @param count      how many photos are being filed, for the title.
  * @param inAlbums   names the photos are ALREADY in, shown ticked.
  * @param onEditTags hand the same items to the full tag editor (optional).
+ * @param bottomInset what the CALLER says is under the sheet (a floating tab
+ *                    dock), so the footer clears it — see STYLE-RULES §4.
  */
 export default function AlbumPickerSheet({
   visible, albums = [], count = 0, inAlbums = [], busy = false,
-  onPick, onClose, onEditTags, theme,
+  onPick, onClose, onEditTags, bottomInset = 0, theme,
 }) {
   const c = theme.colors;
   const insets = useSafeAreaInsets();
+  const { height: winH } = useWindowDimensions();
   const [query, setQuery] = useState('');
+
+  /**
+   * The keyboard lift. The field at the top of this sheet is the whole point
+   * of it — you type a name to find or make an album — and the keyboard used
+   * to come straight up over the list of matches it was filtering.
+   *
+   * House rule (STYLE-RULES §4): no KeyboardAvoidingView; a native-driver
+   * transform matched to the keyboard, `useAnimatedKeyboard` in-tree. The
+   * sheet already rests on `pad` of clearance, so the lift CANCELS exactly
+   * that — adding the two leaves the card floating above the keyboard.
+   *
+   * The height is capped by the same number, because a card that lifts without
+   * shrinking takes its own top off the screen.
+   */
+  const pad = Math.max(insets.bottom, bottomInset);
+  const keyboard = useAnimatedKeyboard();
+  const lift = useAnimatedStyle(() => {
+    'worklet';
+    const up = Math.max(keyboard.height.value - pad, 0);
+    return {
+      transform: [{ translateY: -up }],
+      maxHeight: Math.min(winH * 0.72, winH - up - insets.top - 12),
+    };
+  });
 
   const shown = useMemo(() => albumSuggestions(albums, query), [albums, query]);
   const newName = useMemo(() => cleanAlbumName(query), [query]);
@@ -76,16 +105,16 @@ export default function AlbumPickerSheet({
   const title = count === 1 ? 'Add this photo to…' : `Add ${count} photos to…`;
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none" testID="album-picker">
+    <View style={[StyleSheet.absoluteFill, styles.layer]} pointerEvents="box-none" testID="album-picker">
       <Pressable
         style={[StyleSheet.absoluteFill, styles.scrim]}
         accessibilityLabel="Close"
         onPress={onClose}
       />
-      <View style={[styles.sheet, {
+      <Reanimated.View style={[styles.sheet, lift, {
         backgroundColor: c.surfaceElevated,
         borderColor: c.border,
-        paddingBottom: insets.bottom + 10,
+        paddingBottom: pad + 10,
       }]}
       >
         <View style={styles.grabWrap}><View style={[styles.grab, { backgroundColor: c.border }]} /></View>
@@ -213,15 +242,22 @@ export default function AlbumPickerSheet({
             );
           }}
         />
-      </View>
+      </Reanimated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  // It opened on a press, so it covers what raised it — the selection bar, the
+  // board's page, the headers, the dock (STYLE-RULES §4). 1000 is the app's
+  // top band: the tags sheet (ViewerSheet) carries it too, and the one place
+  // the two meet hands over by CLOSING this first, so they never stack.
+  layer: { zIndex: 1000 },
   scrim: { backgroundColor: 'rgba(0,0,0,0.45)' },
   sheet: {
     position: 'absolute', left: 0, right: 0, bottom: 0,
+    // The resting cap. The animated style narrows it further while the
+    // keyboard is up — see the lift.
     maxHeight: '72%',
     borderTopLeftRadius: 18, borderTopRightRadius: 18,
     borderTopWidth: StyleSheet.hairlineWidth,

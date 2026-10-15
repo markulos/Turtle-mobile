@@ -261,7 +261,10 @@ function Collapsible({ open, children }) {
 function BoardTile({
   row, dot, sharedBy, selected, expanded, tasks, todayStr, c,
   adding, addQuery, onAddQueryChange, onStartAdd, onCancelAdd, onSubmitAdd,
-  onToggle, onOpen, onOpenTask, onEdit,
+  // onManage — (name) => the ALL-boards manager (add one, see them all), on a
+  // long press. The tap and the pencil both belong to THIS board now, and the
+  // manager is a different question.
+  onToggle, onOpen, onOpenTask, onManage,
 }) {
   const open = row.total - row.done;
   const q = String(addQuery || '').trim().toLowerCase();
@@ -293,12 +296,19 @@ function BoardTile({
       {/* This tile's length of the string, running past both its borders. */}
       <View style={[styles.bdThread, { backgroundColor: c.border }]} pointerEvents="none" />
 
+      {/* ── The head OPENS the board ──────────────────────────────────────
+          It used to unfold the tile, which made the board's name the one
+          thing on the card that did not take you to the board — the tap
+          everybody tries first landed on a six-row preview instead. The
+          preview is still here; it is what the chevron is for, and the
+          chevron is the mark that already said so. */}
       <Pressable
         onPressIn={() => tapHaptic()}
-        onPress={onToggle}
+        onPress={onOpen}
+        onLongPress={onManage ? () => onManage(row.name) : undefined}
         accessibilityRole="button"
         accessibilityState={{ selected: !!selected, expanded: !!expanded }}
-        accessibilityLabel={`${boardLabel(row.name)}: ${row.done} of ${row.total} done${row.overdue ? `, ${row.overdue} late` : ''}`}
+        accessibilityLabel={`${boardLabel(row.name)}: ${row.done} of ${row.total} done${row.overdue ? `, ${row.overdue} late` : ''}. Opens the board.`}
         testID={`overview-board-${row.name}`}
         style={({ pressed }) => [styles.bdHead, pressed && styles.pressed]}
       >
@@ -308,13 +318,17 @@ function BoardTile({
             <Text style={[styles.bdTileName, { color: c.textPrimary }]} numberOfLines={1}>
               {boardLabel(row.name)}
             </Text>
-            {/* The pencil stays with the NAME, because that is what it edits.
+            {/* The pencil stays with the NAME, because that is what it edits —
+                and it lands on the board's own page, which is where editing
+                now happens: the name is renamed by tapping it in that page's
+                header. It used to open a sheet listing every board, which is
+                an odd answer to "edit THIS one".
                 Quiet by default — it is on every board, so at full strength
                 twenty-six of them would be the loudest thing on the page — and
                 it comes up to full on press. */}
             <Pressable
               onPressIn={() => tapHaptic()}
-              onPress={() => onEdit?.(row.name)}
+              onPress={onOpen}
               hitSlop={10}
               accessibilityRole="button"
               accessibilityLabel={`Edit ${boardLabel(row.name)}`}
@@ -360,7 +374,25 @@ function BoardTile({
           {open}
           <Text style={[styles.bdTileFigureUnit, { color: c.textTertiary }]}> to do</Text>
         </Text>
-        <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={c.textTertiary} />
+        {/* The unfold, now that the head around it opens the board. Its own
+            key rather than the whole card's: the chevron is already the mark
+            that means "there is more under this", so it is the one part of the
+            head that should keep doing it. Nested inside the head Pressable —
+            the inner one takes the touch. */}
+        <Pressable
+          onPressIn={() => tapHaptic()}
+          onPress={onToggle}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: !!expanded }}
+          accessibilityLabel={expanded
+            ? `Hide ${boardLabel(row.name)}'s tasks`
+            : `Show ${boardLabel(row.name)}'s tasks`}
+          testID={`overview-board-peek-${row.name}`}
+          style={({ pressed }) => [styles.bdVerb, pressed && styles.bdVerbOn]}
+        >
+          <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={c.textTertiary} />
+        </Pressable>
       </Pressable>
 
       <Collapsible open={!!expanded}>
@@ -638,15 +670,70 @@ function ScopePage({ scope, tasks, todayStr, pal, theme, onBack, onOpenTask }) {
   );
 }
 
-function PageHeader({ title, onBack, right, theme }) {
+/**
+ * The pushed page's bar.
+ *
+ * `onRename` makes the TITLE the control: tap it and it becomes a field. A
+ * page that is about one thing should let you rename that thing where its name
+ * already is, rather than somewhere else that also lists twenty-five others.
+ * Return saves, blur cancels — the same contract the board manager's rows use,
+ * so a half-typed name never commits itself on the way out.
+ */
+function PageHeader({ title, onBack, right, theme, onRename }) {
   const c = theme.colors;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+  // A commit is followed by a blur, and blur CANCELS — so the field has to
+  // remember that it already saved or the save undoes itself.
+  const committingRef = useRef(false);
+  useEffect(() => { setDraft(title); }, [title]);
+
+  const commit = useCallback(() => {
+    committingRef.current = true;
+    const next = draft.trim();
+    setEditing(false);
+    // Empty or unchanged is not a rename — it is a way out of the field, and
+    // writing it would touch every task on the board for nothing.
+    if (!next || next === title) return;
+    onRename?.(next);
+  }, [draft, title, onRename]);
+
   return (
     <>
       <View style={styles.topBar}>
         <Pressable onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back" style={({ pressed }) => [styles.backKey, pressed && styles.pressed]}>
           <Icon name="chevron-left" size={28} color={c.textPrimary} />
         </Pressable>
-        <Text style={[styles.topTitle, { color: c.textPrimary }]} numberOfLines={1}>{title}</Text>
+        {editing ? (
+          <AppTextInput
+            style={[styles.topTitle, styles.topTitleField, { color: c.textPrimary, borderColor: c.borderStrong }]}
+            value={draft}
+            onChangeText={setDraft}
+            autoFocus
+            selectTextOnFocus
+            autoCapitalize="words"
+            autoCorrect={false}
+            returnKeyType="done"
+            onSubmitEditing={commit}
+            onBlur={() => { if (!committingRef.current) setEditing(false); }}
+            accessibilityLabel="Board name"
+            testID="page-title-field"
+          />
+        ) : onRename ? (
+          <Pressable
+            onPressIn={() => tapHaptic()}
+            onPress={() => { committingRef.current = false; setDraft(title); setEditing(true); }}
+            accessibilityRole="button"
+            accessibilityLabel={`${title}. Tap to rename.`}
+            testID="page-title-key"
+            style={({ pressed }) => [styles.topTitleKey, pressed && styles.pressed]}
+          >
+            <Text style={[styles.topTitleText, { color: c.textPrimary }]} numberOfLines={1}>{title}</Text>
+            <Icon name="pencil-outline" size={13} color={c.textTertiary} />
+          </Pressable>
+        ) : (
+          <Text style={[styles.topTitle, { color: c.textPrimary }]} numberOfLines={1}>{title}</Text>
+        )}
         <View style={styles.topRight}>{right}</View>
       </View>
       {/* The rule is a SIBLING, never spread onto the bar: `insetRule` is two
@@ -669,7 +756,14 @@ function TagRows({ rows, pal }) {
   ));
 }
 
-function BoardDetail({ row, tasks, todayStr, pal, theme, onBack, onShow, isShown, onOpenTask, onAddTask }) {
+function BoardDetail({
+  row, tasks, todayStr, pal, theme, onBack, onShow, isShown, onOpenTask, onAddTask,
+  // (next) => void and () => void. Absent on a board that cannot be either:
+  // NO_BOARD is a display sentinel with no row to rename, and a board shared
+  // BY someone else is theirs — the server refuses both, so the page must not
+  // offer them.
+  onRename, onDelete,
+}) {
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
   const pending = tasks.filter((t) => !(t.completed || isTaskDoneNow(t, todayStr))).sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999'));
@@ -701,6 +795,7 @@ function BoardDetail({ row, tasks, todayStr, pal, theme, onBack, onShow, isShown
         title={boardLabel(row.name)}
         onBack={onBack}
         theme={theme}
+        onRename={onRename}
         right={(
           <Pressable
             onPressIn={() => tapHaptic()}
@@ -750,6 +845,25 @@ function BoardDetail({ row, tasks, todayStr, pal, theme, onBack, onShow, isShown
           : doneShown.map((t) => (
             <TaskRow key={t.id} t={t} done todayStr={todayStr} pal={pal} onPress={onOpenTask ? () => onOpenTask(t) : null} />
           ))}
+
+        {/* Deleting the board belongs on the board's page, at the end of it —
+            the pencil that used to be the only way here opens this page now,
+            so without it the one door to deleting a board would have closed.
+            Last and quiet, because it is the one thing on the page you cannot
+            undo. */}
+        {!!onDelete && (
+          <Pressable
+            onPressIn={() => tapHaptic()}
+            onPress={onDelete}
+            accessibilityRole="button"
+            accessibilityLabel={`Delete the board ${boardLabel(row.name)}`}
+            testID="board-delete"
+            style={({ pressed }) => [styles.deleteRow, { borderColor: c.border }, pressed && styles.pressed]}
+          >
+            <Icon name="trash-can-outline" size={16} color="#F87171" />
+            <Text style={styles.deleteText}>Delete board</Text>
+          </Pressable>
+        )}
       </ScrollView>
     </View>
   );
@@ -758,9 +872,17 @@ function BoardDetail({ row, tasks, todayStr, pal, theme, onBack, onShow, isShown
 function OverviewPage({
   visible, onClose, tasks, boards, colorOf, sharedIn, selectedProject, calendarDate,
   onSelectBoard, onOpenFilters,
-  // (name) => void — the board's own settings sheet, from the pencil beside
-  // its name.
-  onEditBoard, filterCount = 0, bottomInset = 0, theme,
+  // (name) => void — the ALL-boards manager (add one, see them all), on a long
+  // press of a tile. The tap and the pencil open the board's own page instead:
+  // "edit this board" is a question about one board, and it used to be
+  // answered with a list of every board there is.
+  onEditBoard,
+  // (from, to) => void — the board page's header renames by being tapped.
+  onRenameBoard,
+  // (name) => void — from the end of the board's page. Confirmation is the
+  // caller's: it is the one that knows what deleting takes with it.
+  onDeleteBoard,
+  filterCount = 0, bottomInset = 0, theme,
   // (task) => void — a tap on a task in a board's list opens it for editing.
   onOpenTask,
   // (title, boardName) => void — the finder's create row, which is the point
@@ -852,6 +974,11 @@ function OverviewPage({
   // A board found by search, then dropped from the rows by a keystroke, must
   // not strand its detail page on a row that no longer exists.
   const detailRow = board ? (allRows.find((r) => r.name === board) || null) : null;
+  // Can this board be renamed or deleted at all? NO_BOARD is a display
+  // sentinel — there is no row behind "No Project" to rename — and a board
+  // shared BY someone else belongs to them; the server refuses either write,
+  // so the page must not offer a key that cannot work.
+  const detailEditable = !!detailRow && detailRow.name !== NO_BOARD && !sharedIn?.[detailRow.name];
   const detailTasks = useMemo(() => (board ? (tasks || []).filter((t) => t && itemTypeOf(t) === 'task' && (t.project || NO_BOARD) === board) : []), [tasks, board]);
   const dayLabel = (calendarDate instanceof Date ? calendarDate : new Date()).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
@@ -1013,7 +1140,7 @@ function OverviewPage({
                   setAddQuery('');
                 }}
                 onToggle={() => toggleBoard(row.name)}
-                onEdit={onEditBoard}
+                onManage={onEditBoard}
                 onOpen={() => setBoard(row.name)}
                 onOpenTask={onOpenTask}
               />
@@ -1098,6 +1225,15 @@ function OverviewPage({
               onShow={() => onSelectBoard(detailRow.name)}
               onOpenTask={onOpenTask}
               onAddTask={onAddTask}
+              onRename={detailEditable && onRenameBoard
+                // The page is looking at `board` by NAME, so a rename has to
+                // move it or the next render finds no row and the page empties
+                // out underneath you.
+                ? (next) => { setBoard(next); onRenameBoard(detailRow.name, next); }
+                : undefined}
+              onDelete={detailEditable && onDeleteBoard
+                ? () => { setBoard(null); onDeleteBoard(detailRow.name); }
+                : undefined}
             />
           </View>
         )}
@@ -1124,6 +1260,20 @@ const styles = StyleSheet.create({
   },
   backKey: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   topTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700' },
+  // The tappable title keeps the bar's geometry exactly — flex 1, centred —
+  // and only adds the pencil beside the words, so the page does not shift when
+  // a header becomes renameable.
+  topTitleKey: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  topTitleText: { flexShrink: 1, fontSize: 17, fontWeight: '700' },
+  // Single-line field metrics from the one definition (utils/inputField); the
+  // rule is a hairline under the words so the title reads as a field without
+  // becoming a box in the middle of the bar.
+  topTitleField: {
+    ...INPUT_FIELD,
+    height: 34,
+    paddingHorizontal: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   topRight: { minWidth: 36, alignItems: 'flex-end' },
   topKeys: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   iconKey: { width: 36, height: 32, borderRadius: 9, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
@@ -1132,6 +1282,12 @@ const styles = StyleSheet.create({
   pill: { height: 32, paddingHorizontal: 12, borderRadius: 9, borderWidth: 1, alignItems: 'center', justifyContent: 'center', maxWidth: 120 },
   pillText: { fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9, textTransform: 'uppercase' },
   body: { paddingHorizontal: 16, paddingTop: 14 },
+  deleteRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 26, height: 44, borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  deleteText: { fontSize: 14, fontWeight: '700', color: '#F87171' },
   tiles: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   tile: {
     width: '48%',

@@ -5,7 +5,9 @@
  * is what it OFFERS: the albums you have, a way to make the one you do not,
  * and no way to file a photo somewhere it already is.
  */
+import fs from 'fs';
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
 
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
@@ -141,5 +143,68 @@ describe('the way through to the tag editor', () => {
     const view = await draw({ onEditTags: jest.fn() });
     expect(view.getByText('Tags')).toBeTruthy();
     expect(view.getByLabelText('Edit tags instead')).toBeTruthy();
+  });
+});
+
+/**
+ * IT OPENED ON A PRESS, SO IT COVERS WHAT RAISED IT (STYLE-RULES §4).
+ *
+ * This sheet is the rule's cautionary tale: it was mounted one sibling above
+ * the photos page, so the page you pressed "Album" on painted straight over it
+ * — a sheet you ask for and cannot see.
+ */
+describe('where it sits, and what it clears', () => {
+  const layerOf = (view) => StyleSheet.flatten(view.getByTestId('album-picker').props.style);
+
+  it('is in the app\'s top band, so nothing on the screen outranks it', async () => {
+    expect(layerOf(await draw()).zIndex).toBe(1000);
+  });
+
+  it('rises on the keyboard rather than letting it cover the field', async () => {
+    // The house rule is a native-driver transform matched to the keyboard —
+    // no KeyboardAvoidingView anywhere (STYLE-RULES §4).
+    // Comments blanked: this file's own prose NAMES the thing it must not use,
+    // and the prose must not be allowed to answer for the code.
+    const SRC = fs.readFileSync('screens/TurtleScreen/components/AlbumPickerSheet.jsx', 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .replace(/(^|[^:])\/\/[^\n]*/g, (m, lead) => lead + ' '.repeat(m.length - lead.length));
+    expect(SRC).toMatch(/useAnimatedKeyboard\(\)/);
+    expect(SRC).not.toMatch(/KeyboardAvoidingView/);
+    // The lift CANCELS the clearance the sheet already rests on; adding the
+    // two leaves the card floating above the keyboard.
+    expect(SRC).toMatch(/keyboard\.height\.value - pad/);
+    // And it shrinks by the same number, or a card that lifts takes its own
+    // top off the screen.
+    expect(SRC).toMatch(/maxHeight: Math\.min\(winH \* 0\.72, winH - up/);
+  });
+
+  it('reserves what the caller says is under it, not just the home indicator', async () => {
+    // The floating dock covers the bottom of the screen and reserves no layout
+    // space of its own, so the sheet has to be told about it.
+    const SRC = fs.readFileSync('screens/TurtleScreen/components/AlbumPickerSheet.jsx', 'utf8');
+    expect(SRC).toMatch(/const pad = Math\.max\(insets\.bottom, bottomInset\)/);
+    expect(SRC).toMatch(/paddingBottom: pad \+ 10/);
+  });
+});
+
+/**
+ * The mount SITE, which no render test can see: a parent's zIndex or
+ * `overflow: hidden` outranks whatever the sheet itself carries, so the number
+ * above is only true while this stays at the screen root.
+ */
+describe('the mount site in the gallery', () => {
+  const SRC = fs.readFileSync('screens/TurtleScreen/components/MediaGallery.jsx', 'utf8');
+
+  it('is mounted at the screen root, after the page it opens over', async () => {
+    const mount = SRC.indexOf('<AlbumPickerSheet');
+    const page = SRC.indexOf('<EdgeSwipePage overlay visible={photosOpen}');
+    expect(mount).toBeGreaterThan(-1);
+    expect(page).toBeGreaterThan(-1);
+    // Later sibling paints on top. This is the whole bug, in one comparison.
+    expect(mount).toBeGreaterThan(page);
+  });
+
+  it('is handed the dock to clear', async () => {
+    expect(SRC).toMatch(/<AlbumPickerSheet[\s\S]*?bottomInset=\{Math\.max\(tabBarH, insets\.bottom\)\}/);
   });
 });

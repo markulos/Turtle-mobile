@@ -4118,9 +4118,42 @@ export default function TasksScreen() {
             selectedProject={selectedProject}
             calendarDate={calendarDate}
             onSelectBoard={(name) => setSelectedProject(name)}
-            // The pencil beside a board's name opens the board's own sheet —
-            // the same one a long-press on the rail used to.
+            // The ALL-boards manager — add one, see them all — on a LONG press
+            // of a tile. A tap and the pencil open that board's own page now,
+            // which is where renaming and deleting it live.
             onEditBoard={(name) => openBoardManager(name)}
+            // Renaming is the board page's header, tapped. Keep the screen's
+            // scope on the board it was on, under its new name.
+            onRenameBoard={async (from, to) => {
+              const ok = await renameProject(from, to);
+              if (ok && selectedProject === from) setSelectedProject(to);
+              return ok;
+            }}
+            // Deleting is the row at the end of the board page. The ALERT is
+            // here, not there: this is the side that knows how many tasks go
+            // with it, and that is the whole question.
+            onDeleteBoard={(name) => {
+              const boardTasks = (tasks || []).filter((t) => t && t.project === name);
+              const n = boardTasks.length;
+              const subs = boardTasks.reduce((sum, t) => sum + (t.subtasks ? t.subtasks.length : 0), 0);
+              Alert.alert(
+                'Delete board',
+                n === 0
+                  ? `Delete "${name}"?`
+                  : `"${name}" holds ${n} ${n === 1 ? 'task' : 'tasks'}${subs ? ` and ${subs} subtask${subs === 1 ? '' : 's'}` : ''}. Deleting the board deletes them too. This cannot be undone.`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: () => {
+                      if (selectedProject === name) setSelectedProject('All');
+                      deleteProject(name, { onDeleteTasks: n > 0 });
+                    },
+                  },
+                ],
+              );
+            }}
             onOpenFilters={() => setFilterOpen(true)}
             filterCount={selectedTags.length + selectedOwners.length}
             bottomInset={tabBarHeight}
