@@ -61,23 +61,67 @@ async function openBoard(props = {}) {
 }
 
 describe('a board’s task list', () => {
-  test('every task is an inset CARD, so its white title is never on a white page', async () => {
-    // The bug this replaces: bare rows drawn on the page while taking their
-    // colours from the inset-card palette — white text on the light-mode page.
-    await openBoard({ theme: theme('light') });
+  const rowStyle = (id = 'overview-task-t1') => StyleSheet.flatten(screen.getByTestId(id).props.style);
+  const titleColour = (id = 'overview-task-t1') => StyleSheet.flatten(
+    within(screen.getByTestId(id)).getByText('Renew the passport').props.style,
+  ).color;
 
-    const card = screen.getByTestId('overview-task-t1');
-    const box = StyleSheet.flatten(card.props.style);
-    expect(box.backgroundColor).toBe('#1F2024');   // charcoal on the light page
-    expect(box.borderWidth).toBe(1);
-    expect(box.borderRadius).toBe(14);
+  /**
+   * The rows are LINES ON ONE SURFACE, cut apart by the app's one separator —
+   * the same groove the Notes timeline uses. They were a stack of inset cards,
+   * each its own charcoal panel, on a page that already carries four stat
+   * tiles and a card per tag: every row read as another OBJECT when a list of
+   * ten things is one surface with nine cuts in it.
+   */
+  test('a task is a line in a list, not a card of its own', async () => {
+    await openBoard({ theme: theme('light') });
+    const box = rowStyle();
+    expect(box.backgroundColor).toBeUndefined();
+    expect(box.borderWidth).toBeUndefined();
+    expect(box.borderRadius).toBeUndefined();
   });
 
-  test('…and the card is a step above black in dark mode', async () => {
+  // The ORIGINAL bug this list has had twice: rows drawn straight on the page
+  // while taking their colours from the inset-CARD palette, i.e. white text on
+  // the white light-mode page. Losing the card means the text has to come off
+  // the page's own palette, in both modes.
+  test('its title is the PAGE\'s ink — never white on a white page', async () => {
+    await openBoard({ theme: theme('light') });
+    expect(titleColour()).toBe('#111');
+  });
+
+  test('…and the same ink the other way round in dark mode', async () => {
     await openBoard({ theme: theme('dark') });
-    const box = StyleSheet.flatten(screen.getByTestId('overview-task-t1').props.style);
-    expect(box.backgroundColor).toBe('#17171A');
-    expect(box.backgroundColor).not.toBe('#000');
+    expect(titleColour()).toBe('#fff');
+  });
+
+  test('the rule goes BETWEEN rows — never above the first or below the last', async () => {
+    // insetRule is two hairlines a point apart and IS the element, so as a
+    // border on the row it would also draw across the top of the first and
+    // under the last. Two to-do rows in the fixture → exactly one cut.
+    await openBoard({ theme: theme('light') });
+    expect(screen.getAllByTestId('task-rule')).toHaveLength(1);
+  });
+
+  test('the rule is the groove, with the light caught under it', async () => {
+    await openBoard({ theme: theme('light') });
+    const rule = StyleSheet.flatten(screen.getAllByTestId('task-rule')[0].props.style);
+    expect(rule.borderBottomColor).toBe(RULE_HIGHLIGHT);
+    expect(rule.borderTopWidth).toBeGreaterThan(0);
+  });
+
+  // Losing the card must not cost the row its mark: the circle is the same
+  // one the planner rows, the day sheet and the Notes to-dos use, and it is
+  // the part of a task row you read without reading.
+  test('the tick stays a circle in every one of its states', async () => {
+    await openBoard({
+      // The fixture's two open tasks are both past due, so one with a day in
+      // hand is added here — otherwise "open" is the state never drawn.
+      tasks: [task({ id: 'soon', title: 'Not due yet', dueDate: '2099-01-01' }), task(), task({ id: 't3', completed: true })],
+    });
+    expect(screen.getByTestId('overview-task-mark-soon').props.name).toBe('circle-outline');
+    expect(screen.getByTestId('overview-task-mark-t1').props.name).toBe('alert-circle-outline');
+    expect(screen.getByTestId('overview-task-mark-t3').props.name).toBe('check-circle');
   });
 
   test('a tap opens the task', async () => {

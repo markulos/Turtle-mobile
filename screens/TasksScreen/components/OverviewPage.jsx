@@ -484,76 +484,87 @@ function BoardTile({
  * Tapping opens the task — the list is the obvious place to reach for one, and
  * until now it was the one task list in the app that did nothing when pressed.
  */
-function TaskRow({ t, done, todayStr, pal, onPress, board }) {
+function TaskRow({ t, done, todayStr, theme, onPress, board }) {
+  const c = theme.colors;
   const overdue = !done && t.dueDate && t.dueDate < todayStr;
   const when = t.dueDate
     ? (t.dueDate === todayStr ? 'Today' : t.dueDate.slice(5)) + (t.time ? ` · ${t.time}` : '')
     : '—';
-  if (board) {
-    // All-boards list: the board is the one thing the title cannot tell you.
-    return (
-      <Pressable
-        onPressIn={() => tapHaptic()}
-        onPress={onPress}
-        disabled={!onPress}
-        accessibilityRole="button"
-        accessibilityLabel={`${t.title || 'Untitled'}, ${board}${done ? ', done' : ''}${overdue ? ', late' : ''}, ${when}`}
-        testID={`overview-task-${t.id}`}
-        style={({ pressed }) => [
-          styles.taskCard,
-          styles.taskCardStacked,
-          { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop },
-          pressed && styles.pressed,
-        ]}
-      >
-        <Icon
-          name={done ? 'check-circle' : overdue ? 'alert-circle-outline' : 'circle-outline'}
-          size={18}
-          color={done ? pal.sub : overdue ? '#F87171' : pal.muted}
-        />
-        <View style={styles.taskStack}>
-          <Text
-            style={[styles.taskTitle, { color: done ? pal.muted : pal.text }, done && styles.taskDone]}
-            numberOfLines={1}
-          >
-            {t.title || 'Untitled'}
-          </Text>
-          <Text style={[styles.taskBoard, { color: pal.muted }]} numberOfLines={1}>{board}</Text>
-        </View>
-        <Text style={[styles.taskMeta, { color: overdue ? '#F87171' : pal.sub }]} numberOfLines={1}>{when}</Text>
-      </Pressable>
-    );
-  }
+  // The tick stays a CIRCLE, open or filled — it is the same mark the planner
+  // rows, the day sheet and the Notes to-dos use, and the one part of a task
+  // row you read without reading.
+  const mark = done ? 'check-circle' : overdue ? 'alert-circle-outline' : 'circle-outline';
+  const markColor = done ? c.textTertiary : overdue ? '#F87171' : c.textTertiary;
   return (
     <Pressable
       onPressIn={() => tapHaptic()}
       onPress={onPress}
       disabled={!onPress}
       accessibilityRole="button"
-      accessibilityLabel={`${t.title || 'Untitled'}${done ? ', done' : ''}${overdue ? ', late' : ''}, ${when}`}
+      accessibilityLabel={`${t.title || 'Untitled'}${board ? `, ${board}` : ''}${done ? ', done' : ''}${overdue ? ', late' : ''}, ${when}`}
       testID={`overview-task-${t.id}`}
-      style={({ pressed }) => [
-        styles.taskCard,
-        { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop },
-        pressed && styles.pressed,
-      ]}
+      style={({ pressed }) => [styles.taskRow, pressed && styles.pressed]}
     >
-      <Icon
-        name={done ? 'check-circle' : overdue ? 'alert-circle-outline' : 'circle-outline'}
-        size={18}
-        color={done ? pal.sub : overdue ? '#F87171' : pal.muted}
-      />
-      <Text
-        style={[styles.taskTitle, { color: done ? pal.muted : pal.text }, done && styles.taskDone]}
-        numberOfLines={1}
-      >
-        {t.title || 'Untitled'}
-      </Text>
-      <Text style={[styles.taskMeta, { color: overdue ? '#F87171' : pal.sub }]} numberOfLines={1}>
+      <Icon name={mark} size={18} color={markColor} testID={`overview-task-mark-${t.id}`} />
+      {board ? (
+        // All-boards list: the board is the one thing the title cannot tell
+        // you, so it rides as a quiet second line of provenance.
+        <View style={styles.taskStack}>
+          <Text
+            style={[styles.taskTitle, { color: done ? c.textTertiary : c.textPrimary }, done && styles.taskDone]}
+            numberOfLines={1}
+          >
+            {t.title || 'Untitled'}
+          </Text>
+          <Text style={[styles.taskBoard, { color: c.textTertiary }]} numberOfLines={1}>{board}</Text>
+        </View>
+      ) : (
+        <Text
+          style={[styles.taskTitle, { color: done ? c.textTertiary : c.textPrimary }, done && styles.taskDone]}
+          numberOfLines={1}
+        >
+          {t.title || 'Untitled'}
+        </Text>
+      )}
+      <Text style={[styles.taskMeta, { color: overdue ? '#F87171' : c.textTertiary }]} numberOfLines={1}>
         {when}
       </Text>
     </Pressable>
   );
+}
+
+/**
+ * A list of tasks as ROWS ON ONE SURFACE, cut apart by the app's one
+ * separator — the same groove the Notes timeline uses (`insetRule`: a shadow
+ * hairline with a highlight a point under it, which reads as a score in the
+ * page rather than as a line drawn on it).
+ *
+ * They were a stack of inset CARDS, each row its own charcoal panel with its
+ * own border and corner. On a page that already carries four stat tiles and a
+ * card per tag, every row then read as another OBJECT — ten objects in a
+ * column — when a list of ten things is one surface with nine cuts in it. The
+ * tiles above are still cards, because they are still objects; these are
+ * lines.
+ *
+ * THE RULE IS A SIBLING BETWEEN ROWS, never a border on the row. `insetRule`
+ * is two hairlines a point apart and IS the element, so on the row it would
+ * draw across the top of the first one and under the last as well — the same
+ * reason the Notes list passes it as `ItemSeparatorComponent`.
+ */
+function TaskList({ tasks, isDone, todayStr, theme, onOpenTask, showBoard }) {
+  return tasks.map((t, i) => (
+    <React.Fragment key={t.id}>
+      {i > 0 && <View style={insetRule(theme)} testID="task-rule" />}
+      <TaskRow
+        t={t}
+        done={isDone(t)}
+        todayStr={todayStr}
+        theme={theme}
+        board={showBoard ? boardLabel(t.project || NO_BOARD) : undefined}
+        onPress={onOpenTask ? () => onOpenTask(t) : null}
+      />
+    </React.Fragment>
+  ));
 }
 
 /**
@@ -654,17 +665,16 @@ function ScopePage({ scope, tasks, todayStr, pal, theme, onBack, onOpenTask }) {
       >
         {rows.length === 0
           ? <Text style={[styles.empty, { color: c.textTertiary }]}>{copy.empty}</Text>
-          : rows.map((t) => (
-            <TaskRow
-              key={t.id}
-              t={t}
-              done={scope === 'done' || !!(t.completed || isTaskDoneNow(t, todayStr))}
+          : (
+            <TaskList
+              tasks={rows}
+              isDone={(t) => scope === 'done' || !!(t.completed || isTaskDoneNow(t, todayStr))}
               todayStr={todayStr}
-              pal={pal}
-              board={boardLabel(t.project || NO_BOARD)}
-              onPress={onOpenTask ? () => onOpenTask(t) : null}
+              theme={theme}
+              onOpenTask={onOpenTask}
+              showBoard
             />
-          ))}
+          )}
       </ScrollView>
     </View>
   );
@@ -836,15 +846,27 @@ function BoardDetail({
         <Text style={[styles.section, { color: c.textTertiary }]}>To do · {pendingShown.length}</Text>
         {pendingShown.length === 0
           ? <Text style={[styles.empty, { color: c.textTertiary }]}>{q ? 'Nothing to do matches.' : 'All clear.'}</Text>
-          : pendingShown.map((t) => (
-            <TaskRow key={t.id} t={t} done={false} todayStr={todayStr} pal={pal} onPress={onOpenTask ? () => onOpenTask(t) : null} />
-          ))}
+          : (
+            <TaskList
+              tasks={pendingShown}
+              isDone={() => false}
+              todayStr={todayStr}
+              theme={theme}
+              onOpenTask={onOpenTask}
+            />
+          )}
         <Text style={[styles.section, { color: c.textTertiary }]}>Done · {doneShown.length}</Text>
         {doneShown.length === 0
           ? <Text style={[styles.empty, { color: c.textTertiary }]}>{q ? 'Nothing done matches.' : 'None yet.'}</Text>
-          : doneShown.map((t) => (
-            <TaskRow key={t.id} t={t} done todayStr={todayStr} pal={pal} onPress={onOpenTask ? () => onOpenTask(t) : null} />
-          ))}
+          : (
+            <TaskList
+              tasks={doneShown}
+              isDone={() => true}
+              todayStr={todayStr}
+              theme={theme}
+              onOpenTask={onOpenTask}
+            />
+          )}
 
         {/* Deleting the board belongs on the board's page, at the end of it —
             the pencil that used to be the only way here opens this page now,
@@ -1501,23 +1523,21 @@ const styles = StyleSheet.create({
   fill: { height: 3 },
   // One task = one inset card, stacked. The 8pt gap is the same rhythm as the
   // board rows above, so a board's tasks read as the same kind of object.
-  taskCard: {
+  // A line in a list, not a card: no fill, no border, no corner — the rule
+  // between two of them is the whole separation. Horizontal padding is small
+  // but not nil, so a pressed row's highlight does not start hard against the
+  // page's own margin.
+  taskRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    borderRadius: 14,
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 13,
   },
-  // 15/600 rather than the old 14/400: this is the title of a card now, not a
-  // line in a list, and it has to hold its own against the figures above it.
   taskTitle: { flex: 1, fontSize: 15, fontWeight: '600' },
   taskDone: { textDecorationLine: 'line-through' },
   // The all-boards variant stacks the board under the title, so the row keeps
   // one line of title and gains a quiet second line of provenance.
-  taskCardStacked: { alignItems: 'center' },
   taskStack: { flex: 1 },
   taskBoard: { fontSize: 11, fontWeight: '600', marginTop: 2 },
   taskMeta: { fontSize: 12, fontWeight: '600', flexShrink: 0, fontVariant: ['tabular-nums'] },
