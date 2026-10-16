@@ -208,3 +208,60 @@ describe('the mount site in the gallery', () => {
     expect(SRC).toMatch(/<AlbumPickerSheet[\s\S]*?bottomInset=\{Math\.max\(tabBarH, insets\.bottom\)\}/);
   });
 });
+
+/**
+ * A BULK ACTION THAT FINISHES ENDS THE SELECTION.
+ *
+ * Filing a selection into a board left the picker closing onto the same bar
+ * it was raised from, over a grid whose rows had just moved — a bar you have
+ * to dismiss to find out whether anything happened. Tagging, deleting and
+ * sending all put it away; this was the one that did not.
+ */
+describe('filing into a board ends the selection', () => {
+  const CODE = fs.readFileSync('screens/TurtleScreen/components/MediaGallery.jsx', 'utf8')
+    // Blanked, not deleted: the prose beside each branch explains the rule and
+    // must not be allowed to answer for the code.
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:])\/\/[^\n]*/g, (m, lead) => lead + ' '.repeat(m.length - lead.length));
+  const addToAlbum = CODE.slice(
+    CODE.indexOf('const addToAlbum = useCallback'),
+    CODE.indexOf('const openBulkTags = useCallback'),
+  );
+
+  it('puts the bar away once the write lands', () => {
+    const ok = addToAlbum.slice(addToAlbum.indexOf('if (!r.queued) fetchAlbums();'), addToAlbum.indexOf('} catch'));
+    expect(ok).toMatch(/if \(fromSelection\) leaveSelectMode\(\)/);
+  });
+
+  it('…and on the one where everything was already in that board', () => {
+    // Nothing to write is still a finished errand: the photos ARE in that
+    // album, which is what was asked for. Leaving the bar up reads as a tap
+    // that missed.
+    const noop = addToAlbum.slice(0, addToAlbum.indexOf('const ids = items.map'));
+    expect(noop).toMatch(/if \(fromSelection\) leaveSelectMode\(\)/);
+  });
+
+  it('but NOT when the write failed', () => {
+    // Then the selection is the only thing between you and picking all of
+    // them again.
+    const failed = addToAlbum.slice(addToAlbum.indexOf('} catch'), addToAlbum.indexOf('} finally'));
+    expect(failed).not.toMatch(/leaveSelectMode/);
+  });
+
+  it('only the GRID\'s selection has a bar to put away', () => {
+    // Filing one photo from the viewer never raised one.
+    expect(addToAlbum).toMatch(/const fromSelection = albumPickerIsSelectionRef\.current/);
+  });
+
+  it('there is ONE way to end a selection, not five hand-rolled copies', () => {
+    // Selecting is five pieces of state and five places end it. The copies had
+    // already drifted — only one of them cleared the range anchor, so leaving
+    // select mode mid-range and coming back could fill from a stale one.
+    expect(CODE).toMatch(/const leaveSelectMode = useCallback/);
+    expect(CODE.match(/setSelectedGridItems\(new Set\(\)\)/g) || []).toHaveLength(1);
+    const helper = CODE.slice(CODE.indexOf('const leaveSelectMode = useCallback'), CODE.indexOf('}, []);', CODE.indexOf('const leaveSelectMode')));
+    for (const bit of ['setIsSelectMode(false)', 'setRangeSelectMode(false)', 'setRangeAnchorIdx(null)', 'rangeAnchorRef.current = null']) {
+      expect(helper).toContain(bit);
+    }
+  });
+});

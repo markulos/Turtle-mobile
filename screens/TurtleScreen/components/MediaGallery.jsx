@@ -1026,6 +1026,30 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   rangeSelectModeRef.current = rangeSelectMode;
   const rangeAnchorRef = useRef(null); // anchor data-index of the first tap
 
+  /**
+   * Put the grid back the way it was before you started picking.
+   *
+   * ONE of these, because selecting is five pieces of state (the mode, the
+   * set, the range sub-mode and both halves of its anchor) and there are now
+   * five places that end a selection — tag, delete, send, file into an album,
+   * and the header's own key. Four hand-rolled copies had already drifted:
+   * only one of them cleared `rangeAnchorRef`, so leaving select mode mid-range
+   * and coming back could fill from an anchor you set a minute ago.
+   *
+   * A BULK ACTION THAT FINISHES ENDS THE SELECTION. The job you picked those
+   * photos for is done, and a bar still sitting there over a grid whose rows
+   * have just moved is a bar you have to dismiss to find out whether anything
+   * happened. An action that FAILED does not call this: then the selection is
+   * the only thing standing between you and picking all of them again.
+   */
+  const leaveSelectMode = useCallback(() => {
+    setIsSelectMode(false);
+    setSelectedGridItems(new Set());
+    setRangeSelectMode(false);
+    setRangeAnchorIdx(null);
+    rangeAnchorRef.current = null;
+  }, []);
+
   // ── Edge auto-scroll while drag-selecting ──────────────────────────────
   // When the finger nears the top/bottom of the grid mid-drag, scroll the
   // list under it so the range can span past the visible window — faster the
@@ -3634,13 +3658,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       }
       notifyHaptic('success');
       setSendInTurtleIds(null);
-      // The job is done, so the selection that fed it goes too — the same
-      // thing deleting and tagging a selection do.
-      setIsSelectMode(false);
-      setSelectedGridItems(new Set());
-      setRangeSelectMode(false);
-      setRangeAnchorIdx(null);
-      rangeAnchorRef.current = null;
+      // The job is done, so the selection that fed it goes too.
+      leaveSelectMode();
     } catch (e) {
       notifyHaptic('error');
       Alert.alert(
@@ -3650,7 +3669,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     } finally {
       setSendingTo(null);
     }
-  }, [api, sendInTurtleIds]);
+  }, [api, sendInTurtleIds, leaveSelectMode]);
 
   // Was the picker opened on the GRID's selection, or on items handed in from
   // somewhere else (the viewer, the Files tab)? Only the grid has a selection
@@ -3681,9 +3700,19 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
 
   const addToAlbum = useCallback(async (name) => {
     const items = albumPickerFor || [];
+    // Only the GRID's selection has a bar to put away. Filing one photo from
+    // the viewer never raised one.
+    const fromSelection = albumPickerIsSelectionRef.current;
     const add = tagsToAdd(name, commonAlbums(items, tagsOf));
     // Everything already in it: nothing to write, and nothing to invalidate.
-    if (items.length === 0 || add.length === 0) { closeAlbumPicker(); return; }
+    // Still a finished errand, though — the photos ARE in that album, which
+    // is what you asked for, so the selection ends the same way it would have
+    // if a write had been needed. Anything else looks like the tap missed.
+    if (items.length === 0 || add.length === 0) {
+      closeAlbumPicker();
+      if (fromSelection) leaveSelectMode();
+      return;
+    }
     const ids = items.map((it) => it.id);
     const snapshot = {};
     const tagsById = {};
@@ -3710,14 +3739,20 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       // drops its own album cache on a tag write, so asking again now is what
       // makes the album appear without a pull-to-refresh.
       if (!r.queued) fetchAlbums();
+      // Filed. The bar goes with the errand that raised it — left up over a
+      // grid whose rows have just moved, it is a bar you have to dismiss to
+      // find out whether anything happened.
+      if (fromSelection) leaveSelectMode();
     } catch (e) {
+      // NOT cleared here, deliberately: nothing was filed, and the selection
+      // is the only thing standing between you and picking all of them again.
       console.warn('[MediaGallery] album add failed:', e?.message || e);
       applyTagsLocally(snapshot);
       Alert.alert('Not added', `Could not put ${ids.length === 1 ? 'that photo' : 'those photos'} in “${add[0]}”.`);
     } finally {
       closeAlbumPicker();
     }
-  }, [albumPickerFor, api, applyTagsLocally, closeAlbumPicker, fetchAlbums]);
+  }, [albumPickerFor, api, applyTagsLocally, closeAlbumPicker, fetchAlbums, leaveSelectMode]);
 
   const openBulkTags = useCallback(() => {
     const ids = Array.from(selectedGridItemsRef.current || []);
@@ -3827,15 +3862,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     // Nothing changed → the selection stays for the next action.
     if (bulkDirtyRef.current) {
       // The external (Files-tab) path has no grid selection to clear.
-      if (!wasExternal) {
-        setIsSelectMode(false);
-        setSelectedGridItems(new Set());
-        setRangeSelectMode(false);
-        setRangeAnchorIdx(null);
-        rangeAnchorRef.current = null;
-      }
+      if (!wasExternal) leaveSelectMode();
     }
-  }, []);
+  }, [leaveSelectMode]);
 
   // Helper to construct a full MEDIA url. Built off the media origin (HTTP/2 when
   // the device can reach + trust :3443, probed in ServerContext; else the plain
@@ -4985,11 +5014,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                           prevList.forEach((it, idx) => { if (it && idSet.has(it.id)) removed.push({ item: it, idx }); });
 
                           setUploadItems(prev => prev.filter(item => !idSet.has(item.id)));
-                          setIsSelectMode(false);
-                          setSelectedGridItems(new Set());
-                          setRangeSelectMode(false);
-                          setRangeAnchorIdx(null);
-                          rangeAnchorRef.current = null;
+                          leaveSelectMode();
 
                           (async () => {
                             const failed = [];
@@ -5472,7 +5497,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 <TouchableOpacity
                   testID="gallery-select-toggle"
                   onPress={() => {
-                    if (isSelectMode) { setIsSelectMode(false); setBulkTagsOpen(false); setSelectedGridItems(new Set()); setRangeSelectMode(false); setRangeAnchorIdx(null); rangeAnchorRef.current = null; }
+                    if (isSelectMode) { setBulkTagsOpen(false); leaveSelectMode(); }
                     else { setIsSelectMode(true); }
                   }}
                   hitSlop={HIT_SLOP_10}

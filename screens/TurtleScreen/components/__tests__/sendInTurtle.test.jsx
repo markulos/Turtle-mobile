@@ -126,10 +126,14 @@ describe('the gallery offers it wherever a photo is shared', () => {
   });
 
   it('posts the ids it already has — no download, no upload', () => {
-    const send = CODE.slice(
-      CODE.indexOf('const sendInTurtle = useCallback'),
-      CODE.indexOf('}, [api, sendInTurtleIds]);'),
-    );
+    const start = CODE.indexOf('const sendInTurtle = useCallback');
+    expect(start).toBeGreaterThan(-1);
+    // Ended on the next declaration, not on this one's dependency array —
+    // a dep list is edited whenever the body gains a call, and an anchor that
+    // moves silently turns this into a scan of the whole file.
+    const end = CODE.indexOf('const albumPickerIsSelectionRef', start);
+    expect(end).toBeGreaterThan(start);
+    const send = CODE.slice(start, end);
     expect(send).toMatch(/api\.post\(`\/messages\/\$\{encodeURIComponent\(person\.userId\)\}`/);
     expect(send).toMatch(/attachments: toAttachments\(batch\)/);
     expect(send).not.toMatch(/downloadAsync|uploadPickedAsset/);
