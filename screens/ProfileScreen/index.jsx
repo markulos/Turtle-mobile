@@ -13,6 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../context/ThemeContext';
 import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
+import { useSyncSignals } from '../../context/DownloadsContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar, { AnimalGlyph } from '../../components/AnimalAvatar';
 import AnimalPicker from '../../components/AnimalPicker';
@@ -30,6 +31,19 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import FriendChatPage from './components/FriendChatPage';
+// Every conversation you have, in one list — the door that was missing. The
+// pond has answered `GET /messages` the whole time; nothing called it.
+import MessagesPage from './components/MessagesPage';
+import DirectMessageIcon from '../../components/DirectMessageIcon';
+import { badgeText, threadRows, unreadCount, unreadLabel } from '../../utils/messageThreads';
+
+/**
+ * The CARDS list is data, and one of its rows is drawn with a component
+ * rather than an icon NAME — the DM mark is `send-outline` plus a tilt, not a
+ * glyph (see components/DirectMessageIcon). This sentinel keeps the list a
+ * plain array instead of making every row carry a renderer it does not need.
+ */
+const DM_ICON = '__dm__';
 import ConversationsOverlay from '../TurtleScreen/components/ConversationsOverlay';
 import LinkDesktop from '../TurtleScreen/components/LinkDesktop';
 import PasswordsScreen from '../PasswordsScreen';
@@ -64,6 +78,9 @@ export default function ProfileScreen() {
   const keyboardHeight = useKeyboardHeight();
   const navigation = useNavigation();
   const { api, getBaseUrl } = useServer();
+  // The socket's content-free "there is traffic" ping, which is what makes the
+  // unread badge live rather than once-per-visit.
+  const { messagesVersion } = useSyncSignals();
   const { authIdentity } = useAuth();
 
   // Identity string (e.g. "sub:123" / "phone:+1…"). Everything derived —
@@ -85,6 +102,20 @@ export default function ProfileScreen() {
   // not an id: the thread's header wants their name and avatar immediately,
   // and the row that was pressed already holds both.
   const [chatFriend, setChatFriend] = useState(null);
+  const [messagesOpen, setMessagesOpen] = useState(false);
+  /**
+   * How many messages are waiting, for the card's badge.
+   *
+   * Counted off the SAME rows the Messages page draws (utils/messageThreads),
+   * not off the endpoint's own `unreadTotal`: two numbers from two places
+   * eventually disagree, and a badge that says 3 over a list showing 2 is the
+   * kind of thing you stop believing and then stop looking at.
+   *
+   * Refetched on the socket's content-free ping and whenever the Messages page
+   * CLOSES — opening a thread marks it read server-side, so the close is
+   * exactly the moment the count has changed.
+   */
+  const [unreadDms, setUnreadDms] = useState(0);
   // A tapped message notification names the sender by ID and nothing else, so
   // the thread opens on the id alone and the name and face arrive with
   // /friends. The thread itself only ever needed the id — everything the header
@@ -110,6 +141,18 @@ export default function ProfileScreen() {
   // Declared AFTER `friends` on purpose — a dependency array is evaluated where
   // it is written, so reading `friends` above its own `useState` is a temporal
   // dead zone crash on first render, not a stale value.
+  const refreshUnreadDms = useCallback(async () => {
+    try {
+      const res = await api.get('/messages');
+      setUnreadDms(unreadCount(threadRows(res, null)));
+    } catch {
+      // A badge is decoration: a failed count must never be an error on the
+      // page, and the last good number is a better guess than zero.
+    }
+  }, [api]);
+  useEffect(() => { refreshUnreadDms(); }, [refreshUnreadDms, messagesVersion]);
+  useEffect(() => { if (!messagesOpen && !chatFriend) refreshUnreadDms(); }, [messagesOpen, chatFriend, refreshUnreadDms]);
+
   const chatFriendResolved = useMemo(() => {
     if (!chatFriend || chatFriend.name) return chatFriend;
     return friends.find((f) => String(f?.id) === String(chatFriend.id)) || chatFriend;
@@ -346,6 +389,14 @@ export default function ProfileScreen() {
   ];
 
   const CARDS = [
+    // FIRST, and the only card with a live count on it: the others are places
+    // you go when you decide to, this is the one that has something waiting in
+    // it. Direct messages used to be reachable only from a push notification
+    // or from a row of the Friends LEADERBOARD — so if nobody had written to
+    // you lately there was no door at all.
+    { key: 'messages', icon: DM_ICON, label: 'Messages',
+      sub: unreadLabel(unreadDms), badge: unreadDms,
+      onPress: () => { tapHaptic(); setMessagesOpen(true); } },
     { key: 'vault', icon: 'shield-lock', label: 'Password Vault',
       sub: 'Your saved logins', onPress: () => { tapHaptic(); setVaultOpen(true); } },
     { key: 'chats', icon: 'forum', label: 'Board conversations',
@@ -572,10 +623,18 @@ export default function ProfileScreen() {
               activeOpacity={0.7}
               onPress={card.onPress}
               accessibilityRole="button"
-              accessibilityLabel={card.label}
+              accessibilityLabel={card.badge > 0 ? `${card.label}, ${card.sub}` : card.label}
+              testID={`profile-card-${card.key}`}
             >
               <View style={styles.cardIcon}>
-                <Icon name={card.icon} size={20} color={c.accent || c.accentInfo} />
+                {card.icon === DM_ICON
+                  ? <DirectMessageIcon size={20} color={c.accent || c.accentInfo} />
+                  : <Icon name={card.icon} size={20} color={c.accent || c.accentInfo} />}
+                {badgeText(card.badge) ? (
+                  <View style={styles.cardBadge} testID="profile-messages-badge">
+                    <Text style={styles.cardBadgeText}>{badgeText(card.badge)}</Text>
+                  </View>
+                ) : null}
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={styles.cardLabel} numberOfLines={1}>{card.label}</Text>
@@ -606,6 +665,17 @@ export default function ProfileScreen() {
           Friends page rather than inside it, so it draws OVER that page — an
           EdgeSwipePage nested in another one is an in-tree overlay and the
           last sibling wins. */}
+      {/* Every conversation, in one list. A SIBLING of the chat page and
+          mounted before it, so opening a thread draws over this rather than
+          replacing it — the same arrangement FriendsPage has. */}
+      <MessagesPage
+        visible={messagesOpen}
+        onClose={() => setMessagesOpen(false)}
+        onOpenThread={setChatFriend}
+        theme={theme}
+        insets={insets}
+      />
+
       <FriendChatPage
         visible={!!chatFriend}
         onClose={() => setChatFriend(null)}
@@ -1881,6 +1951,18 @@ const makeStyles = (theme) => {
       alignItems: 'center', justifyContent: 'center',
       backgroundColor: (c.accent || c.accentInfo || '#4ADE80') + '22',
     },
+    // The count, on the icon rather than beside the label: a badge belongs on
+    // the thing it is about, and the row's text is already two lines. Overhangs
+    // the tile on purpose, with a ring in the card's own fill so it reads as
+    // sitting ON the icon rather than inside it.
+    cardBadge: {
+      position: 'absolute', top: -5, right: -6,
+      minWidth: 19, height: 19, borderRadius: 10, paddingHorizontal: 5,
+      alignItems: 'center', justifyContent: 'center',
+      backgroundColor: c.accentError || '#F87171',
+      borderWidth: 2, borderColor: c.surfaceElevated,
+    },
+    cardBadgeText: { fontSize: 10.5, fontWeight: '800', color: '#fff' },
     cardLabel: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
     cardSub: { fontSize: 12, color: c.textTertiary, marginTop: 1 },
     pushHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingBottom: 10 },

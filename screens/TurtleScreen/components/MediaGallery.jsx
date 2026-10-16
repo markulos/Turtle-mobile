@@ -113,6 +113,7 @@ import AlbumPickerSheet from './AlbumPickerSheet';
 // and a selected item already is one — so this leaves the pond alone entirely
 // rather than downloading, re-uploading and arriving as a second copy.
 import SendInTurtleSheet from './SendInTurtleSheet';
+import DirectMessageIcon from '../../../components/DirectMessageIcon';
 import usePondPeople, { useMyUserId } from '../../../utils/usePondPeople';
 import { MAX_MESSAGE_ATTACHMENTS, toAttachments } from '../../../utils/messageAttachments';
 import VaultImagePicker from './VaultImagePicker';
@@ -4728,7 +4729,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                   testID="share-send-in-turtle"
                   onPress={() => { const m = shareChooser; setShareChooser(null); openSendInTurtle([m?.id]); }}
                 >
-                  <Icon name="send" size={22} color={theme.colors.accentSuccess || theme.colors.primary} />
+                  <DirectMessageIcon size={22} color={theme.colors.accentSuccess || theme.colors.primary} />
                   <View style={styles.shareSheetOptionText}>
                     <Text style={styles.shareSheetOptionTitle}>Send in Turtle</Text>
                     <Text style={styles.shareSheetOptionSub}>

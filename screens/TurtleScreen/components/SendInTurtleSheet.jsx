@@ -31,8 +31,8 @@ import {
   ActivityIndicator, BackHandler, FlatList, Pressable, StyleSheet, Text, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AnimalAvatar from '../../../components/AnimalAvatar';
+import DirectMessageIcon from '../../../components/DirectMessageIcon';
 import { tapHaptic } from '../../../utils/haptics';
 import { TAP_ONLY } from '../../../utils/pressBehavior';
 import { MAX_MESSAGE_ATTACHMENTS } from '../../../utils/messageAttachments';
@@ -77,7 +77,7 @@ function PersonRow({ person, busy, onPress, theme }) {
       </Text>
       {busy
         ? <ActivityIndicator size="small" color={c.textMuted} />
-        : <Icon name="send" size={18} color={c.accentInfo || c.primary} />}
+        : <DirectMessageIcon size={18} color={c.accentInfo || c.primary} />}
     </Pressable>
   );
 }
