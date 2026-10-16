@@ -297,3 +297,41 @@ describe('the whole list lives behind the section’s search', () => {
     expect(screen.queryByTestId('planner-filter-board-search')).toBeNull();
   });
 });
+
+/**
+ * The search page COVERS the app, it does not sit inside it.
+ *
+ * As an in-tree overlay it filled this panel, which is itself laid out inside
+ * the Planner — so the Planner's header and tab row sat above the search field
+ * and the day sheet and the dock sat over the results: a page you opened by
+ * pressing something, framed by three things you did not.
+ *
+ * The mock EdgeSwipePage in this file renders its children either way, so this
+ * is the one claim a render test here cannot make. It is plain in the source.
+ */
+describe('the search page covers everything', () => {
+  const SRC = require('fs')
+    .readFileSync('screens/TasksScreen/components/PlannerFilterPanel.jsx', 'utf8')
+    // Blanked, not deleted: the prose above the prop explains the rule and
+    // must not be allowed to answer for the code.
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:])\/\/[^\n]*/g, (m, lead) => lead + ' '.repeat(m.length - lead.length));
+
+  test('it takes the whole screen, not this panel', () => {
+    expect(SRC).toMatch(/<VaultSearchPanel\s+fullScreen/);
+  });
+
+  test('the panel that raises it is still an in-tree overlay', () => {
+    // Which is what MAKES the Modal above legal: iOS drops a sibling Modal
+    // over an OPEN one. If this panel ever becomes a Modal itself, the search
+    // page has to go back to being an overlay or it will silently not appear.
+    expect(SRC).toMatch(/<EdgeSwipePage overlay visible=\{visible\}/);
+  });
+
+  test('the field is the first thing on that page, under the hood and nothing else', () => {
+    // VaultSearchPanel pads its header row by panelTopInset and takes no other
+    // top chrome, so "very top" is the default — this panel must not override
+    // it with an insetTop of its own.
+    expect(SRC).not.toMatch(/<VaultSearchPanel[\s\S]*?insetTop/);
+  });
+});

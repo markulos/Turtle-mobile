@@ -462,10 +462,20 @@ export default function PlannerFilterPanel({
             show. The vault's search page, as the task form's board picker
             already uses it — one search to learn rather than three.
 
-            Mounted LAST, inside this panel's own root: it is an absolute fill,
-            so it covers the panel that raised it rather than being framed by
-            it (STYLE-RULES §4). It renders nothing while closed. */}
+            ── fullScreen, and why it has to be ──────────────────────────────
+            As an in-tree overlay it filled THIS PANEL, which is itself laid
+            out inside the Planner — so the Planner's header and tab row sat
+            above the search field and the day sheet and the dock sat over the
+            results. A page you opened by pressing something, framed by three
+            things you did not. STYLE-RULES §4: it covers everything.
+
+            The Modal form is allowed here precisely because this panel is an
+            in-tree overlay and not a Modal itself — iOS drops a sibling Modal
+            over an OPEN one, which is the case `overlay` exists for and is not
+            this one. Same arrangement as the Notes topic search over the Notes
+            filter panel. It renders nothing while closed. */}
         <VaultSearchPanel
+          fullScreen
           visible={!!searchFor}
           placeholder={searchFor === 'tag' ? 'Search labels' : 'Search boards'}
           accessibilityLabel={searchFor === 'tag' ? 'Search labels' : 'Search boards'}
