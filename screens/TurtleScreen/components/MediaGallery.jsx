@@ -109,6 +109,12 @@ import { dockOccupied } from '../../../components/tabBarLayout';
 import MusicVault from './MusicVault';
 import CanvasBoardsPage from './CanvasBoardsPage';
 import AlbumPickerSheet from './AlbumPickerSheet';
+// Sending photos to somebody IN the pond. A message carries vault media ids,
+// and a selected item already is one — so this leaves the pond alone entirely
+// rather than downloading, re-uploading and arriving as a second copy.
+import SendInTurtleSheet from './SendInTurtleSheet';
+import usePondPeople, { useMyUserId } from '../../../utils/usePondPeople';
+import { MAX_MESSAGE_ATTACHMENTS, toAttachments } from '../../../utils/messageAttachments';
 import VaultImagePicker from './VaultImagePicker';
 import { commonAlbums, tagsToAdd } from '../../../utils/albumPicker';
 import FilesVault from './FilesVault/FilesVault';
@@ -3435,6 +3441,217 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   const [pickingForNewAlbum, setPickingForNewAlbum] = useState(false);
   const startNewAlbum = useCallback(() => setPickingForNewAlbum(true), []);
 
+  /**
+   * Share the selection OUTSIDE Turtle — the OS sheet.
+   *
+   * Hoisted out of the button so the button can ASK first: for anyone in
+   * this pond the answer is a message, and that path leaves the photos
+   * exactly where they are (see SendInTurtleSheet). This one is the other
+   * answer, and it is the expensive one — every original is downloaded to
+   * cache, handed over, and deleted again.
+   */
+  const shareSelectionOutside = useCallback(async () => {
+    // Match native iOS Photos multi-share: download the selected
+    // originals to cache, then present ONE share sheet with ALL of
+    // them. expo-sharing can only take a single file (which forced
+    // an N-sheet slog — one sheet per photo); react-native-share's
+    // `urls` array hands the whole selection to a single OS sheet.
+    if (bulkShareBusyRef.current) return; // ignore double-taps
+    const selectedIds = Array.from(selectedGridItems);
+    if (selectedIds.length === 0) return;
+    bulkShareBusyRef.current = true;
+
+    const local = []; // cached copies to clean up after sharing
+    // Gather overlay while the originals download — the sheet only
+    // appears once everything's ready, so it opens fully populated.
+    setSharePrepLabel(selectedIds.length > 1 ? `Preparing ${selectedIds.length} photos…` : null);
+    setSharePreparing(true);
+    try {
+      // Resolve each selected id → its media object. Start with what's
+      // resident in the virtualized grid, then backfill anything the
+      // LRU page cache has evicted (a photo selected, then scrolled
+      // far past) from the server — so nothing silently drops.
+      const _disp = uploadItemsForDragRef.current || [];
+      const _byId = new Map();
+      for (const di of _disp) if (di && di.id && !di.isSkeleton) _byId.set(di.id, di);
+      let items = selectedIds.map((id) => _byId.get(id)).filter(Boolean);
+      if (items.length < selectedIds.length) {
+        const haveIds = new Set(items.map((it) => it.id));
+        const missing = selectedIds.filter((id) => !haveIds.has(id));
+        try {
+          const resp = await api.post('/media/by-ids', { ids: missing });
+          if (Array.isArray(resp?.items)) items = items.concat(resp.items);
+        } catch (e) {
+          console.warn('[MediaGallery] by-ids backfill failed:', e?.message || e);
+        }
+      }
+      if (items.length === 0) {
+        Alert.alert('Error', 'Could not prepare the selected items');
+        return;
+      }
+
+      // Download originals in parallel batches of 4 → local file URIs.
+      // Each download retries ONCE so a transient network blip on one
+      // photo doesn't silently drop it from the batch.
+      const downloadOne = async (item) => {
+        const url = getFullUrl(item.rawUrl || item.url);
+        // Default the extension by media TYPE so a video with no stored
+        // filename isn't saved as ".jpg" — that makes iOS infer an image
+        // UTI and share the wrong thing (or silently drop the video).
+        const fallbackName = `shared_${item.id}${item.type === 'video' ? '.mp4' : '.jpg'}`;
+        const safeName = (item.filename || fallbackName).replace(/[^\w.\-]/g, '_');
+        // 'shared_' prefix + id: leaked copies get swept by the
+        // cacheManager background sweep, and two items with the
+        // same filename can't clobber each other's download.
+        const dest = `${FileSystem.cacheDirectory}shared_${item.id}_${safeName}`;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const { uri } = await FileSystem.downloadAsync(url, dest);
+            return { uri, item };
+          } catch (e) {
+            if (attempt === 1) {
+              console.warn('[MediaGallery] download failed for', item.id, e?.message || e);
+              return null;
+            }
+          }
+        }
+        return null;
+      };
+      for (let i = 0; i < items.length; i += 4) {
+        const chunk = items.slice(i, i + 4);
+        const got = await Promise.all(chunk.map(downloadOne));
+        local.push(...got.filter(Boolean));
+      }
+      // Drop the overlay BEFORE presenting the sheet so the spinner
+      // doesn't sit under the native share UI — and let it actually
+      // leave the screen (two committed frames) before the native
+      // presentation, which otherwise can be swallowed.
+      setSharePreparing(false);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+      if (local.length === 0) {
+        Alert.alert('Error', 'Could not prepare the selected items');
+        return;
+      }
+
+      // Prefer ONE native share sheet for the whole selection via
+      // react-native-share. We TRY it and only fall back to the
+      // per-photo path if the native module is genuinely missing
+      // (build predates the lib) — so a wrong native-probe can't
+      // strand us on the slow path when the single sheet is usable.
+      let singleSheetDone = false;
+      const RNShare = getRNShare();
+      if (RNShare) {
+        try {
+          // failOnCancel false → a user dismiss resolves quietly
+          // (no throw), so cancelling does NOT trigger the fallback.
+          // Multiple local file:// URIs → ONE OS sheet with all of them.
+          await RNShare.open({
+            urls: local.map((entry) => entry.uri),
+            failOnCancel: false,
+          });
+          singleSheetDone = true;
+        } catch (e) {
+          // Native side unavailable at call time (getEnforcing throw)
+          // or the sheet failed — fall through to per-photo below.
+          console.warn('[MediaGallery] single-sheet share failed, falling back to per-photo:', e?.message || e);
+        }
+      } else if (local.length > 1) {
+        // The ONLY reason a multi-select still prompts once-per-photo:
+        // react-native-share's native module isn't in THIS build. It's
+        // in package.json + autolinkable, so a fresh dev-client build
+        // (EAS) enables the single sheet. Logged so the cause is obvious.
+        console.warn('[MediaGallery] react-native-share native module missing from this build → per-photo fallback. Rebuild the dev client (eas build -p ios --profile development) to enable single-sheet multi-share.');
+      }
+      if (!singleSheetDone) {
+        // Fallback: one expo-sharing sheet per photo. Works, just not
+        // seamless. Present until a build includes react-native-share.
+        for (const entry of local) {
+          await Sharing.shareAsync(entry.uri, {
+            UTI: entry.item.type === 'video' ? 'public.movie' : 'public.image',
+            mimeType: entry.item.type === 'video' ? 'video/mp4' : 'image/jpeg',
+            dialogTitle: local.length > 1 ? `Share (${local.indexOf(entry) + 1} of ${local.length})` : 'Share',
+          });
+        }
+      }
+    } catch (error) {
+      // A real failure (not a dismiss) — worth a line, not an alert.
+      console.warn('[MediaGallery] bulk share failed:', error?.message || error);
+    } finally {
+      bulkShareBusyRef.current = false;
+      setSharePreparing(false);
+      setSharePrepLabel(null);
+      // Delete the cached copies we downloaded just for the share
+      // sheet — otherwise every bulk share leaks originals to disk.
+      for (const entry of local) {
+        try { await FileSystem.deleteAsync(entry.uri, { idempotent: true }); } catch (e) { /* ignore */ }
+      }
+    }
+  }, [api, getFullUrl]);
+
+  // ── Send in Turtle ────────────────────────────────────────────────────────
+  // Which ids the sheet is holding (null = shut), and who it is mid-send to.
+  const [sendInTurtleIds, setSendInTurtleIds] = useState(null);
+  const [sendingTo, setSendingTo] = useState(null);
+  const pondPeople = usePondPeople();
+  const myUserId = useMyUserId();
+  // Everyone but me. `useMyUserId` is null until /me answers, and that is "do
+  // not know yet" rather than "nobody" — so nothing is filtered out until it
+  // does, which is better than briefly hiding a real person.
+  const sendablePeople = useMemo(
+    () => Array.from(pondPeople.values()).filter((p) => p && p.userId && p.userId !== myUserId),
+    [pondPeople, myUserId],
+  );
+
+  const openSendInTurtle = useCallback((ids) => {
+    const list = (ids || []).filter(Boolean);
+    if (list.length === 0) return;
+    setSendInTurtleIds(list);
+  }, []);
+
+  /**
+   * Post the held photos to one person.
+   *
+   * In batches of six because that is what a message holds
+   * (MAX_MESSAGE_ATTACHMENTS) — seven photos arrive as two messages, which the
+   * sheet says BEFORE you tap, rather than six arriving and one disappearing.
+   * Sequential, not parallel: they are a conversation, and six-then-one reads
+   * wrong if the one wins the race.
+   */
+  const sendInTurtle = useCallback(async (person) => {
+    const ids = sendInTurtleIds || [];
+    if (!person?.userId || ids.length === 0) return;
+    setSendingTo(person.userId);
+    try {
+      for (let i = 0; i < ids.length; i += MAX_MESSAGE_ATTACHMENTS) {
+        const batch = ids.slice(i, i + MAX_MESSAGE_ATTACHMENTS);
+        // No words: a photo IS a message here, and the thread is where you say
+        // something about it.
+        await api.post(`/messages/${encodeURIComponent(person.userId)}`, {
+          content: '',
+          attachments: toAttachments(batch),
+        });
+      }
+      notifyHaptic('success');
+      setSendInTurtleIds(null);
+      // The job is done, so the selection that fed it goes too — the same
+      // thing deleting and tagging a selection do.
+      setIsSelectMode(false);
+      setSelectedGridItems(new Set());
+      setRangeSelectMode(false);
+      setRangeAnchorIdx(null);
+      rangeAnchorRef.current = null;
+    } catch (e) {
+      notifyHaptic('error');
+      Alert.alert(
+        'Not sent',
+        `Could not send to ${person.name || 'them'}. ${e?.message || 'Try again in a moment.'}`,
+      );
+    } finally {
+      setSendingTo(null);
+    }
+  }, [api, sendInTurtleIds]);
+
   // Was the picker opened on the GRID's selection, or on items handed in from
   // somewhere else (the viewer, the Files tab)? Only the grid has a selection
   // to clear afterwards, which is the one thing the two tag paths below do
@@ -4472,6 +4689,25 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                   {shareChooser?.type === 'video' ? 'Share video' : 'Share photo'}
                 </Text>
 
+                {/* Somebody in this pond, first — for them none of the three
+                    below is the right answer. It is a message carrying this
+                    item's media id: nothing downloads, nothing uploads, and
+                    the copy that arrives is this one. */}
+                <TouchableOpacity
+                  style={styles.shareSheetOption}
+                  activeOpacity={0.7}
+                  testID="share-send-in-turtle"
+                  onPress={() => { const m = shareChooser; setShareChooser(null); openSendInTurtle([m?.id]); }}
+                >
+                  <Icon name="send" size={22} color={theme.colors.accentSuccess || theme.colors.primary} />
+                  <View style={styles.shareSheetOptionText}>
+                    <Text style={styles.shareSheetOptionTitle}>Send in Turtle</Text>
+                    <Text style={styles.shareSheetOptionSub}>
+                      To someone in your pond · nothing leaves it
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+
                 <TouchableOpacity
                   style={styles.shareSheetOption}
                   activeOpacity={0.7}
@@ -4672,143 +4908,21 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 accessibilityLabel="Share selected photos"
                 style={[styles.selectAction, { opacity: selectedGridItems.size === 0 ? 0.5 : 1 }]}
                 disabled={selectedGridItems.size === 0}
-                onPress={async () => {
-                  // Match native iOS Photos multi-share: download the selected
-                  // originals to cache, then present ONE share sheet with ALL of
-                  // them. expo-sharing can only take a single file (which forced
-                  // an N-sheet slog — one sheet per photo); react-native-share's
-                  // `urls` array hands the whole selection to a single OS sheet.
-                  if (bulkShareBusyRef.current) return; // ignore double-taps
-                  const selectedIds = Array.from(selectedGridItems);
-                  if (selectedIds.length === 0) return;
-                  bulkShareBusyRef.current = true;
-
-                  const local = []; // cached copies to clean up after sharing
-                  // Gather overlay while the originals download — the sheet only
-                  // appears once everything's ready, so it opens fully populated.
-                  setSharePrepLabel(selectedIds.length > 1 ? `Preparing ${selectedIds.length} photos…` : null);
-                  setSharePreparing(true);
-                  try {
-                    // Resolve each selected id → its media object. Start with what's
-                    // resident in the virtualized grid, then backfill anything the
-                    // LRU page cache has evicted (a photo selected, then scrolled
-                    // far past) from the server — so nothing silently drops.
-                    const _disp = uploadItemsForDragRef.current || [];
-                    const _byId = new Map();
-                    for (const di of _disp) if (di && di.id && !di.isSkeleton) _byId.set(di.id, di);
-                    let items = selectedIds.map((id) => _byId.get(id)).filter(Boolean);
-                    if (items.length < selectedIds.length) {
-                      const haveIds = new Set(items.map((it) => it.id));
-                      const missing = selectedIds.filter((id) => !haveIds.has(id));
-                      try {
-                        const resp = await api.post('/media/by-ids', { ids: missing });
-                        if (Array.isArray(resp?.items)) items = items.concat(resp.items);
-                      } catch (e) {
-                        console.warn('[MediaGallery] by-ids backfill failed:', e?.message || e);
-                      }
-                    }
-                    if (items.length === 0) {
-                      Alert.alert('Error', 'Could not prepare the selected items');
-                      return;
-                    }
-
-                    // Download originals in parallel batches of 4 → local file URIs.
-                    // Each download retries ONCE so a transient network blip on one
-                    // photo doesn't silently drop it from the batch.
-                    const downloadOne = async (item) => {
-                      const url = getFullUrl(item.rawUrl || item.url);
-                      // Default the extension by media TYPE so a video with no stored
-                      // filename isn't saved as ".jpg" — that makes iOS infer an image
-                      // UTI and share the wrong thing (or silently drop the video).
-                      const fallbackName = `shared_${item.id}${item.type === 'video' ? '.mp4' : '.jpg'}`;
-                      const safeName = (item.filename || fallbackName).replace(/[^\w.\-]/g, '_');
-                      // 'shared_' prefix + id: leaked copies get swept by the
-                      // cacheManager background sweep, and two items with the
-                      // same filename can't clobber each other's download.
-                      const dest = `${FileSystem.cacheDirectory}shared_${item.id}_${safeName}`;
-                      for (let attempt = 0; attempt < 2; attempt++) {
-                        try {
-                          const { uri } = await FileSystem.downloadAsync(url, dest);
-                          return { uri, item };
-                        } catch (e) {
-                          if (attempt === 1) {
-                            console.warn('[MediaGallery] download failed for', item.id, e?.message || e);
-                            return null;
-                          }
-                        }
-                      }
-                      return null;
-                    };
-                    for (let i = 0; i < items.length; i += 4) {
-                      const chunk = items.slice(i, i + 4);
-                      const got = await Promise.all(chunk.map(downloadOne));
-                      local.push(...got.filter(Boolean));
-                    }
-                    // Drop the overlay BEFORE presenting the sheet so the spinner
-                    // doesn't sit under the native share UI — and let it actually
-                    // leave the screen (two committed frames) before the native
-                    // presentation, which otherwise can be swallowed.
-                    setSharePreparing(false);
-                    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-
-                    if (local.length === 0) {
-                      Alert.alert('Error', 'Could not prepare the selected items');
-                      return;
-                    }
-
-                    // Prefer ONE native share sheet for the whole selection via
-                    // react-native-share. We TRY it and only fall back to the
-                    // per-photo path if the native module is genuinely missing
-                    // (build predates the lib) — so a wrong native-probe can't
-                    // strand us on the slow path when the single sheet is usable.
-                    let singleSheetDone = false;
-                    const RNShare = getRNShare();
-                    if (RNShare) {
-                      try {
-                        // failOnCancel false → a user dismiss resolves quietly
-                        // (no throw), so cancelling does NOT trigger the fallback.
-                        // Multiple local file:// URIs → ONE OS sheet with all of them.
-                        await RNShare.open({
-                          urls: local.map((entry) => entry.uri),
-                          failOnCancel: false,
-                        });
-                        singleSheetDone = true;
-                      } catch (e) {
-                        // Native side unavailable at call time (getEnforcing throw)
-                        // or the sheet failed — fall through to per-photo below.
-                        console.warn('[MediaGallery] single-sheet share failed, falling back to per-photo:', e?.message || e);
-                      }
-                    } else if (local.length > 1) {
-                      // The ONLY reason a multi-select still prompts once-per-photo:
-                      // react-native-share's native module isn't in THIS build. It's
-                      // in package.json + autolinkable, so a fresh dev-client build
-                      // (EAS) enables the single sheet. Logged so the cause is obvious.
-                      console.warn('[MediaGallery] react-native-share native module missing from this build → per-photo fallback. Rebuild the dev client (eas build -p ios --profile development) to enable single-sheet multi-share.');
-                    }
-                    if (!singleSheetDone) {
-                      // Fallback: one expo-sharing sheet per photo. Works, just not
-                      // seamless. Present until a build includes react-native-share.
-                      for (const entry of local) {
-                        await Sharing.shareAsync(entry.uri, {
-                          UTI: entry.item.type === 'video' ? 'public.movie' : 'public.image',
-                          mimeType: entry.item.type === 'video' ? 'video/mp4' : 'image/jpeg',
-                          dialogTitle: local.length > 1 ? `Share (${local.indexOf(entry) + 1} of ${local.length})` : 'Share',
-                        });
-                      }
-                    }
-                  } catch (error) {
-                    // A real failure (not a dismiss) — worth a line, not an alert.
-                    console.warn('[MediaGallery] bulk share failed:', error?.message || error);
-                  } finally {
-                    bulkShareBusyRef.current = false;
-                    setSharePreparing(false);
-                    setSharePrepLabel(null);
-                    // Delete the cached copies we downloaded just for the share
-                    // sheet — otherwise every bulk share leaks originals to disk.
-                    for (const entry of local) {
-                      try { await FileSystem.deleteAsync(entry.uri, { idempotent: true }); } catch (e) { /* ignore */ }
-                    }
-                  }
+                onPress={() => {
+                  const ids = Array.from(selectedGridItems);
+                  if (ids.length === 0) return;
+                  // Two genuinely different things, so the sheet names both.
+                  // Sending inside the pond moves no bytes at all; the OS
+                  // sheet downloads every original first.
+                  Alert.alert(
+                    ids.length === 1 ? 'Share this photo' : `Share ${ids.length} photos`,
+                    undefined,
+                    [
+                      { text: 'Send in Turtle', onPress: () => openSendInTurtle(ids) },
+                      { text: 'Share outside Turtle', onPress: () => { shareSelectionOutside(); } },
+                      { text: 'Cancel', style: 'cancel' },
+                    ],
+                  );
                 }}
               >
                 <Icon name="share-variant" size={20} color={theme.colors.primary} />
@@ -6050,6 +6164,22 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           the SCREEN ROOT with its own zIndex, not beside the page that raised
           it. It used to sit one sibling above the photos page and was painted
           over by it: a sheet you press for and cannot see. */}
+      {/* Send to somebody in the pond. Same rule as the two sheets above: it
+          opens on a press, so it is mounted at the SCREEN ROOT in the top
+          zIndex band and covers the viewer, the selection bar and the dock
+          (STYLE-RULES §4). An in-tree overlay rather than a Modal, because it
+          opens OVER the viewer, which is one. */}
+      <SendInTurtleSheet
+        visible={!!sendInTurtleIds}
+        people={sendablePeople}
+        count={(sendInTurtleIds || []).length}
+        busyFor={sendingTo}
+        onClose={() => { if (!sendingTo) setSendInTurtleIds(null); }}
+        onSend={sendInTurtle}
+        bottomInset={Math.max(tabBarH, insets.bottom)}
+        theme={theme}
+      />
+
       <AlbumPickerSheet
         visible={!!albumPickerFor}
         albums={albumNamesForPicker}

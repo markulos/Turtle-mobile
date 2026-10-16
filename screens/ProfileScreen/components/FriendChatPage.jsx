@@ -64,7 +64,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, BackHandler, Linking, Pressable, StyleSheet, Text, View,
+  ActivityIndicator, Alert, BackHandler, Linking, Pressable, StyleSheet, Text, View,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -78,6 +78,10 @@ import MessageActionsSheet from '../../../components/MessageActionsSheet';
 import AttachmentViewer from '../../../components/AttachmentViewer';
 import MessagePhotos from './MessagePhotos';
 import MessageDraftPhotos, { MessageAttachKey } from './MessageDraftPhotos';
+// "Turtle photos" — the pond's own library as a source for an attachment, the
+// same picker the Turtle chat uses. A photo already in the vault needs no
+// upload at all: a message carries media IDS, and it already has one.
+import VaultImagePicker from '../../TurtleScreen/components/VaultImagePicker';
 import { pickPhotos, uploadErrorMessage, uploadPickedAsset } from '../../../services/vaultAttach';
 import {
   attachmentIdsOf,
@@ -292,10 +296,23 @@ export default function FriendChatPage({
   // simply joins the one already running instead of starting a second.
   const uploads = useRef(new Map());
 
-  /** Start this photo's upload, or hand back the one already in flight. */
+  /**
+   * Start this photo's upload, or hand back the one already in flight.
+   *
+   * A photo taken FROM THE VAULT has no upload to start: it is already a media
+   * row, so the entry arrives carrying its id and this hands back a promise
+   * that is already kept. Everything downstream — send, retry, the optimistic
+   * bubble's attachments — awaits a promise either way and never has to know
+   * which kind of photo it is holding.
+   */
   const uploadOf = useCallback((entry) => {
     const running = uploads.current.get(entry.key);
     if (running) return running;
+    if (entry.mediaId) {
+      const known = Promise.resolve(entry.mediaId);
+      uploads.current.set(entry.key, known);
+      return known;
+    }
     const started = uploadPickedAsset({
       uploadUrl: `${getBaseUrl()}/media/upload`,
       token: getApiAuthToken(),
@@ -347,7 +364,7 @@ export default function FriendChatPage({
     openPhotos(draftFrames, index);
   }, [draftFrames, openPhotos]);
 
-  const addPhotos = useCallback(async () => {
+  const addFromPhone = useCallback(async () => {
     const room = attachmentRoom(photos);
     if (room <= 0) return;
     const picked = await pickPhotos({ limit: room }).catch(() => null);
@@ -361,6 +378,52 @@ export default function FriendChatPage({
     // Started now, awaited later — by Send, if it has not finished by then.
     for (const entry of entries) uploadOf(entry).catch(() => { /* the entry carries it */ });
   }, [photos, uploadOf]);
+
+  /**
+   * The other source: the pond's own library.
+   *
+   * Most of what you want to send somebody here is already IN Turtle — it is
+   * the whole point of having a pond — and the only way to send it was to find
+   * it in the vault, save it to the phone, and attach it back, which uploads a
+   * second copy of a photo the pond already has. These entries carry the media
+   * id they came with, so sending one is a POST and nothing else.
+   */
+  const [vaultOpen, setVaultOpen] = useState(false);
+  const addFromVault = useCallback((items) => {
+    setVaultOpen(false);
+    const room = attachmentRoom(photos);
+    const entries = (items || []).slice(0, Math.max(room, 0)).map((item) => {
+      photoSeq.current += 1;
+      return {
+        key: `v${photoSeq.current}`,
+        // The display variant, which is what a SENT photo's bubble draws from
+        // too — so the draft strip and the message it becomes show the same
+        // picture, from the same URL, already in the image cache.
+        uri: viewerImageUrl(photoOrigin, item),
+        asset: null,
+        mediaId: item.id,
+        error: null,
+      };
+    });
+    if (entries.length === 0) return;
+    setPhotos((prev) => [...prev, ...entries]);
+    // Registers the already-kept promise, so a send mid-change finds it.
+    for (const entry of entries) uploadOf(entry);
+  }, [photos, uploadOf, photoOrigin]);
+
+  /**
+   * Where from? The Turtle chat's own chooser (TurtleScreen's pickClaudeImage),
+   * word for word, because two places that ask the same question should ask it
+   * the same way. The vault leads: on this app it is the likelier answer.
+   */
+  const addPhotos = useCallback(() => {
+    if (attachmentRoom(photos) <= 0) return;
+    Alert.alert('Attach a photo', undefined, [
+      { text: 'Turtle photos', onPress: () => setVaultOpen(true) },
+      { text: 'Phone library', onPress: () => { addFromPhone(); } },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [photos, addFromPhone]);
 
   // ── Sending ───────────────────────────────────────────────────────────────
   const send = useCallback(async (text, retryOf = null) => {
@@ -735,6 +798,21 @@ export default function FriendChatPage({
         actions={heldActions}
         theme={theme}
         testID="friend-chat-actions"
+      />
+
+      {/* "Turtle photos" — the pond's library, as a source for an attachment.
+          The same picker the Turtle chat raises, and it is an in-tree overlay
+          with its own zIndex rather than a Modal, which is exactly what lets
+          it open over this page (STYLE-RULES §4). Mounted here at the page's
+          root, after everything it has to cover. */}
+      <VaultImagePicker
+        visible={vaultOpen}
+        onClose={() => setVaultOpen(false)}
+        onPick={addFromVault}
+        theme={theme}
+        api={api}
+        getFullUrl={(path) => `${photoOrigin}${path}`}
+        maxSelection={Math.max(attachmentRoom(photos), 1)}
       />
 
       {/* A photo, full size. The same viewer a note's attachments open — it takes
