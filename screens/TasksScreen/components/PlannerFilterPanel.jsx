@@ -29,16 +29,19 @@
  *     rather than hidden — a key that appears and disappears is a key you
  *     cannot aim for.
  */
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BackHandler, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
+import VaultSearchPanel from '../../TurtleScreen/components/VaultSearchPanel';
+import { VaultResultRow } from '../../TurtleScreen/components/VaultSearchDock';
 import { tapHaptic } from '../../../utils/haptics';
 import { inkOn } from '../../../utils/accentColor';
 import { boardLabel } from '../utils/taskHelpers';
+import { previewChips } from '../utils/recentFirst';
 import { panelBottomInset, panelTopInset } from '../../../components/tabBarLayout';
 
 const STATUS = [
@@ -77,7 +80,7 @@ function Chip({ label, active, onPress, icon, swatch, theme, testID, accessibili
 }
 
 /** A section: its name, what it is currently set to, and its chips. */
-function Section({ title, value, children, theme, testID }) {
+function Section({ title, value, children, theme, testID, action }) {
   const s = chipStyles(theme);
   return (
     <View style={s.section} testID={testID}>
@@ -90,9 +93,67 @@ function Section({ title, value, children, theme, testID }) {
         <Text style={s.sectionValue} numberOfLines={1} testID={testID ? `${testID}-value` : undefined}>
           {value}
         </Text>
+        {action}
       </View>
       <View style={s.chipWrap}>{children}</View>
     </View>
+  );
+}
+
+/**
+ * The search key a long section carries on its heading.
+ *
+ * A section shows the few you have touched most recently; the whole list is
+ * longer than any chip wrap should be, so it lives behind this — the same
+ * search page the task form's board picker and the vault use, so it is one
+ * search to learn rather than three.
+ */
+function SearchKey({ label, onPress, theme, testID }) {
+  const s = chipStyles(theme);
+  return (
+    <Pressable
+      onPressIn={() => tapHaptic()}
+      onPress={onPress}
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      testID={testID}
+      style={({ pressed }) => [s.sectionKey, pressed && s.pressed]}
+    >
+      <Icon name="magnify" size={16} color={theme.colors.accentInfo} />
+    </Pressable>
+  );
+}
+
+/**
+ * "+9 more" / "Show less" — the rest of a long list, in place.
+ *
+ * Drawn as a chip because everything in this panel is, but deliberately
+ * without the lit state: it changes how much you can SEE, never what is
+ * filtered, and a control that looks like the others but means something else
+ * is how a panel teaches you not to trust it.
+ */
+function MoreChip({ expanded, hidden, onPress, theme, testID }) {
+  const s = chipStyles(theme);
+  return (
+    <Pressable
+      onPressIn={() => tapHaptic()}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ expanded }}
+      accessibilityLabel={expanded ? 'Show fewer' : `Show ${hidden} more`}
+      testID={testID}
+      style={({ pressed }) => [s.chip, s.moreChip, pressed && s.pressed]}
+    >
+      <Icon
+        name={expanded ? 'chevron-up' : 'chevron-down'}
+        size={14}
+        color={theme.colors.textTertiary}
+      />
+      <Text style={[s.chipText, s.moreText]} numberOfLines={1}>
+        {expanded ? 'Show less' : `${hidden} more`}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -103,12 +164,18 @@ export default function PlannerFilterPanel({
   // Status
   statusFilter,
   onStatusChange,
-  // Board scope
+  // Board scope. `projects` is every board there is — what the SEARCH page
+  // offers; `recentProjects` is the same names ordered by what you have
+  // touched most recently, and the first few of those are the chips. A panel
+  // that lists twenty-six boards alphabetically asks you to read all of them
+  // to find the two you are working on this week.
   projects = [],
+  recentProjects = [],
   selectedProject,
   onSelectProject,
-  // Tags
+  // Tags, the same way round.
   tags = [],
+  recentTags = [],
   selectedTags = [],
   onToggleTag,
   tagFilterMode = 'any',
@@ -125,6 +192,43 @@ export default function PlannerFilterPanel({
 }) {
   const insets = useSafeAreaInsets();
   const s = useMemo(() => chipStyles(theme), [theme]);
+
+  // How much of each long section is unfolded, and which one the search page
+  // is open for ('board' | 'tag' | null).
+  const [expanded, setExpanded] = useState({ board: false, tag: false });
+  const [searchFor, setSearchFor] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const openSearch = useCallback((kind) => { setSearchQuery(''); setSearchFor(kind); }, []);
+  const closeSearch = useCallback(() => { setSearchFor(null); setSearchQuery(''); }, []);
+  const toggleExpanded = useCallback(
+    (kind) => setExpanded((prev) => ({ ...prev, [kind]: !prev[kind] })),
+    [],
+  );
+
+  // The ordered list each section draws from, and the few it shows closed.
+  // Falls back to the full list when the screen has not supplied a recency
+  // order, so the panel is never empty because a prop was forgotten.
+  const boardOrder = recentProjects.length ? recentProjects : projects;
+  const tagOrder = recentTags.length ? recentTags : tags;
+  const boardsShown = useMemo(
+    () => (expanded.board ? boardOrder : previewChips(boardOrder, selectedProject)),
+    [expanded.board, boardOrder, selectedProject],
+  );
+  const tagsShown = useMemo(
+    () => (expanded.tag ? tagOrder : previewChips(tagOrder, selectedTags)),
+    [expanded.tag, tagOrder, selectedTags],
+  );
+
+  // What the search page lists: the WHOLE list for that kind, narrowed by the
+  // query. Substring and case-insensitive, like every other search in the app
+  // — typing "cons" has to find "Mayfield Construction".
+  const searchMatches = useMemo(() => {
+    if (!searchFor) return [];
+    const all = searchFor === 'tag' ? tagOrder : boardOrder;
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((n) => (searchFor === 'tag' ? n : boardLabel(n)).toLowerCase().includes(q));
+  }, [searchFor, searchQuery, boardOrder, tagOrder]);
 
   const scoped = (selectedProject && selectedProject !== ALL)
     || statusFilter !== 'todo'
@@ -203,6 +307,14 @@ export default function PlannerFilterPanel({
             value={selectedProject && selectedProject !== ALL ? boardLabel(selectedProject) : 'All boards'}
             theme={theme}
             testID="planner-filter-board"
+            action={projects.length > 0 && (
+              <SearchKey
+                label="Search boards"
+                onPress={() => openSearch('board')}
+                theme={theme}
+                testID="planner-filter-board-search"
+              />
+            )}
           >
             <Chip
               label="All boards"
@@ -212,7 +324,7 @@ export default function PlannerFilterPanel({
               theme={theme}
               testID="planner-filter-board-all"
             />
-            {projects.map((p) => (
+            {boardsShown.map((p) => (
               <Chip
                 key={p}
                 label={boardLabel(p)}
@@ -223,6 +335,15 @@ export default function PlannerFilterPanel({
                 testID={`planner-filter-board-${p}`}
               />
             ))}
+            {boardOrder.length > boardsShown.length || expanded.board ? (
+              <MoreChip
+                expanded={expanded.board}
+                hidden={boardOrder.length - boardsShown.length}
+                onPress={() => toggleExpanded('board')}
+                theme={theme}
+                testID="planner-filter-board-more"
+              />
+            ) : null}
           </Section>
 
           {tags.length > 0 && (
@@ -233,8 +354,16 @@ export default function PlannerFilterPanel({
                 : 'Any'}
               theme={theme}
               testID="planner-filter-tags"
+              action={(
+                <SearchKey
+                  label="Search labels"
+                  onPress={() => openSearch('tag')}
+                  theme={theme}
+                  testID="planner-filter-tag-search"
+                />
+              )}
             >
-              {tags.map((t) => (
+              {tagsShown.map((t) => (
                 <Chip
                   key={t}
                   label={t}
@@ -245,6 +374,15 @@ export default function PlannerFilterPanel({
                   testID={`planner-filter-tag-${t}`}
                 />
               ))}
+              {tagOrder.length > tagsShown.length || expanded.tag ? (
+                <MoreChip
+                  expanded={expanded.tag}
+                  hidden={tagOrder.length - tagsShown.length}
+                  onPress={() => toggleExpanded('tag')}
+                  theme={theme}
+                  testID="planner-filter-tag-more"
+                />
+              ) : null}
             </Section>
           )}
 
@@ -319,6 +457,61 @@ export default function PlannerFilterPanel({
             <Text style={s.doneText}>Show</Text>
           </Pressable>
         </View>
+
+        {/* Search over EVERY board / label, for the ones the chips do not
+            show. The vault's search page, as the task form's board picker
+            already uses it — one search to learn rather than three.
+
+            Mounted LAST, inside this panel's own root: it is an absolute fill,
+            so it covers the panel that raised it rather than being framed by
+            it (STYLE-RULES §4). It renders nothing while closed. */}
+        <VaultSearchPanel
+          visible={!!searchFor}
+          placeholder={searchFor === 'tag' ? 'Search labels' : 'Search boards'}
+          accessibilityLabel={searchFor === 'tag' ? 'Search labels' : 'Search boards'}
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          onClose={closeSearch}
+          items={searchMatches}
+          keyExtractor={(name) => name}
+          emptyText={searchFor === 'tag' ? 'No label matches that.' : 'No board matches that.'}
+          theme={theme}
+          isDark={theme.mode === 'dark'}
+          testIDPrefix="planner-filter-search"
+          renderItem={({ item }) => {
+            const picked = searchFor === 'tag'
+              ? selectedTags.includes(item)
+              : selectedProject === item;
+            return (
+              <VaultResultRow
+                name={searchFor === 'tag' ? item : boardLabel(item)}
+                theme={theme}
+                accessibilityState={{ selected: picked }}
+                accessibilityLabel={`${searchFor === 'tag' ? item : boardLabel(item)}${picked ? ', chosen' : ''}`}
+                testID={`planner-filter-search-pick-${item}`}
+                leading={(
+                  <Icon
+                    name={searchFor === 'tag' ? 'tag-outline' : 'folder-outline'}
+                    size={18}
+                    color={theme.colors.textTertiary}
+                  />
+                )}
+                trailing={picked ? <Icon name="check" size={18} color={theme.colors.accentInfo} /> : null}
+                onPress={() => {
+                  tapHaptic();
+                  if (searchFor === 'tag') {
+                    // Labels are a multi-pick, so the page STAYS: choosing
+                    // three in a row should not be three trips through it.
+                    onToggleTag?.(item);
+                    return;
+                  }
+                  onSelectProject?.(item);
+                  closeSearch();
+                }}
+              />
+            );
+          }}
+        />
       </View>
     </EdgeSwipePage>
   );
@@ -338,7 +531,10 @@ const chipStyles = (theme) => StyleSheet.create({
 
   body: { paddingHorizontal: 16, gap: 18, paddingTop: 4 },
   section: { gap: 10 },
-  sectionHead: { flexDirection: 'row', alignItems: 'baseline', gap: 10 },
+  // `center`, not `baseline`: the heading now carries a round key as well as
+  // two lines of text, and a 28pt circle has no baseline to sit on — it would
+  // hang off the bottom of the row.
+  sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   sectionTitle: {
     fontSize: 11, fontWeight: '800', letterSpacing: 1,
     textTransform: 'uppercase', color: theme.colors.textTertiary,
@@ -346,6 +542,15 @@ const chipStyles = (theme) => StyleSheet.create({
   // Shrinks and ellipsizes: a long board name must never push its own heading
   // off the page (STYLE-RULES §2).
   sectionValue: { flex: 1, fontSize: 12.5, color: theme.colors.textSecondary, textAlign: 'right' },
+  // The one key a heading may carry — the whole list is longer than any chip
+  // wrap should be, so the sections that can run long keep a search.
+  sectionKey: {
+    width: 28, height: 28, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: (theme.colors.accentInfo || '#5598e7') + (theme.mode === 'dark' ? '24' : '16'),
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: (theme.colors.accentInfo || '#5598e7') + '55',
+  },
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
 
   chip: {
@@ -362,6 +567,10 @@ const chipStyles = (theme) => StyleSheet.create({
   },
   chipText: { flexShrink: 1, fontSize: 13, fontWeight: '600', color: theme.colors.textSecondary },
   chipTextOn: { color: theme.colors.accentInfo },
+  // "N more" is a chip in shape only. No fill and a dashed-quiet edge, so a
+  // row of filters never looks like it has one more filter in it than it has.
+  moreChip: { backgroundColor: 'transparent', borderColor: theme.colors.borderStrong || theme.colors.border },
+  moreText: { color: theme.colors.textTertiary, fontWeight: '700' },
   swatch: { width: 10, height: 10, borderRadius: 5 },
   pressed: { opacity: 0.75 },
 

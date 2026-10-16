@@ -180,3 +180,120 @@ describe('sections that would say nothing are not shown', () => {
     expect(screen.queryByTestId('planner-filter-tags')).toBeNull();
   });
 });
+
+/**
+ * A LONG SECTION SHOWS THE FEW YOU ARE ACTUALLY USING.
+ *
+ * Twenty-six boards as chips is six wrapped rows of them, alphabetical, and
+ * the two you are working on this week are never the ones beginning with A —
+ * so the panel asked you to read all twenty-six every time, and the Labels and
+ * People sections underneath were off the bottom of the screen before you
+ * started. The chips are the most RECENTLY used few; the rest is one tap away
+ * in place, and the whole list is behind the section's own search.
+ */
+describe('long sections lead with the recent few', () => {
+  const MANY = ['Admin', 'Bible', 'Gym', 'Inbox', 'Job search', 'Larkin', 'Picco', 'Thesis'];
+  // Recency is the screen's job (utils/recentFirst); the panel is handed the
+  // order and shows the head of it.
+  const RECENT = ['Thesis', 'Larkin', 'Gym', 'Inbox', 'Admin', 'Bible', 'Job search', 'Picco'];
+  const many = (over = {}) => props({ projects: MANY, recentProjects: RECENT, ...over });
+
+  test('four chips, and they are the recent four', async () => {
+    await render(<PlannerFilterPanel {...many()} />);
+    for (const name of ['Thesis', 'Larkin', 'Gym', 'Inbox']) {
+      expect(screen.getByTestId(`planner-filter-board-${name}`)).toBeTruthy();
+    }
+    expect(screen.queryByTestId('planner-filter-board-Picco')).toBeNull();
+  });
+
+  test('the rest is one tap away, and folds back', async () => {
+    await render(<PlannerFilterPanel {...many()} />);
+    expect(screen.getByTestId('planner-filter-board-more')).toHaveTextContent('4 more');
+
+    await press('planner-filter-board-more');
+    expect(screen.getByTestId('planner-filter-board-Picco')).toBeTruthy();
+    expect(screen.getByTestId('planner-filter-board-more')).toHaveTextContent('Show less');
+
+    await press('planner-filter-board-more');
+    expect(screen.queryByTestId('planner-filter-board-Picco')).toBeNull();
+  });
+
+  test('a short list gets no "more" key at all', async () => {
+    await render(<PlannerFilterPanel {...props()} />);
+    expect(screen.queryByTestId('planner-filter-board-more')).toBeNull();
+  });
+
+  // A panel that hides the filter it is applying cannot be read — which is the
+  // whole reason the heading states its own answer.
+  test('the chosen one is always a chip, however far down the order it fell', async () => {
+    await render(<PlannerFilterPanel {...many({ selectedProject: 'Picco' })} />);
+    expect(screen.getByTestId('planner-filter-board-Picco')).toBeTruthy();
+    // And it does not cost one of the recent four.
+    expect(screen.getByTestId('planner-filter-board-Thesis')).toBeTruthy();
+  });
+
+  test('labels fold the same way', async () => {
+    await render(<PlannerFilterPanel {...props({
+      tags: ['a', 'b', 'c', 'd', 'e', 'f'],
+      recentTags: ['f', 'e', 'd', 'c', 'b', 'a'],
+    })} />);
+    expect(screen.getByTestId('planner-filter-tag-f')).toBeTruthy();
+    expect(screen.queryByTestId('planner-filter-tag-a')).toBeNull();
+    await press('planner-filter-tag-more');
+    expect(screen.getByTestId('planner-filter-tag-a')).toBeTruthy();
+  });
+
+  test('with no recency order it still shows something — the list it was given', async () => {
+    // A forgotten prop must narrow the panel, never empty it.
+    await render(<PlannerFilterPanel {...props({ projects: MANY })} />);
+    expect(screen.getByTestId('planner-filter-board-Admin')).toBeTruthy();
+  });
+});
+
+describe('the whole list lives behind the section’s search', () => {
+  const MANY = ['Admin', 'Bible', 'Gym', 'Inbox', 'Mayfield Construction', 'Thesis'];
+  const type = async (text) => {
+    await act(async () => { fireEvent.changeText(screen.getByTestId('planner-filter-search-input'), text); });
+  };
+
+  test('the key opens it, and it lists every board', async () => {
+    await render(<PlannerFilterPanel {...props({ projects: MANY })} />);
+    await press('planner-filter-board-search');
+    for (const name of MANY) {
+      expect(screen.getByTestId(`planner-filter-search-pick-${name}`)).toBeTruthy();
+    }
+  });
+
+  test('it matches anywhere in the name, not just the start', async () => {
+    // "cons" has to find "Mayfield Construction".
+    await render(<PlannerFilterPanel {...props({ projects: MANY })} />);
+    await press('planner-filter-board-search');
+    await type('cons');
+    expect(screen.getByTestId('planner-filter-search-pick-Mayfield Construction')).toBeTruthy();
+    expect(screen.queryByTestId('planner-filter-search-pick-Admin')).toBeNull();
+  });
+
+  test('picking a board scopes the planner and closes the page', async () => {
+    const onSelectProject = jest.fn();
+    await render(<PlannerFilterPanel {...props({ projects: MANY, onSelectProject })} />);
+    await press('planner-filter-board-search');
+    await press('planner-filter-search-pick-Thesis');
+    expect(onSelectProject).toHaveBeenCalledWith('Thesis');
+    expect(screen.queryByTestId('planner-filter-search-pick-Thesis')).toBeNull();
+  });
+
+  test('picking a LABEL keeps the page up — labels are a multi-pick', async () => {
+    const onToggleTag = jest.fn();
+    await render(<PlannerFilterPanel {...props({ tags: ['urgent', 'home', 'errand'], onToggleTag })} />);
+    await press('planner-filter-tag-search');
+    await press('planner-filter-search-pick-urgent');
+    expect(onToggleTag).toHaveBeenCalledWith('urgent');
+    // Choosing three in a row should not be three trips through the page.
+    expect(screen.getByTestId('planner-filter-search-pick-home')).toBeTruthy();
+  });
+
+  test('a board section with no boards offers no search', async () => {
+    await render(<PlannerFilterPanel {...props({ projects: [] })} />);
+    expect(screen.queryByTestId('planner-filter-board-search')).toBeNull();
+  });
+});

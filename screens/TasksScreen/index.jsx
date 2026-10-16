@@ -183,6 +183,9 @@ import { useOpenTarget } from '../../context/OpenTargetContext';
 import { useCelebration } from '../../context/CelebrationContext';
 import { STATUS_OPTIONS } from './components/StatusSegment';
 import BoardManagerSheet from './components/BoardManagerSheet';
+// Which boards and labels you have touched most recently — the filter panel
+// leads with those rather than with whatever happens to sort first.
+import { recentFirst } from './utils/recentFirst';
 import TaskInspectorSheet from './components/TaskInspectorSheet';
 import SchedulePickerSheet from './components/SchedulePickerSheet';
 import OverviewPage from './components/OverviewPage';
@@ -3027,6 +3030,24 @@ export default function TasksScreen() {
   }, [tasks, selectedProject]);
 
   /**
+   * The same two lists, ordered by what has been touched most recently — what
+   * the filter panel shows as chips before "N more".
+   *
+   * Alphabetical is the right order for a SEARCH result and the wrong one for
+   * a shortlist: the boards you are working on this week are never the ones
+   * beginning with A. The panel keeps the full lists for its search page, so
+   * nothing is lost by leading with these.
+   */
+  const recentProjects = useMemo(
+    () => recentFirst(projects, tasks, (t) => [t.project || 'No Project']),
+    [projects, tasks],
+  );
+  const recentTags = useMemo(
+    () => recentFirst(filterTags, tasks, (t) => (Array.isArray(t.tags) ? t.tags : [])),
+    [filterTags, tasks],
+  );
+
+  /**
    * How many items survive the filters as they currently stand — the number
    * the filter panel's footer shows. Live, so a chip that empties the Planner
    * says so before you close the panel to find out.
@@ -3500,9 +3521,11 @@ export default function TasksScreen() {
         statusFilter={statusFilter}
         onStatusChange={setStatusFilter}
         projects={projects}
+        recentProjects={recentProjects}
         selectedProject={selectedProject}
         onSelectProject={setSelectedProject}
         tags={filterTags}
+        recentTags={recentTags}
         selectedTags={selectedTags}
         onToggleTag={(tag) => setSelectedTags((prev) => (
           prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
