@@ -81,6 +81,7 @@ import LinkDesktop from './components/LinkDesktop';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import ApiProposalCard from '../../components/ApiProposalCard';
 import { readProposal, requestPath, summarise } from '../../utils/apiProposal';
+import { CHAT_TIMEOUT_MS } from '../../utils/chatTimeout';
 import ChatBlocks from '../../components/ChatBlocks';
 import { blocksCoverProposal, drawableBlocks } from '../../utils/chatBlocks';
 // SettingsScreen used to be its own tab. We surface it from inside
@@ -1820,7 +1821,7 @@ export default function TurtleScreen() {
       const aiResponse = await api.post('/turtle/chat', {
         message: currentInput,
         history: chatHistoryArray,
-      });
+      }, {}, { timeoutMs: CHAT_TIMEOUT_MS });
 
       const { reply, intent, blocks } = aiResponse;
       const board = drawableBlocks(blocks);

@@ -17,6 +17,7 @@ import MediaLightbox from '../../../components/MediaLightbox';
 import { TaskForm } from '../../TasksScreen/components/TaskForm';
 import { sendOrQueue } from '../../../services/offlineQueue';
 import { inkOn } from '../../../utils/accentColor';
+import { CHAT_TIMEOUT_MS } from '../../../utils/chatTimeout';
 
 // One board's CONVERSATION (conversation-boards Phase 3): the merged feed of
 // everything on the board — tasks, events, notes, media (rendered as compact
@@ -285,7 +286,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
       // Mark on ATTEMPT, not success — the POST can land server-side even if
       // reading the reply fails client-side, so conservative is correct.
       dirtyRef.current = true;
-      const r = await api.post('/turtle/chat', { message: body, history: recentChatHistory, board });
+      const r = await api.post('/turtle/chat', { message: body, history: recentChatHistory, board }, {}, { timeoutMs: CHAT_TIMEOUT_MS });
       const reply = r?.reply;
       setItems((prev) => {
         let next = prev.map((it) => (it.id === localId ? { ...it, local: false } : it));

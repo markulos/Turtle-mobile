@@ -38,3 +38,38 @@ export const matchesFilter = (n, filterKey) => {
   if (filterKey === 'feedback') return isFeedbackNote(n);
   return (n.type || 'note') === filterKey;
 };
+
+/**
+ * The only tags a piece of feedback ever carries, in the web app's order:
+ * which APP it is about, then which PLATFORM. The web Notes screen offers
+ * exactly these as two small pickers (noteKinds.ts APP_TABS / PLATFORM_TABS)
+ * rather than the whole tag universe, because they are the only answers a
+ * feedback row can give.
+ */
+export const FEEDBACK_TOPICS = [...Object.values(APP_TAGS), ...Object.values(PLATFORM_TAGS)];
+
+const hasTag = (n, tag) => Array.isArray(n?.tags)
+  && n.tags.some((t) => String(t).trim().toLowerCase() === tag.toLowerCase());
+
+/**
+ * The topic chips worth offering for a kind filter.
+ *
+ * Every other kind browses the whole universe — note-derived topics merged with
+ * every server board — which is right for notes and to-dos, because a note can
+ * be filed under anything. Feedback cannot: it is stamped by one composer with
+ * one of four tags, so offering the full list was offering dozens of chips that
+ * could only ever return nothing. Narrowing it is what makes the panel's live
+ * count trustworthy under this tab.
+ *
+ * All four are kept even at zero, badge-less (the panel hides a 0 count) —
+ * the same way a board with no notes yet still lists, and the same way the web
+ * pickers always show both apps and both platforms.
+ */
+export function topicChipsFor(filterKey, notes, allTopics) {
+  if (filterKey !== 'feedback') return allTopics;
+  const rows = (Array.isArray(notes) ? notes : []).filter(isFeedbackNote);
+  return FEEDBACK_TOPICS.map((topic) => ({
+    topic,
+    count: rows.filter((n) => hasTag(n, topic)).length,
+  }));
+}

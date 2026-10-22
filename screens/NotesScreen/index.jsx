@@ -101,7 +101,7 @@ import {
   unpinNote, usePinnedNoteIds,
 } from '../../utils/pinnedNotes';
 // Tab predicates + the feedback tag vocabulary (pure, unit-tested separately).
-import { APP_TAGS, PLATFORM_TAGS, isFeedbackNote, matchesFilter } from './feedbackFilter';
+import { APP_TAGS, PLATFORM_TAGS, isFeedbackNote, matchesFilter, topicChipsFor } from './feedbackFilter';
 // The note's own files — fetched from its media ids and shown in the note,
 // matching the web reading pane. Tapping an image opens AttachmentViewer, which
 // takes URLs and so never routes through the media vault.
@@ -926,6 +926,10 @@ export default function NotesScreen() {
       .sort((a, b) => a.topic.toLowerCase().localeCompare(b.topic.toLowerCase()));
   }, [topicTree, boards]);
 
+  // Under Feedback the chips narrow to the four stamps a feedback row can
+  // carry; every other kind browses the whole universe. See topicChipsFor.
+  const panelTopics = useMemo(() => topicChipsFor(filter, notes, railTopics), [filter, notes, railTopics]);
+
   // Create a board (project) from the topic search sheet. Optimistic: the
   // chip appears + filters immediately; the POST persists in the background
   // and rolls back on failure. '/' is refused — it's the sub-topic separator.
@@ -1458,11 +1462,11 @@ export default function NotesScreen() {
         status={todoStatus}
         statusDefault={TODO_STATUS_DEFAULT}
         onStatusChange={setTodoStatus}
-        topics={railTopics}
+        topics={panelTopics}
         selectedTopic={selectedTopic}
         onSelectTopic={setSelectedTopic}
         untaggedKey={UNTAGGED}
-        untaggedCount={topicTree.untagged}
+        untaggedCount={filter === 'feedback' ? 0 : topicTree.untagged}
         // The sheet is a Modal, so it renders over this panel rather than
         // under it — the panel stays open behind, and a pick lands on it.
         onOpenTopicSearch={() => setTopicSearchOpen(true)}

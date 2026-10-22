@@ -233,24 +233,47 @@ export const ServerProvider = ({ children }) => {
     }
   };
 
-  const apiPost = async (endpoint, data, customHeaders = {}) => {
+  // POST, with an OPT-IN deadline (`{ timeoutMs }` as the fourth argument).
+  //
+  // No deadline by default on purpose, and that is NOT the same decision as
+  // apiGet's 20s: a POST here is often an upload, and a 2 GB video legitimately
+  // takes as long as it takes. A long-running READ dressed as a POST is the
+  // opposite case — a chat turn that never settles leaves the screen spinning,
+  // and if iOS's own 60s request timeout fires first the user gets "network
+  // request timed out" instead of a sentence they can act on. So the deadline
+  // lives at the call site that knows what "too long" means; see CHAT_TIMEOUT_MS.
+  const apiPost = async (endpoint, data, customHeaders = {}, { timeoutMs } = {}) => {
     const url = `${getBaseUrl()}${endpoint}`;
     if (__DEV__) console.log(`[API POST] ${url}`, data);
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeader(),
-        ...customHeaders
-      },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Unknown error');
-      console.error(`[API ERROR] ${response.status}: ${errorText}`);
-      throw new Error(`API Error ${response.status}: ${errorText}`);
+    const controller = timeoutMs ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader(),
+          ...customHeaders
+        },
+        body: JSON.stringify(data),
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.error(`[API ERROR] ${response.status}: ${errorText}`);
+        throw new Error(`API Error ${response.status}: ${errorText}`);
+      }
+      return response.json();
+    } catch (e) {
+      // The chat renders this straight to the user, so it has to be a sentence
+      // rather than "Aborted".
+      if (e && e.name === 'AbortError') {
+        throw new Error(`That took longer than ${Math.round(timeoutMs / 1000)}s to answer. Ask for one piece of it and it'll get there.`);
+      }
+      throw e;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-    return response.json();
   };
 
   const apiDelete = async (endpoint) => {
