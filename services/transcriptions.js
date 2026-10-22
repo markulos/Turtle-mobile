@@ -104,6 +104,54 @@ export async function submitTranscription({
   return body;
 }
 
+/**
+ * Transcribe something the POND already holds, by its media id.
+ *
+ * This is the door that did not exist when this client was written, which is
+ * why `TranscriptionPanel.sendPondAudio` downloads a track to the cache and
+ * sends it straight back up. For a voice memo over the LAN that round trip is
+ * a couple of seconds; for a VIDEO it is the whole file twice over a tunnel,
+ * so anything video-shaped must come this way. Offered only when
+ * `capabilities.features.mediaSubmit` is true — an older pond has no such
+ * route and the upload path remains the fallback.
+ *
+ * Safe to call twice: the pond keys an unfinished job on the media row and
+ * hands the running one back (`existing: true`) rather than queueing a second.
+ */
+export async function submitMediaTranscription(api, mediaId, options = {}) {
+  const body = { mediaId: String(mediaId) };
+  for (const [key, value] of Object.entries(options)) {
+    if (value === undefined || value === null || value === '') continue;
+    body[key] = value;
+  }
+  const accepted = await api.post(ROOT, body);
+  if (!accepted?.id) throw new Error(accepted?.error || 'The pond did not accept the recording');
+  return accepted;
+}
+
+/**
+ * Ask the pond to lift a video's audio out into a track of its own, filed
+ * beside the video. Resolves to `{ jobId }`; the conversion runs on the pond
+ * and is watched with `extractAudioStatus`.
+ *
+ * Keyed on the video, so pressing it again returns the running (or finished)
+ * conversion instead of making a second track. Only where
+ * `capabilities.features.audioExtract` says the route is there.
+ */
+export async function extractAudio(api, mediaId) {
+  const accepted = await api.post(`/media/${encodeURIComponent(String(mediaId))}/extract-audio`);
+  if (!accepted?.jobId) throw new Error(accepted?.error || 'The pond did not start the conversion');
+  return accepted;
+}
+
+/**
+ * Where a conversion has got to: `phase` is 'working' | 'completed' |
+ * 'failed', and `mediaId` — the whole point — appears once the track exists.
+ */
+export async function extractAudioStatus(api, jobId) {
+  return api.get(`/media/extract-audio/${encodeURIComponent(String(jobId))}`);
+}
+
 /** Poll one job. A 404 means it is gone — callers stop rather than retry. */
 export async function getJob(api, id) {
   return api.get(`${ROOT}/${encodeURIComponent(id)}`);

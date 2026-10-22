@@ -5,7 +5,7 @@
  * discs, then documents as rows and media as a three-column thumb grid.
  * Long-press → select mode → Move · Tag · Delete, all optimistic.
  */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -21,6 +21,12 @@ import { openDocument } from './documentOpen';
 import PdfViewer, { canRenderPdf } from './PdfViewer';
 import DocumentPeek from './DocumentPeek';
 import { collapseCrumbs, isDocument, isPdf, messageOf, sortFolderItems } from './filesUtils';
+import VideoTranscribeSheet from './VideoTranscribeSheet';
+import TranscriptionPanel from '../../../../components/TranscriptionPanel';
+import { useServer } from '../../../../context/ServerContext';
+import { getCapabilities } from '../../../../services/transcriptions';
+import { startVideoTranscription } from '../../../../services/videoTranscribeRun';
+import { isVideoItem } from '../../../../utils/videoTranscribe';
 
 const GRID_COLS = 3;
 const GAP = 2;
@@ -52,6 +58,43 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   const [progress, setProgress] = useState({}); // id → 0..1
   const [refreshing, setRefreshing] = useState(false);
   const busyRef = useRef(false);
+
+  // ── Transcribing a video ──────────────────────────────────────────────────
+  // What the pond can do is asked for ONCE, and only after someone has tapped
+  // a video's badge: a folder of photos should cost no extra request, and the
+  // answer decides whether "keep the audio as well" is even offered.
+  const { api } = useServer();
+  const [capabilities, setCapabilities] = useState(null);
+  const [transcribeOpen, setTranscribeOpen] = useState(false);
+  const askedCaps = useRef(false);
+  useEffect(() => {
+    if (sheet?.kind !== 'transcribe' || askedCaps.current) return;
+    askedCaps.current = true;
+    let alive = true;
+    getCapabilities(api)
+      .then((caps) => { if (alive) setCapabilities(caps); })
+      // A pond that predates transcription answers 404 here; the sheet then
+      // reads it as "cannot", which is exactly right.
+      .catch(() => { if (alive) setCapabilities({}); });
+    return () => { alive = false; };
+  }, [api, sheet]);
+
+  const beginTranscribe = useCallback((mode) => {
+    const item = sheet?.item;
+    setSheet(null);
+    if (!item) return;
+    startVideoTranscription(api, {
+      item,
+      mode,
+      // The pond's own defaults. The Transcribe page below is where model and
+      // speakers are chosen for a run started there; a tap on a video asks
+      // for a transcript, not for a form.
+      options: {},
+      // The track lands in THIS folder, so the listing is now one row short.
+      onTrackSaved: () => { refresh(); },
+    });
+    setTranscribeOpen(true);
+  }, [api, sheet, refresh]);
 
   const isUnfiled = parent === 'unfiled';
   const folderId = data?.folder?.id || null;
@@ -168,6 +211,22 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
             style={({ pressed }) => [{ width: cellW, height: cellW, marginRight: GAP, marginBottom: GAP, backgroundColor: c.surface, opacity: pressed ? 0.6 : 1 }]}>
             {thumbOf(m) ? <Image source={{ uri: thumbOf(m) }} style={StyleSheet.absoluteFill} contentFit="cover" transition={80} /> : null}
             {m.type === 'video' && <View style={styles.play}><Icon name="play" size={16} color="#fff" /></View>}
+            {/* Drawn on the tile, not hidden behind a long-press: a long
+                press here already means "select", and "get me the words out
+                of this" is a reason to open a folder of recordings at all. */}
+            {isVideoItem(m) && !selectMode && (
+              <Pressable
+                onPressIn={tapHaptic}
+                onPress={() => setSheet({ kind: 'transcribe', item: m })}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`Transcribe ${m.originalName || m.filename || 'this video'}`}
+                testID={`transcribe-${m.id}`}
+                style={({ pressed }) => [styles.transcribe, { opacity: pressed ? 0.6 : 1 }]}
+              >
+                <Icon name="text-box-outline" size={15} color="#fff" />
+              </Pressable>
+            )}
             {selectMode && <View style={styles.check}><Icon name={selected.has(m.id) ? 'check-circle' : 'checkbox-blank-circle-outline'} size={22} color="#fff" /></View>}
           </Pressable>
         ))}
@@ -186,11 +245,12 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
     </View>
   );
 
-  // `!viewing` joins the page's swipe guard below for the same reason `!sheet`
-  // is there: the PDF reader is an in-tree overlay, so without it a left-edge
-  // swipe meant for the reader would close this folder out from under it.
+  // `!viewing` and `!transcribeOpen` join the page's swipe guard below for
+  // the same reason `!sheet` is there: the PDF reader and the Transcribe page
+  // are in-tree overlays, so without them a left-edge swipe meant for one of
+  // those would close this folder out from under it.
   return (
-    <EdgeSwipePage overlay visible={visible} onClose={handleBack} swipeEnabled={!sheet && !selectMode && !viewing}>
+    <EdgeSwipePage overlay visible={visible} onClose={handleBack} swipeEnabled={!sheet && !selectMode && !viewing && !transcribeOpen}>
       <View style={[styles.page, { backgroundColor: c.background, paddingTop: topInset }]}>
         <View style={[styles.header, { paddingTop: insets.top + HEADER_TOP_PAD }]}>
           <Pressable onPress={handleBack} onPressIn={tapHaptic} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back" style={({ pressed }) => [styles.iconBtn, { opacity: pressed ? 0.6 : 1 }]}>
@@ -265,6 +325,40 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
           <FolderActionsSheet folder={sheet.folder} theme={theme} bottomInset={bottomInset} onClose={() => setSheet(null)}
             onRename={() => setSheet({ kind: 'rename', folder: sheet.folder })} onMove={() => setSheet({ kind: 'move-folder', folder: sheet.folder })} onDelete={() => askDelete(sheet.folder)} />
         )}
+        {sheet?.kind === 'transcribe' && (
+          <VideoTranscribeSheet
+            item={sheet.item}
+            capabilities={capabilities}
+            onPick={beginTranscribe}
+            onClose={() => setSheet(null)}
+            theme={theme}
+            bottomInset={bottomInset}
+          />
+        )}
+        {/* The run itself is watched on the same panel the Media tab uses —
+            the recordings store is one list, so a job started here and a job
+            started there are the same row seen from two places. Pushed over
+            this folder so the left-edge swipe comes back to it. */}
+        <EdgeSwipePage visible={transcribeOpen} onClose={() => setTranscribeOpen(false)}>
+          <View style={[styles.page, { backgroundColor: c.background, paddingTop: insets.top + 6 }]}>
+            <View style={styles.header}>
+              <Pressable onPress={() => { tapHaptic(); setTranscribeOpen(false); }} onPressIn={tapHaptic} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back to the folder" style={({ pressed }) => [styles.iconBtn, { opacity: pressed ? 0.6 : 1 }]}>
+                <Icon name="chevron-left" size={28} color={c.textPrimary} />
+              </Pressable>
+              <View style={styles.crumbs}>
+                <Text style={[styles.crumbTail, { color: c.textPrimary }]} numberOfLines={1}>Transcribe</Text>
+              </View>
+            </View>
+            <FlatList
+              data={[]}
+              renderItem={null}
+              keyExtractor={() => 'x'}
+              ListHeaderComponent={<TranscriptionPanel active={transcribeOpen} />}
+              contentContainerStyle={{ padding: 16, paddingBottom: Math.max(insets.bottom, bottomInset) + 24 }}
+              keyboardShouldPersistTaps="handled"
+            />
+          </View>
+        </EdgeSwipePage>
         <DocumentPeek
           visible={!!peek}
           item={peek}
@@ -313,6 +407,7 @@ const styles = StyleSheet.create({
   discs: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8, paddingBottom: 6 },
   section: { fontSize: 10.5, letterSpacing: 0.9, fontWeight: '700', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16 },
+  transcribe: { position: 'absolute', right: 6, top: 6, width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   play: { position: 'absolute', right: 6, bottom: 6, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   check: { position: 'absolute', left: 6, top: 6 },
   empty: { textAlign: 'center', paddingVertical: 40, fontSize: 13 },
