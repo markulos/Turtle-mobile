@@ -1,5 +1,5 @@
 import {
-  folderHue, folderColor, folderTint, formatSize, documentIcon, isDocument, isPdf, collapseCrumbs, sortFolderItems, messageOf,
+  folderHue, folderColor, folderTint, formatSize, documentIcon, isDocument, isPdf, collapseCrumbs, sortFolderItems, messageOf, gridCellSize,
 } from '../filesUtils';
 
 describe('filesUtils', () => {
@@ -79,6 +79,37 @@ describe('filesUtils', () => {
     expect(sortFolderItems(items, 'date', 'desc').map((i) => i.id)).toEqual(['3', '1', '2']);
     expect(sortFolderItems(items, 'type', 'asc').map((i) => i.id)).toEqual(['1', '3', '2']);
     expect(sortFolderItems(items, 'nope', 'asc')).not.toBe(items);
+  });
+
+  // The folder grid showed TWO columns on every phone, for the whole life of
+  // the feature: the cell width left room for the gaps BETWEEN tiles while
+  // each tile also carried a marginRight, so a row of three wanted two points
+  // more than the container had and the third wrapped. These pin the
+  // arithmetic at the real widths — the bug was two points, so an assertion
+  // that is not about exact fit would not have caught it.
+  it('fits a full row of tiles inside the padded container on every phone width', () => {
+    const PAD = 16;
+    const GAP = 2;
+    for (const width of [320, 375, 390, 393, 402, 428, 430, 440, 1024]) {
+      const cell = gridCellSize(width, { cols: 3, gap: GAP, padding: PAD });
+      const inner = width - PAD * 2;
+      const row = cell * 3 + GAP * 2;
+      expect(row).toBeLessThanOrEqual(inner);
+      // And it must be a TIGHT fit — a cell small enough to always fit would
+      // pass the line above while leaving a visible gutter on the right.
+      expect(inner - row).toBeLessThan(3);
+    }
+  });
+
+  it('is a whole number, never negative, and survives a width it cannot use', () => {
+    expect(Number.isInteger(gridCellSize(402))).toBe(true);
+    expect(gridCellSize(0)).toBe(0);
+    expect(gridCellSize(20)).toBe(0);
+    expect(gridCellSize(undefined)).toBe(0);
+    // One column is the whole padded width; a silly column count cannot make
+    // the tile wider than the row.
+    expect(gridCellSize(400, { cols: 1, gap: 2, padding: 16 })).toBe(368);
+    expect(gridCellSize(400, { cols: 0, gap: 2, padding: 16 })).toBe(368);
   });
 
   // I3: the sheets used to render the raw `API Error 409: {...}` blob

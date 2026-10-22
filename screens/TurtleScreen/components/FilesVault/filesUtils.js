@@ -112,3 +112,32 @@ export function messageOf(e) {
   if (apiMatch) return apiMatch[1] || raw;
   return raw;
 }
+
+/**
+ * One cell of the photos-and-videos grid in a folder.
+ *
+ * ─── Why this is a function and not one line at the call site ───────────────
+ *
+ * It was one line at the call site, and it quietly rendered TWO columns
+ * instead of three for as long as it existed. The width budgeted for the gaps
+ * BETWEEN tiles — `cols - 1` of them — while every tile also carried a
+ * `marginRight`, including the last in each row. So a row wanted
+ * `cols × cell + cols × gap` from a container holding
+ * `cols × cell + (cols-1) × gap`: two points short on a 393 pt screen, which
+ * is all `flexWrap` needs to push the third tile down and leave a tile-sized
+ * hole on the right.
+ *
+ * This arithmetic is only right when the gaps really are between tiles, so
+ * the grid spaces its children with the container's `gap` (as the vault
+ * picker and the shared-board grid already do) and no tile carries a margin
+ * of its own. Keeping the two halves apart is what let them disagree.
+ *
+ * The floor is belt and braces: three fractional widths that fit exactly in
+ * theory can sum a hair over the container and wrap for a reason no one
+ * looking at the screen could ever guess.
+ */
+export function gridCellSize(windowWidth, { cols = 3, gap = 2, padding = 16 } = {}) {
+  const inner = Math.max(0, Number(windowWidth) || 0) - padding * 2;
+  const columns = Math.max(1, Math.floor(cols));
+  return Math.max(0, Math.floor((inner - gap * (columns - 1)) / columns));
+}

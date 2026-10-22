@@ -1,5 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { Dimensions, StyleSheet } from 'react-native';
 
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
 jest.mock('expo-image', () => ({ Image: 'ExpoImage' }));
@@ -46,6 +47,7 @@ jest.mock('../PdfViewer', () => {
 });
 
 import FolderPage from '../FolderPage';
+import { gridCellSize } from '../filesUtils';
 
 const theme = { mode: 'dark', colors: { background: '#000', surface: '#0a0a0a', surfaceElevated: '#111', textPrimary: '#fff', textSecondary: '#aaa', textMuted: '#666', primary: '#fff', border: '#222', accentError: '#f55', accentInfo: '#4af' } };
 const listing = {
@@ -86,6 +88,32 @@ describe('FolderPage', () => {
     await waitFor(() => expect(mockOpenDocument).toHaveBeenCalledWith(expect.objectContaining({ id: 'doc-2' }), expect.any(Object)));
     await fireEvent.press(getByLabelText('Open photo a.jpg'));
     expect(p.onOpenMedia).toHaveBeenCalledWith([expect.objectContaining({ id: 'img-1' })], expect.objectContaining({ id: 'img-1' }));
+  });
+
+  // The grid showed TWO columns, not three, on every phone: each tile carried
+  // a marginRight that the cell width had not budgeted for, so a row of three
+  // overran its container by the width of one gap and the third tile wrapped,
+  // leaving a tile-sized hole on the right. The fix is that tiles carry no
+  // horizontal margin at all — the container's `gap` does the spacing, which
+  // is the only thing gridCellSize's arithmetic assumes. Asserted on the
+  // rendered style, because the arithmetic was never the half that was wrong.
+  it('lays media tiles out with no margin of their own, so three fit across', async () => {
+    const { getByLabelText, getByText } = await render(<FolderPage {...props()} />);
+    await waitFor(() => getByText('lease.pdf'));
+
+    const tile = getByLabelText('Open photo a.jpg');
+    const style = StyleSheet.flatten(
+      typeof tile.props.style === 'function' ? tile.props.style({ pressed: false }) : tile.props.style,
+    );
+    // useWindowDimensions under jest reports the default RN window; the cell
+    // is read from the same helper the page uses rather than a literal, so
+    // this pins "the tile is the shared arithmetic" and not one screen size.
+    const { width } = Dimensions.get('window');
+    expect(style.width).toBe(gridCellSize(width, { cols: 3, gap: 2, padding: 16 }));
+    expect(style.height).toBe(style.width);
+    expect(style.marginRight ?? 0).toBe(0);
+    expect(style.marginLeft ?? 0).toBe(0);
+    expect(style.marginHorizontal ?? 0).toBe(0);
   });
 
   // The whole point of the reader: a PDF must NOT leave the app. Anything else

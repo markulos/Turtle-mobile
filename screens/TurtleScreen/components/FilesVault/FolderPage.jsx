@@ -20,7 +20,7 @@ import { FolderNameSheet, FolderPickerSheet, FilesSortSheet, FolderActionsSheet 
 import { openDocument } from './documentOpen';
 import PdfViewer, { canRenderPdf } from './PdfViewer';
 import DocumentPeek from './DocumentPeek';
-import { collapseCrumbs, isDocument, isPdf, messageOf, sortFolderItems } from './filesUtils';
+import { collapseCrumbs, gridCellSize, isDocument, isPdf, messageOf, sortFolderItems } from './filesUtils';
 import VideoTranscribeSheet from './VideoTranscribeSheet';
 import TranscriptionPanel from '../../../../components/TranscriptionPanel';
 import { useServer } from '../../../../context/ServerContext';
@@ -30,6 +30,9 @@ import { isVideoItem } from '../../../../utils/videoTranscribe';
 
 const GRID_COLS = 3;
 const GAP = 2;
+// Shared with styles.grid's paddingHorizontal, so the cell arithmetic and the
+// container it has to fit inside cannot drift apart.
+const GRID_PAD = 16;
 // Shared with the header's own paddingTop and the ⋯ menu's top offset below,
 // so the menu derives from one source instead of duplicating styles.header's
 // minHeight/paddingBottom as separate literals (L71).
@@ -187,7 +190,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
     ]);
   }, [selected, clearSelection, removeItems, fail]);
 
-  const cellW = (width - 32 - GAP * (GRID_COLS - 1)) / GRID_COLS;
+  const cellW = gridCellSize(width, { cols: GRID_COLS, gap: GAP, padding: GRID_PAD });
   const header = (
     <View>
       {!!data?.folders?.length && (
@@ -208,7 +211,8 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
         {media.map((m) => (
           <Pressable key={m.id} delayPressIn={0} onPressIn={tapHaptic} onPress={() => (selectMode ? toggle(m.id) : onOpenMedia(media, m))} onLongPress={() => { impactHaptic('medium'); toggle(m.id); }}
             accessibilityRole="button" accessibilityLabel={`${selectMode ? (selected.has(m.id) ? 'Deselect' : 'Select') : 'Open'} photo ${m.originalName || m.filename || ''}`}
-            style={({ pressed }) => [{ width: cellW, height: cellW, marginRight: GAP, marginBottom: GAP, backgroundColor: c.surface, opacity: pressed ? 0.6 : 1 }]}>
+            testID={`media-${m.id}`}
+            style={({ pressed }) => [{ width: cellW, height: cellW, backgroundColor: c.surface, opacity: pressed ? 0.6 : 1 }]}>
             {thumbOf(m) ? <Image source={{ uri: thumbOf(m) }} style={StyleSheet.absoluteFill} contentFit="cover" transition={80} /> : null}
             {m.type === 'video' && <View style={styles.play}><Icon name="play" size={16} color="#fff" /></View>}
             {/* Drawn on the tile, not hidden behind a long-press: a long
@@ -406,7 +410,9 @@ const styles = StyleSheet.create({
   menuText: { fontSize: 14.5, fontWeight: '600', flexShrink: 1 },
   discs: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8, paddingBottom: 6 },
   section: { fontSize: 10.5, letterSpacing: 0.9, fontWeight: '700', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16 },
+  // `gap` rather than a margin on each tile: it spaces children BETWEEN one
+  // another, which is the only thing gridCellSize's arithmetic assumes.
+  grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: GRID_PAD, gap: GAP },
   transcribe: { position: 'absolute', right: 6, top: 6, width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   play: { position: 'absolute', right: 6, bottom: 6, width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   check: { position: 'absolute', left: 6, top: 6 },
