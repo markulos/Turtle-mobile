@@ -32,10 +32,12 @@
  * places. Rendering "Download" as another board row was what made an ACTION
  * and a BOARD NAMED "Download" read as the same thing.
  *
- *   text/url → creates a note tagged with the board name (server-side
- *              routing handles project vs tag — both look the same in
- *              the existing notes schema, which stores project as a
- *              tag string).
+ *   text/url → creates a note tagged with the board name, whichever KIND of
+ *              board it is: project, tag and album all look the same in the
+ *              existing notes schema, which stores a board as a tag string.
+ *              (An album used to be the exception, and a reel filed on one
+ *              was answered 200 and then kept nowhere the board could show
+ *              it — most boards a person has ARE albums.)
  *   images   → uploaded to /api/share which writes them to media with
  *              tags=[boardName] AND a chat_log entry so they appear
  *              in the web chat preview pane.
@@ -230,9 +232,9 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
   //     share tagged the photos with a name the vault would never list, so the
   //     board you just made was nowhere to be found.
   //   anything with words in it → 'tag'. A text or link share becomes a note
-  //     tagged with the board name, and the server only writes that note for a
-  //     tag/project board — filing a captioned share under a new album would
-  //     drop the caption on the floor.
+  //     tagged with the board name, and a board made of words belongs in the
+  //     topic namespace the Notes rail reads — not in the photo vault's album
+  //     registry, which would list an album with no photos in it.
   const newBoardKind = (imageFiles.length > 0 && !text && !url) ? 'album' : 'tag';
   // Only block the UI on the network when we have NOTHING cached to paint. Once
   // the cache (or a fetch) has populated boards, refreshes happen silently.

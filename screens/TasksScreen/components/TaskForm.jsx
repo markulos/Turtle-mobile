@@ -33,6 +33,7 @@ import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import { DatePickerModal } from './DatePickerModal';
 import { WheelTimePicker } from './WheelTimePicker';
 import { normalizeTags, getPriorityColor } from '../utils/taskHelpers';
+import { isAppointment } from '../utils/appointment';
 import PeoplePicker from './PeoplePicker';
 // Who is involved, ranked by how often you put them on things.
 import { bumpInvolved } from '../utils/peopleFrequency';
@@ -380,19 +381,6 @@ export const TaskForm = ({
       // partner auto-seed is allowed to fill it.
       involvedTouched.current = false;
       if (initialData) {
-        // Check if task is an appointment (createdAt matches dueDate)
-        const isAppointment = initialData.dueDate && initialData.createdAt && (() => {
-          const [y, m, d] = initialData.dueDate.split('-').map(Number);
-          const dueDateTime = new Date(y, m - 1, d).getTime();
-          const createdDate = new Date(initialData.createdAt);
-          const createdDateTime = new Date(
-            createdDate.getFullYear(),
-            createdDate.getMonth(),
-            createdDate.getDate()
-          ).getTime();
-          return dueDateTime === createdDateTime;
-        })();
-
         const type = initialData.itemType || 'task';
         const meta = (initialData.meta && typeof initialData.meta === 'object') ? initialData.meta : {};
         setFormData({
@@ -407,7 +395,7 @@ export const TaskForm = ({
                 involved: !!initialData.reminders.involved,
               }
             : { leads: [], sms: false, involved: false },
-          isAppointment: !!isAppointment,
+          isAppointment: isAppointment(initialData),
           recurring: initialData.recurring || 'none',
           itemType: type,
           color: meta.color || ITEM_TYPE_DEFAULT_COLOR[type] || null,
@@ -522,13 +510,6 @@ export const TaskForm = ({
       itemType: type,
     };
 
-    // If appointment mode is enabled (tasks only), set createdAt to match dueDate
-    if (type === 'task' && formData.isAppointment && formData.dueDate) {
-      const [y, m, d] = formData.dueDate.split('-').map(Number);
-      const appointmentDate = new Date(y, m - 1, d);
-      finalTask.createdAt = appointmentDate.getTime();
-    }
-
     // A guest has no app and no notification tray, so adding one forces the
     // reminder settings: SMS on, and a default pair of leads if none were
     // chosen. Applied HERE rather than as the guest is added, so it reflects
@@ -564,6 +545,12 @@ export const TaskForm = ({
       // A task's guests ride in meta too — they are not an event-only idea any
       // more (a dentist appointment has a guest; it is not an "event").
       if ((formData.guests || []).length > 0) finalTask.meta.guests = formData.guests;
+      // And the single-event switch, as a FIELD. It used to be stored by
+      // overwriting createdAt with midnight of the due date, which gave a
+      // future appointment a creation time that had not happened yet and
+      // parked it on top of every newest-first list — Notes most of all, which
+      // merges notes and to-dos on createdAt. See utils/appointment.
+      if (formData.isAppointment && formData.dueDate) finalTask.meta.appointment = true;
     }
 
     // Strip the UI-only flat fields — they now live inside meta (or are task-only).
