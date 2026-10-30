@@ -17,6 +17,8 @@ import useFolderData from './useFolderData';
 import FolderTile from './FolderTile';
 import DocumentRow from './DocumentRow';
 import { FolderNameSheet, FolderPickerSheet, FilesSortSheet, FolderActionsSheet } from './FolderSheets';
+// The same sheet a board uses — pond members, and public links. See VaultShareSheet.
+import VaultShareSheet from '../VaultShareSheet';
 import { openDocument } from './documentOpen';
 import PdfViewer, { canRenderPdf } from './PdfViewer';
 import DocumentPeek from './DocumentPeek';
@@ -50,7 +52,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   const { data, loading, error, refresh, createFolder, renameFolder, moveFolder, deleteFolder, moveItems, removeItems } = useFolderData(parent, { sort, order });
   const [selected, setSelected] = useState(() => new Set());
   const selectMode = selected.size > 0;
-  // null | { kind: 'new'|'rename'|'move-items'|'move-folder'|'sort'|'actions'|'delete-target', folder?, error? }
+  // null | { kind: 'new'|'rename'|'move-items'|'move-folder'|'sort'|'actions'|'share'|'delete-target', folder?, error? }
   const [sheet, setSheet] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   // The document the in-app PDF viewer is showing, or null. A pushed page over
@@ -66,7 +68,8 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   // What the pond can do is asked for ONCE, and only after someone has tapped
   // a video's badge: a folder of photos should cost no extra request, and the
   // answer decides whether "keep the audio as well" is even offered.
-  const { api } = useServer();
+  // getBaseUrl is for the share sheet's avatars, exactly as MediaGallery passes it.
+  const { api, getBaseUrl } = useServer();
   const [capabilities, setCapabilities] = useState(null);
   const [transcribeOpen, setTranscribeOpen] = useState(false);
   const askedCaps = useRef(false);
@@ -283,6 +286,13 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
                 the phone without going out to another app's share sheet. */}
             {!isUnfiled && <MenuRow icon="image-multiple-outline" label="Add photos & videos" theme={theme} onPress={() => { setMenuOpen(false); onUploadHere(folderId); }} />}
             {!isUnfiled && <MenuRow icon="folder-open-outline" label="Add from phone storage" theme={theme} onPress={() => { setMenuOpen(false); onAddFromStorage?.({ id: folderId, name: data?.folder?.name || 'this folder' }); }} />}
+            {/* The folder you are STANDING IN. A long-press on a tile shares a
+                child, which is both undiscoverable on its own and no use for
+                this one — and Unfiled is not a folder anybody can be given, so
+                there is no row to pin a share to there. */}
+            {!isUnfiled && data?.folder && (
+              <MenuRow icon="share-variant-outline" label="Share this folder" theme={theme} onPress={() => { setMenuOpen(false); setSheet({ kind: 'share', folder: { id: data.folder.id, name: data.folder.name } }); }} />
+            )}
             <MenuRow icon="sort" label="Sort & search" theme={theme} onPress={() => { setMenuOpen(false); setSheet({ kind: 'sort' }); }} />
             {items.length > 0 && <MenuRow icon="checkbox-multiple-marked-circle-outline" label="Select" theme={theme} onPress={() => { setMenuOpen(false); setSelected(new Set([items[0].id])); }} />}
           </View>
@@ -327,7 +337,22 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
         {sheet?.kind === 'sort' && <FilesSortSheet sort={sort} order={order} query={query} onChange={({ sort: s, order: o, query: q }) => { setSort(s); setOrder(o); setQuery(q); }} onClose={() => setSheet(null)} theme={theme} bottomInset={bottomInset} />}
         {sheet?.kind === 'actions' && (
           <FolderActionsSheet folder={sheet.folder} theme={theme} bottomInset={bottomInset} onClose={() => setSheet(null)}
+            onShare={() => setSheet({ kind: 'share', folder: sheet.folder })}
             onRename={() => setSheet({ kind: 'rename', folder: sheet.folder })} onMove={() => setSheet({ kind: 'move-folder', folder: sheet.folder })} onDelete={() => askDelete(sheet.folder)} />
+        )}
+        {/* Who can see this folder — pond members, and public links. The sheet
+            owns its own overlay, so it sits in the same `sheet` slot as the
+            others rather than nesting inside one. */}
+        {sheet?.kind === 'share' && (
+          <VaultShareSheet
+            visible
+            subject={{ kind: 'folder', id: sheet.folder.id, name: sheet.folder.name }}
+            api={api}
+            theme={theme}
+            baseUrl={getBaseUrl?.()}
+            bottomInset={bottomInset}
+            onClose={() => setSheet(null)}
+          />
         )}
         {sheet?.kind === 'transcribe' && (
           <VideoTranscribeSheet

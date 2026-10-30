@@ -26,8 +26,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 /**
  * @param api           the pond client
- * @param opts.kind     'album' | 'track' — which endpoint family to talk to
- * @param opts.id       the board name, or the media id
+ * @param opts.kind     'album' | 'track' | 'folder' — which endpoint family
+ * @param opts.id       the board name, the media id, or the folder id
  * @param opts.enabled  false while the surface is closed, so a shut sheet is
  *                      not holding a subscription to the pond directory
  * @param opts.onChanged called after any successful write, so the surface
@@ -40,11 +40,23 @@ export function usePondAccess(api, { kind = 'album', id, enabled = true, onChang
   const [busyId, setBusyId] = useState(null);
   const [error, setError] = useState(null);
 
-  // One place that knows the two endpoint families differ only by noun.
-  const paths = useMemo(() => (kind === 'track'
-    ? { roster: `/track-access?trackId=${encodeURIComponent(id ?? '')}`, grant: '/track-access', revoke: '/track-access', key: 'trackId' }
-    : { roster: `/album-access?album=${encodeURIComponent(id ?? '')}`, grant: '/album-access', revoke: '/album-access', key: 'album' }
-  ), [kind, id]);
+  // One place that knows the endpoint families differ only by noun.
+  //
+  // A FOLDER's id is a row id rather than a name, which changes nothing here
+  // but changes one thing on the server: a folder id is global, so the grant
+  // path there proves the folder is the sharer's before writing anything (an
+  // album name is only ever interpreted against an owner). See
+  // server/routes/folderAccess.js — the shape of the exchange is identical,
+  // which is why this stays one hook.
+  const paths = useMemo(() => {
+    if (kind === 'track') {
+      return { roster: `/track-access?trackId=${encodeURIComponent(id ?? '')}`, grant: '/track-access', revoke: '/track-access', key: 'trackId' };
+    }
+    if (kind === 'folder') {
+      return { roster: `/folder-access?folderId=${encodeURIComponent(id ?? '')}`, grant: '/folder-access', revoke: '/folder-access', key: 'folderId' };
+    }
+    return { roster: `/album-access?album=${encodeURIComponent(id ?? '')}`, grant: '/album-access', revoke: '/album-access', key: 'album' };
+  }, [kind, id]);
 
   useEffect(() => {
     if (!enabled || id == null || id === '') return undefined;

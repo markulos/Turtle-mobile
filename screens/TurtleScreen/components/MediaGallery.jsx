@@ -131,7 +131,9 @@ import { useVaultUploadActions, useVaultUploadLifecycle } from '../../../context
 import { useMediaVersion } from '../../../context/DownloadsContext';
 import { useTheme } from '../../../context/ThemeContext';
 import PhotoVaultBoardsPage, { SEARCH_ENTER, SEARCH_EXIT } from './PhotoVaultBoardsPage';
-import AlbumShareSheet from './AlbumShareSheet';
+// One sheet for everything shareable in the vault (a board here, a folder in
+// the Files tab). See VaultShareSheet.
+import VaultShareSheet from './VaultShareSheet';
 import AlbumActionsSheet from './AlbumActionsSheet';
 import ImageEditor from './ImageEditor';
 import ShareInsightsPage from './ShareInsightsPage';
@@ -6104,10 +6106,10 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         onClose={() => setAlbumMenuName(null)}
       />
 
-      {/* "Share to the web" for a board. */}
-      <AlbumShareSheet
+      {/* Everything about who can see a board: pond members, and public links. */}
+      <VaultShareSheet
         visible={!!shareAlbumName}
-        albumName={shareAlbumName}
+        subject={{ kind: 'album', id: shareAlbumName, name: shareAlbumName }}
         api={api}
         theme={theme}
         baseUrl={getBaseUrl?.()}

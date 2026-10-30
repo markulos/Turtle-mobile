@@ -68,12 +68,15 @@ describe('FolderSheets', () => {
     expect(onChange).toHaveBeenCalledWith({ sort: 'date', order: 'desc', query: 'lease' });
   });
 
-  it('FolderActionsSheet offers rename, move and delete', async () => {
-    const onRename = jest.fn(); const onMove = jest.fn(); const onDelete = jest.fn();
-    const { getByLabelText } = await render(<FolderActionsSheet folder={{ id: 'fld_aaaaaaaaaaaa', name: 'Scans' }} onRename={onRename} onMove={onMove} onDelete={onDelete} onClose={() => {}} theme={theme} />);
+  it('FolderActionsSheet offers share, rename, move and delete', async () => {
+    const onShare = jest.fn(); const onRename = jest.fn(); const onMove = jest.fn(); const onDelete = jest.fn();
+    const { getByLabelText } = await render(<FolderActionsSheet folder={{ id: 'fld_aaaaaaaaaaaa', name: 'Scans' }} onShare={onShare} onRename={onRename} onMove={onMove} onDelete={onDelete} onClose={() => {}} theme={theme} />);
+    // Share leads: it is the only one of these that involves anybody else.
+    await fireEvent.press(getByLabelText('Share folder…'));
     await fireEvent.press(getByLabelText('Rename folder'));
     await fireEvent.press(getByLabelText('Move folder'));
     await fireEvent.press(getByLabelText('Delete folder'));
+    expect(onShare).toHaveBeenCalled();
     expect(onRename).toHaveBeenCalled(); expect(onMove).toHaveBeenCalled(); expect(onDelete).toHaveBeenCalled();
   });
 });

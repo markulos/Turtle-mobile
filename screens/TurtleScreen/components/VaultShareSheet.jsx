@@ -1,10 +1,21 @@
 /**
- * AlbumShareSheet — publish a vault album to the web.
+ * VaultShareSheet — hand one thing in the vault to somebody. Everything about
+ * who can see it, in one card.
  *
- * Mints a public link (`<host>/s/<slug>`) that opens the album in any
- * browser with no Turtle account. The link IS the credential, so the copy
- * here says that plainly rather than implying it's private; an optional
- * password adds a second gate, and "Turn off" revokes instantly.
+ * Two subjects, because they need the identical sheet:
+ *   · an ALBUM (a board — a tag over the owner's media), and
+ *   · a FOLDER from the Files tab, where the share covers the SUBFOLDERS too.
+ * `subject` carries which, and it decides one query parameter, one request
+ * field and a few nouns. It was album-only (AlbumShareSheet) until folders
+ * needed it; a second copy of 800 lines would have drifted within a month.
+ *
+ * Two ways to hand it over, in this order on purpose:
+ *   · IN YOUR POND — it appears in their own vault. Access is their login, so
+ *     there is nothing to send and nothing to leak.
+ *   · A PUBLIC LINK (`<host>/s/<slug>`) that opens in any browser with no
+ *     Turtle account. The link IS the credential, so the copy here says that
+ *     plainly rather than implying it's private; an optional password adds a
+ *     second gate, and "Turn off" revokes instantly.
  *
  * Rendered as an IN-TREE overlay, never a <Modal>: the vault already lives
  * inside one, and a sibling Modal over an open Modal silently fails to show
@@ -35,6 +46,27 @@ import { useSheetDismiss } from '../../../utils/useSheetDismiss';
 import { INPUT_FIELD } from '../../../utils/inputField';
 
 const isDead = (s) => !!s.revokedAt || !!(s.expiresAt && s.expiresAt < Date.now());
+
+/**
+ * What this sheet is about: `{ kind: 'album' | 'folder', id, name }`.
+ *
+ * For an album, `id` and `name` are both the board's name — a board IS its
+ * name. For a folder they differ: `id` is the row, `name` is what it is
+ * called, and the server interprets the two very differently (a folder id is
+ * global, a board name is only ever read against an owner). Everything below
+ * goes through these three helpers so the difference cannot leak into the
+ * layout.
+ */
+const NOUN = { album: 'board', folder: 'folder' };
+const nounOf = (subject) => NOUN[subject?.kind] || 'board';
+/** The query that lists this subject's public links. */
+const linksQuery = (subject) => (subject.kind === 'folder'
+  ? `/album-shares?folderId=${encodeURIComponent(subject.id)}`
+  : `/album-shares?album=${encodeURIComponent(subject.id)}`);
+/** The field that mints one. */
+const mintField = (subject) => (subject.kind === 'folder'
+  ? { folderId: subject.id }
+  : { album: subject.id });
 
 const EVENT_LABEL = {
   view: 'Opened',
@@ -166,16 +198,18 @@ function PersonDisc({ person, size = 28, baseUrl }) {
  * still shows who already has it — losing the roster because the directory is
  * unreachable would read as "shared with nobody", which is a different claim.
  */
-function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
+function PondAccess({ subject, api, theme, styles: s, baseUrl, onChanged }) {
+  const label = subject.name;
+  const noun = nounOf(subject);
   // The exchange with the server lives in utils/usePondAccess — the music
   // track sheet holds the same conversation and must not drift from this one.
   const {
     people, addable, loading, busyId, error, setError, grant: grantAccess, revoke: revokeAccess,
-  } = usePondAccess(api, { kind: 'album', id: albumName, enabled: !!albumName, onChanged });
+  } = usePondAccess(api, { kind: subject.kind, id: subject.id, enabled: !!subject.id, onChanged });
   const [picking, setPicking] = useState(false);
 
-  // A picker left open on one board must not be open on the next.
-  useEffect(() => { setPicking(false); }, [albumName]);
+  // A picker left open on one subject must not be open on the next.
+  useEffect(() => { setPicking(false); }, [subject.id]);
 
   const grant = useCallback(async (member) => {
     impactHaptic('medium');
@@ -185,7 +219,7 @@ function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
   const revoke = useCallback((person) => {
     Alert.alert(
       `Stop sharing with ${person.name}?`,
-      `“${albumName}” will disappear from their vault.`,
+      `“${label}” will disappear from their vault.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -195,7 +229,7 @@ function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
         },
       ],
     );
-  }, [albumName, revokeAccess]);
+  }, [label, revokeAccess]);
 
   return (
     <View style={s.pondBlock}>
@@ -204,7 +238,9 @@ function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
         <Text style={s.sectionTitle}>IN YOUR POND</Text>
       </View>
       <Text style={s.sectionNote}>
-        The board appears in their own vault. Nothing to send, nothing to leak — their access is their login.
+        {subject.kind === 'folder'
+          ? 'The folder appears in their own Files, with the folders inside it. Nothing to send, nothing to leak — their access is their login.'
+          : 'The board appears in their own vault. Nothing to send, nothing to leak — their access is their login.'}
       </Text>
 
       {!!error && (
@@ -228,12 +264,12 @@ function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
                   <Text style={s.personMeta}>Can view</Text>
                 </View>
                 <Pressable
-                  testID={`album-access-remove-${person.userId}`}
+                  testID={`pond-access-remove-${person.userId}`}
                   onPress={() => revoke(person)}
                   disabled={busyId === person.userId}
                   hitSlop={10}
                   accessibilityRole="button"
-                  accessibilityLabel={`Stop sharing ${albumName} with ${person.name}`}
+                  accessibilityLabel={`Stop sharing ${label} with ${person.name}`}
                   style={s.removeBtn}
                 >
                   <Text style={s.removeText}>Remove</Text>
@@ -247,17 +283,17 @@ function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
               of everyone else would bury it. */}
           {picking ? (
             addable.length === 0 ? (
-              <Text style={s.empty}>Everyone in your pond already has this board.</Text>
+              <Text style={s.empty}>Everyone in your pond already has this {noun}.</Text>
             ) : (
               <View style={s.pickList}>
                 {addable.map((member) => (
                   <Pressable
                     key={member.id}
-                    testID={`album-access-add-${member.id}`}
+                    testID={`pond-access-add-${member.id}`}
                     onPress={() => grant(member)}
                     disabled={!!busyId}
                     accessibilityRole="button"
-                    accessibilityLabel={`Share ${albumName} with ${member.name}`}
+                    accessibilityLabel={`Share ${label} with ${member.name}`}
                     style={({ pressed }) => [s.pickRow, pressed && { opacity: 0.6 }]}
                   >
                     <PersonDisc person={{ ...member, userId: member.id }} size={24} baseUrl={baseUrl} />
@@ -271,10 +307,10 @@ function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
             )
           ) : (
             <Pressable
-              testID="album-access-open-picker"
+              testID="pond-access-open-picker"
               onPress={() => { tapHaptic(); setPicking(true); }}
               accessibilityRole="button"
-              accessibilityLabel={`Share ${albumName} with someone in your pond`}
+              accessibilityLabel={`Share ${label} with someone in your pond`}
               style={s.addBtn}
             >
               <MaterialCommunityIcons name="account-plus-outline" size={15} color={theme.colors.textPrimary} />
@@ -287,7 +323,16 @@ function PondAccess({ albumName, api, theme, styles: s, baseUrl, onChanged }) {
   );
 }
 
-export default function AlbumShareSheet({ visible, albumName, api, theme, onClose, bottomInset = 0, baseUrl }) {
+export default function VaultShareSheet({ visible, subject, api, theme, onClose, bottomInset = 0, baseUrl }) {
+  const label = subject?.name || '';
+  const noun = nounOf(subject);
+  // PRIMITIVES, and every effect and callback below keys on these rather than
+  // on `subject`. Callers build the object inline (`subject={{ kind: 'album',
+  // … }}`), so its identity changes on every render of the screen behind this
+  // sheet — a dependency on the object itself would re-create `load`, re-fire
+  // the effect, set state, and fetch the link list in a loop forever.
+  const subjectKind = subject?.kind || 'album';
+  const subjectId = subject?.id || '';
   const insets = useSafeAreaInsets();
   // Clearance the card rests on: the floating dock when there is one, the
   // home-indicator inset when there isn't (share target / chat's vault page).
@@ -317,12 +362,26 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
   const [allowUpload, setAllowUpload] = useState(false);
   // Which link has its visit log expanded (null = none).
   const [openActivity, setOpenActivity] = useState(null);
+  // This pond's server predates folder links (see `load`). Never true for a
+  // board — every version of that route has understood it.
+  const [unsupported, setUnsupported] = useState(false);
 
   const load = useCallback(async () => {
-    if (!albumName) return;
+    if (!subjectId) return;
     setLoading(true);
     try {
-      const res = await api.get(`/album-shares?album=${encodeURIComponent(albumName)}`);
+      const res = await api.get(linksQuery({ kind: subjectKind, id: subjectId }));
+      // `filteredBy` is CHECKED, not decorative. A pond whose server predates
+      // folder links ignores ?folderId= and answers with EVERY link its owner
+      // has — listing unrelated boards' links as this folder's, each with a
+      // Turn off button. Refuse that answer and say so.
+      if (subjectKind === 'folder' && (res?.filteredBy ?? null) !== 'folderId') {
+        setUnsupported(true);
+        setShares([]);
+        setError(null);
+        return;
+      }
+      setUnsupported(false);
       setShares(res?.shares || []);
       setError(null);
     } catch (e) {
@@ -330,7 +389,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
     } finally {
       setLoading(false);
     }
-  }, [albumName, api]);
+  }, [subjectKind, subjectId, api]);
 
   useEffect(() => {
     if (!visible) return;
@@ -354,7 +413,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
     setError(null);
     try {
       const res = await api.post('/album-shares', {
-        album: albumName,
+        ...mintField({ kind: subjectKind, id: subjectId }),
         password: usePassword ? password : undefined,
         allowDownload,
         allowUpload,
@@ -372,7 +431,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
     } finally {
       setBusy(false);
     }
-  }, [albumName, allowDownload, allowUpload, api, password, usePassword]);
+  }, [subjectKind, subjectId, allowDownload, allowUpload, api, password, usePassword]);
 
   // Flip visitor uploads on an EXISTING link. Optimistic with revert — the
   // switch answers the finger now, the PATCH follows, and a failure puts the
@@ -414,7 +473,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
     // The one destructive action: it kills the link for everyone holding it.
     Alert.alert(
       'Turn off this link?',
-      `Anyone who already has it will immediately lose access to “${albumName}”.`,
+      `Anyone who already has it will immediately lose access to “${label}”.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -441,7 +500,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
         },
       ],
     );
-  }, [albumName, api]);
+  }, [label, api]);
 
   if (!visible) return null;
   const s = makeStyles(theme);
@@ -460,9 +519,9 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
         <View style={s.grabber} />
         <View style={s.headerRow}>
           <View style={{ flex: 1 }}>
-            <Text style={s.title} numberOfLines={1}>Sharing “{albumName}”</Text>
+            <Text style={s.title} numberOfLines={1}>Sharing “{label}”</Text>
             <Text style={s.subtitle}>
-              Everything about who can see this board, in one place.
+              Everything about who can see this {noun}, in one place.
             </Text>
           </View>
           <Pressable onPress={onClose} hitSlop={10} style={s.closeBtn}>
@@ -487,7 +546,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
               board menu's Share entry both land here, so the settings are not
               split across two entry points that drift apart. */}
           <PondAccess
-            albumName={albumName}
+            subject={subject}
             api={api}
             theme={theme}
             styles={s}
@@ -499,9 +558,19 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
             <Text style={s.sectionTitle}>PUBLIC LINK</Text>
           </View>
           <Text style={s.sectionNote}>
-            Anyone with the link can view this board in a browser — no account needed.
+            {subject.kind === 'folder'
+              ? 'Anyone with the link can browse this folder and the folders inside it, in a browser — no account needed.'
+              : 'Anyone with the link can view this board in a browser — no account needed.'}
           </Text>
-          {loading ? (
+          {/* A pond that cannot answer "which links does this folder have" also
+              cannot mint one, so the whole link half stands down rather than
+              offering a button that fails. */}
+          {unsupported ? (
+            <Text style={s.empty} testID="links-unsupported">
+              This pond’s server cannot make a link for a folder yet — it only knows how to share
+              boards. Share it with someone in your pond above, or update the server.
+            </Text>
+          ) : loading ? (
             <ActivityIndicator style={{ marginVertical: 22 }} color={theme.colors.textSecondary} />
           ) : shares.length === 0 ? (
             <Text style={s.empty}>No links yet.</Text>
@@ -589,6 +658,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
           )}
 
           {/* ── new link ─────────────────────────────────────────────── */}
+          {!unsupported && (
           <View style={s.newBlock}>
             <Text style={s.sectionLabel}>NEW LINK</Text>
 
@@ -623,7 +693,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
 
             <View style={s.optionRow}>
               <View style={{ flex: 1, paddingRight: 12 }}>
-                <Text style={[s.optionText, { flex: 0 }]}>Let visitors add to this album</Text>
+                <Text style={[s.optionText, { flex: 0 }]}>Let visitors add to this {noun}</Text>
                 <Text style={s.optionHint}>
                   Anyone with the link can upload photos, videos, audio and PDFs. Files are verified and rate-limited by the server.
                 </Text>
@@ -642,6 +712,7 @@ export default function AlbumShareSheet({ visible, albumName, api, theme, onClos
               <Text style={s.createText}>Create link</Text>
             </Pressable>
           </View>
+          )}
         </ScrollView>
         </Animated.View>
       </Reanimated.View>

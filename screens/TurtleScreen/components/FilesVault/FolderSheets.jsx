@@ -134,7 +134,7 @@ export function FilesSortSheet({ sort, order, query, onChange, onClose, theme, b
   );
 }
 
-export function FolderActionsSheet({ folder, onRename, onMove, onDelete, onClose, theme, bottomInset = 0 }) {
+export function FolderActionsSheet({ folder, onShare, onRename, onMove, onDelete, onClose, theme, bottomInset = 0 }) {
   const c = theme.colors;
   const danger = c.accentError || '#e5484d';
   const row = (icon, label, onPress, isDanger) => (
@@ -144,7 +144,13 @@ export function FolderActionsSheet({ folder, onRename, onMove, onDelete, onClose
     </Pressable>
   );
   return (
-    <ViewerSheet title={folder?.name || 'Folder'} onClose={onClose} theme={theme} bottomInset={bottomInset} collapsedRatio={0.34} testID="folder-actions-sheet">
+    // 0.42, not 0.34: a fourth row at 0.34 sat half under the fold, which on
+    // this sheet reads as "there are three things you can do".
+    <ViewerSheet title={folder?.name || 'Folder'} onClose={onClose} theme={theme} bottomInset={bottomInset} collapsedRatio={0.42} testID="folder-actions-sheet">
+      {/* First, because it is the only one of these that involves anybody
+          else — and because the folders inside come with it, which the sheet
+          it opens says out loud. */}
+      {row('share-variant-outline', 'Share folder…', onShare)}
       {row('pencil-outline', 'Rename folder', onRename)}
       {row('folder-move-outline', 'Move folder', onMove)}
       {row('trash-can-outline', 'Delete folder', onDelete, true)}
