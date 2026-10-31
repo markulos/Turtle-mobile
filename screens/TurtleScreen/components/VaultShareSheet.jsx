@@ -205,6 +205,7 @@ function PondAccess({ subject, api, theme, styles: s, baseUrl, onChanged }) {
   // track sheet holds the same conversation and must not drift from this one.
   const {
     people, addable, loading, busyId, error, setError, grant: grantAccess, revoke: revokeAccess,
+    setPermission, canSetPermission,
   } = usePondAccess(api, { kind: subject.kind, id: subject.id, enabled: !!subject.id, onChanged });
   const [picking, setPicking] = useState(false);
 
@@ -215,6 +216,35 @@ function PondAccess({ subject, api, theme, styles: s, baseUrl, onChanged }) {
     impactHaptic('medium');
     notifyHaptic(await grantAccess(member) ? 'success' : 'error');
   }, [grantAccess]);
+
+  /**
+   * Flip one person between view and edit.
+   *
+   * Confirmed in both directions, and the copy spells out the verbs rather than
+   * saying "edit": handing somebody the ability to take your files out of a
+   * folder is not a thing to discover afterwards. Going back to view is
+   * confirmed too, because it takes something away from a person who may be
+   * halfway through using it.
+   */
+  const changePermission = useCallback((person) => {
+    const toEdit = person.permission !== 'edit';
+    Alert.alert(
+      toEdit ? `Let ${person.name} edit “${label}”?` : `Make it view only for ${person.name}?`,
+      toEdit
+        ? 'They will be able to add files, take files out, rename folders and make new ones. They still cannot delete the folder or pass it on.'
+        : 'They keep seeing the folder, but can no longer change anything in it. Files they already added stay where they are.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: toEdit ? 'Allow editing' : 'View only',
+          onPress: async () => {
+            impactHaptic('medium');
+            notifyHaptic(await setPermission(person, toEdit ? 'edit' : 'view') ? 'success' : 'error');
+          },
+        },
+      ],
+    );
+  }, [label, setPermission]);
 
   const revoke = useCallback((person) => {
     Alert.alert(
@@ -239,7 +269,7 @@ function PondAccess({ subject, api, theme, styles: s, baseUrl, onChanged }) {
       </View>
       <Text style={s.sectionNote}>
         {subject.kind === 'folder'
-          ? 'The folder appears in their own Files, with the folders inside it. Nothing to send, nothing to leak — their access is their login.'
+          ? 'The folder appears in their own Files, with the folders inside it. New shares are view only — tap a name to let them add files, take files out, rename folders and make new ones. Nobody you share with can delete the folder or pass it on.'
           : 'The board appears in their own vault. Nothing to send, nothing to leak — their access is their login.'}
       </Text>
 
@@ -261,7 +291,27 @@ function PondAccess({ subject, api, theme, styles: s, baseUrl, onChanged }) {
                 <PersonDisc person={person} baseUrl={baseUrl} />
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={s.personName} numberOfLines={1}>{person.name}</Text>
-                  <Text style={s.personMeta}>Can view</Text>
+                  {/* Tappable only where the pond will honour a change: a
+                      board's grant has no permission to set, so there it stays
+                      the plain line it always was. */}
+                  {canSetPermission ? (
+                    <Pressable
+                      testID={`pond-access-permission-${person.userId}`}
+                      onPress={() => { tapHaptic(); changePermission(person); }}
+                      disabled={busyId === person.userId}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityLabel={person.permission === 'edit'
+                        ? `${person.name} can edit ${label} — change to view only`
+                        : `${person.name} can view ${label} — allow editing`}
+                    >
+                      <Text style={[s.personMeta, person.permission === 'edit' && s.personMetaOn]}>
+                        {person.permission === 'edit' ? 'Can edit · tap to change' : 'Can view · tap to change'}
+                      </Text>
+                    </Pressable>
+                  ) : (
+                    <Text style={s.personMeta}>Can view</Text>
+                  )}
                 </View>
                 <Pressable
                   testID={`pond-access-remove-${person.userId}`}
@@ -768,6 +818,9 @@ const makeStyles = (theme) => StyleSheet.create({
   personRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 7 },
   personName: { fontSize: 14, fontWeight: '600', color: theme.colors.textPrimary },
   personMeta: { fontSize: 11.5, color: theme.colors.textTertiary, marginTop: 1 },
+  // Edit is the louder of the two states on purpose: it is the one worth
+  // noticing when you scan the roster.
+  personMetaOn: { color: theme.colors.accentPrimary, fontWeight: '600' },
   removeBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: theme.colors.surfaceHighlight },
   removeText: { fontSize: 12, fontWeight: '600', color: theme.colors.textSecondary },
   addBtn: {

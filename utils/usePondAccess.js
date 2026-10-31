@@ -18,6 +18,11 @@
  *     paid for and the row should go the instant you say so.
  *   · `addable` excludes whoever already has it. /friends already excludes me,
  *     so there is no self to filter.
+ *   · A FOLDER's grant can carry 'edit'; a board's and a track's cannot. That
+ *     is a server fact (PERMISSIONS in routes/folderAccess.js vs
+ *     routes/albumAccess.js), so `canSetPermission` is reported from here
+ *     rather than each caller guessing — a toggle on a board would be a
+ *     control for a request the pond has no route for.
  *
  * The two endpoint families are the same shape by design (see
  * server/routes/albumAccess.js), so the only thing a caller varies is the noun.
@@ -115,7 +120,51 @@ export function usePondAccess(api, { kind = 'album', id, enabled = true, onChang
     }
   }, [api, onChanged, paths.revoke, people]);
 
-  return { people, members, addable, loading, busyId, error, setError, grant, revoke };
+  /**
+   * Move somebody between 'view' and 'edit' on a folder.
+   *
+   * Not optimistic: unlike a revoke, nothing has been confirmed and the only
+   * honest thing to show is what the server says the roster now is. A pond
+   * whose server predates the route answers 404 with no `error` of its own,
+   * which is the one case worth its own sentence — a toggle that silently does
+   * nothing is worse than one that says why.
+   */
+  const setPermission = useCallback(async (person, permission) => {
+    setBusyId(person.userId);
+    setError(null);
+    try {
+      const res = await api.patch(`${paths.revoke}/${person.shareId}`, { permission });
+      if (!res?.success) {
+        throw new Error(res?.error || res?.message || 'Could not change that');
+      }
+      setPeople(res.people || []);
+      onChanged?.();
+      return true;
+    } catch (e) {
+      const msg = e?.message || '';
+      setError(/\b404\b/.test(msg) || /Cannot PATCH/i.test(msg)
+        ? 'This pond’s server cannot change a folder’s permission yet.'
+        : (msg || 'Could not change that'));
+      return false;
+    } finally {
+      setBusyId(null);
+    }
+  }, [api, onChanged, paths.revoke]);
+
+  return {
+    people,
+    members,
+    addable,
+    loading,
+    busyId,
+    error,
+    setError,
+    grant,
+    revoke,
+    setPermission,
+    // Only a folder share carries a permission the pond will honour.
+    canSetPermission: kind === 'folder',
+  };
 }
 
 export default usePondAccess;

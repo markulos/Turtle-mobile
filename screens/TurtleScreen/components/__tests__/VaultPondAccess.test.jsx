@@ -271,3 +271,129 @@ describe('a folder’s sharing', () => {
     expect(view.queryByTestId('links-unsupported')).toBeNull();
   });
 });
+
+/**
+ * View vs edit, which only a FOLDER has.
+ *
+ * The pond will honour a permission on a folder share and not on a board's
+ * (PERMISSIONS in server/routes/folderAccess.js vs routes/albumAccess.js), so
+ * the control has to be absent on a board rather than present and futile.
+ */
+describe('a folder’s permission', () => {
+  /** Press through the confirm Alert the toggle raises. */
+  const confirm = (label) => {
+    const call = Alert.alert.mock.calls.at(-1);
+    if (!call) throw new Error('no Alert was raised');
+    const button = (call[2] || []).find((b) => b.text === label);
+    if (!button) throw new Error(`no “${label}” button on the Alert`);
+    return button.onPress();
+  };
+
+  beforeEach(() => { jest.spyOn(Alert, 'alert').mockImplementation(() => {}); });
+  afterEach(() => { Alert.alert.mockRestore?.(); });
+
+  test('a folder row says what the person has and invites a change', async () => {
+    const api = makeApi();
+    const view = await openFolder(api);
+    await waitFor(() => expect(view.getByText('Bea')).toBeTruthy());
+    expect(view.getByText('Can view · tap to change')).toBeTruthy();
+    expect(view.getByTestId('pond-access-permission-u_bea')).toBeTruthy();
+  });
+
+  test('a board row does not, because the pond would ignore it', async () => {
+    const api = makeApi();
+    const view = await open(api);
+    await waitFor(() => expect(view.getByText('Bea')).toBeTruthy());
+    expect(view.queryByTestId('pond-access-permission-u_bea')).toBeNull();
+    expect(view.getByText('Can view')).toBeTruthy();
+  });
+
+  test('allowing edit PATCHes the share row and redraws from the answer', async () => {
+    const api = makeApi({
+      patch: jest.fn(async () => ({
+        success: true,
+        people: [{ ...BEA, permission: 'edit' }],
+      })),
+    });
+    const view = await openFolder(api);
+    await waitFor(() => expect(view.getByTestId('pond-access-permission-u_bea')).toBeTruthy());
+    fireEvent.press(view.getByTestId('pond-access-permission-u_bea'));
+
+    // Spelled out in verbs: handing somebody the ability to take your files
+    // out of a folder is not a thing to discover afterwards.
+    const [title, body] = Alert.alert.mock.calls.at(-1);
+    expect(title).toContain('Let Bea edit');
+    expect(body).toContain('take files out');
+    expect(body).toContain('cannot delete the folder');
+
+    await confirm('Allow editing');
+    expect(api.patch).toHaveBeenCalledWith('/folder-access/share_bea', { permission: 'edit' });
+    await waitFor(() => expect(view.getByText('Can edit · tap to change')).toBeTruthy());
+  });
+
+  test('going back to view is confirmed too, and says what it takes away', async () => {
+    const api = makeApi({
+      get: jest.fn(async (path) => {
+        if (path.startsWith('/folder-access?')) {
+          return { success: true, folderId: 'fld_trip', name: 'Trip', people: [{ ...BEA, permission: 'edit' }] };
+        }
+        if (path === '/friends') return { success: true, friends: [] };
+        if (path.startsWith('/album-shares')) return { success: true, filteredBy: 'folderId', shares: [] };
+        return {};
+      }),
+      patch: jest.fn(async () => ({ success: true, people: [BEA] })),
+    });
+    const view = await openFolder(api);
+    await waitFor(() => expect(view.getByText('Can edit · tap to change')).toBeTruthy());
+    fireEvent.press(view.getByTestId('pond-access-permission-u_bea'));
+
+    const [title, body] = Alert.alert.mock.calls.at(-1);
+    expect(title).toContain('view only');
+    expect(body).toContain('Files they already added stay where they are');
+
+    await confirm('View only');
+    expect(api.patch).toHaveBeenCalledWith('/folder-access/share_bea', { permission: 'view' });
+    await waitFor(() => expect(view.getByText('Can view · tap to change')).toBeTruthy());
+  });
+
+  test('cancelling changes nothing', async () => {
+    const api = makeApi();
+    const view = await openFolder(api);
+    await waitFor(() => expect(view.getByTestId('pond-access-permission-u_bea')).toBeTruthy());
+    fireEvent.press(view.getByTestId('pond-access-permission-u_bea'));
+
+    expect((Alert.alert.mock.calls.at(-1)[2] || []).some((b) => b.style === 'cancel')).toBe(true);
+    expect(api.patch).not.toHaveBeenCalled();
+  });
+
+  /** The OTA can land before the server does. A silent no-op is the worst case. */
+  test('a pond whose server cannot do it yet says so', async () => {
+    const api = makeApi({
+      patch: jest.fn(async () => { throw new Error('API Error: 404'); }),
+    });
+    const view = await openFolder(api);
+    await waitFor(() => expect(view.getByTestId('pond-access-permission-u_bea')).toBeTruthy());
+    fireEvent.press(view.getByTestId('pond-access-permission-u_bea'));
+    await confirm('Allow editing');
+
+    await waitFor(() => expect(
+      view.getByText('This pond’s server cannot change a folder’s permission yet.'),
+    ).toBeTruthy());
+    // And the row still reads what is actually true.
+    expect(view.getByText('Can view · tap to change')).toBeTruthy();
+  });
+
+  /** A new grant must never start at edit — that is always a deliberate choice. */
+  test('a fresh grant is still view', async () => {
+    const api = makeApi();
+    const view = await openFolder(api);
+    await waitFor(() => expect(view.getByTestId('pond-access-open-picker')).toBeTruthy());
+    fireEvent.press(view.getByTestId('pond-access-open-picker'));
+    await waitFor(() => expect(view.getByTestId('pond-access-add-u_cal')).toBeTruthy());
+    fireEvent.press(view.getByTestId('pond-access-add-u_cal'));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    const [, body] = api.post.mock.calls.at(-1);
+    expect(body.permission).toBeUndefined();
+  });
+});
