@@ -4637,8 +4637,16 @@ const createStyles = (theme) => StyleSheet.create({
   // track with 8 under it, a 3pt bar with 2pt caps, and 15pt labels at 700 /
   // 500. Copied rather than approximated — two tab bars that are ALMOST the
   // same is worse than two that are obviously different.
+  // IT CARRIES NO FILL OF ITS OWN. `colors.background` is true black, and the
+  // page is not: the wash over it (backgroundGradient, on screenFrame) lifts it
+  // to a slightly cool off-black. So a header painting the raw token was the one
+  // true-black band on a page that is not true black — which is what read as a
+  // seam where it met the calendar, and again under the clock. Transparent, it
+  // takes the wash with everything else and the whole top is one colour. The
+  // header is in normal flow, not over the pager, so there is nothing it needs
+  // to hide behind an opaque fill.
   headerChrome: {
-    backgroundColor: theme.colors.background,
+    backgroundColor: 'transparent',
   },
   // The groove under the header. Its own element rather than the chrome's
   // border, because it is TWO hairlines — see `insetRule`: a shadow line with a
