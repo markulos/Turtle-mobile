@@ -3499,10 +3499,20 @@ export default function TasksScreen() {
           header's search, in its ASSIGN mode: the header's focus search starts
           a block on what you pick, this one only says what the next one will be
           about — you still press Start session. Two entry points, two verbs,
-          and each says which it is on its own field. */}
+          and each says which it is on its own field.
+
+          FULL SCREEN, like the board picker and like the day's own task finder
+          (TaskFinderOverlay), for that finder's reason rather than the board
+          picker's: this is a thing you TYPE INTO, so the field belongs at the
+          top of the screen and everything from there down to the keyboard
+          should be the answer. As the in-tree overlay it started below the
+          Planner's chrome and then cleared the hood again on its own account,
+          which spent most of a screen before the first row — with the keyboard
+          up that left about four. */}
       <PlannerSearchPanel
         visible={focusPickOpen}
         mode="assign"
+        fullScreen
         query={focusPickQuery}
         onQueryChange={setFocusPickQuery}
         onClose={() => setFocusPickOpen(false)}
