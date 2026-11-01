@@ -160,6 +160,18 @@ export const RULE_HIGHLIGHT = 'rgba(255, 255, 255, 0.92)';
 export const RULE_SHADOW = 'rgba(0, 0, 0, 0.13)';
 
 /**
+ * The single hairline a dark page separates with.
+ *
+ * `borderNeutral` is the theme's own subtle white, handed over untinted by
+ * ThemeContext; `border` is that same token after the accent wash. Falling back
+ * to `border` keeps a hand-built theme (and the frosted sheet's own palette,
+ * which builds from DARK_THEME directly) working rather than drawing nothing.
+ */
+function darkHairline(theme) {
+  return theme.colors.borderNeutral || theme.colors.border;
+}
+
+/**
  * insetRule — a separator that reads as a GROOVE rather than a drawn line.
  *
  * Two hairlines, not one: a shadow line with a highlight directly beneath it.
@@ -177,6 +189,14 @@ export const RULE_SHADOW = 'rgba(0, 0, 0, 0.13)';
  * a white highlight on a black page is not a groove, it is a white line. Spread
  * this unconditionally — the dark theme takes the plain separator it always had.
  *
+ * And `borderNeutral` is how it still gets a PLAIN one. `colors.border` is no
+ * longer the dark theme's own subtle white: ThemeContext washes it with the
+ * chosen accent so every outline in the app carries it. On an off-white page
+ * that wash is a tint; on pure black an accent at 0.22 is a warm brown line,
+ * which is a coloured border rather than "the accent is in the room" — the one
+ * thing the wash is documented not to be. So the groove asks for the untinted
+ * token and the rest of the app keeps the accent.
+ *
  * SPREAD ONTO A VIEW OF ITS OWN, never onto a container. The two borders are
  * the whole element — a View with no children is already exactly their height —
  * and on a container they would draw a line across its TOP as well, because
@@ -190,7 +210,7 @@ export const RULE_SHADOW = 'rgba(0, 0, 0, 0.13)';
 export function insetRule(theme) {
   const hairline = RULE_W;
   if (theme?.mode === 'dark') {
-    return { borderBottomWidth: hairline, borderBottomColor: theme.colors.border };
+    return { borderBottomWidth: hairline, borderBottomColor: darkHairline(theme) };
   }
   return {
     // The score itself, a touch stronger than the theme's plain border — it has
@@ -225,7 +245,7 @@ export function insetRule(theme) {
 export function ridgeRule(theme) {
   const hairline = RULE_W;
   if (theme?.mode === 'dark') {
-    return { borderBottomWidth: hairline, borderBottomColor: theme.colors.border };
+    return { borderBottomWidth: hairline, borderBottomColor: darkHairline(theme) };
   }
   return {
     // The light on the crest.

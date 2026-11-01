@@ -117,6 +117,36 @@ describe('insetRule', () => {
   test('a missing theme degrades to the plain line rather than throwing', () => {
     expect(() => insetRule(undefined)).not.toThrow();
   });
+
+  /**
+   * THE GROOVE DOES NOT TAKE THE ACCENT, and this is what keeps it that way.
+   *
+   * ThemeContext washes `colors.border` with the chosen accent so every outline
+   * in the app carries it. That is right for an outline and wrong for this one
+   * line: on the off-white page the wash is a tint, but on pure black an accent
+   * at 0.22 is a warm brown hairline under the header — a coloured border,
+   * which is the one thing the wash is documented not to be. It shipped that
+   * way once because this branch asked for `border` and the meaning of `border`
+   * changed underneath it; nothing failed when it did.
+   */
+  const washed = {
+    mode: 'dark',
+    colors: {
+      border: 'rgba(255, 159, 10, 0.22)',       // the accent wash
+      borderNeutral: 'rgba(255, 255, 255, 0.08)', // what the groove must use
+    },
+  };
+
+  test('a dark groove uses the UNTINTED token, not the accent-washed border', () => {
+    expect(insetRule(washed).borderBottomColor).toBe(washed.colors.borderNeutral);
+    expect(ridgeRule(washed).borderBottomColor).toBe(washed.colors.borderNeutral);
+  });
+
+  test('and falls back to border, so a hand-built dark palette still draws', () => {
+    // The frosted Task Schedule sheet builds its own palette from DARK_THEME
+    // and never goes through the accent fold, so it has no borderNeutral.
+    expect(insetRule(dark).borderBottomColor).toBe(dark.colors.border);
+  });
 });
 
 /**

@@ -3172,19 +3172,24 @@ export default function TasksScreen() {
         stop, and what it hosts clears the hood with panelTopInset like every
         other full-screen surface. */}
     <View style={styles.screenFrame}>
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* No notch strip and no screen-level StatusBar here any more. Both
-          existed for one case — the planner covering the whole screen, safe
-          area included, so the band at the top had to follow the sheet's colour
-          and the clock had to go light with it. The header stays up now and the
-          planner stops below it, so the safe area is only ever the page's own
-          colour and App.js's StatusBar is already right. */}
       {/* Whisper-faint gradient wash — barely-there white with a
           breath of cool blue at the top, fading to nothing. Reads as
           a soft halo / atmospheric depth cue rather than a visible
           gradient. Alpha values are intentionally tiny (0.06 → 0)
           so the underlying theme background stays dominant; the
-          gradient is just the lightest hint of warmth over the dark. */}
+          gradient is just the lightest hint of warmth over the dark.
+
+          IT LIVES ON THE UNPADDED FRAME, and the page's colour with it.
+          An absolute fill is inset by its parent's padding in Yoga (the
+          divergence from the web that the note above says has cost this app
+          the same bug twice), so as a child of the PADDED container this
+          started at the header's top edge instead of the screen's. The band
+          from the header down carried the wash and the safe-area strip above
+          it did not — on black that is two slightly different blacks with a
+          hard seam under the clock. Out here there is no padding to be inset
+          by, so the wash covers the hood too and the top of the page is one
+          colour. `container` is transparent for the same reason: an opaque
+          fill on it would paint over this. */}
       <LinearGradient
         colors={[
           'rgba(205, 220, 255, 0.07)',  // top-left: faint blue-tinted white
@@ -3197,6 +3202,13 @@ export default function TasksScreen() {
         style={styles.backgroundGradient}
         pointerEvents="none"
       />
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* No notch strip and no screen-level StatusBar here any more. Both
+          existed for one case — the planner covering the whole screen, safe
+          area included, so the band at the top had to follow the sheet's colour
+          and the clock had to go light with it. The header stays up now and the
+          planner stops below it, so the safe area is only ever the page's own
+          colour and App.js's StatusBar is already right. */}
 
       {/* Header — the media vault's, to the point: a large two-weight title,
           then a picker that is just labels with a bar sliding under them. No
@@ -4554,12 +4566,19 @@ const createStyles = (theme) => StyleSheet.create({
   // The outer frame — see the comment at the top of the render. No padding of
   // its own, deliberately: it exists so the portal host has an unambiguous
   // top edge.
+  // The page's colour lives out here, on the frame the safe-area padding is
+  // NOT on, so the one fill covers the hood and the content alike — and the
+  // wash over it (backgroundGradient) covers both too. See the note at the
+  // gradient for why that padding is the whole story.
   screenFrame: {
     flex: 1,
+    backgroundColor: theme.colors.background,
   },
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    // Transparent ON PURPOSE: the frame above holds the colour and the wash,
+    // and an opaque fill here would hide the wash it is stacked over.
+    backgroundColor: 'transparent',
   },
   // Positioned host for the project-picker overlay. flex:1 so it fills the
   // space below the header; overflow:hidden clips the shift layer's bottom

@@ -497,6 +497,12 @@ export const ThemeProvider = ({ children }) => {
       // light backgrounds, where a tint of the same alpha disappears.
       border: withAlpha(accentColor, isDark ? 0.22 : 0.28),
       borderStrong: withAlpha(accentColor, isDark ? 0.4 : 0.45),
+      // The same token BEFORE the wash, for the one line that must not take it:
+      // the groove (`insetRule` / `ridgeRule`). A tint reads as a tint on the
+      // off-white page, but on pure black an accent at 0.22 is a warm brown
+      // hairline — a coloured border, which is what the wash above is expressly
+      // not meant to be. Everything else keeps the accent.
+      borderNeutral: baseTheme.colors.border,
     },
   }), [baseTheme, accentColor, isDark]);
 
