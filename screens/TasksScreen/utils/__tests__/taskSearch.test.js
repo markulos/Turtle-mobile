@@ -103,12 +103,14 @@ describe('an empty field is not an empty answer', () => {
   // A search that answers "nothing" before you type teaches you it is broken.
   // On the Focus tab the whole errand is "pick something to work on", so the
   // useful answer to no query is "here is what is next".
+  // The SCHEDULE shape, which is every scope holding one kind of work. `all`
+  // holds two and is a pile instead — see the describe below.
   test('no query lists what is coming up, soonest first', () => {
     const t = [
       task({ id: 'a', title: 'Later', dueDate: day(9) }),
       task({ id: 'b', title: 'Soon', dueDate: day(1) }),
     ];
-    expect(titles(rank(t, ''))).toEqual(['Soon', 'Later']);
+    expect(titles(rank(t, '', { scope: 'todo' }))).toEqual(['Soon', 'Later']);
   });
 
   test('undated work sits behind dated work — "no date" is not "far away"', () => {
@@ -116,7 +118,74 @@ describe('an empty field is not an empty answer', () => {
       task({ id: 'a', title: 'Someday' }),
       task({ id: 'b', title: 'Friday', dueDate: day(4) }),
     ];
-    expect(titles(rank(t, ''))).toEqual(['Friday', 'Someday']);
+    expect(titles(rank(t, '', { scope: 'todo' }))).toEqual(['Friday', 'Someday']);
+  });
+});
+
+/**
+ * ALL IS A PILE, NOT A SCHEDULE.
+ *
+ * It is the only scope carrying open and finished work at once, and by date the
+ * oldest finished task leads — so the tab that shows everything opened on a wall
+ * of work ticked off months ago, with what you are actually doing below it.
+ */
+describe('the All scope', () => {
+  const pile = [
+    task({ id: 'old-open', title: 'Old open', createdAt: 100, dueDate: day(1) }),
+    task({ id: 'new-open', title: 'New open', createdAt: 900 }),
+    task({ id: 'old-done', title: 'Old done', completed: true, createdAt: 200, dueDate: day(-30) }),
+    task({ id: 'new-done', title: 'New done', completed: true, createdAt: 800 }),
+  ];
+
+  test('open work sits above finished work, whatever the dates say', () => {
+    const out = titles(rank(pile, '', { scope: 'all' }));
+    expect(out.slice(0, 2)).toEqual(['New open', 'Old open']);
+    expect(out.slice(2)).toEqual(['New done', 'Old done']);
+  });
+
+  test('within each half it is newest ADDED first', () => {
+    const t = [
+      task({ id: 'a', title: 'First', createdAt: 100 }),
+      task({ id: 'c', title: 'Third', createdAt: 300 }),
+      task({ id: 'b', title: 'Second', createdAt: 200 }),
+    ];
+    expect(titles(rank(t, '', { scope: 'all' }))).toEqual(['Third', 'Second', 'First']);
+  });
+
+  // createdAt, not taskStamp: ticking a task off is not adding it, and it must
+  // not jump the pile on its way out of the open half.
+  test('finishing a task does not promote it — it only moves it down', () => {
+    const t = [
+      task({ id: 'a', title: 'Added first, done just now', createdAt: 100, completed: true, completedAt: 9999 }),
+      task({ id: 'b', title: 'Added second, still done', createdAt: 200, completed: true, completedAt: 500 }),
+    ];
+    expect(titles(rank(t, '', { scope: 'all' })))
+      .toEqual(['Added second, still done', 'Added first, done just now']);
+  });
+
+  test('an ISO createdAt sorts with the numeric ones rather than falling to the floor', () => {
+    const t = [
+      task({ id: 'a', title: 'Numeric', createdAt: Date.parse('2026-01-01T00:00:00Z') }),
+      task({ id: 'b', title: 'Iso', createdAt: '2026-06-01T00:00:00Z' }),
+    ];
+    expect(titles(rank(t, '', { scope: 'all' }))).toEqual(['Iso', 'Numeric']);
+  });
+
+  test('a task with no createdAt still lands in a stable place', () => {
+    const t = [
+      task({ id: 'b', title: 'Bravo' }),
+      task({ id: 'a', title: 'Alpha' }),
+    ];
+    // Nothing to order them by but the title, and the order must not vary.
+    expect(titles(rank(t, '', { scope: 'all' }))).toEqual(['Alpha', 'Bravo']);
+    expect(titles(rank(t, '', { scope: 'all' }))).toEqual(['Alpha', 'Bravo']);
+  });
+
+  // The other three scopes each hold one kind of work, so "what is next" is
+  // still a question about dates and they keep the schedule shape.
+  test('the single-kind scopes are untouched', () => {
+    const out = titles(rank(pile, '', { scope: 'todo' }));
+    expect(out).toEqual(['Old open', 'New open']);   // dated first, undated behind
   });
 });
 

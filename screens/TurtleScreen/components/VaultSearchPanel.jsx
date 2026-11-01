@@ -186,6 +186,15 @@ export default function VaultSearchPanel({
           // argument to lose, which is the whole reason this is a panel.
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
+          // THE BAR GOES ON THE RIGHT EDGE, pinned rather than inherited. iOS
+          // takes the indicator's insets from the scroll view's content insets
+          // unless it is told otherwise, and inside this panel it was picking
+          // up an inset from somewhere above and drawing the bar partway across
+          // the rows instead of down the edge. `right: 1` is the shape that
+          // actually reaches the edge — a plain 0 is read as "unset" and hands
+          // the question back to the automatic behaviour this is overriding.
+          automaticallyAdjustsScrollIndicatorInsets={false}
+          scrollIndicatorInsets={{ right: 1 }}
           contentContainerStyle={[
             styles.listContent,
             // Ends ABOVE the dock, never behind it (STYLE-RULES §3). Automatic

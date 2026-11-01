@@ -82,6 +82,8 @@ export function indexTask(task) {
     done: isDone(task),
     // Sorted-by-default key: a dated task's day, as a comparable number.
     due: dueMs(task),
+    // What the ALL scope sorts on — when you added it, newest first.
+    created: createdMs(task),
     hay: `${title} ${board} ${tags} ${body}`,
   };
 }
@@ -109,6 +111,23 @@ function dueMs(task) {
   const raw = task?.dueDate || task?.date;
   if (!raw) return 0;
   const parsed = Date.parse(`${String(raw).slice(0, 10)}T00:00:00`);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * When the task was ADDED, as a sortable number; 0 when it is not recorded.
+ *
+ * Deliberately `createdAt` alone and not `taskStamp` (utils/recentFirst), which
+ * is the latest of created/updated/completed. That one answers "what have you
+ * touched lately", which is the right question for ordering BOARDS. This one
+ * answers "what did you add lately", and finishing a task must not shuffle it
+ * back to the top of the pile it just left.
+ */
+function createdMs(task) {
+  const raw = task?.createdAt;
+  if (!raw) return 0;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+  const parsed = Date.parse(String(raw));
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
@@ -173,11 +192,16 @@ export function startOfToday(now = Date.now()) {
 /**
  * Rank an index against a query.
  *
- * WITH NO QUERY this is not empty — it is the tasks you are most likely to want:
- * the soonest dated work first, undated after it. An empty search field that
- * answers "nothing" teaches you the search is broken; one that answers "here is
- * what is next" is useful before you have typed anything, which matters most on
- * the Focus tab, where the whole errand is "pick something to work on".
+ * WITH NO QUERY this is not empty — it is the tasks you are most likely to want.
+ * An empty search field that answers "nothing" teaches you the search is broken;
+ * one that answers "here is what is next" is useful before you have typed
+ * anything, which matters most on the Focus tab, where the whole errand is "pick
+ * something to work on".
+ *
+ * What "most likely to want" means depends on the scope, and the two shapes are
+ * in the no-query branch below: the single-kind scopes are a SCHEDULE (soonest
+ * dated first, undated behind), and `all` is a PILE (open above closed, each
+ * half newest-added first).
  */
 export function rankTasks(index, query, { limit = 50, scope = 'all', now = Date.now() } = {}) {
   const todayMs = startOfToday(now);
@@ -190,16 +214,36 @@ export function rankTasks(index, query, { limit = 50, scope = 'all', now = Date.
 
   const q = buildQuery(query);
   if (q.tokens.length === 0) {
-    // Dated first, soonest to latest; undated behind them, since "no date" is
-    // not "far away", it is "unscheduled".
-    const sorted = pool.slice().sort((a, b) => {
-      if (a.due !== b.due) {
-        if (a.due === 0) return 1;
-        if (b.due === 0) return -1;
-        return a.due - b.due;
-      }
-      return String(a.title).localeCompare(String(b.title));
-    });
+    /**
+     * ALL IS A PILE, NOT A SCHEDULE. It is the only scope holding both open and
+     * finished work, and sorting that by date buries what you are doing under
+     * what you already did: the oldest done task has the earliest date, so it
+     * leads. The tab that shows everything opened on a wall of ticked-off work
+     * from months ago.
+     *
+     * So it reads as a pile instead — open above closed, each half newest-added
+     * first. The other three scopes hold one kind of work each and stay a
+     * schedule, which is the right shape for them: "To do" answers "what is
+     * next", and that is a question about dates.
+     */
+    const sorted = pool.slice().sort(scope === 'all'
+      ? (a, b) => (
+        (a.done === b.done ? 0 : (a.done ? 1 : -1))
+        || (b.created - a.created)
+        // Total order even where nothing recorded a createdAt, so the list
+        // cannot reshuffle between two identical renders.
+        || String(a.title).localeCompare(String(b.title))
+      )
+      // Dated first, soonest to latest; undated behind them, since "no date" is
+      // not "far away", it is "unscheduled".
+      : (a, b) => {
+        if (a.due !== b.due) {
+          if (a.due === 0) return 1;
+          if (b.due === 0) return -1;
+          return a.due - b.due;
+        }
+        return String(a.title).localeCompare(String(b.title));
+      });
     return sorted.slice(0, limit).map((r) => r.task);
   }
 
