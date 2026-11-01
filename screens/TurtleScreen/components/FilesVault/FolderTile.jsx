@@ -38,35 +38,33 @@ export const TILE_SIZE = 72;
 export const TILE_RADIUS = 14;
 
 /**
- * The share badge. A folder you have given someone access to looks exactly like
+ * The share mark. A folder you have given someone access to looks exactly like
  * one you have not, which is the whole problem: the only way to find out was to
- * open the folder's sheet, one folder at a time. A corner mark answers it for
- * the whole grid at a glance.
+ * open the folder's sheet, one folder at a time. This answers it for the whole
+ * grid at a glance.
  *
- * ON THE TILE, not beside the name. The name line already carries the name and
- * wraps to two lines, and the count sits under it — a third element down there
- * would push the grid's rows out of alignment the moment a name wrapped. The
- * tile is a fixed square, so a corner on it costs no layout.
+ * BESIDE THE NAME, and bare — an icon and a number, no pill. It sat in the
+ * tile's corner first, which kept the caption's layout simple but put a chip of
+ * chrome on top of the photographs the tile exists to show. The name line is
+ * where a folder's facts already live (the count is right under it), so the
+ * mark belongs with them and the collage stays a collage.
  *
  * It states the COUNT, not just "shared". "Shared with 3" and "shared with 1"
  * are different facts about a folder, and the number is the one you actually
  * want when you are checking who can see what.
  */
-function ShareBadge({ count, theme, size, testID }) {
-  const c = theme.colors;
+function ShareMark({ count, theme, testID }) {
   return (
     <View
-      // Pinned to the tile's bottom-right: the collage's reading order fills
-      // from the top-left, so the last cell is the one with least in it.
-      style={[styles.badge, { backgroundColor: c.accentInfo, borderColor: c.background }]}
+      style={styles.shareMark}
       testID={testID}
+      // Decorative to a reader: the fact is already in the tile's one label,
+      // and a second stop on it would read the folder's name twice.
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
-      <Icon name="account-multiple" size={Math.round(size * 0.14)} color={c.background} />
-      {count > 1 ? (
-        <Text style={[styles.badgeCount, { color: c.background }]} numberOfLines={1}>{count}</Text>
-      ) : null}
+      <Icon name="account-multiple" size={11} color={theme.colors.accentInfo} />
+      <Text style={[styles.shareCount, { color: theme.colors.accentInfo }]} numberOfLines={1}>{count}</Text>
     </View>
   );
 }
@@ -113,11 +111,17 @@ function FolderTile({ name, covers = [], count = 0, size = TILE_SIZE, base = '',
         testID={testID ? `${testID}-box` : undefined}
       >
         {collage || <Text style={[styles.initial, { color: folderColor(name), fontSize: Math.round(size * 0.42) }]}>{String(name || '?').trim().charAt(0).toUpperCase()}</Text>}
+      </View>
+      {/* The name and, when there is one, who else can see it. A ROW so the
+          mark sits beside the name rather than under it — and the name keeps
+          `flexShrink` so a long one narrows and ellipsizes instead of pushing
+          the mark off the tile (STYLE-RULES §2). */}
+      <View style={styles.nameRow}>
+        <Text style={[styles.name, { color: c.textPrimary }]} numberOfLines={2}>{name}</Text>
         {sharedWith > 0 && (
-          <ShareBadge count={sharedWith} theme={theme} size={size} testID={testID ? `${testID}-shared` : undefined} />
+          <ShareMark count={sharedWith} theme={theme} testID={testID ? `${testID}-shared` : undefined} />
         )}
       </View>
-      <Text style={[styles.name, { color: c.textPrimary }]} numberOfLines={2}>{name}</Text>
       <Text style={[styles.count, { color: c.textMuted }]} numberOfLines={1}>{count}</Text>
     </Pressable>
   );
@@ -129,26 +133,25 @@ const styles = StyleSheet.create({
   // are a hard-edged square sitting inside a rounded one.
   tile: { borderRadius: TILE_RADIUS, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth },
   abs: { position: 'absolute' },
-  // Bottom-right of the tile, with a ring of the page colour around it so it
-  // reads as sitting ON the collage rather than as part of whatever photograph
-  // happens to be in that corner.
-  badge: {
-    position: 'absolute',
-    right: 3,
-    bottom: 3,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 1.5,
-    paddingHorizontal: 3,
+  initial: { fontWeight: '700' },
+  // The caption's first line: the name, and the share mark when there is one.
+  // Centred as a pair, so an unshared folder's name sits exactly where it
+  // always did and a shared one's shifts by half the mark rather than all of it.
+  nameRow: {
+    marginTop: 6,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 1,
+    gap: 3,
+    alignSelf: 'stretch',
+    paddingHorizontal: 2,
   },
-  badgeCount: { fontSize: 9.5, fontWeight: '700' },
-  initial: { fontWeight: '700' },
-  name: { marginTop: 6, fontSize: 12.5, fontWeight: '600', textAlign: 'center', flexShrink: 1 },
+  // Bare: an icon and a number, no chip. It reads as part of the caption,
+  // which is what it is.
+  shareMark: { flexDirection: 'row', alignItems: 'center', gap: 1 },
+  shareCount: { fontSize: 11, fontWeight: '700' },
+  // `marginTop` moved to the row above — the name no longer owns the gap.
+  name: { fontSize: 12.5, fontWeight: '600', textAlign: 'center', flexShrink: 1 },
   count: { fontSize: 11, marginTop: 1, flexShrink: 1 },
 });
 

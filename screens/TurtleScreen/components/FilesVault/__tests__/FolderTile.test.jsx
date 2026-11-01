@@ -96,9 +96,22 @@ describe('FolderTile share badge', () => {
     expect(getByText('3', hidden)).toBeTruthy();
   });
 
-  it('shows no "1" — the icon alone already says one person', async () => {
-    const { queryByText } = await render(tile({ sharedWith: 1 }));
-    expect(queryByText('1', { includeHiddenElements: true })).toBeNull();
+  it('shows the number even at one — the mark is an icon AND a count', async () => {
+    const { getByText } = await render(tile({ sharedWith: 1 }));
+    expect(getByText('1', hidden)).toBeTruthy();
+  });
+
+  // It lives in the caption now, not on the collage. The tile exists to show
+  // the photographs in the folder, and a chip of chrome sat on top of them.
+  it('sits beside the name, not over the covers', async () => {
+    const { getByText, getByTestId } = await render(tile({ sharedWith: 2 }));
+    const row = getByText('Taxes').parent;
+    const mark = getByTestId('tile-shared', hidden);
+    // Same parent row as the name — if it drifts back onto the tile box this
+    // is what notices.
+    expect(row).toBeTruthy();
+    expect(mark).toBeTruthy();
+    expect(getByTestId('tile-box', hidden).children).not.toContain(mark);
   });
 
   it('says who can see it in the label, not as a second stop for a reader', async () => {
