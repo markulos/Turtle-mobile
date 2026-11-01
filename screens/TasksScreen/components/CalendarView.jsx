@@ -52,6 +52,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import { formatDueDate, isOverdue, itemTypeOf, itemColorOf, itemIconOf, taskPassesFilters, matchesRecurrence, isOccurrenceCompleted, parseLocalYMD, boardLabel } from '../utils/taskHelpers';
 import { monthLayout } from '../utils/monthLayout';
 import { topFadeStops } from '../utils/topFadeStops';
+import { pageColor } from '../../../utils/pageWash';
 import { LinearGradient } from 'expo-linear-gradient';
 import ScheduleCard, { clockLabel, TIME_COL_W, TIME_LABEL_CENTER_Y } from './ScheduleCard';
 import { buildCompactRows, gapHourMarks, gapKey, gapNowOffset, gapNowSpans, minutesToTimeString } from '../utils/compactSchedule';
@@ -3599,8 +3600,17 @@ export const CalendarView = ({
 
           {/* Top-edge fade over the empty margin above the month.
               White on the light page, near-black on the dark one: it's
-              theme.colors.background either way, so the one gradient covers
-              both modes.
+              `pageColor(theme)` either way, so the one gradient covers both
+              modes.
+
+              NOT `colors.background`, which is what it used to ramp to. That
+              token is pure black in dark mode and the page is not — the wash
+              over it lifts the top of the screen to about #0E0F12 — so this
+              fade went opaque at TRUE black just under the header and sat there
+              as a flat black block on a page of lifted off-black. `pageColor`
+              composites the wash's strongest stop over the background, which is
+              the colour the page actually presents right here, so "full page
+              colour" below means what it says. See utils/pageWash.
 
               The shape is doing two things that pull against each other, and
               topFadeStops is where the arithmetic lives (with its own tests).
@@ -3621,7 +3631,7 @@ export const CalendarView = ({
           {monthTopInset > 0 && (
             <LinearGradient
               pointerEvents="none"
-              colors={topFade.alphas.map((a) => hexToRgba(theme.colors.background, a))}
+              colors={topFade.alphas.map((a) => hexToRgba(pageColor(theme), a))}
               locations={topFade.locations}
               style={[styles.topFade, { height: monthTopInset + TOP_FADE_FEATHER }]}
             />

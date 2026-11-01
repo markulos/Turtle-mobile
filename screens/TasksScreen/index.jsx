@@ -18,6 +18,7 @@ import {
   AppState,
 } from 'react-native';
 import { depth, insetRule } from '../../utils/surfaceDepth';
+import { PAGE_WASH_COLORS, PAGE_WASH_LOCATIONS, PAGE_WASH_START, PAGE_WASH_END } from '../../utils/pageWash';
 import { SCREEN_TITLE, SCREEN_TITLE_ROW_H } from '../../utils/headerType';
 import AppTextInput from '../../components/AppTextInput';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -3191,14 +3192,10 @@ export default function TasksScreen() {
           colour. `container` is transparent for the same reason: an opaque
           fill on it would paint over this. */}
       <LinearGradient
-        colors={[
-          'rgba(205, 220, 255, 0.07)',  // top-left: faint blue-tinted white
-          'rgba(235, 240, 255, 0.025)', // middle: even fainter
-          'rgba(255, 255, 255, 0)',     // bottom-right: dissolved out
-        ]}
-        locations={[0, 0.55, 1]}
-        start={{ x: 0.1, y: 0 }}
-        end={{ x: 0.9, y: 1 }}
+        colors={PAGE_WASH_COLORS}
+        locations={PAGE_WASH_LOCATIONS}
+        start={PAGE_WASH_START}
+        end={PAGE_WASH_END}
         style={styles.backgroundGradient}
         pointerEvents="none"
       />
