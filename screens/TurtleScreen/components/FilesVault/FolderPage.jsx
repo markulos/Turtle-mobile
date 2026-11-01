@@ -14,6 +14,7 @@ import EdgeSwipePage from '../EdgeSwipePage';
 import { ActionButton } from '../../../../components/ActionButton';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../../utils/haptics';
 import useFolderData from './useFolderData';
+import useFolderShares from './useFolderShares';
 import FolderTile from './FolderTile';
 import DocumentRow from './DocumentRow';
 import { FolderNameSheet, FolderPickerSheet, FilesSortSheet, FolderActionsSheet } from './FolderSheets';
@@ -50,6 +51,9 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   const [order, setOrder] = useState('desc');
   const [query, setQuery] = useState('');
   const { data, loading, error, refresh, createFolder, renameFolder, moveFolder, deleteFolder, moveItems, removeItems } = useFolderData(parent, { sort, order });
+  // The same mark the root grid carries, so a folder does not stop looking
+  // shared the moment you step inside the one holding it.
+  const { sharedCount } = useFolderShares();
   const [selected, setSelected] = useState(() => new Set());
   const selectMode = selected.size > 0;
   // null | { kind: 'new'|'rename'|'move-items'|'move-folder'|'sort'|'actions'|'share'|'delete-target', folder?, error? }
@@ -200,6 +204,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
         <View style={styles.discs}>
           {data.folders.map((f) => (
             <FolderTile key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={!!f.pending}
+              sharedWith={sharedCount(f.id)}
               onPress={() => onOpenFolder(f)} onLongPress={() => { impactHaptic('medium'); setSheet({ kind: 'actions', folder: f }); }} testID={`disc-${f.id}`} />
           ))}
         </View>

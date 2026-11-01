@@ -33,6 +33,7 @@ import { useTheme } from '../../../../context/ThemeContext';
 import { useServer } from '../../../../context/ServerContext';
 import { tapHaptic } from '../../../../utils/haptics';
 import useFolderData from './useFolderData';
+import useFolderShares from './useFolderShares';
 import FolderTile, { TILE_RADIUS } from './FolderTile';
 import { folderColor, folderTint, messageOf } from './filesUtils';
 import {
@@ -67,6 +68,9 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
   const insets = useSafeAreaInsets();
   const { api } = useServer();
   const { data, loading, error, refresh, createFolder } = useFolderData('root');
+  // Which of these folders other people can already see. Independent of the
+  // folder fetch on purpose — see useFolderShares on why it fails quietly.
+  const { sharedCount } = useFolderShares();
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState('');
   // A create that the server rejected ("already exists here"), shown under the
@@ -151,7 +155,7 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
   const canCreate = !!displayQuery.trim() && !exact;
 
   const renderTile = (f) => (
-    <FolderTile key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={!!f.pending} onPress={() => push(f.id)} testID={`root-${f.id}`} />
+    <FolderTile key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={!!f.pending} onPress={() => push(f.id)} testID={`root-${f.id}`} sharedWith={sharedCount(f.id)} />
   );
 
   const renderRow = (f) => {

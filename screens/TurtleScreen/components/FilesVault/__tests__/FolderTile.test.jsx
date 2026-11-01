@@ -52,3 +52,67 @@ describe('FolderTile', () => {
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * THE BADGE ANSWERS "WHO ELSE CAN SEE THIS" FOR THE WHOLE GRID.
+ *
+ * Before it, a folder you had given someone access to was indistinguishable
+ * from one you had not — the only way to find out was to open each folder's
+ * sheet in turn. The mark has to be absent by default, though: a badge on
+ * every tile says nothing, and most folders are shared with nobody.
+ */
+describe('FolderTile share badge', () => {
+  const tile = (props) => (
+    <FolderTile name="Taxes" covers={[]} count={0} theme={theme} onPress={() => {}} testID="tile" {...props} />
+  );
+
+  it('draws nothing when the folder is shared with nobody', async () => {
+    const { queryByTestId } = await render(tile({ sharedWith: 0 }));
+    expect(queryByTestId('tile-shared')).toBeNull();
+  });
+
+  it('is absent when nothing was said about sharing at all', async () => {
+    // The share map loads separately from the folders and may not have arrived
+    // — an undefined prop must read as "not shared", never as a badge.
+    const { queryByTestId } = await render(tile({}));
+    expect(queryByTestId('tile-shared')).toBeNull();
+  });
+
+  // `includeHiddenElements` because the badge is deliberately hidden FROM the
+  // accessibility tree — the fact it carries is already in the tile's one
+  // label, and a reader should not stop on it twice. RNTL 14 skips
+  // a11y-hidden nodes by default, so without this the query cannot see a badge
+  // that is on screen. The label assertions below are what prove it is drawn
+  // for a sighted user; these two prove the mark itself exists.
+  const hidden = { includeHiddenElements: true };
+
+  it('marks a folder that someone else can see', async () => {
+    const { getByTestId } = await render(tile({ sharedWith: 1 }));
+    expect(getByTestId('tile-shared', hidden)).toBeTruthy();
+  });
+
+  it('states the count once there is more than one person', async () => {
+    const { getByText } = await render(tile({ sharedWith: 3 }));
+    expect(getByText('3', hidden)).toBeTruthy();
+  });
+
+  it('shows no "1" — the icon alone already says one person', async () => {
+    const { queryByText } = await render(tile({ sharedWith: 1 }));
+    expect(queryByText('1', { includeHiddenElements: true })).toBeNull();
+  });
+
+  it('says who can see it in the label, not as a second stop for a reader', async () => {
+    const { getByLabelText } = await render(tile({ sharedWith: 2 }));
+    expect(getByLabelText('Open folder Taxes. Shared with 2 people.')).toBeTruthy();
+  });
+
+  it('says "person" for one, because "1 people" is how a label reads as a bug', async () => {
+    const { getByLabelText } = await render(tile({ sharedWith: 1 }));
+    expect(getByLabelText('Open folder Taxes. Shared with 1 person.')).toBeTruthy();
+  });
+
+  it('keeps the plain label when nothing is shared', async () => {
+    const { getByLabelText } = await render(tile({ sharedWith: 0 }));
+    expect(getByLabelText('Open folder Taxes')).toBeTruthy();
+  });
+});

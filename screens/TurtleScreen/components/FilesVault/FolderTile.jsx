@@ -16,6 +16,7 @@
 import React, { memo, useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { tapHaptic } from '../../../../utils/haptics';
 import { folderColor, folderTint } from './filesUtils';
 
@@ -36,7 +37,41 @@ export const TILE_SIZE = 72;
  */
 export const TILE_RADIUS = 14;
 
-function FolderTile({ name, covers = [], count = 0, size = TILE_SIZE, base = '', pending = false, onPress, onLongPress, theme, testID }) {
+/**
+ * The share badge. A folder you have given someone access to looks exactly like
+ * one you have not, which is the whole problem: the only way to find out was to
+ * open the folder's sheet, one folder at a time. A corner mark answers it for
+ * the whole grid at a glance.
+ *
+ * ON THE TILE, not beside the name. The name line already carries the name and
+ * wraps to two lines, and the count sits under it — a third element down there
+ * would push the grid's rows out of alignment the moment a name wrapped. The
+ * tile is a fixed square, so a corner on it costs no layout.
+ *
+ * It states the COUNT, not just "shared". "Shared with 3" and "shared with 1"
+ * are different facts about a folder, and the number is the one you actually
+ * want when you are checking who can see what.
+ */
+function ShareBadge({ count, theme, size, testID }) {
+  const c = theme.colors;
+  return (
+    <View
+      // Pinned to the tile's bottom-right: the collage's reading order fills
+      // from the top-left, so the last cell is the one with least in it.
+      style={[styles.badge, { backgroundColor: c.accentInfo, borderColor: c.background }]}
+      testID={testID}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <Icon name="account-multiple" size={Math.round(size * 0.14)} color={c.background} />
+      {count > 1 ? (
+        <Text style={[styles.badgeCount, { color: c.background }]} numberOfLines={1}>{count}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function FolderTile({ name, covers = [], count = 0, size = TILE_SIZE, base = '', pending = false, onPress, onLongPress, theme, testID, sharedWith = 0 }) {
   const [failed, setFailed] = useState(() => new Set());
   const urls = useMemo(
     () => (covers || []).map((t) => (String(t).startsWith('http') ? String(t) : `${String(base).replace(/\/api$/, '')}${t}`)).filter((u) => !failed.has(u)).slice(0, 4),
@@ -62,7 +97,13 @@ function FolderTile({ name, covers = [], count = 0, size = TILE_SIZE, base = '',
       onLongPress={pending ? undefined : onLongPress}
       disabled={pending}
       accessibilityRole="button"
-      accessibilityLabel={`Open folder ${name}`}
+      // The badge is decorative to a screen reader — the fact it carries belongs
+      // in the one label that is already being read, not as a second stop.
+      accessibilityLabel={
+        sharedWith > 0
+          ? `Open folder ${name}. Shared with ${sharedWith} ${sharedWith === 1 ? 'person' : 'people'}.`
+          : `Open folder ${name}`
+      }
       accessibilityState={{ disabled: pending }}
       style={({ pressed }) => [styles.wrap, { width: size + 16, opacity: pressed ? 0.6 : pending ? 0.5 : 1 }]}
       testID={testID}
@@ -72,6 +113,9 @@ function FolderTile({ name, covers = [], count = 0, size = TILE_SIZE, base = '',
         testID={testID ? `${testID}-box` : undefined}
       >
         {collage || <Text style={[styles.initial, { color: folderColor(name), fontSize: Math.round(size * 0.42) }]}>{String(name || '?').trim().charAt(0).toUpperCase()}</Text>}
+        {sharedWith > 0 && (
+          <ShareBadge count={sharedWith} theme={theme} size={size} testID={testID ? `${testID}-shared` : undefined} />
+        )}
       </View>
       <Text style={[styles.name, { color: c.textPrimary }]} numberOfLines={2}>{name}</Text>
       <Text style={[styles.count, { color: c.textMuted }]} numberOfLines={1}>{count}</Text>
@@ -85,6 +129,24 @@ const styles = StyleSheet.create({
   // are a hard-edged square sitting inside a rounded one.
   tile: { borderRadius: TILE_RADIUS, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth },
   abs: { position: 'absolute' },
+  // Bottom-right of the tile, with a ring of the page colour around it so it
+  // reads as sitting ON the collage rather than as part of whatever photograph
+  // happens to be in that corner.
+  badge: {
+    position: 'absolute',
+    right: 3,
+    bottom: 3,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    paddingHorizontal: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 1,
+  },
+  badgeCount: { fontSize: 9.5, fontWeight: '700' },
   initial: { fontWeight: '700' },
   name: { marginTop: 6, fontSize: 12.5, fontWeight: '600', textAlign: 'center', flexShrink: 1 },
   count: { fontSize: 11, marginTop: 1, flexShrink: 1 },
