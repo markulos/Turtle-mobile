@@ -38,6 +38,16 @@ export const TILE_SIZE = 72;
 export const TILE_RADIUS = 14;
 
 /**
+ * The gutter between the cell's edge and the tile's, and so the inset the
+ * caption under it has to carry to line up with the thumbnail.
+ *
+ * Half of the 16 that `wrap` adds to `size` for the grid's breathing room. One
+ * constant because the name line and the count line both need it and a caption
+ * whose two rows disagree by a point is worse than one that is plainly inset.
+ */
+const CAPTION_INSET = 8;
+
+/**
  * The share mark. A folder you have given someone access to looks exactly like
  * one you have not, which is the whole problem: the only way to find out was to
  * open the folder's sheet, one folder at a time. This answers it for the whole
@@ -135,24 +145,38 @@ const styles = StyleSheet.create({
   abs: { position: 'absolute' },
   initial: { fontWeight: '700' },
   // The caption's first line: the name, and the share mark when there is one.
-  // Centred as a pair, so an unshared folder's name sits exactly where it
-  // always did and a shared one's shifts by half the mark rather than all of it.
+  //
+  // LEFT-ALIGNED, and to the TILE's edge rather than the cell's. The cell is
+  // `size + 16` wide so the squares sit in a grid with air between them, which
+  // leaves an 8pt gutter either side of the tile itself. Aligning the caption
+  // to the cell would start every name 8pt left of the thumbnail above it —
+  // text and image each straight, and visibly not straight with each other.
+  // CAPTION_INSET is that gutter, so the name's first letter and the tile's
+  // left edge are one line.
   nameRow: {
     marginTop: 6,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     gap: 3,
     alignSelf: 'stretch',
-    paddingHorizontal: 2,
+    paddingHorizontal: CAPTION_INSET,
   },
   // Bare: an icon and a number, no chip. It reads as part of the caption,
   // which is what it is.
   shareMark: { flexDirection: 'row', alignItems: 'center', gap: 1 },
   shareCount: { fontSize: 11, fontWeight: '700' },
   // `marginTop` moved to the row above — the name no longer owns the gap.
-  name: { fontSize: 12.5, fontWeight: '600', textAlign: 'center', flexShrink: 1 },
-  count: { fontSize: 11, marginTop: 1, flexShrink: 1 },
+  name: { fontSize: 12.5, fontWeight: '600', textAlign: 'left', flexShrink: 1 },
+  // The count follows the name rather than staying centred under it: a caption
+  // half left and half centred reads as a mistake, not as two kinds of fact.
+  count: {
+    fontSize: 11,
+    marginTop: 1,
+    textAlign: 'left',
+    alignSelf: 'stretch',
+    paddingHorizontal: CAPTION_INSET,
+  },
 });
 
 export default memo(FolderTile);
