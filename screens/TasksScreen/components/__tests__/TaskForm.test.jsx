@@ -133,12 +133,17 @@ describe('TaskForm Save state', () => {
  * nothing to tell you it's still stored.
  */
 describe('TaskForm option disclosure', () => {
+  // Tags are deliberately NOT part of this disclosure contract any more —
+  // see the note where they left OPTIONS.
   test('a new task opens as just the title and the body', async () => {
     const view = await render(<TaskForm {...baseProps} />);
 
     expect(view.getByPlaceholderText('Notes, links, anything…')).toBeTruthy();
-    // None of the optional fields are on the page uninvited.
-    expect(view.queryByPlaceholderText('Type to see suggestions...')).toBeNull();
+    // TAGS ARE ON THE PAGE, uninvited and on purpose — a board and a tag are
+    // the two ways a task gets filed and are asked in the same breath, so tags
+    // left the + menu the way People did before them.
+    expect(view.getByPlaceholderText('Type to see suggestions...')).toBeTruthy();
+    // The rest of the optional fields still wait to be asked for.
     expect(view.queryByText('Single event (appointment)')).toBeNull();
     expect(view.getByLabelText('Add an option to this item')).toBeTruthy();
   });
@@ -146,13 +151,16 @@ describe('TaskForm option disclosure', () => {
   test('adding an option from the sheet puts that field on the page', async () => {
     const view = await render(<TaskForm {...baseProps} />);
 
+    // "Linked note" rather than Tags: tags are no longer behind the + at all,
+    // so this needs an option that still is. The assertion is that it stops
+    // being ON OFFER — which is the half of the contract that does not depend
+    // on knowing what each field happens to render once it lands.
     await fireEvent.press(view.getByLabelText('Add an option to this item'));
-    await fireEvent.press(view.getByLabelText('Add Tags'));
+    expect(view.getByLabelText('Add Linked note')).toBeTruthy();
+    await fireEvent.press(view.getByLabelText('Add Linked note'));
 
-    expect(view.getByPlaceholderText('Type to see suggestions...')).toBeTruthy();
-    // And it stops being on offer, so it can't be added twice.
     await fireEvent.press(view.getByLabelText('Add an option to this item'));
-    expect(view.queryByLabelText('Add Tags')).toBeNull();
+    expect(view.queryByLabelText('Add Linked note')).toBeNull();
   });
 
   test('editing an item shows what it already carries without adding anything', async () => {

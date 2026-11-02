@@ -62,7 +62,6 @@ import {
 // dull and direct rather than clever.
 const OPTIONS = [
   { key: 'linkedNote', label: 'Linked note', icon: 'link-variant', types: ['task'] },
-  { key: 'tags', label: 'Tags', icon: 'tag-outline', types: ['task', 'event', 'birthday'] },
   { key: 'colour', label: 'Colour', icon: 'palette-outline', types: ['event', 'birthday'] },
   { key: 'endTime', label: 'End time', icon: 'clock-end', types: ['task', 'event'] },
   { key: 'repeat', label: 'Repeat', icon: 'repeat', types: ['task', 'event', 'birthday'] },
@@ -72,6 +71,11 @@ const OPTIONS = [
   // meant a PEOPLE heading with nothing under it and no way to reach the
   // picker without already knowing it was there. A task's people are not an
   // edge case, so the picker is simply on the page.
+  //
+  // TAGS left for the same reason. A board and a tag are the two ways a task
+  // gets filed, they are asked in the same breath, and one of them was on the
+  // page while the other was three taps behind a + — so in practice tasks got
+  // a board and no tags. It is on the page now, beside the board.
   { key: 'guests', label: 'Guests', icon: 'account-plus-outline', types: ['event'] },
 ];
 
@@ -1082,7 +1086,7 @@ export const TaskForm = ({
             )}
 
             {/* Tags — tasks only. */}
-            {isTask && shows('tags') && (
+            {isTask && (
               <FormField label="Tags">
                 <View style={styles.tagRow}>
                   <AppTextInput
