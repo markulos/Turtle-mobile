@@ -379,7 +379,7 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
             // per frame would re-render the page mid-scroll.
             if (h > 0) setDockH((prev) => (Math.abs(prev - h) >= 1 ? h : prev));
           }}
-          style={[styles.dockFloat, { paddingTop: topInset + PICKER_GAP, backgroundColor: c.background }, chromeShift]}
+          style={[styles.dockFloat, styles.dock, { paddingTop: topInset + PICKER_GAP, backgroundColor: c.background }, chromeShift]}
         >
           <VaultSearchDock
             search={search}
@@ -437,7 +437,11 @@ const styles = StyleSheet.create({
   dock: { paddingHorizontal: 16, paddingBottom: 10 },
   createError: { fontSize: 12.5, lineHeight: 17, marginTop: 8, paddingHorizontal: 2 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8 },
-  rows: { paddingHorizontal: 14 },
+  // 16, the same inset the dock above carries and the same one Music's list
+  // and field both use. It was 14 — close enough to look like neither a match
+  // nor a decision, and a two-point stagger between a field and the rows under
+  // it is the kind of thing you see without being able to name.
+  rows: { paddingHorizontal: 16 },
   unfiled: { alignItems: 'center', width: 88, paddingVertical: 6 },
   // Unfiled is a folder that happens to have no name, so it is the same shape
   // as the folders beside it — same 72, same corner, taken from FolderTile so
