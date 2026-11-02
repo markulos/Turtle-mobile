@@ -636,6 +636,9 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // RN Animated, not Reanimated: it shares the header node with
   // boardSearchAnim, and the two libraries cannot drive one node.
   const albumsScrollAnim = useRef(new Animated.Value(0)).current;
+  // The Files page's own scroll, same library and same reason — it feeds the
+  // same header node, and RN Animated and Reanimated cannot drive one node.
+  const filesScrollAnim = useRef(new Animated.Value(0)).current;
   // Declared here rather than beside the pager below, next to the other native
   // scroll capture it is combined with: the chrome stands down as the pager
   // leaves Boards (see chromeOnBoards).
@@ -649,19 +652,31 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     boardsDockH,
   );
 
+  /**
+   * How far the vault's chrome is pushed off the top, ACROSS THE PAGER.
+   *
+   * Each page hides the chrome by its own scroll, and the pages are blended by
+   * where the pager is rather than switched when it lands: a page's say fades
+   * to nothing as it leaves, so the header grows back as PART of the swipe and
+   * nothing snaps into place at the end of it.
+   *
+   * A page with no scroll wired in simply contributes a zero node, so it keeps
+   * the full header — which is what Music still does. That is the ONE rule
+   * here worth not breaking: a page that reserves the whole header height must
+   * not let the header leave, or it wears the gap. See the queued task.
+   */
   const vaultChromePx = useMemo(() => {
-    const hidden = chromeOffsetNode(albumsScrollAnim, chromeTravel);
-    // The Music page reserves the FULL header height, so a header parked off
-    // screen by the boards scroll would leave it wearing a gap. Weighted by the
-    // swipe itself rather than reset when it lands, so the header grows back as
-    // PART of the swipe — nothing snaps into place at the end of it.
-    const onBoards = pageScrollX.interpolate({
-      inputRange: [0, width],
-      outputRange: [1, 0],
-      extrapolate: 'clamp',
-    });
-    return Animated.multiply(hidden, onBoards);
-  }, [albumsScrollAnim, pageScrollX, chromeTravel]);
+    const PAGES = [albumsScrollAnim, null, filesScrollAnim];   // boards, music, files
+    const weighted = PAGES.map((scroll, i) => Animated.multiply(
+      chromeOffsetNode(scroll, chromeTravel),
+      pageScrollX.interpolate({
+        inputRange: [(i - 1) * width, i * width, (i + 1) * width],
+        outputRange: [0, 1, 0],
+        extrapolate: 'clamp',
+      }),
+    ));
+    return weighted.reduce((a, b) => Animated.add(a, b));
+  }, [albumsScrollAnim, filesScrollAnim, pageScrollX, chromeTravel]);
 
   // The back-to-top button that comes with this model is declared beside the
   // boards list refs it drives — see `showBoardsTop`.
@@ -5280,6 +5295,14 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               Same contract as MusicVault: clears the measured vault header. */}
           <View style={{ width, height: '100%' }}>
             <FilesVault
+              // The chrome rides a native-driver Animated.event on this prop,
+              // and lifts its own dock by the same node — otherwise the header
+              // parks off screen above a page still reserving its height.
+              chromePx={vaultChromePx}
+              onScroll={Animated.event(
+                [{ nativeEvent: { contentOffset: { y: filesScrollAnim } } }],
+                { useNativeDriver: true },
+              )}
               topInset={(vaultHeaderH || insets.top + 90) + VAULT_PICKER_GAP}
               bottomInset={tabBarH}
               // The bare safe area the page keeps once the vault header has

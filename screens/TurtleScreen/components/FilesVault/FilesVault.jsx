@@ -127,7 +127,7 @@ export function matchFolders(folders, query) {
   return { matches, exact: matches.some((f) => normalise(f.name) === q) };
 }
 
-export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopInset, onSearchActiveChange, onOpenMedia, onBulkTag, onUploadHere, getFullUrl, base, target = null, onTargetConsumed, theme: themeProp, stack = [], onStackChange = () => {} }) {
+export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopInset, chromePx, onScroll, onSearchActiveChange, onOpenMedia, onBulkTag, onUploadHere, getFullUrl, base, target = null, onTargetConsumed, theme: themeProp, stack = [], onStackChange = () => {} }) {
   const themeCtx = useTheme();
   const theme = themeProp || themeCtx.theme;
   const c = theme.colors;
@@ -145,6 +145,14 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
   const [createError, setCreateError] = useState(null);
   // Which folder's share settings are open, from a tap on its share mark.
   const [shareFolder, setShareFolder] = useState(null);
+  // The dock's measured height. The list reserves it as top padding so that at
+  // rest nothing has moved, and the dock travels over the list rather than
+  // pushing it — which is what keeps content moving at 1x the scroll instead of
+  // 2x (the whole reason this is not simply a translate on the wrapper).
+  const [dockH, setDockH] = useState(0);
+  const chromeShift = useMemo(() => (chromePx && dockH > 0
+    ? { transform: [{ translateY: chromePx.interpolate({ inputRange: [0, dockH], outputRange: [0, -dockH], extrapolate: 'clamp' }) }] }
+    : null), [chromePx, dockH]);
 
   const folders = useMemo(() => data?.folders || [], [data]);
   const { matches, exact } = useMemo(() => matchFolders(folders, query), [folders, query]);
@@ -288,33 +296,19 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
 
   return (
     <View style={[styles.page, { backgroundColor: c.background }]}>
-      <Animated.View style={[styles.lift, { marginBottom: -lift, paddingTop: topInset }, search.liftStyle]}>
-        <View style={[styles.dock, { paddingTop: PICKER_GAP }]}>
-          <VaultSearchDock
-            search={search}
-            theme={theme}
-            placeholder="Search or name a folder"
-            accessibilityLabel="Search your folders, or name a new one"
-            cancelLabel="Cancel folder search"
-            clearLabel="Clear folder search"
-            trailingIcon="folder-plus-outline"
-            trailingLabel="New folder"
-            onTrailingPress={() => { tapHaptic(); search.beginSearch(); }}
-            onChangeText={(q) => { setQuery(q); setCreateError(null); }}
-            onSubmitEditing={canCreate ? submitCreate : undefined}
-            returnKeyType={canCreate ? 'done' : 'search'}
-            testIDPrefix="files-search"
-          />
-          {!!createError && <Text style={[styles.createError, { color: c.accentError || '#e5484d' }]}>{createError}</Text>}
-        </View>
+      <Animated.View style={[styles.lift, { marginBottom: -lift }, search.liftStyle]}>
         {loading && !data ? <ActivityIndicator style={{ marginTop: 40 }} color={c.textSecondary} /> : (
-          <ScrollView
+          <Animated.ScrollView
+            onScroll={onScroll}
+            scrollEventThrottle={16}
             contentContainerStyle={[
               // ONE SHAPE, searching or not: the root is a list now, so results
               // are the same rows in the same place rather than a grid rearranging
               // itself into a list under the query.
               styles.rows,
-              { paddingBottom: Math.max(insets.bottom, bottomInset) + 24 + lift },
+              // The dock's room. Reserved by the LIST so the dock can float
+              // over it and leave without the rows jumping up to fill the gap.
+              { paddingTop: topInset + PICKER_GAP + dockH, paddingBottom: Math.max(insets.bottom, bottomInset) + 24 + lift },
             ]}
             refreshControl={searching ? undefined : <RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); try { await refresh(); } finally { setRefreshing(false); } }} tintColor={c.textSecondary} />}
             keyboardShouldPersistTaps="handled"
@@ -362,8 +356,43 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
                 {!!error && <Text style={[styles.empty, { color: c.accentError || '#e5484d' }]}>{error}</Text>}
               </>
             )}
-          </ScrollView>
+          </Animated.ScrollView>
         )}
+        {/* THE DOCK FLOATS OVER THE LIST, and goes up with the vault header.
+            Absolute and rendered last so it paints above the rows; the list
+            reserves its height as top padding, so at rest nothing has moved and
+            the rows simply pass under it as it leaves. Opaque for the same
+            reason — a row sliding through the search field would be unreadable.
+
+            It is NOT the wrapper that translates: moving dock and list together
+            would carry content up at 2x the scroll. */}
+        <Animated.View
+          pointerEvents="box-none"
+          onLayout={(e) => {
+            const h = Math.round(e.nativeEvent.layout.height);
+            // Thresholded: onLayout fires on sub-pixel wobble, and a state write
+            // per frame would re-render the page mid-scroll.
+            if (h > 0) setDockH((prev) => (Math.abs(prev - h) >= 1 ? h : prev));
+          }}
+          style={[styles.dockFloat, { paddingTop: topInset + PICKER_GAP, backgroundColor: c.background }, chromeShift]}
+        >
+          <VaultSearchDock
+            search={search}
+            theme={theme}
+            placeholder="Search or name a folder"
+            accessibilityLabel="Search your folders, or name a new one"
+            cancelLabel="Cancel folder search"
+            clearLabel="Clear folder search"
+            trailingIcon="folder-plus-outline"
+            trailingLabel="New folder"
+            onTrailingPress={() => { tapHaptic(); search.beginSearch(); }}
+            onChangeText={(q) => { setQuery(q); setCreateError(null); }}
+            onSubmitEditing={canCreate ? submitCreate : undefined}
+            returnKeyType={canCreate ? 'done' : 'search'}
+            testIDPrefix="files-search"
+          />
+          {!!createError && <Text style={[styles.createError, { color: c.accentError || '#e5484d' }]}>{createError}</Text>}
+        </Animated.View>
       </Animated.View>
       {/* Who can see this folder — pond members and public links. The same
           sheet the folder page and a board use, so there is ONE place those
@@ -387,6 +416,7 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
 
 const styles = StyleSheet.create({
   page: { flex: 1 },
+  dockFloat: { position: 'absolute', left: 0, right: 0, top: 0, zIndex: 5 },
   // The share mark, hard right of a row. Bare icon and count, the same pair
   // the tile caption used to carry.
   // Overrides VaultResultRow's stock 46pt cover: a 2x2 of 23pt cells is a
