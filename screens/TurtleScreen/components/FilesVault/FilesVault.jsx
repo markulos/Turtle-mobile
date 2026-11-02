@@ -27,6 +27,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Keyboard, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { useTheme } from '../../../../context/ThemeContext';
@@ -398,7 +399,20 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
             testIDPrefix="files-search"
           />
           {!!createError && <Text style={[styles.createError, { color: c.accentError || '#e5484d' }]}>{createError}</Text>}
-        </Animated.View>
+          {/* The dissolve under the dock. Rows do not stop at the dock's edge,
+            they fade out into it — which is what makes the chrome read as
+            sitting over the page rather than as a lid clamped on top of it.
+            Ramps to the page's own colour: the vault carries no wash, so that
+            is plainly theme.colors.background here (NOT pageColor, which is
+            the Planner's washed black and would be a shade light on this page).
+            #RRGGBBAA — the same colour at zero alpha, so it fades to nothing
+            rather than through grey. */}
+        <LinearGradient
+          pointerEvents="none"
+          colors={[c.background, `${c.background}00`]}
+          style={styles.dockFade}
+        />
+      </Animated.View>
       </Animated.View>
       {/* Who can see this folder — pond members and public links. The same
           sheet the folder page and a board use, so there is ONE place those
@@ -423,6 +437,9 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
 const styles = StyleSheet.create({
   page: { flex: 1 },
   dockFloat: { position: 'absolute', left: 0, right: 0, top: 0, zIndex: 5 },
+  // Hangs BELOW the dock (negative bottom) so it dissolves the page under it
+  // without eating into the dock's own room.
+  dockFade: { position: 'absolute', left: 0, right: 0, bottom: -14, height: 14 },
   // The share mark, hard right of a row. Bare icon and count, the same pair
   // the tile caption used to carry.
   // Overrides VaultResultRow's stock 46pt cover: a 2x2 of 23pt cells is a

@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { useSharedValue } from 'react-native-reanimated';
@@ -1135,6 +1136,19 @@ export default function MusicVault({
           onChangeText={onQueryChange}
           testIDPrefix="music-search"
         />
+        {/* The dissolve under the dock. Rows do not stop at the dock's edge,
+            they fade out into it — which is what makes the chrome read as
+            sitting over the page rather than as a lid clamped on top of it.
+            Ramps to the page's own colour: the vault carries no wash, so that
+            is plainly theme.colors.background here (NOT pageColor, which is
+            the Planner's washed black and would be a shade light on this page).
+            #RRGGBBAA — the same colour at zero alpha, so it fades to nothing
+            rather than through grey. */}
+        <LinearGradient
+          pointerEvents="none"
+          colors={[c.background, `${c.background}00`]}
+          style={styles.dockFade}
+        />
       </Animated.View>
       {onClose ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: insets.top + 6, paddingBottom: 8, paddingHorizontal: 10 }}>
@@ -1655,6 +1669,9 @@ const styles = StyleSheet.create({
   // The floating search dock. zIndex so it paints over the lists it is
   // stacked with rather than relying on tree order.
   dockFloat: { position: 'absolute', left: 0, right: 0, top: 0, zIndex: 5 },
+  // Hangs BELOW the dock (negative bottom) so it dissolves the page under it
+  // without eating into the dock's own room.
+  dockFade: { position: 'absolute', left: 0, right: 0, bottom: -14, height: 14 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
   // Hairline grey rule, inset EQUALLY on both sides so it sits centred between
   // rows rather than hanging off the artwork's left edge (row padding is 16).
