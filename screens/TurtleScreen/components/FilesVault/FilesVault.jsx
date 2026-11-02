@@ -35,6 +35,8 @@ import { impactHaptic, tapHaptic } from '../../../../utils/haptics';
 import useFolderData from './useFolderData';
 import useFolderShares from './useFolderShares';
 import { TILE_RADIUS } from './FolderTile';
+import VaultShareSheet from '../VaultShareSheet';
+import { insetRule } from '../../../../utils/surfaceDepth';
 import { folderColor, folderTint, messageOf } from './filesUtils';
 import {
   PICKER_GAP,
@@ -67,6 +69,44 @@ export function folderCreatedLabel(raw, now = Date.now()) {
   return d.toLocaleDateString(undefined, sameYear
     ? { day: 'numeric', month: 'short' }
     : { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+
+/**
+ * The row's cover: FOUR of them, the way the tile drew it.
+ *
+ * A folder is a container of rectangular things and the collage is what says
+ * how much is in it at a glance — one cover says "a folder", four say "a
+ * folder with a lot in it". The row inherited a single cover when it was only
+ * ever the search-result shape; now that the root IS this list, it takes the
+ * tile's read back.
+ *
+ * Bigger than the stock row cover for the same reason: at 46 a 2x2 gives four
+ * 23pt cells, which is thumbnail-of-a-thumbnail territory.
+ */
+const ROW_TILE = 58;
+
+function RowCollage({ covers, base, theme, testID }) {
+  const [failed, setFailed] = useState(() => new Set());
+  const urls = useMemo(
+    () => (covers || [])
+      .map((t) => (String(t).startsWith('http') ? String(t) : `${String(base).replace(/\/api$/, '')}${t}`))
+      .filter((u) => !failed.has(u))
+      .slice(0, 4),
+    [covers, base, failed],
+  );
+  const markFailed = useCallback((u) => setFailed((prev) => new Set(prev).add(u)), []);
+  const half = ROW_TILE / 2;
+  const cell = (u, style, i) => (
+    <Image key={u + i} source={{ uri: u }} style={[{ position: 'absolute' }, style]} contentFit="cover" transition={80} onError={() => markFailed(u)} testID={testID ? `${testID}-cover` : undefined} />
+  );
+  // Degrades 4 -> 3 -> 2 -> 1 -> initial, the same ladder FolderTile walks, so
+  // a cover that fails to load shrinks the collage instead of leaving a hole.
+  if (urls.length === 1) return cell(urls[0], { left: 0, top: 0, width: ROW_TILE, height: ROW_TILE }, 0);
+  if (urls.length === 2) return [cell(urls[0], { left: 0, top: 0, width: half, height: ROW_TILE }, 0), cell(urls[1], { left: half, top: 0, width: half, height: ROW_TILE }, 1)];
+  if (urls.length === 3) return [cell(urls[0], { left: 0, top: 0, width: half, height: ROW_TILE }, 0), cell(urls[1], { left: half, top: 0, width: half, height: half }, 1), cell(urls[2], { left: half, top: half, width: half, height: half }, 2)];
+  if (urls.length >= 4) return [cell(urls[0], { left: 0, top: 0, width: half, height: half }, 0), cell(urls[1], { left: half, top: 0, width: half, height: half }, 1), cell(urls[2], { left: 0, top: half, width: half, height: half }, 2), cell(urls[3], { left: half, top: half, width: half, height: half }, 3)];
+  return null;
 }
 
 /** Fold case and spacing so "Tax Returns" and "tax returns" are one name. */
@@ -103,6 +143,8 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
   // field where the name still is — the sheet used to carry this inline and it
   // is the one thing about it worth keeping.
   const [createError, setCreateError] = useState(null);
+  // Which folder's share settings are open, from a tap on its share mark.
+  const [shareFolder, setShareFolder] = useState(null);
 
   const folders = useMemo(() => data?.folders || [], [data]);
   const { matches, exact } = useMemo(() => matchFolders(folders, query), [folders, query]);
@@ -194,40 +236,53 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
     return made ? `${made} · ${count}` : count;
   };
 
-  const renderRow = (f) => {
-    const cover = (f.covers || [])[0];
-    const url = cover && (String(cover).startsWith('http') ? String(cover) : `${String(base).replace(/\/api$/, '')}${cover}`);
+  const renderRow = (f, index) => {
     const shared = sharedCount(f.id);
+    const hasCovers = (f.covers || []).length > 0;
     return (
-      <VaultResultRow
-        key={f.id}
-        name={f.name}
-        meta={folderMeta(f)}
-        theme={theme}
-        onPress={() => open(f.id)}
-        onLongPress={() => { impactHaptic('medium'); push(f.id); }}
-        // Hard right, clear of the name — which now has the whole row to run
-        // in and no longer has to be cut to two words.
-        trailing={shared > 0 ? (
-          <View style={styles.shareMark}>
-            <Icon name="account-multiple" size={13} color={c.accentInfo} />
-            <Text style={[styles.shareCount, { color: c.accentInfo }]} numberOfLines={1}>{shared}</Text>
-          </View>
-        ) : null}
-        accessibilityLabel={
-          shared > 0
-            ? `Open folder ${f.name}, ${folderMeta(f)}, shared with ${shared} ${shared === 1 ? 'person' : 'people'}`
-            : `Open folder ${f.name}, ${folderMeta(f)}`
-        }
-        testID={`files-row-${f.id}`}
-        leading={url
-          ? <Image source={{ uri: url }} style={StyleSheet.absoluteFillObject} contentFit="cover" transition={120} recyclingKey={`row:${cover}`} />
-          : (
-            <View style={[styles.rowInitial, { backgroundColor: folderTint(f.name, 0.22) }]}>
-              <Text style={[styles.rowInitialText, { color: folderColor(f.name) }]}>{String(f.name || '?').trim().charAt(0).toUpperCase()}</Text>
-            </View>
-          )}
-      />
+      <View key={f.id}>
+        {/* The app's one separator, between each folder and the next. An
+            element of its own rather than a border on the row: insetRule is
+            TWO hairlines a point apart, and on the row itself it would draw
+            across its top edge too (STYLE-RULES §1). Not before the first —
+            the list already has the search dock's edge above it. */}
+        {index > 0 && <View pointerEvents="none" style={insetRule(theme)} />}
+        <VaultResultRow
+          name={f.name}
+          meta={folderMeta(f)}
+          theme={theme}
+          onPress={() => open(f.id)}
+          onLongPress={() => { impactHaptic('medium'); push(f.id); }}
+          leadingStyle={styles.rowTile}
+          // Hard right, clear of the name — which now has the whole row to run
+          // in and no longer has to be cut to two words. It is its OWN target:
+          // tapping the row opens the folder, tapping the mark asks the
+          // question the mark raises — who exactly can see this?
+          trailing={shared > 0 ? (
+            <Pressable
+              onPressIn={tapHaptic}
+              onPress={() => setShareFolder({ id: f.id, name: f.name })}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityRole="button"
+              accessibilityLabel={`Sharing for ${f.name}: ${shared} ${shared === 1 ? 'person' : 'people'}. Open share settings.`}
+              testID={`files-share-${f.id}`}
+              style={({ pressed }) => [styles.shareMark, { opacity: pressed ? 0.6 : 1 }]}
+            >
+              <Icon name="account-multiple" size={13} color={c.accentInfo} />
+              <Text style={[styles.shareCount, { color: c.accentInfo }]} numberOfLines={1}>{shared}</Text>
+            </Pressable>
+          ) : null}
+          accessibilityLabel={`Open folder ${f.name}, ${folderMeta(f)}`}
+          testID={`files-row-${f.id}`}
+          leading={hasCovers
+            ? <RowCollage covers={f.covers} base={base} theme={theme} testID={`files-row-${f.id}`} />
+            : (
+              <View style={[styles.rowInitial, { backgroundColor: folderTint(f.name, 0.22) }]}>
+                <Text style={[styles.rowInitialText, { color: folderColor(f.name) }]}>{String(f.name || '?').trim().charAt(0).toUpperCase()}</Text>
+              </View>
+            )}
+        />
+      </View>
     );
   };
 
@@ -310,6 +365,22 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
           </ScrollView>
         )}
       </Animated.View>
+      {/* Who can see this folder — pond members and public links. The same
+          sheet the folder page and a board use, so there is ONE place those
+          settings live however you got to them. */}
+      {shareFolder && (
+        <VaultShareSheet
+          visible
+          subject={{ kind: 'folder', id: shareFolder.id, name: shareFolder.name }}
+          api={api}
+          theme={theme}
+          // The ORIGIN, not the api base — the sheet resolves member avatars
+          // against it, the same strip the covers above use.
+          baseUrl={String(base || '').replace(/\/api$/, '')}
+          bottomInset={bottomInset}
+          onClose={() => setShareFolder(null)}
+        />
+      )}
     </View>
   );
 }
@@ -318,6 +389,9 @@ const styles = StyleSheet.create({
   page: { flex: 1 },
   // The share mark, hard right of a row. Bare icon and count, the same pair
   // the tile caption used to carry.
+  // Overrides VaultResultRow's stock 46pt cover: a 2x2 of 23pt cells is a
+  // thumbnail of a thumbnail. 58 gives the four covers room to read.
+  rowTile: { width: ROW_TILE, height: ROW_TILE, borderRadius: 12 },
   shareMark: { flexDirection: 'row', alignItems: 'center', gap: 1 },
   shareCount: { fontSize: 12, fontWeight: '700' },
   // The lifting layer. Its negative bottom margin is static: it is always

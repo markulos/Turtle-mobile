@@ -240,3 +240,40 @@ describe('folderCreatedLabel', () => {
     }
   });
 });
+
+/**
+ * The share mark is a QUESTION, so it is its own target.
+ *
+ * Tapping a row opens the folder. Tapping the mark asks the thing the mark
+ * raises — who exactly can see this — and that is a different intent, so it
+ * must not just be a second way to open the folder.
+ */
+describe('FilesVault share mark', () => {
+  const shared = {
+    ...root,
+    folders: [{ id: 'fld_aaaaaaaaaaaa', name: 'Scans', itemCount: 3, folderCount: 1, covers: ['/t/1.jpg'] }],
+  };
+
+  beforeEach(() => {
+    mockApi.get.mockImplementation((p) => {
+      if (p.includes('/folder-access/mine')) {
+        return Promise.resolve({ success: true, folders: { fld_aaaaaaaaaaaa: [{ userId: 'u1' }, { userId: 'u2' }] } });
+      }
+      return Promise.resolve(p.includes('parent=root') ? shared : p.includes('fld_bbbbbbbbbbbb') ? taxes : scans);
+    });
+  });
+
+  it('marks a shared folder with its count, and leaves the others unmarked', async () => {
+    const { getByTestId, queryByTestId } = await render(<Host theme={theme} getFullUrl={(p) => p} base="" onOpenMedia={jest.fn()} onBulkTag={jest.fn()} onUploadHere={jest.fn()} />);
+    await waitFor(() => getByTestId('files-share-fld_aaaaaaaaaaaa'));
+    expect(queryByTestId('files-share-unfiled')).toBeNull();
+  });
+
+  it('opens share settings rather than the folder', async () => {
+    const { getByTestId, queryByText } = await render(<Host theme={theme} getFullUrl={(p) => p} base="" onOpenMedia={jest.fn()} onBulkTag={jest.fn()} onUploadHere={jest.fn()} />);
+    await waitFor(() => getByTestId('files-share-fld_aaaaaaaaaaaa'));
+    await fireEvent.press(getByTestId('files-share-fld_aaaaaaaaaaaa'));
+    // The folder's own contents would mean the row's onPress fired instead.
+    await waitFor(() => expect(queryByText('a.pdf')).toBeNull());
+  });
+});
