@@ -23,6 +23,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import FeatherIcon from 'react-native-vector-icons/Feather';
 import AppTextInput from '../../../components/AppTextInput';
 import { TAP_ONLY_PRESSABLE } from '../../../utils/pressBehavior';
 import { INPUT_FIELD } from '../../../utils/inputField';
@@ -214,7 +215,7 @@ export function useVaultSearch({ query, items, onQueryChange, onSearchActiveChan
  */
 export function VaultSearchDock({
   search, theme, placeholder, accessibilityLabel, cancelLabel, clearLabel,
-  trailingIcon, trailingLabel, onTrailingPress, onChangeText, onSubmitEditing,
+  trailingIcon, trailingIconSet, trailingLabel, onTrailingPress, onChangeText, onSubmitEditing,
   returnKeyType = 'search', testIDPrefix = 'vault-search',
 }) {
   const { searching, displayQuery, inputRef, cancelSearch, clearSearch, onFocus } = search;
@@ -289,7 +290,14 @@ export function VaultSearchDock({
           style={styles.addButton}
           testID={`${testIDPrefix}-add`}
         >
-          <Icon name={trailingIcon} size={28} color={theme.colors.textPrimary} />
+          {/* `trailingIconSet` lets a caller reach for a LIGHTER face than the
+              house Material one — Feather's strokes are about half the weight,
+              which is what a key beside a search field wants when it is an
+              action rather than a status. Both fonts ship in the build: the
+              podspec copies every Fonts/*.ttf, not a named list. */}
+          {trailingIconSet === 'feather'
+            ? <FeatherIcon name={trailingIcon} size={24} color={theme.colors.textPrimary} />
+            : <Icon name={trailingIcon} size={28} color={theme.colors.textPrimary} />}
         </Pressable>
       </Animated.View>
     </View>

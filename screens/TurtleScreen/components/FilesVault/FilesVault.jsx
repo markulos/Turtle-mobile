@@ -308,7 +308,12 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
               styles.rows,
               // The dock's room. Reserved by the LIST so the dock can float
               // over it and leave without the rows jumping up to fill the gap.
-              { paddingTop: topInset + PICKER_GAP + dockH, paddingBottom: Math.max(insets.bottom, bottomInset) + 24 + lift },
+              // dockH ALONE. The dock is measured by onLayout, which reports
+              // its full laid-out height — its own `topInset + PICKER_GAP`
+              // padding included. Adding that padding again here counted the
+              // header twice and left most of a screen of nothing above the
+              // first folder. The fallback is for the frame before it measures.
+              { paddingTop: dockH || (topInset + PICKER_GAP), paddingBottom: Math.max(insets.bottom, bottomInset) + 24 + lift },
             ]}
             refreshControl={searching ? undefined : <RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); try { await refresh(); } finally { setRefreshing(false); } }} tintColor={c.textSecondary} />}
             keyboardShouldPersistTaps="handled"
@@ -383,7 +388,8 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
             accessibilityLabel="Search your folders, or name a new one"
             cancelLabel="Cancel folder search"
             clearLabel="Clear folder search"
-            trailingIcon="folder-plus-outline"
+            trailingIcon="folder-plus"
+            trailingIconSet="feather"
             trailingLabel="New folder"
             onTrailingPress={() => { tapHaptic(); search.beginSearch(); }}
             onChangeText={(q) => { setQuery(q); setCreateError(null); }}
