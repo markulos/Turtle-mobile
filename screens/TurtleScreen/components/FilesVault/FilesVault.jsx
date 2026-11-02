@@ -31,10 +31,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { useTheme } from '../../../../context/ThemeContext';
 import { useServer } from '../../../../context/ServerContext';
-import { tapHaptic } from '../../../../utils/haptics';
+import { impactHaptic, tapHaptic } from '../../../../utils/haptics';
 import useFolderData from './useFolderData';
 import useFolderShares from './useFolderShares';
-import FolderTile, { TILE_RADIUS } from './FolderTile';
+import { TILE_RADIUS } from './FolderTile';
 import { folderColor, folderTint, messageOf } from './filesUtils';
 import {
   PICKER_GAP,
@@ -42,6 +42,32 @@ import {
   VaultSearchDock,
   useVaultSearch,
 } from '../VaultSearchDock';
+
+
+/**
+ * When a folder was made, for the line under its name.
+ *
+ * Short and absolute — "12 Mar 2026" — not "8 months ago". A relative stamp is
+ * the right read for something you are tracking (a message, a task) and the
+ * wrong one for an archive: the question a folder's date answers is "which
+ * batch of work is this", and that is a date, not a distance.
+ *
+ * The year is dropped inside the current one, where it is noise on every row.
+ *
+ * Returns null rather than a string for anything unparseable, so a folder made
+ * before the column existed shows its count alone instead of "Invalid Date".
+ */
+export function folderCreatedLabel(raw, now = Date.now()) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const ms = typeof raw === 'number' ? raw : Date.parse(String(raw));
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return null;
+  const sameYear = d.getFullYear() === new Date(now).getFullYear();
+  return d.toLocaleDateString(undefined, sameYear
+    ? { day: 'numeric', month: 'short' }
+    : { day: 'numeric', month: 'short', year: 'numeric' });
+}
 
 /** Fold case and spacing so "Tax Returns" and "tax returns" are one name. */
 const normalise = (s) => String(s || '').trim().toLowerCase();
@@ -154,21 +180,45 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
   // do not need to.
   const canCreate = !!displayQuery.trim() && !exact;
 
-  const renderTile = (f) => (
-    <FolderTile key={f.id} name={f.name} covers={f.covers} count={f.itemCount} base={base} theme={theme} pending={!!f.pending} onPress={() => push(f.id)} testID={`root-${f.id}`} sharedWith={sharedCount(f.id)} />
-  );
+  /**
+   * What sits under a folder's name: when it was made, and how much is in it.
+   *
+   * The DATE FIRST, because that is the one the list is now showing — the count
+   * was already on the tile and is the lesser fact. A folder with no recorded
+   * createdAt (anything made before the column, and the synthetic Unfiled row)
+   * simply shows the count on its own rather than the word "Invalid Date".
+   */
+  const folderMeta = (f) => {
+    const count = `${f.itemCount || 0} item${f.itemCount === 1 ? '' : 's'}`;
+    const made = folderCreatedLabel(f.createdAt);
+    return made ? `${made} · ${count}` : count;
+  };
 
   const renderRow = (f) => {
     const cover = (f.covers || [])[0];
     const url = cover && (String(cover).startsWith('http') ? String(cover) : `${String(base).replace(/\/api$/, '')}${cover}`);
+    const shared = sharedCount(f.id);
     return (
       <VaultResultRow
         key={f.id}
         name={f.name}
-        meta={`${f.itemCount || 0} item${f.itemCount === 1 ? '' : 's'}`}
+        meta={folderMeta(f)}
         theme={theme}
         onPress={() => open(f.id)}
-        accessibilityLabel={`Open folder ${f.name}, ${f.itemCount || 0} items`}
+        onLongPress={() => { impactHaptic('medium'); push(f.id); }}
+        // Hard right, clear of the name — which now has the whole row to run
+        // in and no longer has to be cut to two words.
+        trailing={shared > 0 ? (
+          <View style={styles.shareMark}>
+            <Icon name="account-multiple" size={13} color={c.accentInfo} />
+            <Text style={[styles.shareCount, { color: c.accentInfo }]} numberOfLines={1}>{shared}</Text>
+          </View>
+        ) : null}
+        accessibilityLabel={
+          shared > 0
+            ? `Open folder ${f.name}, ${folderMeta(f)}, shared with ${shared} ${shared === 1 ? 'person' : 'people'}`
+            : `Open folder ${f.name}, ${folderMeta(f)}`
+        }
         testID={`files-row-${f.id}`}
         leading={url
           ? <Image source={{ uri: url }} style={StyleSheet.absoluteFillObject} contentFit="cover" transition={120} recyclingKey={`row:${cover}`} />
@@ -205,7 +255,10 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
         {loading && !data ? <ActivityIndicator style={{ marginTop: 40 }} color={c.textSecondary} /> : (
           <ScrollView
             contentContainerStyle={[
-              searching ? styles.rows : styles.grid,
+              // ONE SHAPE, searching or not: the root is a list now, so results
+              // are the same rows in the same place rather than a grid rearranging
+              // itself into a list under the query.
+              styles.rows,
               { paddingBottom: Math.max(insets.bottom, bottomInset) + 24 + lift },
             ]}
             refreshControl={searching ? undefined : <RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); try { await refresh(); } finally { setRefreshing(false); } }} tintColor={c.textSecondary} />}
@@ -234,12 +287,20 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
               </>
             ) : (
               <>
-                <Pressable delayPressIn={0} onPressIn={tapHaptic} onPress={() => push('unfiled')} accessibilityRole="button" accessibilityLabel="Open Unfiled" style={({ pressed }) => [styles.unfiled, { opacity: pressed ? 0.6 : 1 }]}>
-                  <View style={[styles.unfiledTile, { backgroundColor: c.surface, borderColor: c.border }]}><Icon name="file-outline" size={28} color={c.textSecondary} /></View>
-                  <Text style={[styles.discName, { color: c.textPrimary }]} numberOfLines={1}>Unfiled</Text>
-                  <Text style={[styles.discCount, { color: c.textMuted }]} numberOfLines={1}>{data?.unfiled?.count ?? 0}</Text>
-                </Pressable>
-                {folders.map(renderTile)}
+                {/* Unfiled is the same ROW as the folders under it now, not a
+                    tile in a grid — it is one of the things in this list and
+                    reads as one. It has no cover and no creation date of its
+                    own, so it takes the folder glyph and says only its count. */}
+                <VaultResultRow
+                  name="Unfiled"
+                  meta={`${data?.unfiled?.count ?? 0} item${(data?.unfiled?.count ?? 0) === 1 ? '' : 's'}`}
+                  theme={theme}
+                  onPress={() => push('unfiled')}
+                  accessibilityLabel="Open Unfiled"
+                  testID="files-row-unfiled"
+                  leading={<Icon name="file-outline" size={22} color={c.textSecondary} />}
+                />
+                {folders.map(renderRow)}
                 {data && folders.length === 0 && (
                   <Text style={[styles.empty, { color: c.textMuted }]}>No folders yet. Folders you watch on your PC appear here on their own; name one in the field above.</Text>
                 )}
@@ -255,6 +316,10 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
 
 const styles = StyleSheet.create({
   page: { flex: 1 },
+  // The share mark, hard right of a row. Bare icon and count, the same pair
+  // the tile caption used to carry.
+  shareMark: { flexDirection: 'row', alignItems: 'center', gap: 1 },
+  shareCount: { fontSize: 12, fontWeight: '700' },
   // The lifting layer. Its negative bottom margin is static: it is always
   // `lift` taller than the page, so the rise is a transform with nothing
   // underneath it to re-lay out.

@@ -27,7 +27,7 @@ jest.mock('../../../../../services/offlineQueue', () => ({ sendOrQueue: jest.fn(
 jest.mock('../documentOpen', () => ({ openDocument: jest.fn(() => Promise.resolve({ uri: 'x', cached: true })) }));
 jest.mock('../../EdgeSwipePage', () => ({ visible, children }) => (visible ? children : null));
 
-import FilesVault, { matchFolders } from '../FilesVault';
+import FilesVault, { folderCreatedLabel, matchFolders } from '../FilesVault';
 import FolderPage from '../FolderPage';
 
 const theme = { mode: 'dark', colors: { background: '#000', surface: '#0a0a0a', surfaceElevated: '#111', textPrimary: '#fff', textSecondary: '#aaa', textMuted: '#666', primary: '#fff', border: '#222', accentError: '#f55' } };
@@ -82,8 +82,12 @@ describe('FilesVault', () => {
     const { getByText, getByLabelText, queryByText } = await render(<Host theme={theme} getFullUrl={(p) => `http://pond${p}`} base="http://pond" onOpenMedia={jest.fn()} onBulkTag={jest.fn()} onUploadHere={jest.fn()} />);
     await waitFor(() => getByText('Scans'));
     expect(getByText('Unfiled')).toBeTruthy();
-    expect(getByText('2')).toBeTruthy();
-    await fireEvent.press(getByLabelText('Open folder Scans'));
+    // The root is a LIST now, so a count is part of a row's meta line rather
+    // than a bare number under a tile — "2 items", possibly behind a creation
+    // date. Matched loosely because the date is locale-formatted and the point
+    // here is that Unfiled's count reached the row at all.
+    expect(getByText(/2 items/)).toBeTruthy();
+    await fireEvent.press(getByLabelText(/^Open folder Scans/));
     await waitFor(() => getByText('a.pdf'));
     await fireEvent.press(getByLabelText('Back'));
     await waitFor(() => expect(queryByText('a.pdf')).toBeNull());
@@ -203,5 +207,36 @@ describe('matchFolders', () => {
   it('survives a missing list', () => {
     expect(matchFolders(null, 'x').matches).toEqual([]);
     expect(matchFolders(undefined, '').matches).toEqual([]);
+  });
+});
+
+/**
+ * The date under a folder's name. Absolute, not relative: the question a
+ * folder's date answers is "which batch of work is this", and that is a date
+ * rather than a distance.
+ */
+describe('folderCreatedLabel', () => {
+  const NOW = Date.parse('2026-11-01T12:00:00Z');
+
+  it('drops the year inside the current one, where it is noise on every row', () => {
+    const label = folderCreatedLabel(Date.parse('2026-03-12T10:00:00Z'), NOW);
+    expect(label).toMatch(/12/);
+    expect(label).not.toMatch(/2026/);
+  });
+
+  it('keeps the year once it is a different one', () => {
+    expect(folderCreatedLabel(Date.parse('2024-03-12T10:00:00Z'), NOW)).toMatch(/2024/);
+  });
+
+  it('reads an ISO string as readily as a number', () => {
+    expect(folderCreatedLabel('2024-03-12T10:00:00Z', NOW)).toMatch(/2024/);
+  });
+
+  // A folder made before the column existed, or the synthetic Unfiled row.
+  // The row shows its count alone rather than the words "Invalid Date".
+  it('answers null for anything it cannot read, rather than a broken date', () => {
+    for (const bad of [null, undefined, '', 0, 'not a date', NaN]) {
+      expect(folderCreatedLabel(bad, NOW)).toBeNull();
+    }
   });
 });
