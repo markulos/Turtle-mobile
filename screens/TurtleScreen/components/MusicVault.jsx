@@ -74,7 +74,7 @@ const fmtTime = (sec) => {
  * page, so the internal back/title row is omitted.
  */
 export default function MusicVault({
-  onClose, topInset = 0, bottomInset = 0,
+  onClose, topInset = 0, bottomInset = 0, chromePx, chromeScrollAnim,
   // Search, on the same contract the Boards and Files pages use: the query is
   // the vault's (so it survives a swipe away and back), and searchTopInset is
   // the bare safe area left once the vault header has stood down — the
@@ -211,6 +211,19 @@ export default function MusicVault({
   const musicContentH = useRef(0);
   const musicLayoutH = useRef(0);
   const musicScrollY = useSharedValue(0);
+  // ── The vault header goes up with the page ────────────────────────────────
+  // A SECOND scroll value, RN Animated rather than Reanimated: musicScrollY
+  // above drives the scrubber, but the header node it would have to share is
+  // RN Animated's and the two libraries cannot drive one node. So the native
+  // event feeds this one and keeps `handleMusicScroll` as its JS listener —
+  // one scroll, two readers, neither reaching across libraries.
+  const [dockH, setDockH] = useState(0);
+  const chromeShift = useMemo(() => (chromePx && dockH > 0
+    ? { transform: [{ translateY: chromePx.interpolate({ inputRange: [0, dockH], outputRange: [0, -dockH], extrapolate: 'clamp' }) }] }
+    : null), [chromePx, dockH]);
+  // The dock's measured height, reserved by every list as top padding so the
+  // dock can float over them and leave without the rows jumping up.
+  const listTopPad = dockH || (topInset + PICKER_GAP);
   const musicMaxScroll = useSharedValue(1);
 
   // Group the list into runs of the same initial. NOTE: `starts` must follow the
@@ -258,6 +271,19 @@ export default function MusicVault({
     musicScrollY.value = (ne.contentOffset && ne.contentOffset.y) || 0;
     musicMaxScroll.value = Math.max(1, musicContentH.current - musicLayoutH.current);
   }, [musicScrollY, musicMaxScroll]);
+
+  /**
+   * The library list's scroll: drives the header natively AND keeps feeding the
+   * scrubber through the JS listener. `chromeScroll` is the same event for the
+   * other three lists, which have no scrubber to feed — attaching the listener
+   * there would push the WRONG list's offsets into the scrubber's shared value.
+   */
+  const chromeScrollMain = useMemo(() => (chromeScrollAnim
+    ? Animated.event([{ nativeEvent: { contentOffset: { y: chromeScrollAnim } } }], { useNativeDriver: true, listener: handleMusicScroll })
+    : handleMusicScroll), [chromeScrollAnim, handleMusicScroll]);
+  const chromeScroll = useMemo(() => (chromeScrollAnim
+    ? Animated.event([{ nativeEvent: { contentOffset: { y: chromeScrollAnim } } }], { useNativeDriver: true })
+    : undefined), [chromeScrollAnim]);
 
   // Plain top-down list, so the drag fraction maps straight to a scroll offset.
   const handleMusicScrubJump = useCallback((dataFrac) => {
@@ -1081,7 +1107,19 @@ export default function MusicVault({
           the field would be a child of whichever list is mounted, and swapping
           the library rows for result rows would tear the focused TextInput out
           mid-keystroke. */}
-      <View style={{ paddingTop: topInset + PICKER_GAP, paddingHorizontal: 16, paddingBottom: 10 }}>
+      {/* Floating, so it can leave with the vault header. Absolute and opaque:
+          the lists reserve its height as top padding, so at rest nothing has
+          moved and the rows simply pass under it as it goes. NOT a translate on
+          the wrapper — that would carry dock and list together and move content
+          at 2x the scroll. */}
+      <Animated.View
+        pointerEvents="box-none"
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          if (h > 0) setDockH((prev) => (Math.abs(prev - h) >= 1 ? h : prev));
+        }}
+        style={[styles.dockFloat, { paddingTop: topInset + PICKER_GAP, paddingHorizontal: 16, paddingBottom: 10, backgroundColor: c.background }, chromeShift]}
+      >
         <VaultSearchDock
           search={search}
           theme={theme}
@@ -1097,7 +1135,7 @@ export default function MusicVault({
           onChangeText={onQueryChange}
           testIDPrefix="music-search"
         />
-      </View>
+      </Animated.View>
       {onClose ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: insets.top + 6, paddingBottom: 8, paddingHorizontal: 10 }}>
           <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }} accessibilityLabel="Back">
@@ -1139,7 +1177,7 @@ export default function MusicVault({
           </Text>
         </View>
       ) : (
-        <FlatList
+        <Animated.FlatList
           ref={listRef}
           // Searching swaps BOTH the data and the row — the library's cards for
           // the vault's result rows. `displayItems` rather than the matches
@@ -1148,7 +1186,7 @@ export default function MusicVault({
           data={searching ? displayTracks : visibleTracks}
           keyExtractor={(t) => String(t.id)}
           renderItem={searching ? renderSearchRow : renderTrack}
-          onScroll={handleMusicScroll}
+          onScroll={chromeScrollMain}
           scrollEventThrottle={16}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
@@ -1167,7 +1205,7 @@ export default function MusicVault({
           ) : null}
           extraData={`${current}:${isPlaying}:${ready}:${playlists.length}:${searching}`}
           // The transport bar, the dock, AND the lift — see libraryPadBottom.
-          contentContainerStyle={{ paddingBottom: libraryPadBottom }}
+          contentContainerStyle={{ paddingTop: listTopPad, paddingBottom: libraryPadBottom }}
           ItemSeparatorComponent={() => <View style={styles.trackSep} />}
         />
       )}
@@ -1300,10 +1338,12 @@ export default function MusicVault({
             </Text>
           </View>
 
-          <FlatList
+          <Animated.FlatList
+            onScroll={chromeScroll}
+            scrollEventThrottle={16}
             data={pondTracks}
             keyExtractor={(t) => String(t.shareId)}
-            contentContainerStyle={{ paddingBottom: listPadBottom }}
+            contentContainerStyle={{ paddingTop: listTopPad, paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             extraData={`${current}:${isPlaying}:${ready}`}
             ListEmptyComponent={(
@@ -1384,7 +1424,9 @@ export default function MusicVault({
               {VOICE_RECORDINGS_LABEL}
             </Text>
           </View>
-          <FlatList
+          <Animated.FlatList
+            onScroll={chromeScroll}
+            scrollEventThrottle={16}
             testID="voice-recordings-list"
             data={voiceRecordings}
             keyExtractor={(t) => String(t.id)}
@@ -1397,7 +1439,7 @@ export default function MusicVault({
               onOptions: (id) => { setRecordingsOpen(false); setSheetId(id); },
             })}
             extraData={`${current}:${isPlaying}:${ready}:${voiceRecordings.length}`}
-            contentContainerStyle={{ paddingBottom: listPadBottom }}
+            contentContainerStyle={{ paddingTop: listTopPad, paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             ListEmptyComponent={(
               <View style={styles.pageEmpty}>
@@ -1438,11 +1480,13 @@ export default function MusicVault({
             <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>Playlists</Text>
           </View>
 
-          <FlatList
+          <Animated.FlatList
+            onScroll={chromeScroll}
+            scrollEventThrottle={16}
             data={playlists}
             keyExtractor={(name) => name}
             renderItem={renderPlaylistRow}
-            contentContainerStyle={{ paddingBottom: listPadBottom }}
+            contentContainerStyle={{ paddingTop: listTopPad, paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             ListEmptyComponent={(
               <View style={styles.pageEmpty}>
@@ -1477,12 +1521,14 @@ export default function MusicVault({
                   {openPlaylist || ''}
                 </Text>
               </View>
-              <FlatList
+              <Animated.FlatList
+            onScroll={chromeScroll}
+            scrollEventThrottle={16}
                 data={openPlaylistTracks}
                 keyExtractor={(t) => String(t.id)}
                 renderItem={renderTrack}
                 extraData={`${activeTrack?.mediaId}:${isPlaying}:${ready}`}
-                contentContainerStyle={{ paddingBottom: listPadBottom }}
+                contentContainerStyle={{ paddingTop: listTopPad, paddingBottom: listPadBottom }}
                 ItemSeparatorComponent={() => <View style={styles.trackSep} />}
               />
             </View>
@@ -1606,6 +1652,9 @@ export default function MusicVault({
 }
 
 const styles = StyleSheet.create({
+  // The floating search dock. zIndex so it paints over the lists it is
+  // stacked with rather than relying on tree order.
+  dockFloat: { position: 'absolute', left: 0, right: 0, top: 0, zIndex: 5 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
   // Hairline grey rule, inset EQUALLY on both sides so it sits centred between
   // rows rather than hanging off the artwork's left edge (row padding is 16).

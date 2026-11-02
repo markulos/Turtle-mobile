@@ -636,9 +636,12 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // RN Animated, not Reanimated: it shares the header node with
   // boardSearchAnim, and the two libraries cannot drive one node.
   const albumsScrollAnim = useRef(new Animated.Value(0)).current;
-  // The Files page's own scroll, same library and same reason — it feeds the
-  // same header node, and RN Animated and Reanimated cannot drive one node.
+  // The Files and Music pages' own scrolls, same library and same reason — they
+  // feed the same header node, and RN Animated and Reanimated cannot drive one
+  // node. (Music already has a Reanimated musicScrollY for its scrubber; this
+  // is the second reader of the same scroll, not a replacement.)
   const filesScrollAnim = useRef(new Animated.Value(0)).current;
+  const musicScrollAnim = useRef(new Animated.Value(0)).current;
   // Declared here rather than beside the pager below, next to the other native
   // scroll capture it is combined with: the chrome stands down as the pager
   // leaves Boards (see chromeOnBoards).
@@ -666,7 +669,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
    * not let the header leave, or it wears the gap. See the queued task.
    */
   const vaultChromePx = useMemo(() => {
-    const PAGES = [albumsScrollAnim, null, filesScrollAnim];   // boards, music, files
+    const PAGES = [albumsScrollAnim, musicScrollAnim, filesScrollAnim];   // boards, music, files
     const weighted = PAGES.map((scroll, i) => Animated.multiply(
       chromeOffsetNode(scroll, chromeTravel),
       pageScrollX.interpolate({
@@ -676,7 +679,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
       }),
     ));
     return weighted.reduce((a, b) => Animated.add(a, b));
-  }, [albumsScrollAnim, filesScrollAnim, pageScrollX, chromeTravel]);
+  }, [albumsScrollAnim, musicScrollAnim, filesScrollAnim, pageScrollX, chromeTravel]);
 
   // The back-to-top button that comes with this model is declared beside the
   // boards list refs it drives — see `showBoardsTop`.
@@ -5276,6 +5279,8 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                 the Boards page leaves under the picker, so the two pages start
                 at the same line and no track card slides under the tabs. */}
             <MusicVault
+              chromePx={vaultChromePx}
+              chromeScrollAnim={musicScrollAnim}
               // NOT + VAULT_PICKER_GAP any more: the page applies the gap
               // itself now (under its search dock, the same way the Boards
               // page does), so adding it here too would double it.
