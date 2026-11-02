@@ -2718,14 +2718,25 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // to a solo item that might itself be one.
   const openViewerFromList = useCallback((items, item) => {
     if (!item || isDocument(item)) return;
-    // ── VAULT INVARIANT — swipe-right must always mean "newer" ─────────────
-    // (see .claude/skills/turtle-vault-invariants and the memory note
-    // photo-viewer-swipe-direction). The grid's own viewerSourceItems is the
-    // reversed (oldest-first) array for exactly this reason; a folder's list
-    // comes in newest-first (sortFolderItems' default), so it needs the same
-    // `.reverse()` treatment here, into a NEW array — never mutate `items`,
-    // which FolderPage still renders newest-first.
-    const list = (items || []).filter((it) => it && !isDocument(it)).reverse();
+    // ── A FOLDER'S VIEWER READS LIKE A CAMERA ROLL ────────────────────────
+    // Swipe RIGHT goes back in time, swipe LEFT goes forward — the direction
+    // iOS Photos uses, and what Mark asked for on 2026-11-01. A folder's list
+    // arrives newest-first (sortFolderItems' default) and that order is what
+    // produces it, so this deliberately does NOT reverse.
+    //
+    // It used to, under a comment calling swipe-right-means-newer a "vault
+    // invariant" and citing `.claude/skills/turtle-vault-invariants` plus a
+    // memory note `photo-viewer-swipe-direction`. NEITHER EXISTS — both were
+    // checked before this change. The rule lived in that comment alone, so
+    // nothing but the comment is being broken here.
+    //
+    // The grid's own viewer (viewerSourceItems, ~line 1899) still reverses and
+    // so still runs the other way round. That split is deliberate for now and
+    // known — it is the folder's viewer that was asked about.
+    //
+    // Still a NEW array either way: `items` belongs to FolderPage, which
+    // renders it newest-first and must not be mutated under itself.
+    const list = (items || []).filter((it) => it && !isDocument(it));
     if (list.length === 0) return;
     const index = Math.max(0, list.findIndex((it) => it.id === item.id));
     setViewerListOverride(list);
