@@ -18,6 +18,7 @@ import {
   AppState,
 } from 'react-native';
 import { depth, insetRule } from '../../utils/surfaceDepth';
+import { panelBottomInset } from '../../components/tabBarLayout';
 import { PAGE_WASH_COLORS, PAGE_WASH_LOCATIONS, PAGE_WASH_START, PAGE_WASH_END } from '../../utils/pageWash';
 import { SCREEN_TITLE, SCREEN_TITLE_ROW_H } from '../../utils/headerType';
 import AppTextInput from '../../components/AppTextInput';
@@ -4001,7 +4002,15 @@ export default function TasksScreen() {
               into the history band; tap to glide (animated) back down to today's
               tasks at the top of Upcoming. box-none so it never blocks list taps. */}
           {viewingPast && (
-            <View style={styles.goToLatestWrap} pointerEvents="box-none">
+            <View
+              // Clears the FLOATING dock, which reserves no layout space — so
+              // "24 from the bottom" was 24 from behind the tab capsule
+              // (STYLE-RULES §3). panelBottomInset is the dock's measured
+              // height plus the house gap, so the small margin is the same one
+              // every other panel in the app leaves.
+              style={[styles.goToLatestWrap, { bottom: panelBottomInset(insets.bottom, true) }]}
+              pointerEvents="box-none"
+            >
               <TouchableOpacity
                 style={styles.goToLatestBtn}
                 onPressIn={() => tapHaptic()}
@@ -4976,7 +4985,7 @@ const createStyles = (theme) => StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 24,
+    // `bottom` is supplied at render — it depends on the dock.
     alignItems: 'center',
     zIndex: 20,
   },
