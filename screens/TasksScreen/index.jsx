@@ -661,7 +661,12 @@ export default function TasksScreen() {
   const [statusFilter, setStatusFilter] = useState('todo');
   const showIncompleteOnly = statusFilter === 'todo';
   const doneOnly = statusFilter === 'done';
-  const setShowIncompleteOnly = useCallback((v) => setStatusFilter(v ? 'todo' : 'all'), []);
+  // (There was a `setShowIncompleteOnly(bool)` here, mapping a two-state toggle
+  // onto 'todo' | 'all'. Nothing has called it since the header's two-way
+  // switch became the three-key StatusSegment — and a boolean setter for a
+  // THREE-state filter cannot express 'done', so it could only ever have been
+  // a way to lose that state. Gone rather than kept for a caller that would be
+  // wrong to write.)
   const [selectedProject, setSelectedProject] = useState('All');
   // What the one header key says, and whether it lights. The board wins the
   // label when one is picked — it is the narrower scope, and the status still
