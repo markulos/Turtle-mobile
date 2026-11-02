@@ -1219,6 +1219,10 @@ export default function MusicVault({
           ) : null}
           extraData={`${current}:${isPlaying}:${ready}:${playlists.length}:${searching}`}
           // The transport bar, the dock, AND the lift — see libraryPadBottom.
+          // listTopPad is the FLOATING DOCK's room, and this is the only list
+          // under it — the pushed pages (playlists, voice recordings, shared)
+          // each carry their own back header and no dock, so reserving it
+          // there was a screen of nothing under their titles.
           contentContainerStyle={{ paddingTop: listTopPad, paddingBottom: libraryPadBottom }}
           ItemSeparatorComponent={() => <View style={styles.trackSep} />}
         />
@@ -1357,7 +1361,7 @@ export default function MusicVault({
             scrollEventThrottle={16}
             data={pondTracks}
             keyExtractor={(t) => String(t.shareId)}
-            contentContainerStyle={{ paddingTop: listTopPad, paddingBottom: listPadBottom }}
+            contentContainerStyle={{ paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             extraData={`${current}:${isPlaying}:${ready}`}
             ListEmptyComponent={(
@@ -1453,7 +1457,7 @@ export default function MusicVault({
               onOptions: (id) => { setRecordingsOpen(false); setSheetId(id); },
             })}
             extraData={`${current}:${isPlaying}:${ready}:${voiceRecordings.length}`}
-            contentContainerStyle={{ paddingTop: listTopPad, paddingBottom: listPadBottom }}
+            contentContainerStyle={{ paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             ListEmptyComponent={(
               <View style={styles.pageEmpty}>
@@ -1500,7 +1504,7 @@ export default function MusicVault({
             data={playlists}
             keyExtractor={(name) => name}
             renderItem={renderPlaylistRow}
-            contentContainerStyle={{ paddingTop: listTopPad, paddingBottom: listPadBottom }}
+            contentContainerStyle={{ paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             ListEmptyComponent={(
               <View style={styles.pageEmpty}>
@@ -1542,7 +1546,7 @@ export default function MusicVault({
                 keyExtractor={(t) => String(t.id)}
                 renderItem={renderTrack}
                 extraData={`${activeTrack?.mediaId}:${isPlaying}:${ready}`}
-                contentContainerStyle={{ paddingTop: listTopPad, paddingBottom: listPadBottom }}
+                contentContainerStyle={{ paddingBottom: listPadBottom }}
                 ItemSeparatorComponent={() => <View style={styles.trackSep} />}
               />
             </View>
