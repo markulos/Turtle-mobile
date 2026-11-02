@@ -1561,7 +1561,14 @@ export default function MusicVault({
             scrollEventThrottle={16}
                 data={openPlaylistTracks}
                 keyExtractor={(t) => String(t.id)}
-                renderItem={renderTrack}
+                // THE PLAYLIST IS THE QUEUE. Handed `renderTrack` bare, FlatList
+                // calls it with {item, index} and no `queue` — so playTrack fell
+                // through to playMedia, which builds the queue from the whole
+                // library. Tapping track 3 of a CD then played the library from
+                // track 3 onward and wandered out of the playlist at its end.
+                // Voice recordings always passed its own rows for this reason;
+                // this list is the one that did not.
+                renderItem={({ item }) => renderTrack({ item, queue: openPlaylistTracks })}
                 extraData={`${activeTrack?.mediaId}:${isPlaying}:${ready}`}
                 contentContainerStyle={{ paddingBottom: listPadBottom }}
                 ItemSeparatorComponent={() => <View style={styles.trackSep} />}

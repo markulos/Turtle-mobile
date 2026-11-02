@@ -434,7 +434,15 @@ describe('MusicVault', () => {
 
     const rows = view.getAllByText('Third');
     await fireEvent.press(rows[rows.length - 1]);
-    expect(mockPlayMedia).toHaveBeenCalledWith('three');
+    // playRows, not playMedia: THE PLAYLIST IS THE QUEUE. playMedia would build
+    // one from the whole library, so the CD you tapped into would play on past
+    // its own last track. The rows handed over are this playlist's, in the
+    // order the page shows them.
+    expect(mockPlayMedia).not.toHaveBeenCalled();
+    expect(mockPlayRows).toHaveBeenCalledTimes(1);
+    const [queue, startId] = mockPlayRows.mock.calls[0];
+    expect(startId).toBe('three');
+    expect(queue.map((t) => String(t.id))).toEqual(['three']);
   });
 
   test('adding to a playlist keeps the tags the track already had', async () => {
@@ -482,5 +490,38 @@ describe('playlist track order', () => {
     const arrived = [{ originalName: 'B' }, {}, { originalName: 'A' }];
     expect(() => names(arrived)).not.toThrow();
     expect(names(arrived)).toHaveLength(3);
+  });
+});
+
+/**
+ * EVERY LIST THAT IS A QUEUE HAS TO SAY SO.
+ *
+ * `renderTrack({ item, queue })` falls through to playMedia when `queue` is
+ * missing, and playMedia builds the queue from the whole library. Handing
+ * `renderTrack` to FlatList BARE is what loses it — FlatList calls it with
+ * {item, index}, no queue, and nothing errors. So the playlist played the
+ * library from the tapped track onward and wandered out of the playlist at its
+ * end. A scan, because the failure is a missing argument that looks like
+ * tidier code.
+ */
+describe('a playlist is its own queue', () => {
+  const SRC = require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'MusicVault.jsx'), 'utf8',
+  );
+
+  it('the open playlist hands its own rows to renderTrack', () => {
+    expect(SRC).toMatch(/renderItem=\{\(\{ item \}\) => renderTrack\(\{ item, queue: openPlaylistTracks \}\)\}/);
+  });
+
+  it('no list inside a pushed page renders renderTrack bare', () => {
+    // The LIBRARY may: it is the list playMedia's own fallback builds, so the
+    // two agree. Any other bare use is a queue that silently became the
+    // library's.
+    const bare = SRC.match(/renderItem=\{renderTrack\}/g) || [];
+    expect(bare.length).toBe(0);
+  });
+
+  it('voice recordings still carries its queue, which is where the pattern came from', () => {
+    expect(SRC).toMatch(/queue: voiceRecordings/);
   });
 });
