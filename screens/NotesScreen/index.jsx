@@ -1273,13 +1273,19 @@ export default function NotesScreen() {
             scope, so it should be a way to change it. The chevron is the only
             mark that says so — a disclosure, not a third control competing
             with the two on the right. */}
+        {/* THE TITLE PICKS THE BOARD; the key on the right does the filters.
+            They both opened the filter panel, so the scope the title names was
+            changed three taps inside a sheet about something else — and the
+            board list, which is the long one, was the part buried. Straight to
+            the searchable list now, the way the Planner's title key goes
+            straight to its boards. */}
         <TouchableOpacity
           style={styles.headerTitleKey}
           onPressIn={() => tapHaptic()}
-          onPress={() => setFilterOpen(true)}
+          onPress={() => setTopicSearchOpen(true)}
           activeOpacity={0.7}
           accessibilityRole="button"
-          accessibilityLabel={`Notes, ${scopeLabel}. Change the filters.`}
+          accessibilityLabel={`Notes, ${scopeLabel}. Choose a board or topic.`}
           testID="notes-scope-key"
         >
           <Text style={styles.title} numberOfLines={1}>
