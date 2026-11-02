@@ -448,3 +448,39 @@ describe('MusicVault', () => {
     expect(mockApi.put).toHaveBeenCalledWith('/media/one/tags', { tags: ['Chill', 'Focus'] });
   });
 });
+
+/**
+ * A playlist of a CD is a numbered run, and the library hands it over
+ * newest-first. Plain string order is not enough either: '1' sorts before '9'
+ * a character at a time, so "No10" lands before "No9".
+ */
+describe('playlist track order', () => {
+  const titleOf = (t) => t.originalName || t.name || '';
+  const byTitleNatural = (a, b) => String(titleOf(a) || '')
+    .localeCompare(String(titleOf(b) || ''), undefined, { numeric: true, sensitivity: 'base' });
+  const names = (rows) => rows.slice().sort(byTitleNatural).map(titleOf);
+
+  it('counts up, whatever order it arrived in', () => {
+    const arrived = ['CD1-Track No09', 'CD1-Track No03', 'CD1-Track No01', 'CD1-Track No02']
+      .map((originalName) => ({ originalName }));
+    expect(names(arrived)).toEqual([
+      'CD1-Track No01', 'CD1-Track No02', 'CD1-Track No03', 'CD1-Track No09',
+    ]);
+  });
+
+  it('puts 9 before 10 — the case plain string order gets wrong', () => {
+    const arrived = ['Track 10', 'Track 9', 'Track 1'].map((originalName) => ({ originalName }));
+    expect(names(arrived)).toEqual(['Track 1', 'Track 9', 'Track 10']);
+  });
+
+  it('does not split a run on case', () => {
+    const arrived = ['track 2', 'Track 1'].map((originalName) => ({ originalName }));
+    expect(names(arrived)).toEqual(['Track 1', 'track 2']);
+  });
+
+  it('survives a track with no name rather than throwing', () => {
+    const arrived = [{ originalName: 'B' }, {}, { originalName: 'A' }];
+    expect(() => names(arrived)).not.toThrow();
+    expect(names(arrived)).toHaveLength(3);
+  });
+});

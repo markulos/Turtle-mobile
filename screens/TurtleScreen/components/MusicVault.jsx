@@ -74,6 +74,21 @@ const fmtTime = (sec) => {
  * pager there is nothing to go back to and the vault header already names the
  * page, so the internal back/title row is omitted.
  */
+/**
+ * Track order inside a playlist: by TITLE, read the way a person reads it.
+ *
+ * `numeric` is the whole point — plain string order puts "No10" before "No9",
+ * because '1' sorts before '9' one character at a time. With it, the run of
+ * digits is compared as a number, so No01 … No09, No10, No11 come out in the
+ * order the names obviously mean. `sensitivity: 'base'` so case and accents do
+ * not split a run either.
+ *
+ * A playlist arrives in whatever order the library handed it over, which is
+ * newest-first — right for a library, wrong for a CD whose tracks are numbered.
+ */
+const byTitleNatural = (a, b) => String(titleOf(a) || '')
+  .localeCompare(String(titleOf(b) || ''), undefined, { numeric: true, sensitivity: 'base' });
+
 export default function MusicVault({
   onClose, topInset = 0, bottomInset = 0, chromePx, chromeScrollAnim,
   // Search, on the same contract the Boards and Files pages use: the query is
@@ -356,12 +371,14 @@ export default function MusicVault({
   /** One playlist's tracks, with Transcribed unioned from the local list. */
   const tracksInPlaylist = useCallback((name) => {
     const tagged = playlistIndex.get(name) || [];
-    if (name !== TRANSCRIBED_PLAYLIST) return tagged;
+    // A NEW array — `playlistIndex`'s own is shared, and sorting in place would
+    // reorder it under every other reader.
+    if (name !== TRANSCRIBED_PLAYLIST) return tagged.slice().sort(byTitleNatural);
     const seen = new Set(tagged.map((t) => String(t.id)));
     const derived = visibleTracks.filter(
       (t) => transcribedIds.has(String(t.id)) && !seen.has(String(t.id)),
     );
-    return derived.length ? [...tagged, ...derived] : tagged;
+    return (derived.length ? [...tagged, ...derived] : tagged.slice()).sort(byTitleNatural);
   }, [playlistIndex, visibleTracks, transcribedIds]);
 
   // ── Playlists page ─────────────────────────────────────────────────────────
