@@ -51,6 +51,7 @@ import { boardLabel } from '../utils/taskHelpers';
 import { focusStats, formatMinutes } from '../utils/focusStats';
 import { rangeSummaries } from '../utils/focusRanges';
 import FocusStatsPanel from './FocusStatsPanel';
+import FocusDayPanel from './FocusDayPanel';
 
 // One breath in, one out. Slower than a real breath on purpose — matching it
 // exactly reads as a pulse-ox monitor; a little slower reads as calm.
@@ -380,26 +381,50 @@ function useCountUp(value, ms = 520) {
  * counts up to it and `format` turns each step into what you read, so "1h 05m"
  * climbs as honestly as "65" would.
  */
-function Tile({ icon, label, count, format, value, caption, pal, accent, enter, testID }) {
+function Tile({ icon, label, count, format, value, caption, pal, accent, enter, onPress, testID }) {
   const shown = useCountUp(count ?? 0);
   const text = count == null ? value : (format ? format(shown) : String(shown));
-  return (
-    <Animated.View
-      style={[
-        styles.tile,
-        { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop },
-        enter,
-      ]}
-      testID={testID}
-    >
+  const skin = { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop };
+  const body = (
+    <>
       <View style={styles.tileTop}>
         <View style={[styles.iconTile, { backgroundColor: pal.tile }]}>
           <Icon name={icon} size={15} color={accent || pal.text} />
         </View>
         <Text style={[styles.label, { color: pal.muted }]} numberOfLines={1}>{label}</Text>
+        {/* The same chevron the period keys below wear, for the same reason:
+            it is the only thing on an otherwise identical card that says this
+            one opens. */}
+        {onPress ? <Icon name="chevron-right" size={16} color={pal.muted} /> : null}
       </View>
       <Text style={[styles.value, { color: accent || pal.text }]} numberOfLines={1}>{text}</Text>
       <Text style={[styles.caption, { color: pal.muted }]} numberOfLines={1}>{caption}</Text>
+    </>
+  );
+
+  if (!onPress) {
+    return (
+      <Animated.View style={[styles.tileSlot, styles.tileCard, skin, enter]} testID={testID}>
+        {body}
+      </Animated.View>
+    );
+  }
+  // The grid cell and the card are split when the tile opens something: the
+  // slot keeps flexBasis (a percentage of the ROW), and the card fills it.
+  // Leaving flexBasis on the inner Pressable would read as 47% of the
+  // wrapper's main axis, which is its height.
+  return (
+    <Animated.View style={[styles.tileSlot, enter]}>
+      <Pressable
+        onPressIn={() => tapHaptic()}
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`${label}, ${text}, ${caption}. Open the day's stats.`}
+        testID={testID}
+        style={({ pressed }) => [styles.tileCard, styles.tileFill, skin, pressed && styles.tilePressed]}
+      >
+        {body}
+      </Pressable>
     </Animated.View>
   );
 }
@@ -651,6 +676,10 @@ function FocusPage({
   // Which period's panel is open, or null. Holding the RANGE rather than a
   // boolean is what lets four keys share one panel.
   const [statsRange, setStatsRange] = useState(null);
+  // The Today tile's own page. A boolean, not a day: the tile is about today
+  // and nothing else opens this yet — when something does, this becomes the
+  // day it was opened for, which is already all `FocusDayPanel` takes.
+  const [dayOpen, setDayOpen] = useState(false);
   const insets = useSafeAreaInsets();
 
   // ── The entrance ──────────────────────────────────────────────────────────
@@ -714,6 +743,10 @@ function FocusPage({
           caption={stats.todaySessions === 1 ? '1 block' : `${stats.todaySessions} blocks`}
           pal={pal}
           enter={enterAt(0, 0.35)}
+          // The only tile that opens: "50m · 2 blocks" is a number with
+          // nothing beside it, and whether 50 minutes is good depends on what
+          // your Tuesdays usually look like. That is what the day panel is.
+          onPress={() => setDayOpen(true)}
           testID="focus-tile-today"
         />
         <Tile
@@ -929,6 +962,25 @@ function FocusPage({
         EdgeSwipePage's `overlay` prop). A Modal also escapes the pager, which
         an absolute child could not — it would scroll away sideways with the
         page it was pinned to. */}
+    {/* Today, opened out: the day's blocks, and the two comparisons a single
+        day cannot make about itself (see FocusDayPanel). Mounted only while
+        open, like the stats page beside it. */}
+    <EdgeSwipePage visible={dayOpen} onClose={() => setDayOpen(false)}>
+      {dayOpen && (
+        <FocusDayPanel
+          sessions={sessions}
+          boardOfTask={boardOfTask}
+          taskOfId={taskOfId}
+          pal={pal}
+          theme={theme}
+          dayMs={now}
+          onClose={() => setDayOpen(false)}
+          insetTop={insets.top}
+          bottomInset={Math.max(insets.bottom, bottomInset)}
+        />
+      )}
+    </EdgeSwipePage>
+
     <EdgeSwipePage visible={!!statsRange} onClose={() => setStatsRange(null)}>
       {!!statsRange && (
         <FocusStatsPanel
@@ -1009,7 +1061,12 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.75 },
 
   tiles: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  tile: { flexGrow: 1, flexBasis: '47%', borderRadius: 14, borderWidth: 1, padding: 12, gap: 2 },
+  // The grid cell, and the card that fills it. Split so a tile that OPENS
+  // something can put a Pressable between them — see Tile.
+  tileSlot: { flexGrow: 1, flexBasis: '47%' },
+  tileCard: { borderRadius: 14, borderWidth: 1, padding: 12, gap: 2 },
+  tileFill: { flex: 1 },
+  tilePressed: { opacity: 0.72 },
   tileTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   iconTile: { width: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   label: { flex: 1, fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9, textTransform: 'uppercase' },
