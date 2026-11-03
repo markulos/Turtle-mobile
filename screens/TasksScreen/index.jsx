@@ -3254,19 +3254,7 @@ export default function TasksScreen() {
               which board you were on and offered no way to be on another. A
               title that states a scope should be the way to pick it. */}
           <TouchableOpacity
-            style={[
-              styles.headerTitleKey,
-              // The backdrop that says PRESS ME. The title has opened the board
-              // picker since the header key went away, and nothing on it said
-              // so: a chevron at the end of a screen title reads as decoration,
-              // and a title is the last thing anyone tries to tap. A filled
-              // pill is the same promise every other control on this header
-              // makes. Tinted with the board's own colour when there is one,
-              // so the thing you press to change the scope is wearing it.
-              plannerScopeInk
-                ? { backgroundColor: `${plannerScopeInk}1A` }
-                : styles.headerTitleKeyPlain,
-            ]}
+            style={styles.headerTitleKey}
             onPressIn={() => tapHaptic()}
             onPress={() => { setBoardQuery(''); setBoardPickerOpen(true); }}
             activeOpacity={0.7}
@@ -3274,18 +3262,36 @@ export default function TasksScreen() {
             accessibilityLabel={`Planner, ${plannerScopeLabel}. Choose a board.`}
             testID="planner-scope-key"
           >
-            <Text style={styles.headerTitleLarge} numberOfLines={1}>
-              {/* Two weights, the vault's exactly: the constant half hairline,
-                  the half that actually varies in a regular weight. What the
-                  board IS is the part worth reading. */}
-              <Text style={styles.headerTitleThin}>Planner </Text>
-              {/* …and the half that varies wears the colour that varies with
-                  it, so the scope is legible as a GLANCE and not only as a
-                  read. Unscoped, there is no hue to wear. */}
-              <Text style={[styles.headerTitleStrong, plannerScopeInk && { color: plannerScopeInk }]}>
-                {`• ${plannerScopeLabel}`}
-              </Text>
+            {/* Two weights, the vault's exactly: the constant half hairline,
+                the half that actually varies in a regular weight. What the
+                board IS is the part worth reading — and it is also the only
+                part that is a CHOICE, which is why the backdrop stops here
+                and the word "Planner" stays bare type. A pill around the whole
+                title made the screen's name look pressable too. */}
+            <Text style={[styles.headerTitleWord, styles.headerTitleThin]} numberOfLines={1}>
+              Planner
             </Text>
+            <View
+              style={[
+                styles.headerScopePill,
+                // Tinted with the board's own colour, so the control that
+                // changes the scope is wearing the scope. The EDGE is what
+                // makes it read as a control rather than a highlight: a fill
+                // this faint is a wash at a glance, and a hairline around it
+                // is the house's way of saying a thing has a boundary you can
+                // press (the same one the chips and the search field take).
+                plannerScopeInk
+                  ? { backgroundColor: `${plannerScopeInk}1A`, borderColor: `${plannerScopeInk}66` }
+                  : styles.headerScopePillPlain,
+              ]}
+            >
+              <Text
+                style={[styles.headerTitleScope, styles.headerTitleStrong, plannerScopeInk && { color: plannerScopeInk }]}
+                numberOfLines={1}
+              >
+                {plannerScopeLabel}
+              </Text>
+            </View>
             {/* The one mark that says the title opens something. Small and in
                 the muted ink — it is a disclosure, not a control competing with
                 the two keys on the right. */}
@@ -4753,41 +4759,55 @@ const createStyles = (theme) => StyleSheet.create({
   // that hugs them — see headerTitleSpacer for what holds the two keys out to
   // the right now that this no longer stretches.
   headerTitleKey: {
-    // flexShrink, NOT flex: 1. The pill has to HUG the title — grown to fill
-    // the row it would stretch across the empty space to the two keys and read
-    // as a bar rather than a button. Shrink still lets a long board name give
-    // way to the keys instead of pushing one off the edge (STYLE-RULES §2).
+    // flexShrink, NOT flex: 1. The row has to HUG — grown to fill, it would
+    // stretch across the empty space to the two keys and put the chevron out
+    // by the search key, miles from the name it belongs to. Shrink still lets
+    // a long board name give way rather than pushing a control off the edge
+    // (STYLE-RULES §2).
     flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    // The pill. Snug: this is a screen title, and the breath around the type
-    // is most of what makes it still read as one.
-    paddingLeft: 10,
-    paddingRight: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    gap: 6,
   },
-  // Unscoped there is no hue to borrow, so it takes the house control fill —
-  // the same surface the filter chips sit on.
-  headerTitleKeyPlain: {
+  // Both halves take the app's screen title size (utils/headerType), so every
+  // tab's title is the same type and the set reads as one product. The two
+  // WEIGHTS below are this header's own — the constant half hairline, the half
+  // that varies in a regular weight.
+  //
+  // The screen's name. Constant, so it never shrinks: there is nothing to
+  // truncate and it is the shorter half anyway.
+  headerTitleWord: {
+    ...SCREEN_TITLE,
+    color: theme.colors.textPrimary,
+    flexShrink: 0,
+  },
+  // THE BOARD NAME'S BACKDROP — the pill, and the only part of the title that
+  // is a control. Snug: this is still a screen title, and the breath around
+  // the type is most of what keeps it reading as one.
+  headerScopePill: {
+    flexShrink: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 11,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  // Unscoped there is no hue to borrow, so the pill takes the house control
+  // fill and the house hairline — the same pair the filter chips wear.
+  headerScopePillPlain: {
     backgroundColor: theme.colors.surfaceElevated,
+    borderColor: theme.colors.border,
+  },
+  // The board name itself. Shrinks inside the pill, so a long one truncates
+  // within its backdrop instead of dragging the backdrop off the screen.
+  headerTitleScope: {
+    ...SCREEN_TITLE,
+    color: theme.colors.textPrimary,
+    flexShrink: 1,
   },
   // Holds the two keys against the right edge now that the title hugs. Grows
   // into whatever is spare and never shrinks — when the row runs out of room
   // the PILL gives way, which is the behaviour the title already had.
   headerTitleSpacer: { flexGrow: 1, flexShrink: 0, flexBasis: 0 },
-  headerTitleLarge: {
-    // Shrinks to whatever sits beside it rather than pushing it off the edge
-    // (STYLE-RULES §2).
-    flex: 1,
-    // The app's screen title (utils/headerType): every tab's title is this
-    // size, so the set reads as one product. The two WEIGHTS below are this
-    // header's own — the constant half hairline, the half that varies regular.
-    ...SCREEN_TITLE,
-    color: theme.colors.textPrimary,
-  },
-
   headerTitleThin: { fontWeight: '100' },
   headerTitleStrong: { fontWeight: '400' },
   // A horizontal ScrollView is flexGrow:1 by default and would swallow the
