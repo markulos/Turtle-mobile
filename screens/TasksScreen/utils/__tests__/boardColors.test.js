@@ -7,7 +7,7 @@
  * and separation from the neighbours — are asserted as PROPERTIES rather than
  * as hex values, so adding a colour tells you whether it belongs.
  */
-import { BOARD_COLORS, boardColorAt, inkOn, luminanceOf } from '../boardColors';
+import { BOARD_COLORS, boardColorAt, boardInkOn, inkOn, luminanceOf } from '../boardColors';
 
 const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
 const linear = (c) => {
@@ -21,6 +21,20 @@ const luminance = (hex) => {
 const contrast = (a, b) => {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
+};
+
+/** Hue in degrees, for asserting that a legibility fix did not change the colour. */
+const hue = (hex) => {
+  const [r, g, b] = rgb(hex).map((v) => v / 255);
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (!d) return 0;
+  let h;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  h *= 60;
+  return h < 0 ? h + 360 : h;
 };
 
 const hsv = (hex) => {
@@ -138,5 +152,67 @@ describe('boardColorAt', () => {
 
   test('and a negative index is still a colour, not undefined', () => {
     expect(boardColorAt(-1)).toBe(BOARD_COLORS[BOARD_COLORS.length - 1]);
+  });
+});
+
+/**
+ * The palette is sized to be FILLED WITH — every colour carries white or
+ * near-black type at 4.5:1 (`inkOn`). Being the type is the other half of the
+ * problem and the palette does not solve it: Indigo is 2.3:1 on a dark page,
+ * Leaf is 2.2:1 on the warm off-white. A board name nobody can read is worse
+ * than one in the plain ink, because it still looks deliberate.
+ */
+describe('boardInkOn — the palette as ink rather than as fill', () => {
+  // The two pages, as `pageColor(theme)` actually resolves them: a lifted
+  // off-black and a warm off-white, neither of them the raw token.
+  const DARK = '#121214';
+  const LIGHT = '#F5F3EF';
+
+  test.each([DARK, LIGHT])('every board clears the legibility floor on %s', (page) => {
+    for (const c of BOARD_COLORS) {
+      expect(contrast(boardInkOn(c, page), page)).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  // The whole reason this keeps the hue instead of reaching for the theme's
+  // ink: the point of the colour is that the board is recognisable as itself.
+  test('it moves the lightness and leaves the hue alone', () => {
+    for (const page of [DARK, LIGHT]) {
+      for (const c of BOARD_COLORS) {
+        const after = boardInkOn(c, page);
+        // Hue survives the round trip through HSL within a degree or two.
+        const drift = Math.abs(hue(after) - hue(c));
+        expect(Math.min(drift, 360 - drift)).toBeLessThanOrEqual(2);
+        // Still a COLOUR and not a tinted grey — the "TOO DUSTY" failure is
+        // reachable from this direction too.
+        expect(hsv(after).s).toBeGreaterThan(0.3);
+      }
+    }
+  });
+
+  // The common case must cost nothing and change nothing: a colour that is
+  // already legible is the palette's own.
+  test('a colour that already clears it comes back untouched', () => {
+    // Rust on the off-white is 4.9:1 — it needs no help, and a "fix" that
+    // darkened it anyway would make the title and the chip's dot disagree.
+    expect(boardInkOn('#BF4A1F', LIGHT)).toBe('#BF4A1F');
+  });
+
+  test('it lightens on a dark page and darkens on a light one', () => {
+    const indigo = '#3949AB';
+    expect(luminance(boardInkOn(indigo, DARK))).toBeGreaterThan(luminance(indigo));
+    const leaf = '#7CB342';
+    expect(luminance(boardInkOn(leaf, LIGHT))).toBeLessThan(luminance(leaf));
+  });
+
+  // The caller falls back to its own ink on null; painting with the string
+  // "null" is the bug this prevents.
+  test('a non-colour is null, not a colour', () => {
+    expect(boardInkOn(undefined, LIGHT)).toBeNull();
+    expect(boardInkOn('not a colour', LIGHT)).toBeNull();
+  });
+
+  test('and with no page to measure against, the palette colour stands', () => {
+    expect(boardInkOn('#1976D2', undefined)).toBe('#1976D2');
   });
 });

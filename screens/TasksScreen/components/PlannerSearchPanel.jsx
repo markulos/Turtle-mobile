@@ -7,16 +7,22 @@
  * to first go somewhere you did not want to be. The field is on the header now,
  * so it is on every tab, and this is what it opens.
  *
- * ─── One surface, four questions ───────────────────────────────────────────
+ * ─── One surface, three questions ──────────────────────────────────────────
  *
- * The tab you opened it from decides what the rows MEAN, because the same words
- * are a different errand on each page:
+ * Not one per TAB — that was the earlier arrangement and it is the thing that
+ * went wrong. The header key read the tab underneath it, so the same magnifier
+ * searched boards on one page and started a focus block on another, and the
+ * plain question "where is that task" could only be asked from half the
+ * Planner. The key asks that one question now, from everywhere. What is left
+ * is three callers, each opening this from the surface its errand belongs to:
  *
- *   · agenda / calendar — "find this task". A hit opens it.
- *   · focus            — "what shall I work on?" A hit STARTS A BLOCK on it,
- *                        which is why its rows wear a play key and why its
- *                        empty query lists what is next rather than nothing.
- *   · boards           — "find this board". A hit scopes the Planner to it.
+ *   · list   — the header key. "Find this task", any task, any tab. A hit
+ *              opens it for editing.
+ *   · assign — the Focus deck's own picker. A hit NAMES the task the next
+ *              session is for; it does not start one. Composes as well as
+ *              finds, which is why its rows wear a key and its empty query
+ *              lists what is next rather than nothing.
+ *   · boards — the title. "Find this board". A hit scopes the Planner to it.
  *
  * What does NOT change is the surface: it is `VaultSearchPanel` wearing
  * `VaultResultRow`, the vault's board search exactly, because a second search
@@ -60,10 +66,8 @@ const ALL = 'All';
 /** What the field says it will do, per tab. The verb is the whole difference. */
 const PLACEHOLDER = {
   assign: 'Pick or create a task',
-  focus: 'Pick or create a task to focus on',
   boards: 'Search boards',
-  list: 'Search your tasks',
-  calendar: 'Search your tasks',
+  list: 'Search every task',
 };
 
 /**
@@ -87,10 +91,8 @@ const EMPTY = {
   // Only ever seen with an EMPTY field now: type anything and the create row
   // heads the list, so "nothing matches" is never a dead end.
   assign: 'No task matches that. A session with no task still counts.',
-  focus: 'No task matches that. Start a block without one from the Focus tab.',
   boards: 'No board matches that.',
   list: 'No task matches that.',
-  calendar: 'No task matches that.',
 };
 
 export default function PlannerSearchPanel({
@@ -111,14 +113,14 @@ export default function PlannerSearchPanel({
   boardStats,
   // (name) => hex, so a board's row wears the colour its cards do.
   boardColor,
-  // Take the whole screen rather than the area under the Planner header. The
-  // board PICKER does; the per-tab search does not, because you want to see
-  // which tab you are searching.
+  // Take the whole screen rather than the area under the Planner header. Every
+  // caller does: all three are a tab screen opening a picker from its own
+  // chrome, and none of them is improved by being framed by the page it came
+  // from. Kept as a prop because it is EdgeSwipePage's Modal-or-overlay choice,
+  // and an embedded caller would still need the overlay.
   fullScreen = false,
-  // (task) => void — open it. Agenda and Calendar.
+  // (task) => void — open it for editing. The header key.
   onOpenTask,
-  // (task) => void — start a focus block on it. Focus.
-  onFocusTask,
   // (task) => void — name the task the NEXT session is for, without starting
   // it. The Focus deck's own picker.
   onAssignTask,
@@ -135,7 +137,6 @@ export default function PlannerSearchPanel({
   const styles = useMemo(() => panelStyles(theme), [theme]);
   const q = String(query || '').trim();
   const isBoards = mode === 'boards';
-  const isFocus = mode === 'focus';
   const isAssign = mode === 'assign';
 
   // ── Boards: the names, filtered ───────────────────────────────────────────
@@ -159,10 +160,10 @@ export default function PlannerSearchPanel({
    * title of one of the answers — the same rule the Planner's finder uses
    * (CalendarView's `showCreate`), kept in one place so the two cannot drift.
    *
-   * Only where a create makes sense: picking a task for a session, or starting
-   * one. Searching the list or the boards is a lookup, not a composer.
+   * Only where a create makes sense: picking the task a session is for.
+   * Searching the tasks or the boards is a lookup, not a composer.
    */
-  const canCreate = (isAssign || isFocus) && !!onCreateTask;
+  const canCreate = isAssign && !!onCreateTask;
   const showCreate = canCreate && needsCreateRow(query, taskRows);
 
   const items = useMemo(
@@ -206,9 +207,8 @@ export default function PlannerSearchPanel({
   const pickTask = useCallback((task) => {
     tapHaptic();
     if (isAssign) onAssignTask?.(task);
-    else if (isFocus) onFocusTask?.(task);
     else onOpenTask?.(task);
-  }, [isAssign, isFocus, onAssignTask, onFocusTask, onOpenTask]);
+  }, [isAssign, onAssignTask, onOpenTask]);
 
   const renderRow = useCallback(({ item }) => {
     if (item.createTitle !== undefined) {
@@ -218,14 +218,14 @@ export default function PlannerSearchPanel({
           name={item.createTitle}
           // What pressing it will DO, said on the row itself: it does not just
           // make a task, it makes the one this session is about.
-          meta={isFocus ? 'New task · starts a block on it' : 'New task · for this session'}
+          meta="New task · for this session"
           accessibilityLabel={`Create task ${item.createTitle}`}
           testID="planner-search-create"
           onPress={createTask}
           leading={<Icon name="plus" size={20} color={theme.colors.accentInfo} />}
           trailing={(
             <View style={styles.playKey}>
-              <Icon name={isFocus ? 'play' : 'target'} size={16} color={theme.colors.accentInfo} />
+              <Icon name="target" size={16} color={theme.colors.accentInfo} />
             </View>
           )}
         />
@@ -267,7 +267,7 @@ export default function PlannerSearchPanel({
         theme={theme}
         name={t.title || 'Untitled'}
         meta={taskSearchMeta(t, { boardLabel, now: nowMs ?? Date.now() })}
-        accessibilityLabel={isAssign ? `Focus on ${t.title} next` : (isFocus ? `Focus on ${t.title}` : t.title)}
+        accessibilityLabel={isAssign ? `Focus on ${t.title} next` : t.title}
         testID={`planner-search-task-${t.id}`}
         onPress={() => pickTask(t)}
         leading={(
@@ -281,14 +281,14 @@ export default function PlannerSearchPanel({
         // same row otherwise, so the difference is drawn on it — said once, on
         // the thing you are about to press, rather than in a note above the
         // list that nobody reads twice.
-        trailing={(isFocus || isAssign) ? (
+        trailing={isAssign ? (
           <View style={styles.playKey}>
-            <Icon name={isAssign ? 'target' : 'play'} size={16} color={theme.colors.accentInfo} />
+            <Icon name="target" size={16} color={theme.colors.accentInfo} />
           </View>
         ) : null}
       />
     );
-  }, [theme, styles, selectedProject, isFocus, isAssign, pickBoard, pickTask, createTask, nowMs, boardStats, boardColor]);
+  }, [theme, styles, selectedProject, isAssign, pickBoard, pickTask, createTask, nowMs, boardStats, boardColor]);
 
   return (
     <VaultSearchPanel
@@ -324,14 +324,13 @@ export default function PlannerSearchPanel({
       // clearance — an absolute fill lays out over the hood regardless — so the
       // 0 this used to pass put the search field through the clock. See
       // panelTopInset.
-      // The Focus tab's list before you have typed is a SUGGESTION, and saying
-      // so is the difference between "here is what is next" and "here are some
-      // tasks for no reason".
-      ListHeaderComponent={(isFocus || isAssign) && !q ? (
+      // The picker's list before you have typed is a SUGGESTION, and saying so
+      // is the difference between "here is what is next" and "here are some
+      // tasks for no reason". The header key's list needs no such note: an
+      // untyped search obviously has nothing to say yet.
+      ListHeaderComponent={isAssign && !q ? (
         <Text style={styles.hint} testID="planner-search-focus-hint">
-          {isAssign
-            ? 'Up next — pick one, or type a new one. You still press Start session.'
-            : 'Up next — pick one to start a focus block on it.'}
+          Up next — pick one, or type a new one. You still press Start session.
         </Text>
       ) : null}
       theme={theme}

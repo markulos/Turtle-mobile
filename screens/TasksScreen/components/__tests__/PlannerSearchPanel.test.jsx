@@ -55,7 +55,6 @@ const props = (over = {}) => ({
   projects: ['Admin', 'Travel'],
   selectedProject: 'All',
   onOpenTask: jest.fn(),
-  onFocusTask: jest.fn(),
   onPickBoard: jest.fn(),
   onAssignTask: jest.fn(),
   theme,
@@ -69,35 +68,31 @@ const press = async (testID) => {
   await act(async () => { fireEvent.press(el); });
 };
 
-describe('the same field, a different errand per tab', () => {
+describe('one errand per caller, not one per tab', () => {
   // Search used to be the Boards tab's alone: to look for a TASK you first had
-  // to go to the one page that does not list tasks.
-  test('the agenda searches tasks, and a hit opens it', async () => {
+  // to go to the one page that does not list tasks. Then it was the header's,
+  // but it still read the tab underneath — so on two of the four tabs the
+  // magnifier did something other than find a task.
+  test('the header key searches tasks, and a hit opens it', async () => {
     const p = props({ mode: 'list', query: 'ferry' });
     await render(<PlannerSearchPanel {...p} />);
     await press('planner-search-task-t2');
     expect(p.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: 't2' }));
-    expect(p.onFocusTask).not.toHaveBeenCalled();
+    expect(p.onAssignTask).not.toHaveBeenCalled();
   });
 
-  test('the calendar searches the same tasks the same way', async () => {
-    const p = props({ mode: 'calendar', query: 'passport' });
+  // The whole point of the mode collapsing to one: the rows must not change
+  // meaning with the page behind them.
+  test('the task search never scopes a board, whatever it was opened over', async () => {
+    const p = props({ mode: 'list', query: 'passport' });
     await render(<PlannerSearchPanel {...p} />);
+    expect(screen.queryByTestId('planner-search-board-Admin')).toBeNull();
     await press('planner-search-task-t1');
     expect(p.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: 't1' }));
+    expect(p.onPickBoard).not.toHaveBeenCalled();
   });
 
-  // The Focus tab's rows mean "start a block on this", which is a different
-  // verb on the same noun — so it must not quietly open the task instead.
-  test('the focus tab starts a block on the task it was given', async () => {
-    const p = props({ mode: 'focus', query: 'ferry' });
-    await render(<PlannerSearchPanel {...p} />);
-    await press('planner-search-task-t2');
-    expect(p.onFocusTask).toHaveBeenCalledWith(expect.objectContaining({ id: 't2' }));
-    expect(p.onOpenTask).not.toHaveBeenCalled();
-  });
-
-  test('the boards tab searches boards, and a hit scopes the planner', async () => {
+  test('the title searches boards, and a hit scopes the planner', async () => {
     const p = props({ mode: 'boards', query: 'trav' });
     await render(<PlannerSearchPanel {...p} />);
     await press('planner-search-board-Travel');
@@ -105,21 +100,24 @@ describe('the same field, a different errand per tab', () => {
   });
 
   test('the field says which errand it is on', async () => {
-    await render(<PlannerSearchPanel {...props({ mode: 'focus' })} />);
-    expect(screen.getByTestId('planner-search-input').props.placeholder).toBe('Pick or create a task to focus on');
+    const { unmount } = await render(<PlannerSearchPanel {...props({ mode: 'list' })} />);
+    expect(screen.getByTestId('planner-search-input').props.placeholder).toBe('Search every task');
+    await act(async () => { unmount(); });
+
+    await render(<PlannerSearchPanel {...props({ mode: 'boards' })} />);
+    expect(screen.getByTestId('planner-search-input').props.placeholder).toBe('Search boards');
   });
 });
 
 // The Focus deck's own picker. Same panel, same rows, a different VERB: the
-// header's focus search starts a block on what you pick, this one only names
-// what the next one will be about.
+// header key opens what you pick, this one only names what the next session
+// will be about.
 describe('assigning a task to the next session', () => {
   test('a hit names the task instead of starting anything', async () => {
     const p = props({ mode: 'assign', query: 'ferry' });
     await render(<PlannerSearchPanel {...p} />);
     await press('planner-search-task-t2');
     expect(p.onAssignTask).toHaveBeenCalledWith(expect.objectContaining({ id: 't2' }));
-    expect(p.onFocusTask).not.toHaveBeenCalled();
     expect(p.onOpenTask).not.toHaveBeenCalled();
   });
 
@@ -227,23 +225,16 @@ describe('making the task you were looking for', () => {
     expect(screen.queryByTestId('planner-search-create')).toBeNull();
   });
 
-  // The row says what pressing it will DO, and the two entry points do different
-  // things with what they make — one names the next session's task, the other
-  // starts a block there and then.
+  // The row says what pressing it will DO, rather than only that it will make
+  // something: what it makes is the task this session is about.
   test('on the picker, the row says it names the next session', async () => {
     await render(<PlannerSearchPanel {...creating({ query: 'Wash the car' })} />);
     expect(screen.getByTestId('planner-search-create')).toHaveTextContent(/for this session/);
   });
 
-  test('on the Focus search, it says it starts one there and then', async () => {
-    await render(<PlannerSearchPanel {...creating({ mode: 'focus', query: 'Wash the car' })} />);
-    expect(screen.getByTestId('planner-search-create')).toHaveTextContent(/starts a block on it/);
-  });
-
-  // Searching the agenda, the calendar or the boards is a LOOKUP. Offering to
-  // make a task from a field whose press opens one would be a different verb on
-  // the same row.
-  test.each(['list', 'calendar', 'boards'])('%s is a lookup, and never composes', async (mode) => {
+  // Searching the tasks or the boards is a LOOKUP. Offering to make a task from
+  // a field whose press opens one would be a different verb on the same row.
+  test.each(['list', 'boards'])('%s is a lookup, and never composes', async (mode) => {
     await render(<PlannerSearchPanel {...creating({ mode, query: 'Wash the car' })} />);
     expect(screen.queryByTestId('planner-search-create')).toBeNull();
   });
@@ -323,20 +314,27 @@ describe('the answers', () => {
   });
 
   // An empty field answering "nothing" teaches you the search is broken. On
-  // Focus in particular the whole errand is "pick something to work on".
+  // the picker in particular the whole errand is "pick something to work on".
   test('an empty field lists what is next rather than nothing', async () => {
     await render(<PlannerSearchPanel {...props({ query: '' })} />);
     expect(screen.getByTestId('planner-search-task-t1')).toBeTruthy();
     expect(screen.getByTestId('planner-search-task-t2')).toBeTruthy();
   });
 
-  test('…and on Focus it says that is what the list is', async () => {
-    await render(<PlannerSearchPanel {...props({ mode: 'focus', query: '' })} />);
+  test('…and on the picker it says that is what the list is', async () => {
+    await render(<PlannerSearchPanel {...props({ mode: 'assign', query: '' })} />);
     expect(screen.getByTestId('planner-search-focus-hint')).toBeTruthy();
   });
 
+  // The header key's list needs no such note — an untyped search has nothing
+  // to explain — and a "pick one to start" hint over it would be a lie.
+  test('the plain task search carries no picker hint', async () => {
+    await render(<PlannerSearchPanel {...props({ mode: 'list', query: '' })} />);
+    expect(screen.queryByTestId('planner-search-focus-hint')).toBeNull();
+  });
+
   test('the hint goes once you have actually asked something', async () => {
-    await render(<PlannerSearchPanel {...props({ mode: 'focus', query: 'ferry' })} />);
+    await render(<PlannerSearchPanel {...props({ mode: 'assign', query: 'ferry' })} />);
     expect(screen.queryByTestId('planner-search-focus-hint')).toBeNull();
   });
 
@@ -345,9 +343,9 @@ describe('the answers', () => {
     expect(screen.getByText('Admin · Tomorrow')).toBeTruthy();
   });
 
-  test('nothing matching says so in the tab’s own words', async () => {
-    await render(<PlannerSearchPanel {...props({ mode: 'focus', query: 'zzzz' })} />);
-    expect(screen.getByText(/No task matches that/)).toBeTruthy();
+  test('nothing matching says so in the caller’s own words', async () => {
+    await render(<PlannerSearchPanel {...props({ mode: 'assign', query: 'zzzz' })} />);
+    expect(screen.getByText(/A session with no task still counts/)).toBeTruthy();
   });
 });
 

@@ -19,7 +19,7 @@ import {
 } from 'react-native';
 import { depth, insetRule } from '../../utils/surfaceDepth';
 import { panelBottomInset } from '../../components/tabBarLayout';
-import { PAGE_WASH_COLORS, PAGE_WASH_LOCATIONS, PAGE_WASH_START, PAGE_WASH_END } from '../../utils/pageWash';
+import { PAGE_WASH_COLORS, PAGE_WASH_LOCATIONS, PAGE_WASH_START, PAGE_WASH_END, pageColor } from '../../utils/pageWash';
 import { SCREEN_TITLE, SCREEN_TITLE_ROW_H } from '../../utils/headerType';
 import AppTextInput from '../../components/AppTextInput';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -175,7 +175,7 @@ import { ScreenPortalHost, ScreenPortalProvider } from '../../components/ScreenP
 import PlannerSearchPanel from './components/PlannerSearchPanel';
 import PlannerFilterPanel from './components/PlannerFilterPanel';
 import { boardCardPalette } from './utils/cardPalette';
-import { boardColorAt } from './utils/boardColors';
+import { boardColorAt, boardInkOn } from './utils/boardColors';
 import FriendCard from '../TurtleScreen/components/FriendCard';
 import PeoplePopover from './components/PeoplePopover';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
@@ -1468,7 +1468,26 @@ export default function TasksScreen() {
     if (!projectName || projectName === 'All') return theme.colors.textSecondary;
     return projectColorMap[projectName] || theme.colors.textSecondary;
   }, [projectColorMap, theme.colors.textSecondary]);
-  
+
+  /**
+   * THE PICKED BOARD'S OWN COLOUR, for the two places its NAME is written: the
+   * title that states the scope, and the chip that clears it.
+   *
+   * The board already had a colour everywhere it was a shape — the card's left
+   * border, the month grid's pill, the chip's dot — and nowhere it was a word.
+   * A dot is a legend; the name is the label, and the label was the one part
+   * that looked the same whichever board you were on.
+   *
+   * Null when nothing is picked. "All Boards" is not a board and must not
+   * borrow a hue that means one, and a board with no colour in the map keeps
+   * the title's own ink rather than going grey.
+   */
+  const plannerScopeInk = useMemo(() => (
+    selectedProject && selectedProject !== 'All'
+      ? boardInkOn(projectColorMap[selectedProject], pageColor(theme))
+      : null
+  ), [selectedProject, projectColorMap, theme]);
+
   // Use collapsible tasks hook - ALL collapsed by default
   const collapsible = useCollapsibleTasks(doneTasks, projects, {
     showIncompleteOnly,
@@ -3256,7 +3275,12 @@ export default function TasksScreen() {
                   the half that actually varies in a regular weight. What the
                   board IS is the part worth reading. */}
               <Text style={styles.headerTitleThin}>Planner </Text>
-              <Text style={styles.headerTitleStrong}>{`• ${plannerScopeLabel}`}</Text>
+              {/* …and the half that varies wears the colour that varies with
+                  it, so the scope is legible as a GLANCE and not only as a
+                  read. Unscoped, there is no hue to wear. */}
+              <Text style={[styles.headerTitleStrong, plannerScopeInk && { color: plannerScopeInk }]}>
+                {`• ${plannerScopeLabel}`}
+              </Text>
             </Text>
             {/* The one mark that says the title opens something. Small and in
                 the muted ink — it is a disclosure, not a control competing with
@@ -3396,7 +3420,15 @@ export default function TasksScreen() {
             {selectedProject !== 'All' && (
               <View style={[styles.filterChip, styles.tagFilterChip]}>
                 <View style={[styles.ownerFilterDot, { backgroundColor: getProjectColor(selectedProject) }]} />
-                <Text style={[styles.filterChipText, styles.tagFilterChipText]}>{boardLabel(selectedProject)}</Text>
+                {/* The same ink as the title above it: one board, named twice
+                    on one screen, must not be two colours. */}
+                <Text style={[
+                  styles.filterChipText,
+                  styles.tagFilterChipText,
+                  plannerScopeInk && { color: plannerScopeInk },
+                ]}>
+                  {boardLabel(selectedProject)}
+                </Text>
                 <TouchableOpacity
                   onPress={() => setSelectedProject('All')}
                   accessibilityRole="button"
@@ -3451,31 +3483,37 @@ export default function TasksScreen() {
           people bottom sheet reachable only from inside that fold. */}
       <PlannerSearchPanel
         visible={searchOpen}
-        // The tab you opened it from is the errand: find a task, find a board,
-        // or pick something to focus on.
-        mode={viewMode}
+        /* ONE ERRAND, ON EVERY TAB: find a task, anywhere in the pond.
+         *
+         * It used to be whichever errand the page underneath it was about —
+         * boards on the Inbox tab, start-a-block on Focus — so the same key
+         * answered a different question depending on where it was pressed,
+         * and the question it could not answer from two of the four tabs was
+         * the one it looks like it asks. The other two errands kept the
+         * surfaces that are actually ABOUT them, which is where they were
+         * always easier to find: the TITLE opens the board picker, and the
+         * Focus deck opens its own task picker. */
+        mode="list"
+        // The whole screen. A search of every task framed inside the tab you
+        // happened to be standing on said the opposite of what it does — and
+        // the list is as long as the pond, so the room is the point.
+        fullScreen
         query={plannerQuery}
         onQueryChange={setPlannerQuery}
         onClose={() => setSearchOpen(false)}
         scope={searchScope}
         onScopeChange={setSearchScope}
         taskIndex={taskIndex}
-        projects={projects}
-        selectedProject={selectedProject}
-        boardStats={boardStats}
-        boardColor={getProjectColor}
-        onOpenTask={(task) => { setSearchOpen(false); openDetail(task); }}
-        onFocusTask={(task) => { setSearchOpen(false); startFocusOnTask(task); }}
-        // The Focus tab's search STARTS what you pick, so creating from it
-        // starts a block on the new task — which is also what puts it on today.
-        onCreateTask={async (title) => {
+        // A hit opens the task's EDIT form, not the read-only detail sheet:
+        // you went looking for it in order to DO something to it, and the
+        // sheet made every one of those things a second press on an Edit key.
+        onOpenTask={(task) => {
           setSearchOpen(false);
-          const made = await createFocusTask(title);
-          if (made) startFocusOnTask(made);
+          // Edit the LIVE row. A result is a snapshot of the index, which is
+          // rebuilt on a beat of its own — the form must open on what the
+          // pond holds now, not on what the search was holding.
+          openEditForm((tasks || []).find((t) => t && t.id === task.id) || task);
         }}
-        // Picking a board scopes the whole Planner to it — the title says so,
-        // and every tab is already looking at that scope.
-        onPickBoard={(name) => { setSearchOpen(false); setSelectedProject(name); }}
         theme={theme}
         isDark={theme.mode === 'dark'}
       />
