@@ -175,6 +175,30 @@ export function scoreTask(rec, q) {
  */
 export const TASK_SCOPES = ['all', 'todo', 'done', 'overdue'];
 
+/**
+ * THE BOARD SCOPE, which is the Planner's and not the search's.
+ *
+ * One scope, named in the title, obeyed by every tab — so a search run from
+ * inside a board answers about that board. A field that quietly reached past
+ * the scope the rest of the screen is keeping would be the one place in the
+ * Planner where "Job search" did not mean Job search.
+ *
+ * Matched on the task's own `project` rather than the index's lowercased copy:
+ * board names are compared for IDENTITY here, not searched, and two boards
+ * differing only in case are two boards.
+ *
+ * 'All' is the screen's sentinel for no scope, and 'No Project' is a real
+ * choice meaning the boardless — the same two sentinels inboxDestination reads.
+ */
+export const BOARD_ANY = 'All';
+export const BOARD_NONE = 'No Project';
+
+function inBoard(rec, board) {
+  if (!board || board === BOARD_ANY) return true;
+  const project = rec?.task?.project || '';
+  return board === BOARD_NONE ? !project : project === board;
+}
+
 function inScope(rec, scope, todayMs) {
   if (scope === 'todo') return !rec.done;
   if (scope === 'done') return rec.done;
@@ -202,12 +226,18 @@ export function startOfToday(now = Date.now()) {
  * in the no-query branch below: the single-kind scopes are a SCHEDULE (soonest
  * dated first, undated behind), and `all` is a PILE (open above closed, each
  * half newest-added first).
+ *
+ * `board` is the Planner's scope (see inBoard) and is applied BEFORE the limit,
+ * which is the only order that works: filtering the answers afterwards would
+ * cap at `limit` across every board and then throw most of them away, so a
+ * small board inside a big pond would come back half empty.
  */
-export function rankTasks(index, query, { limit = 50, scope = 'all', now = Date.now() } = {}) {
+export function rankTasks(index, query, { limit = 50, scope = 'all', board = null, now = Date.now() } = {}) {
   const todayMs = startOfToday(now);
   const pool = [];
   for (const rec of index || []) {
     if (!rec) continue;
+    if (!inBoard(rec, board)) continue;
     if (!inScope(rec, scope, todayMs)) continue;
     pool.push(rec);
   }

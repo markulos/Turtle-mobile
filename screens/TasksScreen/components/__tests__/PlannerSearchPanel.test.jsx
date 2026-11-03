@@ -365,3 +365,52 @@ describe('the scope chips', () => {
     expect(screen.queryByTestId('planner-search-task-t1')).toBeNull();
   });
 });
+
+/**
+ * The Planner has ONE scope and the search is not exempt from it — but a
+ * narrowed list with nothing on screen saying so is indistinguishable from
+ * missing data, which is why the filter and the thing that announces it are
+ * tested together.
+ */
+describe('the board the Planner is on', () => {
+  const scoped = (over = {}) => props({ mode: 'list', selectedProject: 'Travel', ...over });
+
+  test('the answers are that board’s, and the others are gone', async () => {
+    await render(<PlannerSearchPanel {...scoped({ query: '' })} />);
+    expect(screen.getByTestId('planner-search-task-t2')).toBeTruthy();   // Travel
+    expect(screen.queryByTestId('planner-search-task-t1')).toBeNull();   // Admin
+  });
+
+  test('and the panel says which board it is inside', async () => {
+    await render(<PlannerSearchPanel {...scoped({ query: '' })} />);
+    expect(screen.getByTestId('planner-search-board-scope')).toHaveTextContent(/Travel/);
+  });
+
+  test('the field says it too, before you have typed', async () => {
+    await render(<PlannerSearchPanel {...scoped()} />);
+    expect(screen.getByTestId('planner-search-input').props.placeholder).toBe('Search Travel');
+  });
+
+  // Nothing in a board is a different fact from nothing anywhere, and the
+  // difference is the next thing you would do about it.
+  test('an empty result names the board rather than the pond', async () => {
+    await render(<PlannerSearchPanel {...scoped({ query: 'zzzz' })} />);
+    expect(screen.getByText(/No task in Travel matches that/)).toBeTruthy();
+  });
+
+  test('unscoped, there is no line and the field speaks for the pond', async () => {
+    await render(<PlannerSearchPanel {...props({ mode: 'list', selectedProject: 'All', query: '' })} />);
+    expect(screen.queryByTestId('planner-search-board-scope')).toBeNull();
+    expect(screen.getByTestId('planner-search-input').props.placeholder).toBe('Search every task');
+    expect(screen.getByTestId('planner-search-task-t1')).toBeTruthy();
+  });
+
+  // The board PICKER is how you leave the board. Scoping its list to the board
+  // you are trying to leave would be a picker you cannot use.
+  test('the board picker is never narrowed to the board it is picking from', async () => {
+    await render(<PlannerSearchPanel {...props({ mode: 'boards', selectedProject: 'Travel', query: '' })} />);
+    expect(screen.getByTestId('planner-search-board-Admin')).toBeTruthy();
+    expect(screen.getByTestId('planner-search-board-Travel')).toBeTruthy();
+    expect(screen.queryByTestId('planner-search-board-scope')).toBeNull();
+  });
+});

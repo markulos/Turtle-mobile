@@ -330,3 +330,67 @@ describe('needsCreateRow', () => {
     expect(needsCreateRow('Wash the car', [])).toBe(true);
   });
 });
+
+/**
+ * THE PLANNER HAS ONE SCOPE and the search is not exempt from it. A field that
+ * quietly reached past the board the rest of the screen was keeping would be
+ * the one place where being on "Job search" did not mean being on it.
+ */
+describe('the board scope', () => {
+  const POND = [
+    task({ id: 'a', title: 'Ring the recruiter', project: 'Job search' }),
+    task({ id: 'b', title: 'Ring the dentist', project: 'Admin' }),
+    // Genuinely boardless — the factory defaults to Admin, so it must be
+    // cleared explicitly or "no board" is not what is being tested.
+    task({ id: 'c', title: 'Ring the bank', project: '' }),
+  ];
+
+  test('a board narrows the answers to that board', () => {
+    expect(titles(rank(POND, 'ring', { board: 'Job search' }))).toEqual(['Ring the recruiter']);
+  });
+
+  test('“All” is the sentinel for no scope, not a board nobody has', () => {
+    expect(rank(POND, 'ring', { board: 'All' })).toHaveLength(3);
+    expect(rank(POND, 'ring', { board: null })).toHaveLength(3);
+    expect(rank(POND, 'ring')).toHaveLength(3);
+  });
+
+  test('“No Project” is a real scope: the boardless, and only those', () => {
+    expect(titles(rank(POND, 'ring', { board: 'No Project' }))).toEqual(['Ring the bank']);
+  });
+
+  // Board names are compared for IDENTITY, not searched — two boards differing
+  // only in case are two boards, and the index's lowercased copy is for
+  // matching text.
+  test('the board must be the board, not a near miss', () => {
+    expect(rank(POND, 'ring', { board: 'job search' })).toHaveLength(0);
+    expect(rank(POND, 'ring', { board: 'Job' })).toHaveLength(0);
+  });
+
+  test('it holds with no query, where the list is "what is next"', () => {
+    expect(titles(rank(POND, '', { board: 'Admin' }))).toEqual(['Ring the dentist']);
+  });
+
+  // The order matters: capping across every board and THEN discarding the
+  // other boards would leave a small board inside a big pond half empty.
+  test('the limit is applied to the board, not to the pond', () => {
+    const many = [];
+    for (let i = 0; i < 40; i++) many.push(task({ id: `x${i}`, title: `Chase invoice ${i}`, project: 'Admin' }));
+    for (let i = 0; i < 5; i++) many.push(task({ id: `j${i}`, title: `Chase application ${i}`, project: 'Job search' }));
+    const rows = rank(many, 'chase', { board: 'Job search', limit: 3 });
+    expect(rows).toHaveLength(3);
+    expect(rows.every((t) => t.project === 'Job search')).toBe(true);
+  });
+
+  // The board scope and the status chips are different questions and both
+  // have to hold at once.
+  test('it stacks with the status scope rather than replacing it', () => {
+    const mixed = [
+      task({ id: 'a', title: 'Ring the recruiter', project: 'Job search' }),
+      task({ id: 'b', title: 'Ring the referee', project: 'Job search', completed: true }),
+      task({ id: 'c', title: 'Ring the dentist', project: 'Admin', completed: true }),
+    ];
+    expect(titles(rank(mixed, 'ring', { board: 'Job search', scope: 'done' }))).toEqual(['Ring the referee']);
+    expect(titles(rank(mixed, 'ring', { board: 'Job search', scope: 'todo' }))).toEqual(['Ring the recruiter']);
+  });
+});

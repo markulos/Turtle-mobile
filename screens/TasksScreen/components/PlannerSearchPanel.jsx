@@ -43,7 +43,7 @@ import VaultSearchPanel from '../../TurtleScreen/components/VaultSearchPanel';
 import { VaultResultRow } from '../../TurtleScreen/components/VaultSearchDock';
 import { tapHaptic } from '../../../utils/haptics';
 import { boardLabel } from '../utils/taskHelpers';
-import { needsCreateRow, rankTasks, taskSearchMeta } from '../utils/taskSearch';
+import { BOARD_ANY, needsCreateRow, rankTasks, taskSearchMeta } from '../utils/taskSearch';
 
 /** How many answers a query gets. Far past what fits — the list scrolls. */
 const LIMIT = 60;
@@ -60,15 +60,15 @@ const TASK_SCOPE_CHIPS = [
   { key: 'done', label: 'Done' },
 ];
 
-/** The sentinel for "no board scope" — the screen's own, not a new one. */
-const ALL = 'All';
-
 /** What the field says it will do, per tab. The verb is the whole difference. */
 const PLACEHOLDER = {
   assign: 'Pick or create a task',
   boards: 'Search boards',
   list: 'Search every task',
 };
+
+/** …and what it says instead when the Planner is on a board. */
+const scopedPlaceholder = (board) => `Search ${boardLabel(board)}`;
 
 /**
  * What a board's row says under its name.
@@ -154,10 +154,27 @@ export default function PlannerSearchPanel({
     return list.filter((p) => String(p).toLowerCase().includes(needle));
   }, [projects, q]);
 
+  /**
+   * THE PLANNER'S BOARD, applied to the search.
+   *
+   * One scope, named in the title, obeyed by every tab — the search included,
+   * or it is the one place where being on a board does not mean being on it.
+   * Only where the rows are TASKS and only where the panel SAYS so (below):
+   * a filter you cannot see is indistinguishable from missing data.
+   *
+   * Not the board picker, obviously — that lists boards, and a board picker
+   * showing one board is a picker you cannot use to leave it.
+   */
+  const boardScope = (!isBoards && selectedProject && selectedProject !== BOARD_ANY)
+    ? selectedProject
+    : null;
+
   // ── Tasks: ranked against the index ───────────────────────────────────────
   const taskRows = useMemo(
-    () => (isBoards ? [] : rankTasks(taskIndex, query, { limit: LIMIT, scope, now: nowMs ?? Date.now() })),
-    [isBoards, taskIndex, query, scope, nowMs],
+    () => (isBoards
+      ? []
+      : rankTasks(taskIndex, query, { limit: LIMIT, scope, board: boardScope, now: nowMs ?? Date.now() })),
+    [isBoards, taskIndex, query, scope, boardScope, nowMs],
   );
 
   /**
@@ -185,7 +202,7 @@ export default function PlannerSearchPanel({
       // lives. Hidden only when the query has ruled it out.
       const offerAll = !q || 'all boards'.includes(q.toLowerCase());
       return [
-        ...(offerAll ? [{ key: 'board-__all__', name: ALL, isAll: true }] : []),
+        ...(offerAll ? [{ key: 'board-__all__', name: BOARD_ANY, isAll: true }] : []),
         ...boardRows.map((name) => ({ key: `board-${name}`, name })),
       ];
     },
@@ -239,18 +256,18 @@ export default function PlannerSearchPanel({
     if (item.name !== undefined) {
       const isAll = !!item.isAll;
       const active = isAll
-        ? (!selectedProject || selectedProject === ALL)
+        ? (!selectedProject || selectedProject === BOARD_ANY)
         : selectedProject === item.name;
       const tint = isAll ? null : boardColor?.(item.name);
       return (
         <VaultResultRow
           theme={theme}
           name={isAll ? 'All boards' : boardLabel(item.name)}
-          meta={boardMetaLine(boardStats?.[isAll ? ALL : item.name])}
+          meta={boardMetaLine(boardStats?.[isAll ? BOARD_ANY : item.name])}
           accessibilityLabel={isAll ? 'All boards, no scope' : `${boardLabel(item.name)} board`}
           accessibilityState={{ selected: active }}
           testID={`planner-search-board-${isAll ? '__all__' : item.name}`}
-          onPress={() => pickBoard(isAll ? ALL : item.name)}
+          onPress={() => pickBoard(isAll ? BOARD_ANY : item.name)}
           leading={(
             <Icon
               name={isAll ? 'folder-multiple-outline' : (active ? 'folder' : 'folder-outline')}
@@ -301,8 +318,8 @@ export default function PlannerSearchPanel({
       query={query}
       onQueryChange={onQueryChange}
       onClose={onClose}
-      placeholder={PLACEHOLDER[mode] || PLACEHOLDER.list}
-      accessibilityLabel={PLACEHOLDER[mode] || PLACEHOLDER.list}
+      placeholder={boardScope ? scopedPlaceholder(boardScope) : (PLACEHOLDER[mode] || PLACEHOLDER.list)}
+      accessibilityLabel={boardScope ? scopedPlaceholder(boardScope) : (PLACEHOLDER[mode] || PLACEHOLDER.list)}
       testIDPrefix="planner-search"
       inputTestID="planner-search-input"
       // Return takes the obvious answer: the top row, which is the one the
@@ -322,7 +339,11 @@ export default function PlannerSearchPanel({
       items={items}
       keyExtractor={(r) => r.key}
       renderItem={renderRow}
-      emptyText={EMPTY[mode] || EMPTY.list}
+      // Nothing matching INSIDE a board is a different fact from nothing
+      // matching at all, and the difference is the next thing you would do.
+      emptyText={boardScope
+        ? `No task in ${boardLabel(boardScope)} matches that. The title widens the scope.`
+        : (EMPTY[mode] || EMPTY.list)}
       fullScreen={fullScreen}
       // No insetTop: the hood is the panel's job in BOTH forms. The overlay
       // form opening inside the Planner does not inherit its header's
@@ -333,11 +354,27 @@ export default function PlannerSearchPanel({
       // is the difference between "here is what is next" and "here are some
       // tasks for no reason". The header key's list needs no such note: an
       // untyped search obviously has nothing to say yet.
-      ListHeaderComponent={isAssign && !q ? (
-        <Text style={styles.hint} testID="planner-search-focus-hint">
-          Up next — pick one, or type a new one. You still press Start session.
-        </Text>
-      ) : null}
+      ListHeaderComponent={(
+        <>
+          {/* WHAT YOU ARE SEARCHING INSIDE. The board is the Planner's scope,
+              so the search obeys it — and a narrowed list with nothing on
+              screen saying so is the bug that would make, not the feature.
+              Wears the board's own colour, the same mark its chip does. */}
+          {boardScope ? (
+            <View style={styles.scopeLine} testID="planner-search-board-scope">
+              <View style={[styles.scopeDot, { backgroundColor: boardColor?.(boardScope) || theme.colors.accentInfo }]} />
+              <Text style={styles.scopeText} numberOfLines={1}>
+                {`Within ${boardLabel(boardScope)} — the board the Planner is on`}
+              </Text>
+            </View>
+          ) : null}
+          {isAssign && !q ? (
+            <Text style={styles.hint} testID="planner-search-focus-hint">
+              Up next — pick one, or type a new one. You still press Start session.
+            </Text>
+          ) : null}
+        </>
+      )}
       theme={theme}
       isDark={isDark}
     />
@@ -354,5 +391,17 @@ const panelStyles = (theme) => StyleSheet.create({
     width: 30, height: 30, borderRadius: 15,
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: (theme.colors.accentInfo || '#5598e7') + '22',
+  },
+  scopeLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingVertical: 10,
+  },
+  scopeDot: { width: 8, height: 8, borderRadius: 4 },
+  scopeText: {
+    flexShrink: 1,
+    fontSize: theme?.typography?.small || 13,
+    color: theme.colors.textTertiary,
   },
 });

@@ -3291,11 +3291,17 @@ export default function TasksScreen() {
               >
                 {plannerScopeLabel}
               </Text>
+              {/* The mark that says this opens something — INSIDE the pill,
+                  because the pill is the control and a disclosure floating
+                  outside the shape it discloses belongs to nothing. Muted, and
+                  tinted with the board when there is one: it is part of the
+                  same object as the name beside it. */}
+              <Icon
+                name="chevron-down"
+                size={16}
+                color={plannerScopeInk || theme.colors.textTertiary}
+              />
             </View>
-            {/* The one mark that says the title opens something. Small and in
-                the muted ink — it is a disclosure, not a control competing with
-                the two keys on the right. */}
-            <Icon name="chevron-down" size={17} color={theme.colors.textTertiary} />
           </TouchableOpacity>
           {/* What used to be the title's own flex:1. The title hugs its pill
               now, so something else has to hold the keys against the right
@@ -4623,6 +4629,13 @@ export default function TasksScreen() {
         scope={searchScope}
         onScopeChange={setSearchScope}
         taskIndex={taskIndex}
+        // THE PLANNER'S SCOPE IS THE SEARCH'S. One board, named in the title,
+        // obeyed by every tab — a field that quietly reached past it would be
+        // the one place on this screen where being on a board did not mean
+        // being on it. The panel says which board it is in; `boardColor` is
+        // how that line wears the board's own mark.
+        selectedProject={selectedProject}
+        boardColor={getProjectColor}
         // A hit opens the task's EDIT form, not the read-only detail sheet:
         // you went looking for it in order to DO something to it, and the
         // sheet made every one of those things a second press on an Edit key.
@@ -4786,7 +4799,13 @@ const createStyles = (theme) => StyleSheet.create({
   // the type is most of what keeps it reading as one.
   headerScopePill: {
     flexShrink: 1,
-    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    // The chevron carries its own optical space, so the right side is tighter
+    // than the left or the pill looks lopsided.
+    gap: 2,
+    paddingLeft: 10,
+    paddingRight: 7,
     paddingVertical: 3,
     borderRadius: 11,
     borderWidth: StyleSheet.hairlineWidth,
