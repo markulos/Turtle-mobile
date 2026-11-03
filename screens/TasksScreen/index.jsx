@@ -3562,34 +3562,6 @@ export default function TasksScreen() {
         isDark={theme.mode === 'dark'}
       />
 
-      <PlannerFilterPanel
-        visible={filterOpen}
-        onClose={() => setFilterOpen(false)}
-        theme={theme}
-        statusFilter={statusFilter}
-        onStatusChange={setStatusFilter}
-        projects={projects}
-        recentProjects={recentProjects}
-        selectedProject={selectedProject}
-        onSelectProject={setSelectedProject}
-        tags={filterTags}
-        recentTags={recentTags}
-        selectedTags={selectedTags}
-        onToggleTag={(tag) => setSelectedTags((prev) => (
-          prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-        ))}
-        tagFilterMode={tagFilterMode}
-        onTagModeChange={setTagFilterMode}
-        owners={owners}
-        selectedOwners={selectedOwners}
-        onToggleOwner={(userId) => setSelectedOwners((prev) => (
-          prev.includes(userId) ? prev.filter((u) => u !== userId) : [...prev, userId]
-        ))}
-        ownerColor={ownerColor}
-        matchCount={filterMatchCount}
-        onClearAll={clearAllFilters}
-        bottomInset={tabBarHeight}
-      />
 
       <TaskForm
         visible={showTaskForm}
@@ -4648,6 +4620,50 @@ export default function TasksScreen() {
         }}
         theme={theme}
         isDark={theme.mode === 'dark'}
+      />
+
+      {/* ── The filters ─────────────────────────────────────────────────────
+          OUT HERE WITH THE SEARCH, and for a sharper version of the same
+          reason. It used to sit inside `dropdownHost`, which is `flex: 1`
+          with `overflow: hidden` — the area BELOW the header — and inside
+          the shift layer, which carries an animated translateY. So the one
+          absolute-fill surface that is supposed to be the whole screen was
+          clipped to the page under the chrome AND rode the picker's slide.
+          It opened as a panel pinned under the tab strip.
+
+          It is still the in-tree overlay rather than the Modal form: its
+          board and label search is a nested EdgeSwipePage overlay, and that
+          only works while this is not a Modal (iOS drops a sibling Modal over
+          an open one). On the frame there is no padding, no clip and no
+          transform, so the overlay reaches the top on its own — and clears
+          the hood with panelTopInset, as it always did. */}
+      <PlannerFilterPanel
+        visible={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        theme={theme}
+        statusFilter={statusFilter}
+        onStatusChange={setStatusFilter}
+        projects={projects}
+        recentProjects={recentProjects}
+        selectedProject={selectedProject}
+        onSelectProject={setSelectedProject}
+        tags={filterTags}
+        recentTags={recentTags}
+        selectedTags={selectedTags}
+        onToggleTag={(tag) => setSelectedTags((prev) => (
+          prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+        ))}
+        tagFilterMode={tagFilterMode}
+        onTagModeChange={setTagFilterMode}
+        owners={owners}
+        selectedOwners={selectedOwners}
+        onToggleOwner={(userId) => setSelectedOwners((prev) => (
+          prev.includes(userId) ? prev.filter((u) => u !== userId) : [...prev, userId]
+        ))}
+        ownerColor={ownerColor}
+        matchCount={filterMatchCount}
+        onClearAll={clearAllFilters}
+        bottomInset={tabBarHeight}
       />
 
       {/* ── The over-everything layer ───────────────────────────────────────
