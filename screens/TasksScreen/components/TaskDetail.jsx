@@ -20,8 +20,28 @@
  *   • the three task actions become a wrapping row of keys rather than three
  *     stacked full-width buttons, and Edit / Delete become the shell's footer.
  *
- * Everything it showed before it still shows, and every prop it took it still
- * takes.
+ * ─── What it does NOT say twice ────────────────────────────────────────────
+ *
+ * The card grew to six headed sections, and most of the top one was already
+ * on screen: the shell's header states the board and the date, and PRIORITY
+ * and DETAILS then restated the board, and the date in raw ISO, under two
+ * more headings. It read as cluttered because it WAS repetition, not detail.
+ *
+ * So the rule here is one fact, one place, and a heading only where it is the
+ * only thing naming what follows:
+ *
+ *   · the board and the when belong to the SHELL HEADER. The card repeats
+ *     neither — except an occasion's board, since its header says "Event".
+ *   · the stamp and what is left of the facts are ONE unlabelled row. A pill
+ *     reading MEDIUM does not need a heading reading PRIORITY.
+ *   · provenance ("Added …") is a footnote, not a chip weighted like the rest.
+ *   · the verbs carry their own names, so no ACTIONS heading over two buttons
+ *     that already say Continue today and Start Pomodoro.
+ *   · Tags, Guests, People, Notes, Subtasks and Comments KEEP their headings:
+ *     each is the only thing saying what its chips are.
+ *
+ * Nothing was dropped for being information. Every prop it took it still
+ * takes, and it takes `memberOf` as well.
  */
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
@@ -141,6 +161,9 @@ export const TaskDetail = ({
   onQueueForClaude,
   onStartPomodoro,
   onContinue,
+  // (userId) => { name, … } | null. The screen's one member map, which knows
+  // about YOU as well as about everyone else.
+  memberOf,
 }) => {
   const { theme } = useTheme();
   const { api } = useServer();
@@ -149,11 +172,6 @@ export const TaskDetail = ({
   const [comments, setComments] = useState([]);
   const [commentDraft, setCommentDraft] = useState('');
   const [postingComment, setPostingComment] = useState(false);
-  // Pond members, used to resolve the task's involvedUsers (user IDs) to display
-  // names for the read-only "People involved" chips. Same source the editor's
-  // ParticipantPicker uses (/api/friends). Only fetched when the task actually
-  // has assignees so a solo task makes no extra call.
-  const [friends, setFriends] = useState([]);
 
   // Per-task completed-pomodoro count for the meta chip (read-only on mobile;
   // removing some lives in the web edit modal). Refetched when the sheet opens.
@@ -170,17 +188,7 @@ export const TaskDetail = ({
     return () => { cancelled = true; };
   }, [api, visible, task?.id]);
 
-  // Resolve assignee names for the "People involved" chips. Skipped entirely
-  // for tasks with no one assigned.
   const involvedUsers = Array.isArray(task?.involvedUsers) ? task.involvedUsers : [];
-  useEffect(() => {
-    if (!visible || involvedUsers.length === 0) return;
-    let cancelled = false;
-    api.get('/friends')
-      .then((r) => { if (!cancelled) setFriends(Array.isArray(r?.friends) ? r.friends : []); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [api, visible, involvedUsers.length]);
 
   // Comment thread — anyone who can SEE the task (owner, shared-board, involved)
   // may read + reply; the server gates by taskVisibility. Loaded on open.
@@ -235,13 +243,17 @@ export const TaskDetail = ({
     .map(v => (REMINDER_OPTIONS.find(o => o.value === v)?.label) || v);
   const yearly = kind === 'birthday' && task.meta?.yearly !== false;
 
-  // People involved (tasks and events). Resolve IDs -> display name via the
-  // fetched pond members; fall back to the raw id if the member list hasn't
-  // loaded yet.
-  const nameOfUser = (id) => {
-    const f = friends.find((x) => x.id === id);
-    return f ? (f.displayName || f.phone || 'Member') : id;
-  };
+  /**
+   * A person's name, from the screen's one member map.
+   *
+   * This used to fetch `/friends` here and fall back to the raw id, which
+   * printed "user_owner" on the chip whenever the person involved was YOU:
+   * /friends is everyone EXCEPT you, so your own id never resolved. The
+   * screen's `memberOf` already merges /me for exactly that reason — see the
+   * note on its fetch — so this asks it rather than keeping a second, wronger
+   * copy of the same lookup.
+   */
+  const nameOfUser = (id) => memberOf?.(id)?.name || 'Member';
 
   // The one filled pill on the card: priority for a task, the kind for an
   // occasion. Black ink on the accent — the inversion rule, and the only
@@ -253,7 +265,6 @@ export const TaskDetail = ({
   // the already-advanced next dueDate, which read as "completed it, now it
   // says due tomorrow?!".
   const shownDate = (done && !task.completed && lastCompletedDate(task)) || task.dueDate;
-  const dateLabel = isOccasion ? 'Date' : (done && !task.completed ? 'Done' : 'Due');
 
   const titleField = (
     <View style={styles.titleRow}>
@@ -283,10 +294,10 @@ export const TaskDetail = ({
         <Text style={[styles.title, { color: colors.textPrimary }, done && styles.struck]}>
           {task.title}
         </Text>
-        <View style={styles.editHintRow}>
-          <Icon name="pencil-outline" size={12} color={colors.textMuted} />
-          <Text style={[styles.editHint, { color: colors.textMuted }]}>Tap to edit</Text>
-        </View>
+        {/* No "Tap to edit" caption. Edit is a labelled button in the footer,
+            two inches below and always on screen, so the caption was a second
+            name for a thing already named — and it sat in the one place the
+            eye lands first. */}
       </Pressable>
     </View>
   );
@@ -335,8 +346,12 @@ export const TaskDetail = ({
     >
       <ViewerSheet
         title={isOccasion ? titleCase(kind) : (task.project ? boardLabel(task.project) : 'Task')}
+        /* The card's one statement of WHEN, now that Details no longer repeats
+           it underneath in raw ISO. A ticked recurring task names the day it
+           was ticked — not its already-advanced next dueDate, which read as
+           "completed it, so why does it say due tomorrow?". */
         subtitle={done && !task.completed
-          ? 'Done'
+          ? `Done${shownDate ? ` · ${formatDueDate(shownDate)}` : ''}`
           : (task.dueDate ? `${formatDueDate(task.dueDate)}${task.time ? ` · ${task.time}` : ''}` : 'No date')}
         bottomInset={insets.bottom}
         onClose={onClose}
@@ -347,29 +362,40 @@ export const TaskDetail = ({
         footer={footer}
         testID="task-detail-sheet"
       >
-        <Section label={isOccasion ? 'Type' : 'Priority'} colors={colors}>
-          <View style={styles.wrap}>
-            <View style={[styles.stamp, { backgroundColor: stampColor }]}>
-              <Text style={styles.stampText} numberOfLines={1}>{stampLabel}</Text>
-            </View>
+        {/* ONE UNLABELLED ROW, not a PRIORITY section above a DETAILS section.
+            Two headings, five chips and a stamp used to open the card, and
+            most of it was already on screen: the sheet's own header states the
+            board and the date, so "Mark and Michelle - Plans" and
+            "Due: 2026-11-03" were being said twice — the second time in raw
+            ISO, worse than the first.
+            What is left is only what the header cannot say. The stamp needs no
+            label (it reads MEDIUM / EVENT), and nor does a row of facts. */}
+        <View style={[styles.wrap, styles.metaRow]}>
+          <View style={[styles.stamp, { backgroundColor: stampColor }]}>
+            <Text style={styles.stampText} numberOfLines={1}>{stampLabel}</Text>
           </View>
-        </Section>
+          {/* The board, ONLY for an occasion: a task's board is the header's
+              title, but an occasion's header says "Event" instead. */}
+          {isOccasion && !!task.project && (
+            <Key icon="folder-outline" label={boardLabel(task.project)} colors={colors} />
+          )}
+          {!!task.time && isOccasion && <Key icon="clock-outline" label={task.time} colors={colors} />}
+          {yearly && <Key icon="calendar-refresh" label="Every year" tint={theme.colors.accentSuccess} colors={colors} />}
+          {task.completed && task.completedTime && (
+            <Key icon="check-circle" label={`Done ${new Date(task.completedTime).toLocaleString()}`} tint={theme.colors.accentSuccess} colors={colors} />
+          )}
+          {pomoCount > 0 && (
+            <Key icon="timer-outline" label={`${pomoCount} ${pomoCount === 1 ? 'pomodoro' : 'pomodoros'}`} tint={theme.colors.accentInfo} colors={colors} />
+          )}
+        </View>
 
-        <Section label="Details" colors={colors}>
-          <View style={styles.wrap}>
-            {!!task.project && <Key icon="folder-outline" label={boardLabel(task.project)} colors={colors} />}
-            {!!shownDate && <Key icon="calendar-blank-outline" label={`${dateLabel}: ${shownDate}`} colors={colors} />}
-            {!!task.time && isOccasion && <Key icon="clock-outline" label={task.time} colors={colors} />}
-            {yearly && <Key icon="calendar-refresh" label="Every year" tint={theme.colors.accentSuccess} colors={colors} />}
-            <Key icon="clock-outline" label={`Created: ${new Date(task.createdAt).toLocaleDateString()}`} colors={colors} />
-            {task.completed && task.completedTime && (
-              <Key icon="check-circle" label={`Done: ${new Date(task.completedTime).toLocaleString()}`} tint={theme.colors.accentSuccess} colors={colors} />
-            )}
-            {pomoCount > 0 && (
-              <Key icon="timer-outline" label={`${pomoCount} ${pomoCount === 1 ? 'pomodoro' : 'pomodoros'} spent`} tint={theme.colors.accentInfo} colors={colors} />
-            )}
-          </View>
-        </Section>
+        {/* Provenance, not a fact you act on — so it is a footnote rather than
+            a chip with the same weight as the priority. */}
+        {!!task.createdAt && (
+          <Text style={[styles.footnote, { color: colors.textMuted }]} testID="detail-created">
+            {`Added ${new Date(task.createdAt).toLocaleDateString()}`}
+          </Text>
+        )}
 
         {tags.length > 0 && (
           <Section label="Tags" colors={colors}>
@@ -394,7 +420,10 @@ export const TaskDetail = ({
             (view-only) and were notified when added; on an event they are
             participants who can edit it. Edit the set via the task editor. */}
         {kind !== 'birthday' && involvedUsers.length > 0 && (
-          <Section label={`People involved · ${involvedUsers.length}`} colors={colors} right={<Text style={[styles.hint, { color: colors.textMuted }]}>edit in the full editor</Text>}>
+          /* No "edit in the full editor" caption: Edit is a labelled button in
+             the footer, and a line of small print per section is how a card
+             this size fills up. */
+          <Section label={`People involved · ${involvedUsers.length}`} colors={colors}>
             <View style={styles.wrap}>
               {involvedUsers.map((id) => (
                 <Key key={id} icon="account-outline" label={nameOfUser(id)} tint={theme.colors.accentInfo} colors={colors} />
@@ -453,55 +482,58 @@ export const TaskDetail = ({
           </Section>
         )}
 
+        {/* No "ACTIONS" heading over two buttons that are already verbs. The
+            keys say Continue today and Start Pomodoro; a label announcing
+            that they are actions is the clutter itself. They keep their taller
+            shape and tinted icons, which is what separates a thing you press
+            from a fact you read. */}
         {hasActions && (
-          <Section label="Actions" colors={colors}>
-            <View style={styles.wrap}>
-              {/* "Continue today" — re-add this task to today as a
-                  progress-carrying copy. Subtasks and their done state ride
-                  along (the "status it already had"); the copy itself is an
-                  open continuation of this still-open task. Tasks only —
-                  occasions (events/birthdays) aren't continued this way. */}
-              {onContinue && !isOccasion && (
-                <ActionKey
-                  label="Continue today"
-                  icon="calendar-plus"
-                  tint={theme.colors.accentSuccess}
-                  colors={colors}
-                  onPressIn={() => notifyHaptic('success')}
-                  onPress={onContinue}
-                  testID="detail-continue"
-                />
-              )}
-              {/* Start a focus timer for this task. Routes through the Turtle
-                  chat's /pomodoro pipeline (the task title rides along as the
-                  session label), then jumps to the Turtle tab where the timer
-                  card lives. */}
-              {onStartPomodoro && (
-                <ActionKey
-                  label="Start Pomodoro"
-                  icon="timer-outline"
-                  tint={theme.colors.accentWarning}
-                  colors={colors}
-                  onPressIn={() => impactHaptic('medium')}
-                  onPress={onStartPomodoro}
-                  testID="detail-pomodoro"
-                />
-              )}
-              {/* Hand this task off to the Claude session (Turtle tab). It's
-                  added to a queue that Claude works through one at a time. */}
-              {onQueueForClaude && (
-                <ActionKey
-                  label="Send to Claude"
-                  icon="robot-outline"
-                  tint={theme.colors.accentInfo}
-                  colors={colors}
-                  onPressIn={() => tapHaptic()}
-                  onPress={onQueueForClaude}
-                  testID="detail-claude"
-                />
-              )}
-            </View>
-          </Section>
+          <View style={[styles.wrap, styles.actionRow]}>
+            {/* "Continue today" — re-add this task to today as a
+                progress-carrying copy. Subtasks and their done state ride
+                along (the "status it already had"); the copy itself is an
+                open continuation of this still-open task. Tasks only —
+                occasions (events/birthdays) aren't continued this way. */}
+            {onContinue && !isOccasion && (
+              <ActionKey
+                label="Continue today"
+                icon="calendar-plus"
+                tint={theme.colors.accentSuccess}
+                colors={colors}
+                onPressIn={() => notifyHaptic('success')}
+                onPress={onContinue}
+                testID="detail-continue"
+              />
+            )}
+            {/* Start a focus timer for this task. Routes through the Turtle
+                chat's /pomodoro pipeline (the task title rides along as the
+                session label), then jumps to the Turtle tab where the timer
+                card lives. */}
+            {onStartPomodoro && (
+              <ActionKey
+                label="Start Pomodoro"
+                icon="timer-outline"
+                tint={theme.colors.accentWarning}
+                colors={colors}
+                onPressIn={() => impactHaptic('medium')}
+                onPress={onStartPomodoro}
+                testID="detail-pomodoro"
+              />
+            )}
+            {/* Hand this task off to the Claude session (Turtle tab). It's
+                added to a queue that Claude works through one at a time. */}
+            {onQueueForClaude && (
+              <ActionKey
+                label="Send to Claude"
+                icon="robot-outline"
+                tint={theme.colors.accentInfo}
+                colors={colors}
+                onPressIn={() => tapHaptic()}
+                onPress={onQueueForClaude}
+                testID="detail-claude"
+              />
+            )}
+          </View>
         )}
 
         {/* Comments — read + reply. Gated server-side by taskVisibility, so the
@@ -567,8 +599,6 @@ const styles = StyleSheet.create({
   titleTextWrap: { flex: 1, minWidth: 0 },
   title: { fontSize: 20, fontWeight: '600', lineHeight: 26 },
   struck: { textDecorationLine: 'line-through', opacity: 0.6 },
-  editHintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-  editHint: { fontSize: 11, fontWeight: '500' },
 
   // Sections — the app's small-caps label, the Overview / inspector scale.
   section: { marginTop: 4, marginBottom: 14 },
@@ -578,6 +608,16 @@ const styles = StyleSheet.create({
 
   // Chips. maxWidth + flexShrink + one line: nothing oversets the card (§2).
   wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  // The card's one unlabelled row of facts, where PRIORITY and DETAILS used
+  // to be two headed sections. `alignItems: center` because the stamp is 30
+  // and the keys beside it are 34.
+  metaRow: { alignItems: 'center', marginTop: 2, marginBottom: 10 },
+  // Provenance, said quietly once rather than as a chip with the same weight
+  // as everything else on the card.
+  footnote: { fontSize: 11, fontWeight: '500', marginBottom: 16 },
+  // The verbs. More air above them than between chips, since the heading that
+  // used to separate them from the facts is gone.
+  actionRow: { marginTop: 4, marginBottom: 18 },
   key: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, maxWidth: '100%', flexShrink: 1 },
   keyText: { fontSize: 12, fontWeight: '600', letterSpacing: 0.2, flexShrink: 1 },
   stamp: { height: 30, paddingHorizontal: 14, borderRadius: 15, alignItems: 'center', justifyContent: 'center', maxWidth: '100%', flexShrink: 1 },

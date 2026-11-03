@@ -3593,6 +3593,12 @@ export default function TasksScreen() {
         onDelete={() => { handleDelete(selectedTask.id); setShowDetail(false); }}
         onTagPress={() => {}}
         onToggleSubtask={handleToggleSubtask}
+        // The screen's one member map, so a person involved reads as a NAME.
+        // The card used to ask /friends itself and fall back to the raw id —
+        // and /friends is everyone except you, so your own id never resolved
+        // and the chip said "user_owner". This map merges /me for exactly
+        // that reason.
+        memberOf={memberOf}
         onContinue={() => {
           // "Continue today" — re-add the open task to today as a
           // progress-carrying copy. Resolve the live task from `tasks`

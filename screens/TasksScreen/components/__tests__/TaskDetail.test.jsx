@@ -117,7 +117,13 @@ describe('TaskDetail', () => {
     // The one filled pill, and the board name as the sheet's header title.
     expect(view.getByText('medium')).toBeTruthy();
     expect(view.getAllByText('Job search').length).toBeGreaterThan(0);
-    expect(view.getByText('Due: 2026-09-16')).toBeTruthy();
+    // The DATE is the header's subtitle and is said ONCE. It used to be
+    // repeated underneath as a "Due: 2026-09-16" chip — the same fact, in raw
+    // ISO, under a DETAILS heading, beside a second copy of the board name
+    // that the header was already carrying. That pair of sections is what
+    // made the card read as cluttered.
+    expect(view.getByText('Wed, Sep 16')).toBeTruthy();
+    expect(view.queryByText('Due: 2026-09-16')).toBeNull();
     // Section labels are the app's small-caps scale, and the count rides the label.
     expect(view.getByText('Subtasks · 1/2')).toBeTruthy();
     expect(view.getByText('Export the PDF')).toBeTruthy();
@@ -165,5 +171,110 @@ describe('TaskDetail', () => {
     fireEvent.press(view.getByText('portfolio'));
     expect(onClose).toHaveBeenCalled();
     expect(onTagPress).toHaveBeenCalledWith('portfolio');
+  });
+});
+
+/**
+ * The card was asked to be simpler to read. What went was DUPLICATION and
+ * labels that named things already named — not information.
+ */
+describe('the card says each thing once', () => {
+  const open = (over = {}, props = {}) => render(
+    <TaskDetail task={{ ...task, ...over }} visible onClose={jest.fn()} onEdit={jest.fn()} {...props} />,
+  );
+
+  // The board is the sheet's header TITLE. A chip repeating it sat two lines
+  // below, under a heading, next to a second copy of the date.
+  test('the board is the header, not also a chip under it', async () => {
+    const view = await open();
+    expect(view.getAllByText('Job search')).toHaveLength(1);
+  });
+
+  // Two headings over a stamp and a row of chips, where the stamp reads
+  // "MEDIUM" and the chips say what they are.
+  test('neither the stamp nor the facts wear a heading', async () => {
+    const view = await open();
+    expect(view.queryByText('PRIORITY')).toBeNull();
+    expect(view.queryByText('Priority')).toBeNull();
+    expect(view.queryByText('Details')).toBeNull();
+    expect(view.getByText('medium')).toBeTruthy();
+  });
+
+  // Provenance, demoted from a chip to a footnote — still there, no longer
+  // weighted the same as the priority.
+  test('“Added” is a footnote, and not a chip saying Created', async () => {
+    const view = await open();
+    expect(view.queryByText(/^Created:/)).toBeNull();
+    expect(view.getByTestId('detail-created')).toBeTruthy();
+  });
+
+  // Edit is a labelled button in the footer. The caption under the title was
+  // a second name for it, in the place the eye lands first.
+  test('the title carries no “Tap to edit” caption', async () => {
+    const view = await open();
+    expect(view.queryByText('Tap to edit')).toBeNull();
+    expect(view.getByText('Edit')).toBeTruthy();
+  });
+
+  test('a heading does not announce that the verbs are verbs', async () => {
+    const view = await open({}, { onContinue: jest.fn(), onStartPomodoro: jest.fn() });
+    expect(view.queryByText('Actions')).toBeNull();
+    expect(view.getByText('Continue today')).toBeTruthy();
+    expect(view.getByText('Start Pomodoro')).toBeTruthy();
+  });
+
+  // A ticked recurring task names the day it was TICKED, which used to live
+  // in the Details chip. Dropping the chip must not drop the fact.
+  test('a ticked recurring task still says when it was done', async () => {
+    // `isTaskDoneNow` only calls a repeater done while its last ticked
+    // occurrence is TODAY or later — before that it is simply due again — so
+    // the tick has to be today, and it lives under `meta`.
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const view = await open({
+      recurring: 'weekly',
+      // The already-ADVANCED next due date, which is what made the old card
+      // read "completed it, so why does it say due next week?".
+      dueDate: '2099-01-01',
+      meta: { completedDates: [today] },
+    });
+    expect(view.getByText(/^Done · /)).toBeTruthy();
+    expect(view.queryByText('Fri, Jan 1')).toBeNull();
+  });
+});
+
+/**
+ * /friends is everyone EXCEPT you, so a card that resolved names from it
+ * alone printed your raw user id — "user_owner" — whenever the person
+ * involved was you. The screen's member map merges /me for that reason.
+ */
+describe('a person involved reads as a name', () => {
+  const withPeople = (memberOf) => render(
+    <TaskDetail
+      task={{ ...task, involvedUsers: ['user_owner'] }}
+      visible
+      onClose={jest.fn()}
+      memberOf={memberOf}
+    />,
+  );
+
+  test('it asks the screen’s map, which knows about you too', async () => {
+    const memberOf = jest.fn((id) => (id === 'user_owner' ? { id, name: 'Mark' } : null));
+    const view = await withPeople(memberOf);
+    expect(memberOf).toHaveBeenCalledWith('user_owner');
+    expect(view.getByText('Mark')).toBeTruthy();
+    expect(view.queryByText('user_owner')).toBeNull();
+  });
+
+  // Still loading, or a member who has since left: a word, never the id.
+  test('an unresolved person is “Member”, never a raw id', async () => {
+    const view = await withPeople(() => null);
+    expect(view.getByText('Member')).toBeTruthy();
+    expect(view.queryByText('user_owner')).toBeNull();
+  });
+
+  test('and the section carries no “edit in the full editor” small print', async () => {
+    const view = await withPeople(() => ({ name: 'Mark' }));
+    expect(view.queryByText('edit in the full editor')).toBeNull();
   });
 });
