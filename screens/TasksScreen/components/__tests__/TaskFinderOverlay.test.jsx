@@ -160,7 +160,11 @@ describe('TaskFinderOverlay field', () => {
     // accessibilityLabel is what a screen reader should read, not this copy.
     expect(ph.props.pointerEvents).toBe('none');
     expect(ph.props.accessible).toBe(false);
-    expect(view.getByTestId('finder-overlay-input').props.accessibilityLabel).toBe('Search or add a task');
+    // Create first: the field's commonest use is typing a title, and leading
+    // with "search" made it read as a search box that also, somehow, made
+    // tasks. The caller's placeholder says the same thing in the same order.
+    expect(view.getByTestId('finder-overlay-input').props.accessibilityLabel)
+      .toBe('Create a task, or find an existing one');
   });
 });
 

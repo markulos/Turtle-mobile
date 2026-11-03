@@ -137,7 +137,7 @@ export default function TaskFinderOverlay({
             blurOnSubmit={false}
             returnKeyType="done"
             autoCorrect={false}
-            accessibilityLabel="Search or add a task"
+            accessibilityLabel="Create a task, or find an existing one"
             testID="finder-overlay-input"
           />
           {timeLabel ? (

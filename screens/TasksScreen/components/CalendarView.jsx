@@ -63,6 +63,7 @@ import { accentFrostInk, FROST_TINT_ALPHA } from '../../../utils/accentColor';
 import { finderDestination, KIND_SEP, FIELD_SEP } from '../utils/finderDestination';
 import { needsCreateRow } from '../utils/taskSearch';
 import TaskFinderOverlay from './TaskFinderOverlay';
+import { BRING_CONTINUE, BRING_HERE, bringToDay } from '../utils/finderReadd';
 // (HatchBackdrop's import went with the task-card hatch. The month grid's
 // today marker uses the local DiagonalHatch below, not this component.)
 import { TaskSectionFrontier } from './TaskSectionFrontier';
@@ -3243,11 +3244,41 @@ export const CalendarView = ({
     setPendingTime(null);
   }, [newTaskTitle, onAddTask, selectedProject, pendingTime]);
 
-  // Re-add a previously-existing task: create a fresh instance on the
-  // selected day, copying the original's description + tags + subtasks
-  // (reset to incomplete with new ids) and any pending time slot.
+  /**
+   * Put a task the finder found onto the day being looked at.
+   *
+   * TWO VERBS, and which one applies is not a choice — see utils/finderReadd.
+   * An OPEN task MOVES here, because it is the same piece of work and copying
+   * it leaves you holding two. A FINISHED one is COPIED, because doing it
+   * again is a new instance and the old one is the record that you did it
+   * then. A repeater is copied even while open: its dueDate anchors the
+   * series, so moving it would drag every future occurrence along.
+   *
+   * It used to copy in every case, so pulling an open task forward left the
+   * original sitting on the day you were trying to move it off.
+   */
   const handlePickSuggestion = useCallback((task) => {
     const dateStr = toDateString(selectedDateRef.current);
+    const { action, patch } = bringToDay(task, dateStr, { time: pendingTime });
+    const dismiss = () => {
+      setNewTaskTitle('');
+      setIsAddingTask(false);
+      setPendingTime(null);
+    };
+
+    // Open, here already, nothing to change. The key is not drawn in this
+    // case — this is the belt to that braces.
+    if (action === BRING_HERE) { dismiss(); return; }
+
+    // CONTINUE: the task itself moves, carrying everything it already has.
+    if (action === BRING_CONTINUE) {
+      onUpdateTask?.(task.id, patch);
+      dismiss();
+      return;
+    }
+
+    // RE-ADD: a fresh instance, copying the original's description, tags and
+    // subtasks (reset to incomplete with new ids) and any pending time slot.
     onAddTask?.(
       task.title,
       // Same sentinel guard as handleAddTask above.
@@ -3261,10 +3292,8 @@ export const CalendarView = ({
         subtasks: resetSubtasksForReuse(task.subtasks),
       },
     );
-    setNewTaskTitle('');
-    setIsAddingTask(false);
-    setPendingTime(null);
-  }, [onAddTask, selectedProject, pendingTime]);
+    dismiss();
+  }, [onAddTask, onUpdateTask, selectedProject, pendingTime]);
 
   // One month's worth of UI — a thin adapter over the memoized MonthPage.
   // Cells come prebuilt from the per-month cache; highlight strings are
@@ -3845,7 +3874,7 @@ export const CalendarView = ({
               activeOpacity={0.85}
               accessibilityRole="button"
               accessibilityState={{ expanded: isAddingTask }}
-              accessibilityLabel={isAddingTask ? 'Close' : 'Search or add a task'}
+              accessibilityLabel={isAddingTask ? 'Close' : 'Create a task, or find an existing one'}
               testID="day-finder-key"
             >
               <Icon name={isAddingTask ? 'close' : 'plus'} size={27} color={sheetTheme.colors.background} />
@@ -3980,7 +4009,15 @@ export const CalendarView = ({
         onChangeText={setNewTaskTitle}
         onSubmit={handleAddTask}
         onCancel={handleCancelAdd}
-        placeholder={pendingTime ? `New task at ${formatTimeLabel(pendingTime, use24h)}` : 'Search or add a task…'}
+        // CREATE FIRST. "Search or add a task" led with the thing you do
+        // second and named the thing you do most last, so the field read as a
+        // search box that also, somehow, made tasks. Typing a title is the
+        // common case; finding one you already have is the other half, and
+        // saying "bring back" rather than "search" names what finding one is
+        // FOR — the row's key is what puts it on this day.
+        placeholder={pendingTime
+          ? `New task at ${formatTimeLabel(pendingTime, use24h)}`
+          : 'Create a task, or bring back an old one…'}
         timeLabel={pendingTime ? formatTimeLabel(pendingTime, use24h) : null}
         onEditTime={() => setEditingTime(true)}
         onClearTime={clearPendingTime}
@@ -4000,21 +4037,31 @@ export const CalendarView = ({
         createCaption={`Create · ${finderWhere.day}${finderWhere.filed ? ` · ${finderWhere.board}` : ''}${pendingTime ? ` · ${formatTimeLabel(pendingTime, use24h)}` : ''}`}
         onOpenFullForm={openFullCreate}
         results={searchResults}
-        resultsCaption={`${searchResults.length} matching · tap to open · + re-adds here`}
+        // The key's verb is per ROW now (an open task moves, a finished one is
+        // copied), so the caption stops claiming one of them for all of them.
+        resultsCaption={`${searchResults.length} matching · tap to open · or bring one here`}
         // Before a single character is typed the panel is not blank: it opens
         // ON the day it would create into. Half of what the finder gets used
         // for is "is this already on today?", and that used to need the panel
         // closed again to answer. Open only — a day's DONE tasks are not what
         // you are checking against before adding another.
         idleResults={dayOpenTasks}
+        // No "+ re-adds here" on this list: these are the tasks already open
+        // ON this day, so there is nothing to bring and the key is not drawn.
         idleCaption={
           dayOpenTasks.length
-            ? `${dayOpenTasks.length} open · ${finderWhere.day} · tap to open · + re-adds here`
+            ? `${dayOpenTasks.length} open · ${finderWhere.day} · tap to open`
             : ''
         }
         idleEmptyHint={`Nothing open on ${finderWhere.day}. Type to search every task — or to name a new one.`}
         renderResult={(task) => {
           const overdue = !task.completed && isOverdue(task.dueDate);
+          // What the key on THIS row would do. One glyph for two verbs was
+          // the confusion: a plus on an open task promised a copy and now
+          // gives a move, and a row that is already here promised anything
+          // at all.
+          const { action } = bringToDay(task, toDateString(selectedDateRef.current), { time: pendingTime });
+          const moves = action === BRING_CONTINUE;
           return (
             <View key={task.id} style={styles.searchResultItem}>
               <TouchableOpacity
@@ -4037,16 +4084,25 @@ export const CalendarView = ({
                   </Text>
                 </View>
               </TouchableOpacity>
-              <TouchableOpacity
-                onPressIn={() => tapHaptic()}
-                onPress={() => handlePickSuggestion(task)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityRole="button"
-                accessibilityLabel={`Re-add ${task.title} on this day`}
-                style={styles.finderReadd}
-              >
-                <Icon name="plus" size={18} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
+              {action === BRING_HERE ? null : (
+                <TouchableOpacity
+                  onPressIn={() => tapHaptic()}
+                  onPress={() => handlePickSuggestion(task)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={moves
+                    ? `Continue ${task.title} on ${finderWhere.day} — move it here`
+                    : `Re-add ${task.title} on ${finderWhere.day} — a fresh copy`}
+                  testID={`finder-bring-${task.id}`}
+                  style={styles.finderReadd}
+                >
+                  <Icon
+                    name={moves ? 'calendar-arrow-right' : 'plus'}
+                    size={moves ? 17 : 18}
+                    color={theme.colors.textSecondary}
+                  />
+                </TouchableOpacity>
+              )}
             </View>
           );
         }}
