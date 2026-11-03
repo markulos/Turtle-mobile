@@ -3481,42 +3481,6 @@ export default function TasksScreen() {
           silently fails to present. They also replace three surfaces that used
           to disagree — the Boards tab's fold-out, its board rail, and a tags /
           people bottom sheet reachable only from inside that fold. */}
-      <PlannerSearchPanel
-        visible={searchOpen}
-        /* ONE ERRAND, ON EVERY TAB: find a task, anywhere in the pond.
-         *
-         * It used to be whichever errand the page underneath it was about —
-         * boards on the Inbox tab, start-a-block on Focus — so the same key
-         * answered a different question depending on where it was pressed,
-         * and the question it could not answer from two of the four tabs was
-         * the one it looks like it asks. The other two errands kept the
-         * surfaces that are actually ABOUT them, which is where they were
-         * always easier to find: the TITLE opens the board picker, and the
-         * Focus deck opens its own task picker. */
-        mode="list"
-        // The whole screen. A search of every task framed inside the tab you
-        // happened to be standing on said the opposite of what it does — and
-        // the list is as long as the pond, so the room is the point.
-        fullScreen
-        query={plannerQuery}
-        onQueryChange={setPlannerQuery}
-        onClose={() => setSearchOpen(false)}
-        scope={searchScope}
-        onScopeChange={setSearchScope}
-        taskIndex={taskIndex}
-        // A hit opens the task's EDIT form, not the read-only detail sheet:
-        // you went looking for it in order to DO something to it, and the
-        // sheet made every one of those things a second press on an Edit key.
-        onOpenTask={(task) => {
-          setSearchOpen(false);
-          // Edit the LIVE row. A result is a snapshot of the index, which is
-          // rebuilt on a beat of its own — the form must open on what the
-          // pond holds now, not on what the search was holding.
-          openEditForm((tasks || []).find((t) => t && t.id === task.id) || task);
-        }}
-        theme={theme}
-        isDark={theme.mode === 'dark'}
-      />
 
       {/* The board picker. FULL SCREEN, unlike the two above: it is not a
           search within the page you are on, it is the choice of what the whole
@@ -4603,6 +4567,60 @@ export default function TasksScreen() {
       />
 
     </View>
+
+      {/* ── The task search ─────────────────────────────────────────────────
+          ONE ERRAND, ON EVERY TAB: find a task, anywhere in the pond.
+
+          It used to be whichever errand the page underneath it was about —
+          boards on the Inbox tab, start-a-block on Focus — so the same key
+          answered a different question depending on where it was pressed, and
+          the question it could not answer from two of the four tabs was the
+          one it looks like it asks. The other two errands kept the surfaces
+          that are actually ABOUT them, which is where they were always easier
+          to find: the TITLE opens the board picker, and the Focus deck opens
+          its own task picker.
+
+          OUT HERE ON THE UNPADDED FRAME, and an in-tree overlay rather than
+          the Modal form, which are the same decision made twice:
+
+            · Inside the padded container it did not reach the top. An
+              absolute fill is inset by its parent's padding in Yoga — the
+              divergence this file has already paid for twice (see the frame's
+              own note above, and the wash) — so the panel began at the
+              header's edge and wore the hood underneath it.
+            · The Modal form DOES start at the top, and that is how this was
+              first fixed. But the whole point of a hit is that it opens the
+              EDIT FORM, and the form is itself a Modal: iOS will not present
+              a second sibling Modal while the first is still dismissing, so
+              the panel slid away and nothing came back. Silently — which is
+              the worst way for it to fail.
+
+          A sibling of the padded screen is both: the top of the screen is the
+          top of the screen, and the only Modal in play is the form's. The
+          panel clears the hood itself with panelTopInset, like every other
+          full-screen surface here. */}
+      <PlannerSearchPanel
+        visible={searchOpen}
+        mode="list"
+        query={plannerQuery}
+        onQueryChange={setPlannerQuery}
+        onClose={() => setSearchOpen(false)}
+        scope={searchScope}
+        onScopeChange={setSearchScope}
+        taskIndex={taskIndex}
+        // A hit opens the task's EDIT form, not the read-only detail sheet:
+        // you went looking for it in order to DO something to it, and the
+        // sheet made every one of those things a second press on an Edit key.
+        onOpenTask={(task) => {
+          setSearchOpen(false);
+          // Edit the LIVE row. A result is a snapshot of the index, which is
+          // rebuilt on a beat of its own — the form must open on what the
+          // pond holds now, not on what the search was holding.
+          openEditForm((tasks || []).find((t) => t && t.id === task.id) || task);
+        }}
+        theme={theme}
+        isDark={theme.mode === 'dark'}
+      />
 
       {/* ── The over-everything layer ───────────────────────────────────────
           LAST, because paint order is tree order: whatever is portalled here

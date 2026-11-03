@@ -113,11 +113,16 @@ export default function PlannerSearchPanel({
   boardStats,
   // (name) => hex, so a board's row wears the colour its cards do.
   boardColor,
-  // Take the whole screen rather than the area under the Planner header. Every
-  // caller does: all three are a tab screen opening a picker from its own
-  // chrome, and none of them is improved by being framed by the page it came
-  // from. Kept as a prop because it is EdgeSwipePage's Modal-or-overlay choice,
-  // and an embedded caller would still need the overlay.
+  // EdgeSwipePage's Modal form rather than its in-tree overlay. Both cover the
+  // screen; what differs is whether another Modal can be presented over the
+  // top, and on iOS the answer for a sibling Modal is no.
+  //
+  // So this is decided by WHAT A HIT DOES, not by how much room the panel
+  // wants. The two pickers only set state, so they take the Modal. The task
+  // search opens the edit FORM, which is itself a Modal — it has to be the
+  // overlay, mounted on the screen's unpadded frame so it still starts at the
+  // top of the screen. The Planner's own note at that call site has the
+  // longer version.
   fullScreen = false,
   // (task) => void — open it for editing. The header key.
   onOpenTask,
