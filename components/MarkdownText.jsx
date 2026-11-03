@@ -7,17 +7,20 @@
  * Colours come from the bubble it sits in: pass the same `style` the plain
  * text used (font size / line height / colour) and the renderer derives the
  * rest — code on a translucent field, links in the accent, quotes with a bar.
+ *
+ * EVERY BLOCK IS SELECTABLE. A fence always was, because a fence is the shape
+ * a reply uses for the things you are meant to take; but the rest of a reply
+ * is just as often the part you want — a sentence out of an answer, an
+ * address, one line of a list — and there was no way to lift it. Selection is
+ * the platform's own long-press: handles, a magnifier and the system's Copy,
+ * which is where everyone already looks for it.
  */
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import React, { memo, useMemo } from 'react';
+import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 import { parseMarkdown } from '../utils/markdownLite';
-import { copyText } from '../utils/copyText';
-import { tapHaptic } from '../utils/haptics';
+import CopyKey from './CopyKey';
 
 const MONO = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
-// The copy key's visible box is ~16pt tall; this is what gets it to 44.
-const HIT_SLOP_10 = { top: 14, bottom: 14, left: 10, right: 10 };
 
 // Parse once per distinct text, app-wide: a recycled list cell mounts a new
 // component instance for the same message, and useMemo would parse again.
@@ -71,30 +74,11 @@ function Spans({ spans, colors }) {
  *
  * It is deliberately not on every block. A paragraph is to read; a fence is to
  * use. Putting a key on both would make neither mean anything — so the control
- * appears exactly where the reply's own formatting says "this is an artefact",
- * and a reply with no fences shows no keys at all.
+ * appears exactly where the reply's own formatting says "this is an artefact".
+ * The WHOLE message has its own key, in the bubble's corner, and any part of
+ * it can be selected by hand; this one is for the artefact alone.
  */
 function CodeBlock({ block, base, colors, gap, style: blockStyle }) {
-  // null → idle; otherwise the word to show back ('Copied' / 'Shared').
-  const [done, setDone] = useState(null);
-  const timer = useRef(null);
-  const alive = useRef(true);
-  useEffect(() => () => {
-    alive.current = false;
-    if (timer.current) clearTimeout(timer.current);
-  }, []);
-
-  const onCopy = useCallback(async () => {
-    tapHaptic();
-    const result = await copyText(block.text);
-    // 'none' means the clipboard was unavailable AND the share sheet was
-    // dismissed — claiming "Copied" there would be a lie.
-    if (result === 'none' || !alive.current) return;
-    setDone(result === 'shared' ? 'Shared' : 'Copied');
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => { if (alive.current) setDone(null); }, 1600);
-  }, [block.text]);
-
   return (
     <View style={[styles.codeBlock, { backgroundColor: colors.codeBg }, gap]}>
       {/* Language on the left when the fence declared one, key on the right.
@@ -105,23 +89,14 @@ function CodeBlock({ block, base, colors, gap, style: blockStyle }) {
         <Text style={[styles.codeLang, { color: colors.muted }]} numberOfLines={1}>
           {block.lang || ''}
         </Text>
-        <Pressable
-          onPress={onCopy}
-          hitSlop={HIT_SLOP_10}
-          accessibilityRole="button"
+        <CopyKey
+          text={block.text}
+          color={colors.muted}
+          doneColor={colors.copyDone || colors.muted}
           accessibilityLabel={block.lang ? `Copy this ${block.lang} block` : 'Copy this block'}
           testID="markdown-copy-code"
-          style={({ pressed }) => [styles.copyKey, pressed && { opacity: 0.6 }]}
-        >
-          <Icon
-            name={done ? 'check' : 'content-copy'}
-            size={13}
-            color={done ? (colors.copyDone || colors.muted) : colors.muted}
-          />
-          <Text style={[styles.copyKeyText, { color: done ? (colors.copyDone || colors.muted) : colors.muted }]}>
-            {done || 'Copy'}
-          </Text>
-        </Pressable>
+          style={styles.copyKey}
+        />
       </View>
       <Text style={[base, styles.codeBlockText, { color: colors.codeText }, blockStyle]} selectable>
         {block.text}
@@ -155,7 +130,7 @@ function MarkdownText({ text, style, theme, testID }) {
           case 'heading': {
             const size = b.level === 1 ? fontSize + 4 : b.level === 2 ? fontSize + 2 : fontSize + 1;
             return (
-              <Text key={i} style={[base, styles.bold, { fontSize: size, lineHeight: Math.round(size * 1.3) }, gap, i > 0 && { marginTop: 4 }]}>
+              <Text key={i} selectable style={[base, styles.bold, { fontSize: size, lineHeight: Math.round(size * 1.3) }, gap, i > 0 && { marginTop: 4 }]}>
                 <Spans spans={b.spans} colors={colors} />
               </Text>
             );
@@ -165,8 +140,8 @@ function MarkdownText({ text, style, theme, testID }) {
               <View key={i} style={gap}>
                 {b.items.map((it, j) => (
                   <View key={j} style={[styles.listRow, { paddingLeft: 4 + it.depth * 14 }]}>
-                    <Text style={[base, styles.marker]}>{b.ordered ? `${it.number ?? j + 1}.` : '•'}</Text>
-                    <Text style={[base, styles.listText]}>
+                    <Text selectable style={[base, styles.marker]}>{b.ordered ? `${it.number ?? j + 1}.` : '•'}</Text>
+                    <Text selectable style={[base, styles.listText]}>
                       <Spans spans={it.spans} colors={colors} />
                     </Text>
                   </View>
@@ -178,7 +153,7 @@ function MarkdownText({ text, style, theme, testID }) {
           case 'quote':
             return (
               <View key={i} style={[styles.quote, { borderLeftColor: colors.quoteBar }, gap]}>
-                <Text style={[base, { color: colors.muted }]}>
+                <Text selectable style={[base, { color: colors.muted }]}>
                   <Spans spans={b.spans} colors={colors} />
                 </Text>
               </View>
@@ -187,7 +162,7 @@ function MarkdownText({ text, style, theme, testID }) {
             return <View key={i} style={[styles.rule, { backgroundColor: colors.rule }, gap]} />;
           default:
             return (
-              <Text key={i} style={[base, gap]}>
+              <Text key={i} selectable style={[base, gap]}>
                 <Spans spans={b.spans} colors={colors} />
               </Text>
             );
@@ -249,10 +224,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     paddingLeft: 8,
-  },
-  copyKeyText: {
-    fontSize: 11,
-    fontWeight: '600',
   },
   codeBlockText: {
     fontFamily: MONO,

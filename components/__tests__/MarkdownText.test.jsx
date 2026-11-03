@@ -134,3 +134,44 @@ describe('MarkdownText copy affordance', () => {
     await waitFor(() => expect(mockSetString).toHaveBeenCalledWith('second'));
   });
 });
+
+/**
+ * A copy key only exists where the reply's own formatting says "artefact".
+ * Everything ELSE in a reply — the sentence that answers the question, an
+ * address, one line of a list — is just as often the part you want, and the
+ * only way to lift a PART of anything is the platform's own selection. So
+ * every block is selectable, not just the fence that always was.
+ */
+describe('every block can be selected by hand', () => {
+  /** How many rendered nodes carry `selectable`, walked off the JSON tree. */
+  const selectables = (view) => {
+    let n = 0;
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      if (node.props?.selectable) n += 1;
+      (node.children || []).forEach(walk);
+    };
+    walk(view.toJSON());
+    return { length: n };
+  };
+
+  test.each([
+    ['a paragraph', 'Meet me at 14 Larkin Street at six.'],
+    ['a heading', '# The plan'],
+    ['a quote', '> their words, not mine'],
+    ['a list', '- first\n- second'],
+    ['a fence', '```\nnpm ci\n```'],
+  ])('%s', async (_name, text) => {
+    const view = await render(<MarkdownText text={text} theme={theme} />);
+    expect(selectables(view).length).toBeGreaterThan(0);
+  });
+
+  // The thing this is really for: taking ONE line out of a list, which no
+  // key can offer because there is no key per line.
+  test('each line of a list selects on its own', async () => {
+    const view = await render(<MarkdownText text={'- first\n- second\n- third'} theme={theme} />);
+    // Three markers and three bodies, every one of them selectable.
+    expect(selectables(view).length).toBeGreaterThanOrEqual(6);
+  });
+});

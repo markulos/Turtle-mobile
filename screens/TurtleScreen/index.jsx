@@ -53,7 +53,7 @@ import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
 import TypingIndicator from '../../components/TypingIndicator';
 import MarkdownText from '../../components/MarkdownText';
-import { copyText } from '../../utils/copyText';
+import CopyKey from '../../components/CopyKey';
 import { generatedName } from '../../utils/avatar';
 import { useMyAvatarAnimal } from '../../utils/avatarChoice';
 import { useCommandBus } from '../../context/CommandBusContext';
@@ -1990,25 +1990,20 @@ export default function TurtleScreen() {
     // read before it is pressed.
     const board = message.sender === 'assistant' ? drawableBlocks(message.blocks) : [];
 
-    // Long-press any bubble with words in it to take the whole thing.
+    // TWO WAYS TO TAKE THE WORDS, because they answer different questions.
     //
-    // The per-fence copy keys in MarkdownText cover the artefacts a reply
-    // formats AS artefacts. This is the catch-all under them: plenty of useful
-    // replies — a prompt written as a paragraph, an address, a name spelled out
-    // — carry nothing the parser can point at, and hand-selecting those in a
-    // scrolling transcript is the thing the keys exist to avoid. Long-press is
-    // where every other messenger puts it, so it costs no chrome at all.
+    // LONG-PRESS is the platform's own text selection — handles, a magnifier,
+    // the system Copy — so you can lift a sentence out of an answer, or one
+    // line of a list, rather than the whole message. It comes from `selectable`
+    // on the text itself (see MarkdownText), not from a handler here.
+    //
+    // THE KEY beside the timestamp takes the whole message in one tap, which
+    // is the common case and used to be what long-press did. The two could not
+    // both be long-press: selectable text consumes the gesture, and the one
+    // that had to become visible is the one nothing on screen announced
+    // (STYLE-RULES: a gesture alone is half a feature).
     const bubble = (
-      <Pressable
-        onLongPress={textToRender ? async () => {
-          confirmBuzz();
-          await copyText(textToRender);
-        } : undefined}
-        delayLongPress={400}
-        // Not a button: the bubble's job is to be read, and announcing every
-        // message as pressable would put "button" in front of the text itself.
-        // The hint carries the affordance for anyone who goes looking.
-        accessibilityHint={textToRender ? 'Long-press to copy this message' : undefined}
+      <View
         style={[
         styles.messageBubble,
         message.isWelcome ? styles.welcomeBubble :
@@ -2033,12 +2028,17 @@ export default function TurtleScreen() {
         )}
         {textToRender ? (
           message.sender === 'user' ? (
-            <Text style={[
-              styles.messageText,
-              styles.userText,
-              // Re-inject padding for text if it was removed by the image container
-              extractedImage && { paddingHorizontal: 8, paddingBottom: 4 }
-            ]}>
+            <Text
+              // Your own messages select too: the commonest thing to lift out
+              // of a transcript is the prompt you typed, to send again.
+              selectable
+              style={[
+                styles.messageText,
+                styles.userText,
+                // Re-inject padding for text if it was removed by the image container
+                extractedImage && { paddingHorizontal: 8, paddingBottom: 4 }
+              ]}
+            >
               {textToRender}
             </Text>
           ) : (
@@ -2054,20 +2054,38 @@ export default function TurtleScreen() {
           )
         ) : null}
         {!message.isWelcome && (
-          <Text style={[
-            styles.timestamp,
-            // Adjust timestamp position if inside a photo bubble
+          <View style={[
+            styles.messageMeta,
+            // Adjust the row's position if inside a photo bubble
             extractedImage && { paddingHorizontal: 8, paddingBottom: 2 }
           ]}>
-            {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </Text>
+            {/* The whole message, in one tap. Beside the timestamp because
+                that corner is already the bubble's margin — the words keep
+                the full width, and nothing floats over the text it copies.
+                Icon only: a "Copy" label next to a 10pt time would be the
+                loudest thing in the bubble. */}
+            {textToRender ? (
+              <CopyKey
+                text={textToRender}
+                label={false}
+                size={12}
+                color={theme.colors.textMuted}
+                doneColor={theme.colors.accentSuccess || theme.colors.textMuted}
+                accessibilityLabel="Copy this message"
+                testID="chat-copy-message"
+              />
+            ) : null}
+            <Text style={styles.timestamp}>
+              {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </Text>
+          </View>
         )}
         {message.isTelegram && (
           <View style={{ backgroundColor: 'rgba(0, 136, 204, 0.8)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2, marginTop: 6, alignSelf: 'flex-end', ...(extractedImage && { marginRight: 6, marginBottom: 4 }) }}>
             <Text style={{ fontSize: 9, color: '#fff', fontWeight: 'bold' }}>TG</Text>
           </View>
         )}
-      </Pressable>
+      </View>
     );
 
     if (!board.length) return bubble;
@@ -4020,11 +4038,18 @@ const createStyles = (theme, insets) =>
     serverText: {
       color: theme.colors.textPrimary,
     },
+    // The bubble's bottom corner: the copy key and the time, on one row. The
+    // row carries the alignment the timestamp used to carry alone.
+    messageMeta: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 4,
+      alignSelf: 'flex-end',
+    },
     timestamp: {
       fontSize: 10,
       color: theme.colors.textMuted,
-      marginTop: 4,
-      alignSelf: 'flex-end',
     },
     loadingBubble: {
       alignSelf: 'flex-start',
