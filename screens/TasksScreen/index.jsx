@@ -176,6 +176,7 @@ import PlannerSearchPanel from './components/PlannerSearchPanel';
 import PlannerFilterPanel from './components/PlannerFilterPanel';
 import { boardCardPalette } from './utils/cardPalette';
 import { boardColorAt, boardInkOn } from './utils/boardColors';
+import { hasAgendaDate, isAgendaPast } from './utils/agendaBands';
 import FriendCard from '../TurtleScreen/components/FriendCard';
 import PeoplePopover from './components/PeoplePopover';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
@@ -1592,31 +1593,13 @@ export default function TasksScreen() {
   const agendaOrder = useMemo(() => {
     const source = tasksRef.current || [];
     const todayStr = localTodayStr();
-    const now = new Date();
-    const nowMs = now.getTime();
+    const nowMs = Date.now();
     const filters = { selectedProject, selectedTags, tagFilterMode, selectedOwners, searchQuery };
-    const hasDate = (t) => typeof t.dueDate === 'string' && !!t.dueDate;
-    // A today-dated task whose TIME has already passed is overdue — it belongs
-    // in the Past band, not Upcoming (mirrors isPast's today-branch exactly, so
-    // every task lands in exactly one band).
-    const duePassedToday = (t) => {
-      if (t.dueDate === todayStr && t.time) {
-        const [h, m] = String(t.time).split(':').map(Number);
-        const due = new Date(now); due.setHours(h || 0, m || 0, 0, 0);
-        return due.getTime() < nowMs;
-      }
-      return false;
-    };
-    // "Past" = completed (or done-now recurring) OR an incomplete item whose
-    // due moment has already passed.
-    const isPast = (t) => {
-      if (t.completed || isTaskDoneNow(t)) return true;
-      if (hasDate(t)) {
-        if (t.dueDate < todayStr) return true;
-        return duePassedToday(t);
-      }
-      return false;
-    };
+    // Which side of the seam a row falls on — see utils/agendaBands. It used
+    // to be written out here, and being written out here is how "Everything"
+    // could file every completed task off the top of the screen for two
+    // rounds of hunting without anyone being able to point at the rule.
+    const isPast = (t) => isAgendaPast(t, { todayStr, nowMs, statusFilter });
     // Past sorts ASCENDING by the DUE date first (ticking never re-sorts a
     // dated row); done-now recurring rows stamp by the day they were ticked
     // (their dueDate has already advanced); undated completions fall back to
@@ -1626,7 +1609,7 @@ export default function TasksScreen() {
         const d = lastCompletedDate(t);
         if (d) return new Date(`${d}T23:59:59`).getTime();
       }
-      if (hasDate(t)) {
+      if (hasAgendaDate(t)) {
         const [h, m] = String(t.time || '00:00').split(':').map(Number);
         const dd = new Date(`${t.dueDate}T00:00:00`);
         dd.setHours(h || 0, m || 0, 0, 0);
@@ -1662,10 +1645,10 @@ export default function TasksScreen() {
     // key = the due date it was SORTED under (undated rows get no divider).
     const open = inScope.filter((t) => !isPast(t));
     const dated = open
-      .filter(hasDate)
+      .filter(hasAgendaDate)
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || String(a.time || '99:99').localeCompare(String(b.time || '99:99')));
     const undated = open
-      .filter((t) => !hasDate(t))
+      .filter((t) => !hasAgendaDate(t))
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     const upcoming = [
       ...dated.map((t) => ({ id: t.id, dateKey: t.dueDate.slice(0, 10) })),
@@ -3027,8 +3010,17 @@ export default function TasksScreen() {
   const taskIndex = useMemo(() => buildTaskIndex(tasks), [tasks]);
 
   // ── The Inbox tab's own list ──────────────────────────────────────────────
-  const inboxLabel = useMemo(() => inboxDestinationLabel(projects), [projects]);
-  const inbox = useMemo(() => inboxTasks(tasks, projects), [tasks, projects]);
+  // Scoped to the board the Planner is on, like every other tab. Unscoped,
+  // `selectedProject` is the 'All' sentinel and these fall back to the inbox
+  // rule — see utils/inboxDestination.
+  const inboxLabel = useMemo(
+    () => inboxDestinationLabel(projects, selectedProject),
+    [projects, selectedProject],
+  );
+  const inbox = useMemo(
+    () => inboxTasks(tasks, projects, { scope: selectedProject }),
+    [tasks, projects, selectedProject],
+  );
   // Which line the capture field just made, so exactly one row animates in
   // rather than the whole list replaying on every add.
   const [freshInboxId, setFreshInboxId] = useState(null);
@@ -3262,7 +3254,19 @@ export default function TasksScreen() {
               which board you were on and offered no way to be on another. A
               title that states a scope should be the way to pick it. */}
           <TouchableOpacity
-            style={styles.headerTitleKey}
+            style={[
+              styles.headerTitleKey,
+              // The backdrop that says PRESS ME. The title has opened the board
+              // picker since the header key went away, and nothing on it said
+              // so: a chevron at the end of a screen title reads as decoration,
+              // and a title is the last thing anyone tries to tap. A filled
+              // pill is the same promise every other control on this header
+              // makes. Tinted with the board's own colour when there is one,
+              // so the thing you press to change the scope is wearing it.
+              plannerScopeInk
+                ? { backgroundColor: `${plannerScopeInk}1A` }
+                : styles.headerTitleKeyPlain,
+            ]}
             onPressIn={() => tapHaptic()}
             onPress={() => { setBoardQuery(''); setBoardPickerOpen(true); }}
             activeOpacity={0.7}
@@ -3287,6 +3291,11 @@ export default function TasksScreen() {
                 the two keys on the right. */}
             <Icon name="chevron-down" size={17} color={theme.colors.textTertiary} />
           </TouchableOpacity>
+          {/* What used to be the title's own flex:1. The title hugs its pill
+              now, so something else has to hold the keys against the right
+              edge — and it must be a spacer rather than the title growing,
+              or the pill stretches into a bar. */}
+          <View style={styles.headerTitleSpacer} />
           {/* The two keys, on the TITLE row so they clear the tab picker and
               stay put across all four tabs. The title shrinks to them rather
               than under them — a long board name must never push a control off
@@ -4147,7 +4156,7 @@ export default function TasksScreen() {
                   trailing={overviewKey}
                   destinationLabel={inboxLabel}
                   onAdd={(title) => {
-                    const task = inboxTaskFrom(title, projects);
+                    const task = inboxTaskFrom(title, projects, { scope: selectedProject });
                     if (!task) return;
                     // Remembered for one render so the list knows which line to
                     // slide in — see InboxList. The id is the createdAt stamp.
@@ -4164,7 +4173,7 @@ export default function TasksScreen() {
                   c={theme.colors}
                   theme={theme}
                   onOpenTask={openDetail}
-                  onOpenAll={() => setSelectedProject(inboxDestination(projects) || 'No Project')}
+                  onOpenAll={() => setSelectedProject(inboxDestination(projects, selectedProject) || 'No Project')}
                 />
               </View>
             )}
@@ -4264,7 +4273,7 @@ export default function TasksScreen() {
             // A thought parked mid-block lands exactly where one typed on the
             // Inbox tab lands — one capture destination, not two.
             onJot={(line) => {
-              const t = inboxTaskFrom(line, projects);
+              const t = inboxTaskFrom(line, projects, { scope: selectedProject });
               if (t) handleSaveTask(t);
             }}
             onStart={startFocusHere}
@@ -4740,14 +4749,34 @@ const createStyles = (theme) => StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  // The title AS a key: the label and its disclosure on one line, taking all
-  // the room the two keys on the right do not need.
+  // The title AS a key: the label and its disclosure on one line, in a pill
+  // that hugs them — see headerTitleSpacer for what holds the two keys out to
+  // the right now that this no longer stretches.
   headerTitleKey: {
-    flex: 1,
+    // flexShrink, NOT flex: 1. The pill has to HUG the title — grown to fill
+    // the row it would stretch across the empty space to the two keys and read
+    // as a bar rather than a button. Shrink still lets a long board name give
+    // way to the keys instead of pushing one off the edge (STYLE-RULES §2).
+    flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
+    // The pill. Snug: this is a screen title, and the breath around the type
+    // is most of what makes it still read as one.
+    paddingLeft: 10,
+    paddingRight: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
+  // Unscoped there is no hue to borrow, so it takes the house control fill —
+  // the same surface the filter chips sit on.
+  headerTitleKeyPlain: {
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  // Holds the two keys against the right edge now that the title hugs. Grows
+  // into whatever is spare and never shrinks — when the row runs out of room
+  // the PILL gives way, which is the behaviour the title already had.
+  headerTitleSpacer: { flexGrow: 1, flexShrink: 0, flexBasis: 0 },
   headerTitleLarge: {
     // Shrinks to whatever sits beside it rather than pushing it off the edge
     // (STYLE-RULES §2).

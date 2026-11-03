@@ -19,10 +19,35 @@
  * first time you use it is a capture field that changes your board list behind
  * your back; with no Inbox board, "no board" is a perfectly good home and the
  * Planner already shows it.
+ *
+ * ─── Unless you have picked a board ────────────────────────────────────────
+ *
+ * The Planner has one scope, named in its title, and every other tab obeys it.
+ * The Inbox tab did not: scoped to a board, it still listed the inbox and still
+ * captured into it, so the one page with a text field in it was the one page
+ * that ignored what you said you were working on.
+ *
+ * A picked board is therefore the destination, and the list under the field is
+ * that board's. Both halves or neither: a list showing one board above a field
+ * that files somewhere else is worse than ignoring the scope, because what you
+ * type vanishes out of the list you are looking at.
  */
 
+/** The screen's sentinels: no scope at all, and the boardless pseudo-board. */
+const SCOPE_NONE = 'All';
+const SCOPE_BOARDLESS = 'No Project';
+
+/** The board the Planner is scoped to, or null when it is not scoped. */
+function scopedBoard(scope) {
+  if (typeof scope !== 'string' || !scope || scope === SCOPE_NONE) return null;
+  // "No Board" is a real choice — capture into no board, list the boardless.
+  return scope === SCOPE_BOARDLESS ? '' : scope;
+}
+
 /** The board name to capture into — '' meaning no board at all. */
-export function inboxDestination(projects) {
+export function inboxDestination(projects, scope) {
+  const picked = scopedBoard(scope);
+  if (picked !== null) return picked;
   for (const p of Array.isArray(projects) ? projects : []) {
     if (typeof p === 'string' && p.trim().toLowerCase() === 'inbox') return p;
   }
@@ -37,8 +62,8 @@ export function inboxDestination(projects) {
  * "Unsorted" is a truer word for a boardless task than "No Board", which reads
  * like an error rather than a state.
  */
-export function inboxDestinationLabel(projects) {
-  const board = inboxDestination(projects);
+export function inboxDestinationLabel(projects, scope) {
+  const board = inboxDestination(projects, scope);
   return board || 'Unsorted';
 }
 
@@ -52,8 +77,12 @@ export function inboxDestinationLabel(projects) {
  *
  * Returns null for a blank line, so the caller never has to guard — an empty
  * field submitted by an accidental Return must not create an untitled task.
+ *
+ * `now` and `scope` ride in one options bag rather than as a third and fourth
+ * positional: two optional arguments in a row is a signature where the common
+ * call passes the wrong one.
  */
-export function inboxTaskFrom(title, projects, now = Date.now()) {
+export function inboxTaskFrom(title, projects, { now = Date.now(), scope } = {}) {
   const clean = String(title || '').trim();
   if (!clean) return null;
   return {
@@ -62,7 +91,7 @@ export function inboxTaskFrom(title, projects, now = Date.now()) {
     description: '',
     priority: 'medium',
     completed: false,
-    project: inboxDestination(projects),
+    project: inboxDestination(projects, scope),
     dueDate: '',
     tags: [],
     subtasks: [],
@@ -82,8 +111,8 @@ export function inboxTaskFrom(title, projects, now = Date.now()) {
  * on its own page; a list that grows without bound under a capture field pushes
  * everything else off the screen the moment you use it properly.
  */
-export function inboxTasks(tasks, projects, { limit = 12, now = Date.now() } = {}) {
-  const home = inboxDestination(projects);
+export function inboxTasks(tasks, projects, { limit = 12, now = Date.now(), scope } = {}) {
+  const home = inboxDestination(projects, scope);
   const out = [];
   for (const t of Array.isArray(tasks) ? tasks : []) {
     if (!t || !t.id) continue;
