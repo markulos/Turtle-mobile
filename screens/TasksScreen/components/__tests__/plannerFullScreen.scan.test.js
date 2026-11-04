@@ -57,13 +57,48 @@ describe('the sheet is portalled over the screen', () => {
     expect(inside).toMatch(/<Reanimated\.View style=\{\[sheetStyles\.sheet/);
   });
 
-  test('the host is the LAST child of the screen root, inside the provider', () => {
+  test('the host comes after everything the sheet must cover', () => {
     const root = region(SCREEN, '<ScreenPortalProvider>', '</ScreenPortalProvider>');
     const host = root.indexOf('<ScreenPortalHost />');
     expect(host).toBeGreaterThan(-1);
-    // Nothing of the screen after it: paint order is tree order, and "over
-    // everything" is the entire point.
-    expect(root.slice(host)).toMatch(/^<ScreenPortalHost \/>\s*<\/View>\s*$/);
+    // Paint order is tree order, and "over everything" is the entire point:
+    // no part of the PAGE may follow the host, or the sheet stops covering
+    // it. This used to be "nothing at all follows", and the exception that
+    // changed it is deliberate — see the panel layer below.
+    const after = root.slice(host);
+    for (const furniture of [
+      'styles.headerChrome',
+      'styles.viewPager',
+      'styles.activeFiltersBar',
+      'styles.dropdownHost',
+      '<CalendarView',
+    ]) {
+      expect(after).not.toContain(furniture);
+    }
+  });
+
+  /**
+   * THE ONE THING ABOVE THE SHEET: the panel layer.
+   *
+   * A full-screen panel is not part of the page the sheet covers — it is the
+   * thing you just opened, and the latest panel goes over everything. The
+   * profile card arrived as a bug report for exactly this: tapped from a
+   * task's avatar stack, it opened UNDERNEATH the raised To-Do sheet.
+   *
+   * Which panels, and why none of them may be a Modal, is
+   * plannerPanels.scan.test.js. This only pins that the exception is a
+   * SHORT, NAMED list and not a drift.
+   */
+  test('…and only the panel layer follows it', () => {
+    const root = region(SCREEN, '<ScreenPortalProvider>', '</ScreenPortalProvider>');
+    const after = root.slice(root.indexOf('<ScreenPortalHost />'));
+    const tags = (after.match(/<[A-Z][A-Za-z]*/g) || []).map((t) => t.slice(1));
+    expect(tags.sort()).toEqual([
+      'FriendCard',
+      'PlannerFilterPanel',
+      'PlannerSearchPanel',
+      'ScreenPortalHost',
+    ]);
   });
 
   test('it RIDES the pager rather than being switched on and off', () => {

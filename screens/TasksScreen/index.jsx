@@ -3641,12 +3641,11 @@ export default function TasksScreen() {
         onStartPomodoro={() => { startPomodoroFor(selectedTask); setShowDetail(false); }}
       />
 
-      {/* Owner profile — opened by tapping a task's owner badge on the shared
-          calendar. Built from what the task list carries (name + that person's
-          tasks); phone/role/avatar light up once a members feed is wired in. */}
-      {/* The avatar stack's list. Rendered at the screen root so it covers the
-          tab bar and cannot be clipped; picking someone hands off to the full
-          profile card below. */}
+      {/* The avatar stack's list — everyone on a task. A transparent Modal, so
+          it escapes the pager and covers the tab bar; picking someone hands
+          off to the profile card, which lives in the PANEL LAYER at the very
+          bottom of this component (it has to paint over the day sheet too,
+          and the sheet is portalled above everything here). */}
       <PeoplePopover
         visible={!!peopleList}
         people={peopleList?.people || []}
@@ -3659,14 +3658,6 @@ export default function TasksScreen() {
         }}
       />
 
-      <FriendCard
-        friend={profileFriend}
-        // Resolves this member's server-relative avatarUrl. Without it the card
-        // had no way to turn "/api/avatars/x.jpg" into something loadable.
-        serverBase={serverBase}
-        tasks={profileOwner ? tasks.filter((t) => t.userId === profileOwner.userId) : []}
-        onClose={() => setProfileOwner(null)}
-      />
 
       {/* (The All Boards page renders as the LAST child of the screen root —
           an in-tree EdgeSwipePage overlay must paint above the pager. See the
@@ -4567,6 +4558,51 @@ export default function TasksScreen() {
 
     </View>
 
+
+      {/* ── The over-everything layer ───────────────────────────────────────
+          LAST, because paint order is tree order: whatever is portalled here
+          covers the header, the chips and the page — which is how the day
+          planner becomes the whole screen without a single thing underneath
+          it moving or being unmounted. box-none inside, so a touch that
+          misses the portalled view still reaches the screen. The Modals above
+          are unaffected: RN presents those in their own window.
+
+          The floating dock is NOT under it — the navigator draws that above
+          this screen entirely — which is why what it hosts ends above the
+          dock rather than assuming it owns the bottom of the glass. */}
+      <ScreenPortalHost />
+
+      {/* ══ THE PANEL LAYER ═════════════════════════════════════════════
+          THE LATEST PANEL GOES OVER EVERYTHING. That is the rule, and this is
+          where it is kept: paint order is tree order, so a full-screen panel
+          belongs AFTER the portal host, not before it and not inside the page.
+
+          Three things used to get this wrong, in three different ways, and
+          each looked like its own bug:
+
+            · inside the PADDED container, an absolute fill is laid out
+              against a padding box — the panel started under the header.
+            · inside `dropdownHost` (flex:1, overflow:hidden, and a shift
+              transform) it was also CLIPPED to the page and rode a slide
+              belonging to the board picker.
+            · before the PORTAL HOST, it was painted over by the raised day
+              sheet, which is portalled there — so the profile card opened
+              underneath the To-Do sheet.
+
+          Out here there is no padding, no clip, no transform and nothing
+          above. Each of these clears the hood itself with panelTopInset, as
+          every full-screen surface in the app does.
+
+          WHY NOT MODALS, which stack natively in open order: every panel here
+          is opened from, or opens, another Modal — the search hands off to the
+          edit FORM, the filter has a nested search page, and the profile is
+          opened from the people popover, which is itself a Modal. iOS will not
+          present a sibling Modal over an open one. In-tree overlays are what
+          can stack here, so their ORDER below is the tie-break, arranged by
+          which can be opened over which.
+
+          `plannerPanels.scan.test.js` is what keeps a fourth one from going
+          its own way. */}
       {/* ── The task search ─────────────────────────────────────────────────
           ONE ERRAND, ON EVERY TAB: find a task, anywhere in the pond.
 
@@ -4672,18 +4708,17 @@ export default function TasksScreen() {
         bottomInset={tabBarHeight}
       />
 
-      {/* ── The over-everything layer ───────────────────────────────────────
-          LAST, because paint order is tree order: whatever is portalled here
-          covers the header, the chips and the page — which is how the day
-          planner becomes the whole screen without a single thing underneath
-          it moving or being unmounted. box-none inside, so a touch that
-          misses the portalled view still reaches the screen. The Modals above
-          are unaffected: RN presents those in their own window.
-
-          The floating dock is NOT under it — the navigator draws that above
-          this screen entirely — which is why what it hosts ends above the
-          dock rather than assuming it owns the bottom of the glass. */}
-      <ScreenPortalHost />
+      {/* Last, because it is the one that can open while another is up: a
+          task's avatar stack lists everyone on it, and tapping a face opens
+          this over whatever you were looking at. */}
+      <FriendCard
+        friend={profileFriend}
+        // Resolves this member's server-relative avatarUrl. Without it the card
+        // had no way to turn "/api/avatars/x.jpg" into something loadable.
+        serverBase={serverBase}
+        tasks={profileOwner ? tasks.filter((t) => t.userId === profileOwner.userId) : []}
+        onClose={() => setProfileOwner(null)}
+      />
     </View>
     </ScreenPortalProvider>
   );
