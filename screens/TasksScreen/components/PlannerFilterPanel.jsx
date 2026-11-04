@@ -43,6 +43,7 @@ import { inkOn } from '../../../utils/accentColor';
 import { boardLabel } from '../utils/taskHelpers';
 import { previewChips } from '../utils/recentFirst';
 import { panelBottomInset, panelTopInset } from '../../../components/tabBarLayout';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 const STATUS = [
   { key: 'todo', label: 'To do', icon: 'checkbox-blank-circle-outline' },
@@ -283,7 +284,7 @@ export default function PlannerFilterPanel({
           </Pressable>
         </View>
 
-        <ScrollView
+        <ScrollView {...SCROLL_INDICATOR}
           contentContainerStyle={[s.body, { paddingBottom: 24 }]}
           keyboardShouldPersistTaps="handled"
           testID="planner-filter-scroll"

@@ -4,6 +4,7 @@ import { depth } from '../../../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 /**
  * ParticipantPicker — pick pond members for a task's "people involved" set
@@ -60,7 +61,7 @@ export default function ParticipantPicker({ selected = [], onChange }) {
         <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={() => setOpen(false)}>
           <TouchableOpacity activeOpacity={1} style={styles.sheet} onPress={() => {}}>
             <Text style={styles.sheetTitle}>People involved</Text>
-            <ScrollView style={{ maxHeight: 340 }} keyboardShouldPersistTaps="handled">
+            <ScrollView {...SCROLL_INDICATOR} style={{ maxHeight: 340 }} keyboardShouldPersistTaps="handled">
               {friends.length === 0 ? (
                 <Text style={styles.empty}>No other members in your pond yet.</Text>
               ) : (

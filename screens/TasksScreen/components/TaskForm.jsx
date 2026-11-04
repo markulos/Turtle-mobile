@@ -42,6 +42,7 @@ import { bumpInvolved } from '../utils/peopleFrequency';
 import { guestReminderConfig } from '../utils/guestReminders';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 import { INPUT_FIELD } from '../../../utils/inputField';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 import {
   PRIORITIES,
   ITEM_TYPES,
@@ -825,7 +826,7 @@ export const TaskForm = ({
               // iOS otherwise floats the vertical indicator on the WRONG side /
               // inset; pinning a 1px right inset forces it to the true right
               // edge. indicatorStyle keeps it visible on the black theme.
-              scrollIndicatorInsets={{ right: 1 }}
+              {...SCROLL_INDICATOR}
               indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
             >
             {/* Type selector — tap a kind to move between Task / Event /
@@ -1110,7 +1111,7 @@ export const TaskForm = ({
 
                 {showSuggestions && suggestions.length > 0 && (
                   <View style={styles.suggestionsContainer}>
-                    <ScrollView
+                    <ScrollView {...SCROLL_INDICATOR}
                       keyboardShouldPersistTaps="handled"
                       nestedScrollEnabled
                     >

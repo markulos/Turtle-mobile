@@ -22,6 +22,7 @@ import AnimalAvatar from '../../../components/AnimalAvatar';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { INPUT_FIELD } from '../../../utils/inputField';
 import { Image } from 'expo-image';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 // Sheet-presentation curve — the same weighted ease-out the vault's other
 // bottom-anchored surfaces use, so this card enters like the rest of the app.
@@ -434,7 +435,7 @@ export default function TrackActionsSheet({
             <ScrollView
               style={styles.playlistScroll}
               keyboardShouldPersistTaps="handled"
-              scrollIndicatorInsets={{ right: 1 }}
+              {...SCROLL_INDICATOR}
               {...scrollProps}
             >
               {pond.loading ? (
@@ -549,7 +550,7 @@ export default function TrackActionsSheet({
             <ScrollView
               style={styles.playlistScroll}
               keyboardShouldPersistTaps="handled"
-              scrollIndicatorInsets={{ right: 1 }}
+              {...SCROLL_INDICATOR}
               {...scrollProps}
             >
               {playlists.length === 0 ? (

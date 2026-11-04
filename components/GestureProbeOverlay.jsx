@@ -24,6 +24,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useServer } from '../context/ServerContext';
 import gestureProbe, { BAD_MS, SLOW_MS, buildFixPrompt } from '../utils/gestureProbe';
 import { isGestureProbeEnabled, subscribeDebugSettings } from '../utils/debugSettings';
+import { SCROLL_INDICATOR } from '../utils/scrollIndicator';
 
 const IS_DEV = typeof __DEV__ !== 'undefined' && __DEV__;
 const STORAGE_KEY = 'gestureProbe.findings.v1';
@@ -216,7 +217,7 @@ function ProbeOverlayBody() {
 
             <ScrollView
               style={{ maxHeight: 320 }}
-              scrollIndicatorInsets={{ right: 1 }}
+              {...SCROLL_INDICATOR}
               indicatorStyle="white"
             >
               {findings.length === 0 ? (

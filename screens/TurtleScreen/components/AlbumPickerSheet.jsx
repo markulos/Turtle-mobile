@@ -38,6 +38,7 @@ import { INPUT_FIELD } from '../../../utils/inputField';
 import { TAP_ONLY } from '../../../utils/pressBehavior';
 import { tapHaptic } from '../../../utils/haptics';
 import { albumSuggestions, isNewAlbumName, cleanAlbumName } from '../../../utils/albumPicker';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 /**
  * ─── Why the tag editor is a key in HERE ──────────────────────────────────
@@ -200,7 +201,7 @@ export default function AlbumPickerSheet({
           </TouchableOpacity>
         ) : null}
 
-        <FlatList
+        <FlatList {...SCROLL_INDICATOR}
           data={shown}
           keyExtractor={(a) => a.name}
           style={styles.list}

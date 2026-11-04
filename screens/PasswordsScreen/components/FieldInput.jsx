@@ -9,6 +9,7 @@ import {
 import AppTextInput from '../../../components/AppTextInput';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 // Extract all unique field labels from all entries
 const extractFieldLabels = (entries) => {
@@ -134,7 +135,7 @@ export const FieldInput = ({
       />
       {showSuggestions && suggestions.length > 0 && (
         <View style={styles.suggestionsContainer}>
-          <FlatList
+          <FlatList {...SCROLL_INDICATOR}
             data={suggestions}
             keyExtractor={(item) => item}
             renderItem={renderSuggestion}

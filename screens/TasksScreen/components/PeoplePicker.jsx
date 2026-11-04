@@ -36,6 +36,7 @@ import { tapHaptic } from '../../../utils/haptics';
 import { ROW_COVER, VaultResultRow } from '../../TurtleScreen/components/VaultSearchDock';
 import { loadCounts, rankPeople } from '../utils/peopleFrequency';
 import { INPUT_FIELD } from '../../../utils/inputField';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 /** Fold case and spacing so "Mo" finds "Mohamed" and " mo " finds it too. */
 const norm = (s) => String(s || '').trim().toLowerCase();
@@ -257,7 +258,7 @@ export default function PeoplePicker({
             ) : null}
           </View>
 
-          <ScrollView
+          <ScrollView {...SCROLL_INDICATOR}
             style={styles.list}
             contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 12) + 12 }}
             keyboardShouldPersistTaps="handled"

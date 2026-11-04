@@ -35,6 +35,7 @@ import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import { tapHaptic } from '../../utils/haptics';
 import { inkOn } from '../../utils/accentColor';
 import { panelBottomInset, panelTopInset } from '../../components/tabBarLayout';
+import { SCROLL_INDICATOR } from '../../utils/scrollIndicator';
 
 /** The kind chips, in the order they read — widest scope first. */
 const KIND_ICONS = {
@@ -188,7 +189,7 @@ export default function NotesFilterPanel({
           </Pressable>
         </View>
 
-        <ScrollView
+        <ScrollView {...SCROLL_INDICATOR}
           contentContainerStyle={[s.body, { paddingBottom: 24 }]}
           keyboardShouldPersistTaps="handled"
           testID="notes-filter-scroll"

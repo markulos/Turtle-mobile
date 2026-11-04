@@ -47,6 +47,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useSheetDetents } from '../../../../utils/useSheetDetents';
 import { depth } from '../../../../utils/surfaceDepth';
+import { SCROLL_INDICATOR } from '../../../../utils/scrollIndicator';
 
 const SCREEN_H = Dimensions.get('window').height || 900;
 const ENTER_MS = 240;
@@ -298,7 +299,7 @@ export default function ViewerSheet({
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
               showsVerticalScrollIndicator
-              scrollIndicatorInsets={{ right: 1 }}
+              {...SCROLL_INDICATOR}
               indicatorStyle={dark ? 'white' : 'default'}
               {...scrollProps}
             >

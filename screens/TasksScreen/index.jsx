@@ -196,6 +196,7 @@ import FocusPage from './components/FocusPage';
 import { mergeFocusLog } from './utils/focusStats';
 // So a block started from the Focus tab still pings THIS device when it ends.
 import { getExpoPushTokenSafe } from '../../services/vaultPush';
+import { SCROLL_INDICATOR } from '../../utils/scrollIndicator';
 
 // The row's real board, or null. "None" is stored three ways — absent, empty,
 // and the legacy 'No Project' sentinel (see boardLabel) — and all three mean
@@ -3752,7 +3753,7 @@ export default function TasksScreen() {
             onTouchCancel={onAgendaTouchCancel}
             testID="agenda-touch-surface"
           >
-          <FlashList
+          <FlashList {...SCROLL_INDICATOR}
             // Remount per scope: a fresh list opens on Upcoming at offset 0
             // (see agendaScopeKey) instead of inheriting the previous scope's
             // offset + position-hold anchor.
@@ -4330,7 +4331,7 @@ export default function TasksScreen() {
               </TouchableOpacity>
             </View>
           </View>
-          <SectionList
+          <SectionList {...SCROLL_INDICATOR}
             ref={boardsListRef}
             sections={collapsible.groupedData}
             keyExtractor={(item, index) => (item ? `${item.id || index}` : `board-section-${index}`)}

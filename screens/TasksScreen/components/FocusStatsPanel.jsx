@@ -47,6 +47,7 @@ import { formatMinutes } from '../utils/focusStats';
 import { focusRangeStats, focusRecords } from '../utils/focusRanges';
 // One ramp for the whole app's charts — see the note above.
 import { RAMP, rampStep } from './StatsPanel';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 const RANGE_KEYS = [
   { value: 'week', label: 'Week' },
@@ -375,7 +376,7 @@ function FocusStatsPanel({
       <ScrollView
         contentContainerStyle={[styles.body, { paddingBottom: 32 + bottomInset }]}
         showsVerticalScrollIndicator
-        scrollIndicatorInsets={{ right: 1 }}
+        {...SCROLL_INDICATOR}
         indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
         testID="focus-stats-scroll"
       >

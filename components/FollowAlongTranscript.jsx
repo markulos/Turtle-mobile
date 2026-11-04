@@ -37,6 +37,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { followState, seekTargetFor } from '../utils/followAlong';
 import { formatDuration } from '../utils/transcriptionOptions';
 import { tapHaptic } from '../utils/haptics';
+import { SCROLL_INDICATOR } from '../utils/scrollIndicator';
 
 const at = (seconds) => formatDuration(seconds) || '0:00';
 
@@ -178,7 +179,7 @@ export default function FollowAlongTranscript({
 
   return (
     <View style={{ flex: 1 }} testID={testID}>
-      <FlatList
+      <FlatList {...SCROLL_INDICATOR}
         ref={listRef}
         data={turns}
         keyExtractor={(turn, index) => `${turn.start}-${index}`}

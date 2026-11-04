@@ -16,6 +16,7 @@ import { inkOn } from '../../../utils/accentColor';
 import { formatDueDate } from '../../TasksScreen/utils/taskHelpers';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import EdgeSwipePage from './EdgeSwipePage';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 // "3:45 PM" from "HH:MM" (24h); '' when unset.
 const fmtTime12 = (t) => {
@@ -118,7 +119,7 @@ export default function FriendCard({
           <View style={{ flex: 1 }} />
         </View>
 
-          <ScrollView contentContainerStyle={styles.body}>
+          <ScrollView {...SCROLL_INDICATOR} contentContainerStyle={styles.body}>
           {/* Avatar */}
           <View style={styles.avatarWrap}>
             {avatarUri ? (

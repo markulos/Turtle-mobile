@@ -33,6 +33,7 @@ import { insetRule } from '../../../utils/surfaceDepth';
 import { formatMinutes } from '../utils/focusStats';
 import { clockLabel, compareToAverage, focusDayStats, ordinal } from '../utils/focusDay';
 import { RAMP, rampStep } from './StatsPanel';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 /** A mark with nothing in it is the TRACK, never a ramp step: nothing must
  *  never read as a little. Same rule as the stats panel's charts. */
@@ -182,7 +183,7 @@ function FocusDayPanel({
       <ScrollView
         contentContainerStyle={[styles.body, { paddingBottom: 32 + bottomInset }]}
         showsVerticalScrollIndicator
-        scrollIndicatorInsets={{ right: 1 }}
+        {...SCROLL_INDICATOR}
         testID="focus-day-scroll"
       >
         {/* ── 1. THE DAY ─────────────────────────────────────────────────── */}

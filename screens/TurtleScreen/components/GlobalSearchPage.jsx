@@ -29,6 +29,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import { tapHaptic } from '../../../utils/haptics';
 import { searchEverything, stripMarks } from '../../../services/globalSearch';
 import { INPUT_FIELD } from '../../../utils/inputField';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 const DEBOUNCE_MS = 250;
 const THUMB_COLS = 3;
@@ -149,7 +150,7 @@ export default function GlobalSearchPage({ visible, initialQuery = '', onClose, 
           contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
-          scrollIndicatorInsets={{ right: 1 }}
+          {...SCROLL_INDICATOR}
           indicatorStyle={theme.mode === 'dark' ? 'white' : 'default'}
         >
           {!query.trim() && (

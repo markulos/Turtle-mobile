@@ -30,6 +30,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import EdgeSwipePage from './EdgeSwipePage';
 import { notifyHaptic, tapHaptic } from '../../../utils/haptics';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 const DAY_MS = 86400000;
 const CHART_DAYS = 30;
@@ -332,7 +333,7 @@ export default function ShareInsightsPage({
             // overlay it is presented inside). Pinning a 1px right inset forces
             // it to the true right edge; indicatorStyle keeps it legible in both
             // themes. Same fix as TaskForm and ConversationsOverlay.
-            scrollIndicatorInsets={{ right: 1 }}
+            {...SCROLL_INDICATOR}
             indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
           >
             {state.error && <Text style={styles.error}>{state.error}</Text>}

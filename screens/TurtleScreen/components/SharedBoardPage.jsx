@@ -31,6 +31,7 @@ import { Image } from 'expo-image';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import EdgeSwipePage from './EdgeSwipePage';
 import { tapHaptic, notifyHaptic } from '../../../utils/haptics';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 const COLUMNS = 3;
 const GAP = 2;
@@ -262,7 +263,7 @@ export default function SharedBoardPage({
             </Text>
           </View>
         ) : (
-          <FlatList
+          <FlatList {...SCROLL_INDICATOR}
             data={items}
             keyExtractor={(item) => item.id}
             numColumns={COLUMNS}

@@ -27,6 +27,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import { inkOn } from '../../../utils/accentColor';
 import { blurProps, frostOverlayColor } from '../../../utils/frostedChat';
 import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 // Glossy top sheen laid over the frosted blur — a soft light highlight that
 // fades out, giving the glass a polished, lit look. Subtler in dark mode.
@@ -381,7 +382,7 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
         </Animated.View>
       )}
 
-      <ScrollView
+      <ScrollView {...SCROLL_INDICATOR}
         ref={scrollRef}
         // ALWAYS flex:1. The panel now has a concrete Reanimated-driven height
         // in BOTH states, so the body must fill it every frame of the resize —

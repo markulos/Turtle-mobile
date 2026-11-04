@@ -34,6 +34,7 @@ import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { buildGalleryUrl } from '../../../utils/galleryFilters';
 import { tapHaptic } from '../../../utils/haptics';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 const COLS = 3;
 const GAP = 2;
@@ -215,7 +216,7 @@ export default function VaultImagePicker({ visible, onClose, onPick, theme, api,
           ) : null}
         </View>
       ) : (
-        <FlatList
+        <FlatList {...SCROLL_INDICATOR}
           testID="vault-picker-grid"
           data={items}
           keyExtractor={(item) => String(item.id)}

@@ -20,6 +20,7 @@ import { useTheme } from '../context/ThemeContext';
 import { blurProps, frostOverlayColor, frostBorderColor } from '../utils/frostedChat';
 import ChatComposer, { ComposerAction } from './ChatComposer';
 import { tapHaptic } from '../utils/haptics';
+import { SCROLL_INDICATOR } from '../utils/scrollIndicator';
 
 // The iOS keyboard ease — Animated has no built-in "keyboard" curve, so this
 // bezier matches it closely; the OS-reported duration is what really syncs the
@@ -180,7 +181,7 @@ export default function CommandConsole({ visible, onClose }) {
                 style={styles.suggestions}
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
-                scrollIndicatorInsets={{ right: 1 }}
+                {...SCROLL_INDICATOR}
               >
                 {suggestions.map((s) => (
                   <TouchableOpacity

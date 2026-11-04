@@ -36,6 +36,7 @@ import DirectMessageIcon from '../../../components/DirectMessageIcon';
 import { tapHaptic } from '../../../utils/haptics';
 import { TAP_ONLY } from '../../../utils/pressBehavior';
 import { MAX_MESSAGE_ATTACHMENTS } from '../../../utils/messageAttachments';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 /**
  * How many messages `count` photos will arrive as.
@@ -129,7 +130,7 @@ export default function SendInTurtleSheet({
           </View>
         </View>
 
-        <FlatList
+        <FlatList {...SCROLL_INDICATOR}
           data={people}
           keyExtractor={(p) => p.userId}
           style={styles.list}

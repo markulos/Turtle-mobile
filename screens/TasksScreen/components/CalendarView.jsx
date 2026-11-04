@@ -70,6 +70,7 @@ import { TaskSectionFrontier } from './TaskSectionFrontier';
 import { WheelTimePicker } from './WheelTimePicker';
 import { tapHaptic } from '../../../utils/haptics';
 import { useTapOnly } from '../../../utils/pressBehavior';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 // Spring used for every snap of the day-tasks bottom sheet (drag release,
 // tap-toggle, programmatic open). Tuned snappy-but-soft; expect on-device
@@ -1569,7 +1570,7 @@ const DayPane = React.memo(function DayPane({
 
   return (
     <View style={styles.dayPage}>
-      <ScrollView
+      <ScrollView {...SCROLL_INDICATOR}
         ref={scrollRef}
         style={styles.taskList}
         contentContainerStyle={{ paddingBottom: Math.max(bottomInset, keyboardHeight + 20) }}

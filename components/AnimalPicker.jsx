@@ -24,6 +24,7 @@ import { depth } from '../utils/surfaceDepth';
 import { inkOn } from '../utils/accentColor';
 import { tapHaptic, selectionHaptic } from '../utils/haptics';
 import { AVATAR_CHOICES, avatarAnimal, generatedName } from '../utils/avatar';
+import { SCROLL_INDICATOR } from '../utils/scrollIndicator';
 
 const TILE = 58;
 
@@ -87,7 +88,7 @@ export default function AnimalPicker({
             style={s.scroll}
             contentContainerStyle={s.grid}
             showsVerticalScrollIndicator
-            scrollIndicatorInsets={{ right: 1 }}
+            {...SCROLL_INDICATOR}
           >
             {/* The way back. Drawn as the icon-font silhouette it really is, so
                 it reads as "the one you were given" rather than as a 50th

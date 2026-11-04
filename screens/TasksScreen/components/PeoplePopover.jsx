@@ -36,6 +36,7 @@ import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { depth } from '../../../utils/surfaceDepth';
 import { tapHaptic } from '../../../utils/haptics';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const CARD_W = 268;
@@ -103,7 +104,7 @@ export default function PeoplePopover({ visible, people = [], anchor, theme, onP
         </Text>
         <ScrollView
           style={{ maxHeight: MAX_ROWS * ROW_H }}
-          scrollIndicatorInsets={{ right: 1 }}
+          {...SCROLL_INDICATOR}
           indicatorStyle={theme?.mode === 'dark' ? 'white' : 'default'}
           showsVerticalScrollIndicator
         >

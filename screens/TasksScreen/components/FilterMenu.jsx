@@ -12,6 +12,7 @@ import { depth } from '../../../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { useSheetDismiss } from '../../../utils/useSheetDismiss';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 // Same stable per-owner colour as the calendar badges (hash userId → hue) so
 // the filter swatch matches the badge a task carries on the grid.
@@ -81,7 +82,7 @@ export const FilterMenu = ({
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={true}
-          scrollIndicatorInsets={{ right: 1 }}
+          {...SCROLL_INDICATOR}
           keyboardShouldPersistTaps="handled"
           {...scrollProps}
         >

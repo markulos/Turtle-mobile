@@ -50,6 +50,7 @@ import PasswordsScreen from '../PasswordsScreen';
 import SettingsScreen from '../SettingsScreen';
 import Turtle3DPanel from './Turtle3DPanel';
 import { subscribeChatIntent, takePendingChat } from '../../services/chatIntent';
+import { SCROLL_INDICATOR } from '../../utils/scrollIndicator';
 
 /**
  * ProfileScreen — the personal tab.
@@ -738,7 +739,7 @@ export default function ProfileScreen() {
             <Text style={[styles.pushTitle, styles.pushTitleCentered]}>Updates</Text>
             <View style={styles.pushHeaderSlot} />
           </View>
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: dockOccupied(insets.bottom) + 24 }}>
+          <ScrollView {...SCROLL_INDICATOR} contentContainerStyle={{ padding: 16, paddingBottom: dockOccupied(insets.bottom) + 24 }}>
             {/* Same guard Settings gives it: a native-module throw in here
                 must not take the profile down with it. */}
             {updatesOpen ? <ErrorBoundary label="App updates" compact><UpdatesPanel /></ErrorBoundary> : null}
@@ -1579,7 +1580,7 @@ function StatDetailPage({
               </TouchableOpacity>
               <Text style={styles.pushTitle}>{meta.logTitle}</Text>
             </View>
-            <ScrollView contentContainerStyle={{ paddingBottom: dockOccupied(insets.bottom) + 24 }}>
+            <ScrollView {...SCROLL_INDICATOR} contentContainerStyle={{ paddingBottom: dockOccupied(insets.bottom) + 24 }}>
               {log.length === 0 ? (
                 <Text style={styles.empty}>
                   {metric === 'focus' ? 'No focus blocks finished yet.' : 'No completed tasks yet.'}
@@ -1618,7 +1619,7 @@ function StatDetailPage({
               </TouchableOpacity>
               <Text style={styles.pushTitle}>How points are scored</Text>
             </View>
-            <ScrollView contentContainerStyle={{ paddingBottom: dockOccupied(insets.bottom) + 24, paddingHorizontal: 16 }}>
+            <ScrollView {...SCROLL_INDICATOR} contentContainerStyle={{ paddingBottom: dockOccupied(insets.bottom) + 24, paddingHorizontal: 16 }}>
               <Text style={[statStyles.ledgerNote, { color: c.textSecondary }]}>
                 Points are computed by the server from two actions. The weights
                 below are the live ones — change them there and this page follows.

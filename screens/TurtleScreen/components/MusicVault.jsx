@@ -38,6 +38,7 @@ import {
 // only route to a track was to scroll the whole library.
 import { VaultResultRow, VaultSearchDock, useVaultSearch, PICKER_GAP } from './VaultSearchDock';
 import { rankTracks, trackCountLabel } from './trackSearch';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 // Tags double as playlists for audio: the vault already models "a named group of
 // media" as a tag, so a music playlist is just a tag on an audio row.
@@ -1208,7 +1209,7 @@ export default function MusicVault({
           </Text>
         </View>
       ) : (
-        <Animated.FlatList
+        <Animated.FlatList {...SCROLL_INDICATOR}
           ref={listRef}
           // Searching swaps BOTH the data and the row — the library's cards for
           // the vault's result rows. `displayItems` rather than the matches
@@ -1373,7 +1374,7 @@ export default function MusicVault({
             </Text>
           </View>
 
-          <Animated.FlatList
+          <Animated.FlatList {...SCROLL_INDICATOR}
             onScroll={chromeScroll}
             scrollEventThrottle={16}
             data={pondTracks}
@@ -1459,7 +1460,7 @@ export default function MusicVault({
               {VOICE_RECORDINGS_LABEL}
             </Text>
           </View>
-          <Animated.FlatList
+          <Animated.FlatList {...SCROLL_INDICATOR}
             onScroll={chromeScroll}
             scrollEventThrottle={16}
             testID="voice-recordings-list"
@@ -1515,7 +1516,7 @@ export default function MusicVault({
             <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>Playlists</Text>
           </View>
 
-          <Animated.FlatList
+          <Animated.FlatList {...SCROLL_INDICATOR}
             onScroll={chromeScroll}
             scrollEventThrottle={16}
             data={playlists}
@@ -1556,7 +1557,7 @@ export default function MusicVault({
                   {openPlaylist || ''}
                 </Text>
               </View>
-              <Animated.FlatList
+              <Animated.FlatList {...SCROLL_INDICATOR}
             onScroll={chromeScroll}
             scrollEventThrottle={16}
                 data={openPlaylistTracks}
@@ -1599,7 +1600,7 @@ export default function MusicVault({
               Transcribe
             </Text>
           </View>
-          <ScrollView
+          <ScrollView {...SCROLL_INDICATOR}
             contentContainerStyle={{ padding: 16, paddingBottom: listPadBottom + 8 }}
             keyboardShouldPersistTaps="handled"
           >

@@ -37,6 +37,7 @@ import { boardLabel, isTaskDoneNow, itemTypeOf, localTodayStr } from '../utils/t
 import { overviewStats, NO_BOARD } from '../utils/overviewStats';
 import { INPUT_FIELD } from '../../../utils/inputField';
 import StatsPanel from './StatsPanel';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 const pct = (done, total) => (total > 0 ? Math.round((done / total) * 100) : 0);
 
@@ -660,7 +661,7 @@ function ScopePage({ scope, tasks, todayStr, pal, theme, onBack, onOpenTask }) {
       <ScrollView
         contentContainerStyle={styles.body}
         showsVerticalScrollIndicator
-        scrollIndicatorInsets={{ right: 1 }}
+        {...SCROLL_INDICATOR}
         indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
       >
         {rows.length === 0
@@ -769,7 +770,7 @@ function BoardTagsPage({ rows, selected, pal, theme, onBack, onPick }) {
   return (
     <View style={[styles.page, { backgroundColor: c.background }]}>
       <PageHeader title={`Tags · ${rows.length}`} onBack={onBack} theme={theme} />
-      <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator scrollIndicatorInsets={{ right: 1 }} indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}>
+      <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator {...SCROLL_INDICATOR} indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}>
         <TagPick
           label="All tags"
           done={totalDone}
@@ -921,7 +922,7 @@ function BoardDetail({
           </View>
         )}
       />
-      <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator scrollIndicatorInsets={{ right: 1 }} indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}>
+      <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator {...SCROLL_INDICATOR} indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}>
         <View style={styles.tiles}>
           <Tile icon="checkbox-blank-circle-outline" label="To do" value={row.total - row.done} caption={`of ${row.total}`} pal={pal} testID="board-tile-todo" />
           <Tile icon="check" label="Done" value={row.done} caption={`${pct(row.done, row.total)}% complete`} pal={pal} testID="board-tile-done" />
@@ -1263,7 +1264,7 @@ function OverviewPage({
         <ScrollView
           contentContainerStyle={[styles.body, { paddingBottom: 32 + Math.max(insets.bottom, bottomInset) }]}
           showsVerticalScrollIndicator
-          scrollIndicatorInsets={{ right: 1 }}
+          {...SCROLL_INDICATOR}
           indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
           // The capture field sits in here, so a drag that starts on it has to
           // put the keyboard away rather than fight the scroll.
@@ -1333,7 +1334,7 @@ function OverviewPage({
         {overviewOpen && (
           <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: c.background }}>
             <PageHeader title="Overview" onBack={() => setOverviewOpen(false)} theme={theme} />
-            <ScrollView contentContainerStyle={[styles.body, { paddingBottom: 32 + Math.max(insets.bottom, bottomInset) }]}>
+            <ScrollView {...SCROLL_INDICATOR} contentContainerStyle={[styles.body, { paddingBottom: 32 + Math.max(insets.bottom, bottomInset) }]}>
               <View style={styles.tiles}>
                 <Tile icon="checkbox-blank-circle-outline" label="To do" value={all.total - all.done} caption={`of ${all.total} tasks`} pal={pal} testID="overview-tile-todo" onPress={() => setScope('todo')} />
                 <Tile icon="check" label="Done" value={all.done} caption={`${pct(all.done, all.total)}% complete`} pal={pal} testID="overview-tile-done" onPress={() => setScope('done')} />

@@ -84,6 +84,7 @@ import {
   supportedDocumentFiles,
 } from '../utils/shareMediaClassifier';
 import { FolderPickerSheet } from './TurtleScreen/components/FilesVault/FolderSheets';
+import { SCROLL_INDICATOR } from '../utils/scrollIndicator';
 
 // Local cache of the boards list so the picker renders INSTANTLY on open
 // instead of waiting on the network — we show the cached list immediately and
@@ -426,7 +427,7 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
     <SafeAreaView style={[styles.root, { backgroundColor: theme.colors.background }]}>
       <Header onDismiss={onDismiss} title="Send to Turtle" theme={theme} />
 
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView {...SCROLL_INDICATOR} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {/* Preview — show what is about to be sent */}
         <SharePreview
           text={text}

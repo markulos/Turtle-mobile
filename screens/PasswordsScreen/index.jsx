@@ -15,6 +15,7 @@ import { useTheme } from '../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useVault } from './hooks/useVault';
 import { tapHaptic, notifyHaptic } from '../../utils/haptics';
+import { SCROLL_INDICATOR } from '../../utils/scrollIndicator';
 import {
   SetupScreen,
   UnlockScreen,
@@ -189,7 +190,7 @@ export default function PasswordsScreen({ onBack }) {
           previously a FlatList nested inside a ScrollView, which RN warns
           about ("VirtualizedLists should never be nested…") and disables
           windowing for. */}
-      <FlatList
+      <FlatList {...SCROLL_INDICATOR}
         style={styles.list}
         // Clears the floating tab bar, which no longer reserves space.
         contentContainerStyle={[styles.listContent, { paddingBottom: tabBarHeight + 24 }]}

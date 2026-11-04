@@ -20,6 +20,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { tapHaptic } from '../../../../utils/haptics';
 import { activeOutlineKey } from './pdfOutline';
+import { SCROLL_INDICATOR } from '../../../../utils/scrollIndicator';
 
 const MAX_W = 340;
 const WIDTH_RATIO = 0.84;
@@ -184,7 +185,7 @@ export default function PdfIndexPanel({ visible, rows, pageCount, page, mode, on
           </View>
         )}
         {showing === 'outline' ? (
-          <FlatList
+          <FlatList {...SCROLL_INDICATOR}
             ref={listRef}
             data={rows}
             keyExtractor={(i) => i.key}
@@ -197,7 +198,7 @@ export default function PdfIndexPanel({ visible, rows, pageCount, page, mode, on
             keyboardShouldPersistTaps="handled"
           />
         ) : pages.length > 0 ? (
-          <FlatList
+          <FlatList {...SCROLL_INDICATOR}
             ref={listRef}
             data={pages}
             keyExtractor={(i) => String(i)}

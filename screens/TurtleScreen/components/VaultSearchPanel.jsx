@@ -33,6 +33,7 @@ import EdgeSwipePage from './EdgeSwipePage';
 import { HIT_SLOP_8, ROW_KEY_W, SEARCH_HEIGHT } from './VaultSearchDock';
 import { panelBottomInset, panelTopInset } from '../../../components/tabBarLayout';
 import { INPUT_FIELD } from '../../../utils/inputField';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 export default function VaultSearchPanel({
   visible,
@@ -194,7 +195,7 @@ export default function VaultSearchPanel({
           // actually reaches the edge — a plain 0 is read as "unset" and hands
           // the question back to the automatic behaviour this is overriding.
           automaticallyAdjustsScrollIndicatorInsets={false}
-          scrollIndicatorInsets={{ right: 1 }}
+          {...SCROLL_INDICATOR}
           contentContainerStyle={[
             styles.listContent,
             // Ends ABOVE the dock, never behind it (STYLE-RULES §3). Automatic

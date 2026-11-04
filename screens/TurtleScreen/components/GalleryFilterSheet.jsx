@@ -27,6 +27,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, tapHaptic } from '../../../utils/haptics';
 import { useSheetDismiss } from '../../../utils/useSheetDismiss';
 import { COLS_MAX, COLS_MIN } from '../../../utils/galleryFilters';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 const OPEN_MS = 240;
 const CLOSE_MS = 180;
@@ -393,7 +394,7 @@ export default function GalleryFilterSheet({
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator
-            scrollIndicatorInsets={{ right: 1 }}
+            {...SCROLL_INDICATOR}
             indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
             {...scrollProps}
           >

@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, Modal, ScrollView, StyleSheet, ActivityIn
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../../context/ThemeContext';
 import { useServer } from '../../../context/ServerContext';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 /**
  * CalendarPartners — manage "partner accounts" (whole-calendar shares) from the
@@ -128,7 +129,7 @@ export default function CalendarPartners() {
           <TouchableOpacity activeOpacity={1} style={styles.sheet} onPress={() => {}}>
             <Text style={styles.sheetTitle}>Share my calendar with</Text>
             <Text style={styles.sheetSub}>They&rsquo;ll see your whole calendar (view-only). For a two-way view, they add you back.</Text>
-            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
+            <ScrollView {...SCROLL_INDICATOR} style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
               {candidates.length === 0 ? (
                 <Text style={styles.empty}>{friends.length === 0 ? 'No other members in your pond yet.' : 'Everyone is already a partner.'}</Text>
               ) : (

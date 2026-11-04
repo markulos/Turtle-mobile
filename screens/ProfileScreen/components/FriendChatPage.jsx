@@ -101,6 +101,7 @@ import { copyText } from '../../../utils/copyText';
 import { FROST_OVERLAP } from '../../../utils/frostedChat';
 import { viewerImageUrl } from '../../../utils/mediaAttachments';
 import { firstLinkUrl, linkSegments } from '../../../utils/messageLinks';
+import { scrollIndicator } from '../../../utils/scrollIndicator';
 import {
   mergeThread, optimisticMessage, timeLabel, startsNewDay, dayLabel,
 } from '../../../utils/friendMessages';
@@ -707,7 +708,7 @@ export default function FriendChatPage({
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
             // The scrollbar stops at the composer rather than running under it.
-            scrollIndicatorInsets={{ right: 1, bottom: dockHeight }}
+            {...scrollIndicator({ bottom: dockHeight })}
             indicatorStyle={isDark ? 'white' : 'black'}
             ListEmptyComponent={(
               <View style={s.centre}>

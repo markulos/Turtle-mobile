@@ -30,6 +30,7 @@ import { useServer } from '../../../../context/ServerContext';
 import { getCapabilities } from '../../../../services/transcriptions';
 import { startVideoTranscription } from '../../../../services/videoTranscribeRun';
 import { isVideoItem } from '../../../../utils/videoTranscribe';
+import { SCROLL_INDICATOR } from '../../../../utils/scrollIndicator';
 
 const GRID_COLS = 3;
 const GAP = 2;
@@ -321,7 +322,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
             ListFooterComponent={footer}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); try { await refresh(); } finally { setRefreshing(false); } }} tintColor={c.textSecondary} />}
             keyboardDismissMode="on-drag"
-            scrollIndicatorInsets={{ right: 1 }}
+            {...SCROLL_INDICATOR}
             indicatorStyle={theme.mode === 'dark' ? 'white' : 'default'}
           />
         )}
@@ -383,7 +384,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
                 <Text style={[styles.crumbTail, { color: c.textPrimary }]} numberOfLines={1}>Transcribe</Text>
               </View>
             </View>
-            <FlatList
+            <FlatList {...SCROLL_INDICATOR}
               data={[]}
               renderItem={null}
               keyExtractor={() => 'x'}

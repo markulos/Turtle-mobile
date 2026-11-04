@@ -9,6 +9,7 @@ import {
   TouchableWithoutFeedback,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { SCROLL_INDICATOR } from '../utils/scrollIndicator';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -136,7 +137,7 @@ export function DismissKeyboardView({ children, style }) {
  *     action while typing.
  *
  * Usage:
- *   <FlatList {...keyboardScrollProps} ... />
+ *   <FlatList {...SCROLL_INDICATOR} {...keyboardScrollProps} ... />
  */
 export const keyboardScrollProps = {
   // 'on-drag' on both platforms: a scroll dismisses the keyboard outright.

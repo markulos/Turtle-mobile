@@ -145,6 +145,7 @@ import {
 } from '../../../utils/photoVaultBoards';
 import { sendOrQueue } from '../../../services/offlineQueue';
 import { buildSlots, patchSlots, patchCost } from '../../../utils/virtualSlots';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 // Create an animated version of FlashList to match our existing architecture.
 //
@@ -4556,7 +4557,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
         </View>
         <View style={insetRule(theme)} />
 
-        <FlatList
+        <FlatList {...SCROLL_INDICATOR}
           data={localAssets}
           keyExtractor={(item) => item.id}
           numColumns={3}

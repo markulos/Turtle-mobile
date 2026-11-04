@@ -36,6 +36,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { taskStats } from '../utils/taskStats';
 import { boardLabel } from '../utils/taskHelpers';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 /**
  * Sequential ramp, low→high. Dark end recedes toward the charcoal card, light
@@ -215,7 +216,7 @@ function StatsPanel({ tasks, todayStr, pal, theme, onClose, insetTop = 0, bottom
       <ScrollView
         contentContainerStyle={[styles.body, { paddingBottom: 32 + bottomInset }]}
         showsVerticalScrollIndicator
-        scrollIndicatorInsets={{ right: 1 }}
+        {...SCROLL_INDICATOR}
         indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
         testID="stats-scroll"
       >

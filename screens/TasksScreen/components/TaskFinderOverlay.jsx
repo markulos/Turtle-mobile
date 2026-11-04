@@ -30,6 +30,7 @@ import AppTextInput from '../../../components/AppTextInput';
 import { tapHaptic } from '../../../utils/haptics';
 import { KIND_SEP, FIELD_SEP } from '../utils/finderDestination';
 import { INPUT_FIELD } from '../../../utils/inputField';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 /**
  * The field is the vault's board-search pill, one size up: a fully rounded
@@ -186,7 +187,7 @@ export default function TaskFinderOverlay({
             so the scroll view's own bottom edge lands on the keyboard and its
             scrollbar does too. */}
         <View style={[s.listWrap, { marginBottom: keyboardHeight }]}>
-          <ScrollView
+          <ScrollView {...SCROLL_INDICATOR}
             style={s.list}
             contentContainerStyle={s.listContent}
             keyboardShouldPersistTaps="handled"

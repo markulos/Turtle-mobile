@@ -17,6 +17,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { tapHaptic, impactHaptic } from '../../../utils/haptics';
 import { INPUT_FIELD } from '../../../utils/inputField';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 // Two-step unlock:
 //   • Biometrics (if enrolled + a master password was saved) → unlock directly,
@@ -135,7 +136,7 @@ export const UnlockScreen = ({
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView {...SCROLL_INDICATOR} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <View style={styles.content}>
           <View style={styles.iconContainer}>
             <Icon name={step === 'otp' ? 'message-text-lock' : 'shield-lock'} size={60} color={theme.colors.textPrimary} />

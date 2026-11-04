@@ -44,6 +44,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 import { useSheetDismiss } from '../../../utils/useSheetDismiss';
 import { INPUT_FIELD } from '../../../utils/inputField';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 const isDead = (s) => !!s.revokedAt || !!(s.expiresAt && s.expiresAt < Date.now());
 
@@ -588,7 +589,7 @@ export default function VaultShareSheet({ visible, subject, api, theme, onClose,
         <ScrollView
           style={s.scroll}
           keyboardShouldPersistTaps="handled"
-          scrollIndicatorInsets={{ right: 1 }}
+          {...SCROLL_INDICATOR}
           {...scrollProps}
         >
           {/* ONE CARD, SECTIONED. This is the only place a board's sharing is

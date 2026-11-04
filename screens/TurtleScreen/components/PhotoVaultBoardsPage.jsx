@@ -16,6 +16,7 @@ import { TAP_ONLY } from '../../../utils/pressBehavior';
 import { tapHaptic } from '../../../utils/haptics';
 import PhotoVaultBoardCard from './PhotoVaultBoardCard';
 import SharedWithYouStrip from './SharedWithYouStrip';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 import {
   HIT_SLOP_8,
   PICKER_GAP,
@@ -466,7 +467,7 @@ const PhotoVaultBoardsPage = forwardRef(({
       >
         {renderSearchDock()}
       </Animated.View>
-      <Animated.FlatList
+      <Animated.FlatList {...SCROLL_INDICATOR}
         // The key is what swaps the layout: numColumns cannot change on a
         // mounted list (RN says so outright), so grid ⇄ rows is a remount. The
         // search field is deliberately not inside this subtree, so the remount

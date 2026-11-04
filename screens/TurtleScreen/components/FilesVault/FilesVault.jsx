@@ -39,6 +39,7 @@ import { TILE_RADIUS } from './FolderTile';
 import VaultShareSheet from '../VaultShareSheet';
 import { insetRule } from '../../../../utils/surfaceDepth';
 import { folderColor, folderTint, messageOf } from './filesUtils';
+import { SCROLL_INDICATOR } from '../../../../utils/scrollIndicator';
 import {
   PICKER_GAP,
   VaultResultRow,
@@ -319,7 +320,7 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
             refreshControl={searching ? undefined : <RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); try { await refresh(); } finally { setRefreshing(false); } }} tintColor={c.textSecondary} />}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
-            scrollIndicatorInsets={{ right: 1 }}
+            {...SCROLL_INDICATOR}
             indicatorStyle={theme.mode === 'dark' ? 'white' : 'default'}
           >
             {searching ? (

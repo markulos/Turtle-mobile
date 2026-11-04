@@ -41,6 +41,7 @@ import { useSyncSignals } from '../../../context/DownloadsContext';
 import usePondPeople from '../../../utils/usePondPeople';
 import { messagePreviewLine } from '../../../utils/messageAttachments';
 import { threadRows, threadWhen } from '../../../utils/messageThreads';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 function ThreadRow({ row, theme, onPress }) {
   const c = theme.colors;
@@ -137,7 +138,7 @@ export default function MessagesPage({ visible, onClose, onOpenThread, theme, in
         </View>
         <View style={insetRule(theme)} />
 
-        <FlatList
+        <FlatList {...SCROLL_INDICATOR}
           data={rows}
           keyExtractor={(r) => r.userId}
           contentContainerStyle={[

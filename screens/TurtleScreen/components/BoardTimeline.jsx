@@ -18,6 +18,7 @@ import { TaskForm } from '../../TasksScreen/components/TaskForm';
 import { sendOrQueue } from '../../../services/offlineQueue';
 import { inkOn } from '../../../utils/accentColor';
 import { CHAT_TIMEOUT_MS } from '../../../utils/chatTimeout';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 // One board's CONVERSATION (conversation-boards Phase 3): the merged feed of
 // everything on the board — tasks, events, notes, media (rendered as compact
@@ -527,7 +528,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
             </Text>
           </View>
         ) : (
-          <FlatList
+          <FlatList {...SCROLL_INDICATOR}
             // Inverted over newest-first data: index 0 (newest) renders at the
             // visual bottom, exactly like a messenger. Reaching the "end" of
             // the inverted list = scrolling up into older history.

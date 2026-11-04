@@ -39,6 +39,7 @@ import CanvasBoardView from './CanvasBoardView';
 import PdfViewer from './FilesVault/PdfViewer';
 import { shareDocument } from './FilesVault/documentOpen';
 import AttachmentViewer from '../../../components/AttachmentViewer';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
 /** "Tuesday" / "12 Mar" — enough to tell which canvas you were last on. */
 const whenLabel = (ms) => {
@@ -169,7 +170,7 @@ export default function CanvasBoardsPage({ visible, onClose }) {
           <Text style={[styles.title, { color: c.textPrimary }]} numberOfLines={1}>Canvases</Text>
         </View>
 
-        <FlatList
+        <FlatList {...SCROLL_INDICATOR}
           testID="canvas-boards-list"
           data={boards}
           keyExtractor={(b) => b.id}

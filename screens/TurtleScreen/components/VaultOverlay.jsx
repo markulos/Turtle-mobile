@@ -15,6 +15,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { tapHaptic, notifyHaptic } from '../../../utils/haptics';
 import { useVault } from '../../PasswordsScreen/hooks/useVault';
+import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 import {
   SetupScreen,
   UnlockScreen,
@@ -175,7 +176,7 @@ export default function VaultOverlay({ initialPassword, onClose }) {
           "VirtualizedLists should never be nested inside plain ScrollViews",
           and it defeated virtualization: every password row rendered at
           once. The new-entry form rides along as the list header. */}
-      <FlatList
+      <FlatList {...SCROLL_INDICATOR}
         data={filteredEntries}
         keyExtractor={(item) => item.id}
         style={styles.scrollView}

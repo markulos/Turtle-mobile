@@ -134,6 +134,7 @@ import { sendOrQueue } from '../../services/offlineQueue';
 // key. They used to be two rails of chips under the title; see the panel's own
 // header for why they are not any more.
 import NotesFilterPanel from './NotesFilterPanel';
+import { SCROLL_INDICATOR } from '../../utils/scrollIndicator';
 
 const FILTER_ALL = 'all';
 const FILTER_NOTE = 'note';
@@ -1155,7 +1156,7 @@ export default function NotesScreen() {
       </View>
     );
     return (
-      <FlatList
+      <FlatList {...SCROLL_INDICATOR}
         data={data}
         keyExtractor={(item) => item.id}
         style={{ flex: 1 }}
@@ -1697,7 +1698,7 @@ function TopicSearchSheet({ visible, entries, totalNotes, untagged, selectedTopi
             <Text style={s.emptyText}>No boards or topics match "{q.trim()}".</Text>
           </View>
         ) : (
-          <FlatList
+          <FlatList {...SCROLL_INDICATOR}
             data={rows}
             keyExtractor={(r) => r.key}
             keyboardShouldPersistTaps="handled"

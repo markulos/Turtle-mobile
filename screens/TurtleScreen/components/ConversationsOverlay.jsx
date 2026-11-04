@@ -11,6 +11,7 @@ import { tapHaptic } from '../../../utils/haptics';
 import EdgeSwipePage from './EdgeSwipePage';
 import { TAP_ONLY } from '../../../utils/pressBehavior';
 import BoardTimeline from './BoardTimeline';
+import { scrollIndicator } from '../../../utils/scrollIndicator';
 
 // "Conversation boards" (Phases 1+3): a messenger-style inbox of the user's
 // boards — each row shows the board's latest activity as a preview line, and
@@ -388,7 +389,7 @@ export default function ConversationsOverlay({ visible, onClose, onOpenClaude, i
             // from the right edge and read as floating mid-list. An explicit
             // indicator inset pins it back to the trailing edge.
             showsVerticalScrollIndicator
-            scrollIndicatorInsets={{ right: 1, top: 0, bottom: insets.bottom }}
+            {...scrollIndicator({ top: 0, bottom: insets.bottom })}
             indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}
             ItemSeparatorComponent={() => (
               <View style={{ height: 1, backgroundColor: c.border, marginLeft: 72 }} />

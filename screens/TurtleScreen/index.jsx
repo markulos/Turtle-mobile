@@ -89,6 +89,7 @@ import { blocksCoverProposal, drawableBlocks } from '../../utils/chatBlocks';
 // shed a slot, and Settings reads more like a "preferences sheet"
 // of the Turtle home than a peer destination.
 import SettingsScreen from '../SettingsScreen';
+import { SCROLL_INDICATOR } from '../../utils/scrollIndicator';
 
 const turtleIcon = require('../../assets/turtle-icon.png');
 // The startup/brand turtle logo, reused as an extremely faint watermark behind
@@ -2526,7 +2527,7 @@ export default function TurtleScreen() {
             )}
           </View>
 
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
+          <ScrollView {...SCROLL_INDICATOR} style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
             {friendsLoading ? (
               <Text style={styles.friendEmpty}>Loading…</Text>
             ) : filteredFriends.length === 0 && filteredPending.length === 0 ? (
@@ -2737,7 +2738,7 @@ export default function TurtleScreen() {
               <Text style={[styles.friendSub, { paddingHorizontal: 20, marginBottom: 8 }]}>
                 Pick a board to share, view-only. They'll see its tasks in their planner.
               </Text>
-              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
+              <ScrollView {...SCROLL_INDICATOR} style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
                 {myProjects.length === 0 ? (
                   <Text style={styles.friendEmpty}>{shareBusy ? 'Loading…' : 'You have no boards to share yet.'}</Text>
                 ) : (
@@ -3193,7 +3194,7 @@ export default function TurtleScreen() {
         {/* Autocomplete Dropdown */}
         {showAutocomplete && (
           <View style={styles.autocompleteContainer}>
-            <ScrollView 
+            <ScrollView {...SCROLL_INDICATOR} 
               style={styles.autocompleteScroll}
               keyboardShouldPersistTaps="handled"
             >
