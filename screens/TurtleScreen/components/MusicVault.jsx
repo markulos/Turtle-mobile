@@ -457,6 +457,18 @@ export default function MusicVault({
     return parts.join(',');
   }, [isConnected, offline.downloaded, offline.inFlight, offline.failed]);
 
+  /**
+   * Hold the offline slot open on every row, or on none of them.
+   *
+   * All-or-nothing rather than per-row: the slot exists to keep the duration
+   * column straight, and a slot that appears only where there is a tick is
+   * precisely what knocked it crooked. On a library with nothing downloaded
+   * the rows give the 28pt back to the title instead.
+   */
+  const reserveOfflineSlot = offline.downloaded.size > 0
+    || offline.inFlight.size > 0
+    || offline.failed.size > 0;
+
   // Tapping the glyph on a row: the one control, cycling through the three
   // states rather than three separate buttons on a phone-width row.
   const toggleOffline = useCallback((row) => {
@@ -840,9 +852,19 @@ export default function MusicVault({
       titleActive: { fontSize: 15, fontWeight: '600', color: accent },
       titleIdle: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
       source: { fontSize: 12, color: c.textTertiary, marginTop: 1 },
-      duration: { fontSize: 12, color: c.textTertiary },
-      // A fixed slot, so a row does not shift sideways the moment a download
-      // finishes and the tick appears.
+      // Durations line up as a column. Two things are needed and neither is
+      // optional: a fixed width (so the left edges agree, not just the right
+      // ones) and tabular figures (so "1:40" and "154:33" use the same digit
+      // width). Sized for six characters — fmtTime is m:ss, so even a
+      // ten-hour recording reads "600:00".
+      duration: {
+        fontSize: 12, color: c.textTertiary,
+        width: 48, textAlign: 'right', fontVariant: ['tabular-nums'],
+      },
+      // A fixed slot, held open on EVERY row once anything in the library is
+      // downloaded — not just the rows that have a tick. Rendering it only
+      // where there is something to show is what made the durations ragged:
+      // a row with a tick pushed its duration 28pt left of the rows without.
       offlineBtn: { width: 28, alignItems: 'center', justifyContent: 'center' },
 
       // ── Downloading, as the row filling up ────────────────────────────
@@ -1002,36 +1024,46 @@ export default function MusicVault({
             baseUrl={getBaseUrl?.()}
           />
         ) : null}
-        {item.duration ? <Text style={trackStyles.duration}>{fmtTime(item.duration)}</Text> : null}
-        {/* Kept on this device. Shown only once it means something — a
-            download arrow on all 300 rows would be noise, and the ⋯ menu is
-            where you go to start one.
+        {/* Kept on this device, to the LEFT of the duration — the duration is
+            the column the eye runs down, so nothing variable belongs between
+            it and the ⋯ button.
 
-            No percentage here any more: the row itself is the progress bar,
-            and a number beside a bar measuring the same thing is one of them
-            too many. What stays is the stop target. */}
-        {offlineState.state !== 'absent' ? (
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel={
-              offlineState.state === 'done' ? `${titleOf(item)} is on this device. Remove it`
-                : offlineState.state === 'downloading'
-                  ? `Downloading ${titleOf(item)}, ${Math.round((offlineState.progress || 0) * 100)} percent. Stop`
-                  : `Download of ${titleOf(item)} failed. Try again`
-            }
-            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
-            onPress={() => toggleOffline(item)}
-            style={trackStyles.offlineBtn}
-          >
-            <Icon
-              name={offlineState.state === 'failed' ? 'alert-circle-outline'
-                : offlineState.state === 'downloading' ? 'close-circle-outline'
-                : 'check-circle'}
-              size={16}
-              color={offlineState.state === 'failed' ? (c.accentError || c.textTertiary) : MUSIC_TINT(c)}
-            />
-          </TouchableOpacity>
+            The slot is held open on every row once anything is downloaded, so
+            a row with a tick and a row without still agree on where the
+            duration starts. No percentage here any more: the row itself is
+            the progress bar, and a number beside a bar measuring the same
+            thing is one of them too many. What stays is the stop target. */}
+        {reserveOfflineSlot ? (
+          offlineState.state === 'absent' ? (
+            <View style={trackStyles.offlineBtn} />
+          ) : (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={
+                offlineState.state === 'done' ? `${titleOf(item)} is on this device. Remove it`
+                  : offlineState.state === 'downloading'
+                    ? `Downloading ${titleOf(item)}, ${Math.round((offlineState.progress || 0) * 100)} percent. Stop`
+                    : `Download of ${titleOf(item)} failed. Try again`
+              }
+              hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+              onPress={() => toggleOffline(item)}
+              style={trackStyles.offlineBtn}
+            >
+              <Icon
+                name={offlineState.state === 'failed' ? 'alert-circle-outline'
+                  : offlineState.state === 'downloading' ? 'close-circle-outline'
+                  : 'check-circle'}
+                size={16}
+                color={offlineState.state === 'failed' ? (c.accentError || c.textTertiary) : MUSIC_TINT(c)}
+              />
+            </TouchableOpacity>
+          )
         ) : null}
+
+        {/* Always rendered, even with no duration to show: an empty slot keeps
+            the column straight where a missing one would pull the rows below
+            it out of line. */}
+        <Text style={trackStyles.duration}>{item.duration ? fmtTime(item.duration) : ''}</Text>
         {/* Per-track options. Its own touchable so it doesn't start playback —
             hitSlop widens the 24pt glyph to a comfortable target without
             stealing the row's tap area. */}
@@ -1051,7 +1083,7 @@ export default function MusicVault({
         </TouchableOpacity>
       </TouchableOpacity>
     );
-  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready, transcribedIds, trackAccess, theme, getBaseUrl, offline, toggleOffline, isConnected]);
+  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready, transcribedIds, trackAccess, theme, getBaseUrl, offline, toggleOffline, isConnected, reserveOfflineSlot]);
 
   /**
    * One search result, in the vault's shared row.
