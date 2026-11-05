@@ -39,6 +39,8 @@ import {
 import { VaultResultRow, VaultSearchDock, useVaultSearch, PICKER_GAP } from './VaultSearchDock';
 import { rankTracks, trackCountLabel } from './trackSearch';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
+import { useOfflineMusic } from '../../../utils/useOfflineMusic';
+import { formatBytes } from '../../../services/musicOfflineStore';
 
 // Tags double as playlists for audio: the vault already models "a named group of
 // media" as a tag, so a music playlist is just a tag on an audio row.
@@ -410,6 +412,41 @@ export default function MusicVault({
     }
   }, [api]);
   useEffect(() => { refreshPondTracks(); }, [refreshPondTracks]);
+
+  // ── Kept on this device ────────────────────────────────────────────────
+  // The store lives outside React (services/musicOfflineStore), so a download
+  // keeps running when the vault unmounts; this is only the subscription.
+  const offline = useOfflineMusic();
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
+  /**
+   * Everything with a copy on the phone, drawn from all three lists.
+   *
+   * The library, the recordings folder and the tracks other people shared are
+   * separate lists on purpose, but a download does not care which one it came
+   * from — and a downloaded track that appeared in none of them would be bytes
+   * on the phone with nothing on screen able to remove them.
+   */
+  const downloadedTracks = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    for (const row of [...tracks, ...voiceRecordings, ...pondTracks]) {
+      const id = String(row?.id);
+      if (seen.has(id) || !offline.downloaded.has(id)) continue;
+      seen.add(id);
+      out.push(row);
+    }
+    return out;
+  }, [tracks, voiceRecordings, pondTracks, offline.downloaded]);
+
+  // Tapping the glyph on a row: the one control, cycling through the three
+  // states rather than three separate buttons on a phone-width row.
+  const toggleOffline = useCallback((row) => {
+    tapHaptic();
+    const status = offline.statusOf(row?.id);
+    if (status.state === 'downloading') { offline.cancel(row?.id); return; }
+    if (status.state === 'done') { offline.remove(row?.id); return; }
+    offline.download(row);
+  }, [offline]);
 
   // The Voice recordings section — a pushed page like Playlists, holding the
   // audio that is NOT in the library.
@@ -785,6 +822,10 @@ export default function MusicVault({
       titleIdle: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
       source: { fontSize: 12, color: c.textTertiary, marginTop: 1 },
       duration: { fontSize: 12, color: c.textTertiary },
+      // A fixed slot, so a row does not shift sideways the moment a download
+      // finishes and the percentage becomes a tick.
+      offlineBtn: { width: 34, alignItems: 'center', justifyContent: 'center' },
+      offlinePct: { fontSize: 11, fontWeight: '700', color: accent, fontVariant: ['tabular-nums'] },
     });
   }, [c]);
 
@@ -899,6 +940,39 @@ export default function MusicVault({
           />
         ) : null}
         {item.duration ? <Text style={trackStyles.duration}>{fmtTime(item.duration)}</Text> : null}
+        {/* Kept on this device. Shown only once it means something — a
+            download arrow on all 300 rows would be noise, and the ⋯ menu is
+            where you go to start one. Here it is state: downloaded, or
+            arriving with its percentage. Tapping removes or cancels. */}
+        {(() => {
+          const status = offline.statusOf(item.id);
+          if (status.state === 'absent') return null;
+          return (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={
+                status.state === 'done' ? `${titleOf(item)} is on this device. Remove it`
+                  : status.state === 'downloading' ? `Downloading ${titleOf(item)}. Stop`
+                  : `Download of ${titleOf(item)} failed. Try again`
+              }
+              hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+              onPress={() => toggleOffline(item)}
+              style={trackStyles.offlineBtn}
+            >
+              {status.state === 'downloading' ? (
+                <Text style={trackStyles.offlinePct}>
+                  {Math.round((status.progress || 0) * 100)}%
+                </Text>
+              ) : (
+                <Icon
+                  name={status.state === 'failed' ? 'alert-circle-outline' : 'check-circle'}
+                  size={16}
+                  color={status.state === 'failed' ? (c.accentError || c.textTertiary) : MUSIC_TINT(c)}
+                />
+              )}
+            </TouchableOpacity>
+          );
+        })()}
         {/* Per-track options. Its own touchable so it doesn't start playback —
             hitSlop widens the 24pt glyph to a comfortable target without
             stealing the row's tap area. */}
@@ -918,7 +992,7 @@ export default function MusicVault({
         </TouchableOpacity>
       </TouchableOpacity>
     );
-  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready, transcribedIds, trackAccess, theme, getBaseUrl]);
+  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready, transcribedIds, trackAccess, theme, getBaseUrl, offline, toggleOffline]);
 
   /**
    * One search result, in the vault's shared row.
@@ -1004,6 +1078,35 @@ export default function MusicVault({
         <Icon name="chevron-right" size={22} color={c.textTertiary} />
       </TouchableOpacity>
 
+      {/* ── On this device ────────────────────────────────────────────────
+          A destination like the two around it, and absent until something is
+          kept — an empty "On this device" is a promise of a feature rather
+          than a place to go, the same reasoning as "Shared with you" below.
+          The subtitle carries the size, because the only question anyone asks
+          of downloads is how much room they are taking. */}
+      {offline.downloaded.size > 0 ? (
+        <TouchableOpacity
+          {...TAP_ONLY}
+          testID="music-downloads-row"
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={`On this device, ${offline.downloaded.size}`}
+          onPress={() => { tapHaptic(); setDownloadsOpen(true); }}
+          style={styles.row}
+        >
+          <View style={[styles.art, trackStyles.artTint]}>
+            <Icon name="cloud-check-outline" size={22} color={MUSIC_TINT(c)} />
+          </View>
+          <View style={trackStyles.body}>
+            <Text style={trackStyles.titleIdle} numberOfLines={1}>On this device</Text>
+            <Text style={trackStyles.source} numberOfLines={1}>
+              {`${offline.downloaded.size} track${offline.downloaded.size === 1 ? '' : 's'} · ${formatBytes(offline.totalBytes)} · plays with no pond`}
+            </Text>
+          </View>
+          <Icon name="chevron-right" size={22} color={c.textTertiary} />
+        </TouchableOpacity>
+      ) : null}
+
       <TouchableOpacity
         {...TAP_ONLY}
         activeOpacity={0.7}
@@ -1085,7 +1188,7 @@ export default function MusicVault({
       </TouchableOpacity>
     </>
   ), [c, trackStyles, playlists.length, openTranscribe, transcribeSubtitle, pondTracks.length,
-    voiceRecordings.length]);
+    voiceRecordings.length, offline.downloaded.size, offline.totalBytes]);
 
   const renderPlaylistRow = useCallback(({ item }) => {
     // Through the same accessor the page below uses, so a playlist's count and
@@ -1444,6 +1547,77 @@ export default function MusicVault({
 
           Each row keeps its ⋯ menu, which is where "Move back to music" is —
           a folder you cannot take something out of is a trap. */}
+      {/* Everything kept on the phone. A page rather than a filter on the
+          library, matching Voice recordings and Playlists — and it is the one
+          list that still reads correctly with no pond at all. */}
+      <EdgeSwipePage visible={downloadsOpen} onClose={() => setDownloadsOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
+          <View style={styles.pageHeader}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Back to all songs"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              onPress={() => { tapHaptic(); setDownloadsOpen(false); }}
+              style={styles.pageBackBtn}
+            >
+              <Icon name="chevron-left" size={28} color={c.textPrimary} />
+            </TouchableOpacity>
+            <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>
+              On this device
+            </Text>
+            {downloadedTracks.length ? (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Remove every download"
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                onPress={() => {
+                  tapHaptic();
+                  // Confirmed, because it is the only control here that can
+                  // undo an hour of downloading in one tap. The wording says
+                  // the tracks themselves are safe — this is the one place
+                  // someone could reasonably fear it means "delete my music".
+                  Alert.alert(
+                    'Remove downloads?',
+                    `${downloadedTracks.length} track${downloadedTracks.length === 1 ? '' : 's'} (${formatBytes(offline.totalBytes)}) will be removed from this phone. They stay in the pond.`,
+                    [
+                      { text: 'Keep them', style: 'cancel' },
+                      { text: 'Remove', style: 'destructive', onPress: () => { offline.clear(); setDownloadsOpen(false); } },
+                    ]
+                  );
+                }}
+                style={styles.pageBackBtn}
+              >
+                <Icon name="delete-outline" size={22} color={c.textTertiary} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          <Animated.FlatList {...SCROLL_INDICATOR}
+            onScroll={chromeScroll}
+            scrollEventThrottle={16}
+            testID="music-downloads-list"
+            data={downloadedTracks}
+            keyExtractor={(t) => String(t.id)}
+            renderItem={({ item }) => renderTrack({
+              item,
+              queue: downloadedTracks,
+              onOptions: (id) => { setDownloadsOpen(false); setSheetId(id); },
+            })}
+            extraData={`${current}:${isPlaying}:${ready}:${downloadedTracks.length}`}
+            contentContainerStyle={{ paddingBottom: listPadBottom }}
+            ItemSeparatorComponent={() => <View style={styles.trackSep} />}
+            ListEmptyComponent={(
+              <View style={styles.pageEmpty}>
+                <Icon name="cloud-off-outline" size={40} color={c.textTertiary} />
+                <Text style={{ color: c.textSecondary, marginTop: 12, textAlign: 'center' }}>
+                  Nothing is kept here yet. Open a track's ⋯ menu and choose
+                  “Keep on this device” — it will play with no pond to reach.
+                </Text>
+              </View>
+            )}
+          />
+        </View>
+      </EdgeSwipePage>
+
       <EdgeSwipePage visible={recordingsOpen} onClose={() => setRecordingsOpen(false)}>
         <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
           <View style={styles.pageHeader}>
@@ -1679,6 +1853,9 @@ export default function MusicVault({
         onToggleRecording={sheetToggleRecording}
         isRecording={!!sheetTrack && isVoiceRecording(sheetTrack)}
         onTranscribe={sheetTranscribe}
+        onToggleOffline={sheetTrack ? () => toggleOffline(sheetTrack) : undefined}
+        offlineState={sheetTrack ? offline.statusOf(sheetTrack.id).state : 'absent'}
+        offlineProgress={sheetTrack ? (offline.statusOf(sheetTrack.id).progress || 0) : 0}
         onDelete={sheetDelete}
         onClose={closeSheet}
         bottomInset={Math.max(insets.bottom, bottomInset)}

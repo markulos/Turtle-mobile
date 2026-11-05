@@ -69,6 +69,14 @@ export default function TrackActionsSheet({
   onToggleRecording,
   isRecording = false,
   onTranscribe,
+  /** () => void — keep this track's bytes on the phone, or give them back.
+   *  `offlineState` says which way it goes. Optional: a surface that cannot
+   *  download (a test, the share target) simply omits it. */
+  onToggleOffline,
+  /** 'absent' | 'downloading' | 'done' | 'failed' */
+  offlineState = 'absent',
+  /** 0..1, only meaningful while downloading. */
+  offlineProgress = 0,
   onDelete,
   onClose,
   bottomInset = 0,
@@ -282,6 +290,32 @@ export default function TrackActionsSheet({
                 }}
               />
             ) : null}
+            {/* Keeping the bytes on the phone. Sat under the two Share rows
+                because it answers the same shape of question — where does
+                this track live — and the label says what you GET rather than
+                what it does, since "Download" already means Share's hand-the-
+                file-to-the-OS on this sheet. */}
+            {onToggleOffline ? (
+              <ActionRow
+                testID="track-offline-toggle"
+                icon={offlineState === 'done' ? 'cloud-check-outline'
+                  : offlineState === 'downloading' ? 'progress-download'
+                  : offlineState === 'failed' ? 'alert-circle-outline'
+                  : 'cloud-download-outline'}
+                label={offlineState === 'done' ? 'Remove from this device'
+                  : offlineState === 'downloading' ? `Downloading… ${Math.round((offlineProgress || 0) * 100)}% — stop`
+                  : offlineState === 'failed' ? 'Download failed — try again'
+                  : 'Keep on this device'}
+                color={c.textPrimary}
+                style={rowBorder}
+                disabled={busy}
+                // Deliberately NOT closing the sheet on a start: the label
+                // turns into live progress, which is the only confirmation
+                // that a download that takes a minute has begun at all.
+                onPress={onToggleOffline}
+              />
+            ) : null}
+
             <ActionRow
               icon="pencil-outline"
               label="Rename track…"

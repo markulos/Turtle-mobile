@@ -19,6 +19,7 @@ import { useServer } from './ServerContext';
 import { buildMusicQueue } from '../services/musicTrackMapper';
 import { partitionVoiceRecordings } from '../utils/voiceRecordings';
 import { musicPlayerService } from '../services/musicPlayerService';
+import { musicOfflineStore } from '../services/musicOfflineStore';
 
 const MusicPlayerContext = createContext(null);
 
@@ -259,7 +260,12 @@ export function MusicPlayerProvider({ children }) {
   const playMedia = useCallback(
     async (mediaId) => {
       return runCommand(async () => {
-        const { items, startIndex } = buildMusicQueue(tracks, mediaId, mediaBase);
+        // Read at the moment the queue is built, not held in state: a track
+        // downloaded while this queue's tracks were already on screen must be
+        // played from the phone, and the store is the only thing that knows.
+        const { items, startIndex } = buildMusicQueue(
+          tracks, mediaId, mediaBase, musicOfflineStore.localUris()
+        );
         await musicPlayerService.playQueue(items, startIndex);
       });
     },
@@ -279,7 +285,9 @@ export function MusicPlayerProvider({ children }) {
   const playRows = useCallback(
     async (rows, mediaId) => {
       return runCommand(async () => {
-        const { items, startIndex } = buildMusicQueue(rows, mediaId, mediaBase);
+        const { items, startIndex } = buildMusicQueue(
+          rows, mediaId, mediaBase, musicOfflineStore.localUris()
+        );
         await musicPlayerService.playQueue(items, startIndex);
       });
     },

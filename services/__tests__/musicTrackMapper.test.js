@@ -73,4 +73,56 @@ describe('musicTrackMapper', () => {
       extras: { turtleMediaId: '12' },
     });
   });
+
+  // Offline playback is entirely this: the queue points at a file on the
+  // phone instead of at the pond. Everything else about the item is the same,
+  // which is what keeps the lock screen and the transport unchanged.
+  describe('a track kept on this device', () => {
+    const row = { id: 7, originalName: 'Song.mp3', rawUrl: '/api/media/raw/7' };
+    const LOCAL = 'file:///docs/music-offline/7';
+
+    test('plays from the phone instead of the pond', () => {
+      const item = mapMediaRowToTrack(row, 'https://pond.example', { 7: LOCAL });
+      expect(item.url).toBe(LOCAL);
+      expect(item.mediaId).toBe('7');
+      expect(item.title).toBe('Song');
+    });
+
+    test('still streams when this particular track is not kept', () => {
+      const item = mapMediaRowToTrack(row, 'https://pond.example', { 999: LOCAL });
+      expect(item.url).toBe('https://pond.example/api/media/raw/7');
+    });
+
+    test('is unchanged when nothing is kept at all', () => {
+      expect(mapMediaRowToTrack(row, 'https://pond.example')).toEqual(
+        mapMediaRowToTrack(row, 'https://pond.example', undefined)
+      );
+    });
+
+    test('a queue mixes local and streamed tracks without losing the index', () => {
+      const rows = [
+        { id: 1, originalName: 'A.mp3', rawUrl: '/api/media/raw/1' },
+        { id: 2, originalName: 'B.mp3', rawUrl: '/api/media/raw/2' },
+        { id: 3, originalName: 'C.mp3', rawUrl: '/api/media/raw/3' },
+      ];
+      const { items, startIndex } = buildMusicQueue(rows, 2, 'https://pond.example', {
+        1: 'file:///docs/music-offline/1',
+        3: 'file:///docs/music-offline/3',
+      });
+
+      expect(startIndex).toBe(1);
+      expect(items.map((i) => i.url)).toEqual([
+        'file:///docs/music-offline/1',
+        'https://pond.example/api/media/raw/2',
+        'file:///docs/music-offline/3',
+      ]);
+    });
+
+    test('a row with no stream URL is still playable once it is downloaded', () => {
+      // The pond can forget where a file came from; the bytes on the phone
+      // are the one thing that cannot go stale.
+      const item = mapMediaRowToTrack({ id: 8, originalName: 'Gone.mp3' }, null, { 8: LOCAL });
+      expect(item?.url).toBe(LOCAL);
+    });
+  });
 });

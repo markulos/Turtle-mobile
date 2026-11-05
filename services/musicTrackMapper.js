@@ -22,9 +22,20 @@ export function resolveMediaUrl(value, mediaBase) {
   return `${String(mediaBase).replace(/\/$/, '')}/${raw.replace(/^\//, '')}`;
 }
 
-export function mapMediaRowToTrack(row, mediaBase) {
+/**
+ * `localUris` maps media id → a `file://` path for a track kept on this
+ * device. Given one, it is used INSTEAD of the stream URL, which is the
+ * whole of offline playback: resolveMediaUrl already passes a file: URI
+ * through untouched, and the player plays local files natively.
+ *
+ * Artwork is deliberately left pointing at the pond. It is small, it is not
+ * what you came for, and a missing cover on a plane is a far smaller loss
+ * than another file per track to download, track and clean up.
+ */
+export function mapMediaRowToTrack(row, mediaBase, localUris) {
   if (row?.id == null) return null;
-  const url = resolveMediaUrl(row.rawUrl || row.url, mediaBase);
+  const local = localUris ? localUris[String(row.id)] : null;
+  const url = local || resolveMediaUrl(row.rawUrl || row.url, mediaBase);
   if (!url) return null;
 
   const item = {
@@ -45,10 +56,10 @@ export function mapMediaRowToTrack(row, mediaBase) {
   return item;
 }
 
-export function buildMusicQueue(rows, selectedId, mediaBase) {
+export function buildMusicQueue(rows, selectedId, mediaBase, localUris) {
   const selectedKey = String(selectedId);
   const items = (Array.isArray(rows) ? rows : [])
-    .map((row) => mapMediaRowToTrack(row, mediaBase))
+    .map((row) => mapMediaRowToTrack(row, mediaBase, localUris))
     .filter(Boolean);
   const startIndex = items.findIndex((item) => item.mediaId === selectedKey);
   if (startIndex < 0) throw new Error('Selected track is not playable');
