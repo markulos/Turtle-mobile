@@ -41,6 +41,7 @@ import { rankTracks, trackCountLabel } from './trackSearch';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 import { useOfflineMusic } from '../../../utils/useOfflineMusic';
 import { formatBytes } from '../../../services/musicOfflineStore';
+import { rowOfflineAppearance } from './musicRowAppearance';
 
 // Tags double as playlists for audio: the vault already models "a named group of
 // media" as a tag, so a music playlist is just a tag on an audio row.
@@ -100,7 +101,7 @@ export default function MusicVault({
   // difference between the two insets is how far this page lifts.
   query = '', onQueryChange, searchTopInset, onSearchActiveChange,
 }) {
-  const { theme } = useTheme();
+  const { theme, isDark } = useTheme();
   const c = theme.colors;
   const insets = useSafeAreaInsets();
   const {
@@ -130,7 +131,7 @@ export default function MusicVault({
     refreshLibrary,
     retrySetup,
   } = useMusicPlayer();
-  const { api, getBaseUrl, getMediaBaseUrl } = useServer();
+  const { api, getBaseUrl, getMediaBaseUrl, isConnected } = useServer();
   // Ids removed locally by a delete that hasn't round-tripped yet. Deleting is
   // optimistic (app-wide rule): the row leaves the list on the tap and only
   // comes back if the server rejects it.
@@ -437,6 +438,24 @@ export default function MusicVault({
     }
     return out;
   }, [tracks, voiceRecordings, pondTracks, offline.downloaded]);
+
+  /**
+   * A compact signature of everything the offline UI draws from.
+   *
+   * FlatList cells are pure: a download finishing, a percentage ticking, or
+   * the pond going away repaints nothing unless the list is told the data
+   * behind its rows has moved. Every list that draws tracks keys on this.
+   * Progress is rounded to whole percents so the signature changes a hundred
+   * times across a download, not thousands.
+   */
+  const offlineSignature = useMemo(() => {
+    const parts = [isConnected ? 'on' : 'off', String(offline.downloaded.size)];
+    for (const [id, v] of offline.inFlight) {
+      parts.push(`${id}@${Math.round((v?.progress || 0) * 100)}`);
+    }
+    for (const id of offline.failed.keys()) parts.push(`${id}!`);
+    return parts.join(',');
+  }, [isConnected, offline.downloaded, offline.inFlight, offline.failed]);
 
   // Tapping the glyph on a row: the one control, cycling through the three
   // states rather than three separate buttons on a phone-width row.
@@ -823,11 +842,29 @@ export default function MusicVault({
       source: { fontSize: 12, color: c.textTertiary, marginTop: 1 },
       duration: { fontSize: 12, color: c.textTertiary },
       // A fixed slot, so a row does not shift sideways the moment a download
-      // finishes and the percentage becomes a tick.
-      offlineBtn: { width: 34, alignItems: 'center', justifyContent: 'center' },
-      offlinePct: { fontSize: 11, fontWeight: '700', color: accent, fontVariant: ['tabular-nums'] },
+      // finishes and the tick appears.
+      offlineBtn: { width: 28, alignItems: 'center', justifyContent: 'center' },
+
+      // ── Downloading, as the row filling up ────────────────────────────
+      // The bar is the row's own background rather than a widget on it: the
+      // thing being downloaded IS the row, and a progress element sitting in
+      // the layout would have to push the title or the duration aside to find
+      // room. Absolutely positioned and drawn first, so every later sibling
+      // paints over it.
+      progressFill: {
+        position: 'absolute', left: 0, top: 0, bottom: 0,
+        backgroundColor: accent + '2e',
+      },
+      // Finished, and the row keeps a tint so "kept" is legible at a glance
+      // down a long list — in dark mode a LIGHTER wash, because a darker one
+      // against a dark background is invisible.
+      keptRow: { backgroundColor: isDark ? accent + '1f' : accent + '14' },
+      // No pond, and no copy here: the row cannot play. Dimmed as a whole
+      // rather than hidden — the library is still the library, and a track
+      // that silently vanished would read as lost rather than out of reach.
+      unreachableRow: { opacity: 0.38 },
     });
-  }, [c]);
+  }, [c, isDark]);
 
   // ── Search ────────────────────────────────────────────────────────────
   // What one track looks like to the matcher. Built here, not in trackSearch,
@@ -895,14 +932,40 @@ export default function MusicVault({
     // A track with a transcript reads along as it plays, so the row says so —
     // otherwise the only way to find out is to play it and notice.
     const hasTranscript = transcribedIds.has(String(item.id));
+    const offlineState = offline.statusOf(item.id);
+    const look = rowOfflineAppearance(offlineState, isConnected);
+    const { kept, unreachable } = look;
     return (
       <TouchableOpacity
         {...TAP_ONLY}
         activeOpacity={0.7}
+        // Dimmed but NOT disabled, deliberately. `isConnected` is the pond's
+        // last health check, and it starts false on a cold boot and goes
+        // false on any blip — gating the tap on it would make the entire
+        // library untappable for the moment before the first check lands, and
+        // leave it that way on a false negative. Dimming is a hint about what
+        // will probably happen; the player already says so properly when a
+        // stream really cannot be reached.
         disabled={!ready}
+        accessibilityHint={unreachable ? 'Not on this device, and the pond is not reachable' : undefined}
         onPress={() => playTrack(item, queue)}
-        style={styles.row}
+        style={[
+          styles.row,
+          kept && trackStyles.keptRow,
+          unreachable && trackStyles.unreachableRow,
+        ]}
       >
+        {/* The download, filling the row from the left. Drawn before anything
+            else so the title, duration and buttons all paint over it. */}
+        {look.fillPercent > 0 ? (
+          <View
+            testID={`music-progress-${item.id}`}
+            pointerEvents="none"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={[trackStyles.progressFill, { width: `${look.fillPercent}%` }]}
+          />
+        ) : null}
         <View style={[styles.art, trackStyles.artTint]}>
           <Icon
             name={active && isPlaying ? 'pause' : 'music-note'}
@@ -942,37 +1005,33 @@ export default function MusicVault({
         {item.duration ? <Text style={trackStyles.duration}>{fmtTime(item.duration)}</Text> : null}
         {/* Kept on this device. Shown only once it means something — a
             download arrow on all 300 rows would be noise, and the ⋯ menu is
-            where you go to start one. Here it is state: downloaded, or
-            arriving with its percentage. Tapping removes or cancels. */}
-        {(() => {
-          const status = offline.statusOf(item.id);
-          if (status.state === 'absent') return null;
-          return (
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel={
-                status.state === 'done' ? `${titleOf(item)} is on this device. Remove it`
-                  : status.state === 'downloading' ? `Downloading ${titleOf(item)}. Stop`
+            where you go to start one.
+
+            No percentage here any more: the row itself is the progress bar,
+            and a number beside a bar measuring the same thing is one of them
+            too many. What stays is the stop target. */}
+        {offlineState.state !== 'absent' ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={
+              offlineState.state === 'done' ? `${titleOf(item)} is on this device. Remove it`
+                : offlineState.state === 'downloading'
+                  ? `Downloading ${titleOf(item)}, ${Math.round((offlineState.progress || 0) * 100)} percent. Stop`
                   : `Download of ${titleOf(item)} failed. Try again`
-              }
-              hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
-              onPress={() => toggleOffline(item)}
-              style={trackStyles.offlineBtn}
-            >
-              {status.state === 'downloading' ? (
-                <Text style={trackStyles.offlinePct}>
-                  {Math.round((status.progress || 0) * 100)}%
-                </Text>
-              ) : (
-                <Icon
-                  name={status.state === 'failed' ? 'alert-circle-outline' : 'check-circle'}
-                  size={16}
-                  color={status.state === 'failed' ? (c.accentError || c.textTertiary) : MUSIC_TINT(c)}
-                />
-              )}
-            </TouchableOpacity>
-          );
-        })()}
+            }
+            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+            onPress={() => toggleOffline(item)}
+            style={trackStyles.offlineBtn}
+          >
+            <Icon
+              name={offlineState.state === 'failed' ? 'alert-circle-outline'
+                : offlineState.state === 'downloading' ? 'close-circle-outline'
+                : 'check-circle'}
+              size={16}
+              color={offlineState.state === 'failed' ? (c.accentError || c.textTertiary) : MUSIC_TINT(c)}
+            />
+          </TouchableOpacity>
+        ) : null}
         {/* Per-track options. Its own touchable so it doesn't start playback —
             hitSlop widens the 24pt glyph to a comfortable target without
             stealing the row's tap area. */}
@@ -992,7 +1051,7 @@ export default function MusicVault({
         </TouchableOpacity>
       </TouchableOpacity>
     );
-  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready, transcribedIds, trackAccess, theme, getBaseUrl, offline, toggleOffline]);
+  }, [c, trackStyles, activeTrack, isPlaying, playTrack, ready, transcribedIds, trackAccess, theme, getBaseUrl, offline, toggleOffline, isConnected]);
 
   /**
    * One search result, in the vault's shared row.
@@ -1338,7 +1397,7 @@ export default function MusicVault({
               Nothing matches “{displayQuery.trim()}”.
             </Text>
           ) : null}
-          extraData={`${current}:${isPlaying}:${ready}:${playlists.length}:${searching}`}
+          extraData={`${current}:${isPlaying}:${ready}:${playlists.length}:${searching}:${offlineSignature}`}
           // The transport bar, the dock, AND the lift — see libraryPadBottom.
           // listTopPad is the FLOATING DOCK's room, and this is the only list
           // under it — the pushed pages (playlists, voice recordings, shared)
@@ -1484,7 +1543,7 @@ export default function MusicVault({
             keyExtractor={(t) => String(t.shareId)}
             contentContainerStyle={{ paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
-            extraData={`${current}:${isPlaying}:${ready}`}
+            extraData={`${current}:${isPlaying}:${ready}:${offlineSignature}`}
             ListEmptyComponent={(
               <View style={styles.pageEmpty}>
                 <Icon name="account-music-outline" size={40} color={c.textTertiary} />
@@ -1602,7 +1661,7 @@ export default function MusicVault({
               queue: downloadedTracks,
               onOptions: (id) => { setDownloadsOpen(false); setSheetId(id); },
             })}
-            extraData={`${current}:${isPlaying}:${ready}:${downloadedTracks.length}`}
+            extraData={`${current}:${isPlaying}:${ready}:${downloadedTracks.length}:${offlineSignature}`}
             contentContainerStyle={{ paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             ListEmptyComponent={(
@@ -1648,7 +1707,7 @@ export default function MusicVault({
               // so the two agree.
               onOptions: (id) => { setRecordingsOpen(false); setSheetId(id); },
             })}
-            extraData={`${current}:${isPlaying}:${ready}:${voiceRecordings.length}`}
+            extraData={`${current}:${isPlaying}:${ready}:${voiceRecordings.length}:${offlineSignature}`}
             contentContainerStyle={{ paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
             ListEmptyComponent={(
@@ -1744,7 +1803,7 @@ export default function MusicVault({
                 // Voice recordings always passed its own rows for this reason;
                 // this list is the one that did not.
                 renderItem={({ item }) => renderTrack({ item, queue: openPlaylistTracks })}
-                extraData={`${activeTrack?.mediaId}:${isPlaying}:${ready}`}
+                extraData={`${activeTrack?.mediaId}:${isPlaying}:${ready}:${offlineSignature}`}
                 contentContainerStyle={{ paddingBottom: listPadBottom }}
                 ItemSeparatorComponent={() => <View style={styles.trackSep} />}
               />
