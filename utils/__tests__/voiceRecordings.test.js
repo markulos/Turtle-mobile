@@ -16,6 +16,7 @@ import {
   isVoiceRecording,
   partitionVoiceRecordings,
   recordingCountLabel,
+  recordingPlaylistIndex,
   tagsWithVoiceRecording,
   tagsWithoutVoiceRecording,
 } from '../voiceRecordings';
@@ -101,5 +102,61 @@ describe('what the section row says', () => {
     expect(recordingCountLabel(0)).toMatch(/Nothing filed/);
     expect(recordingCountLabel(1)).toBe('1 recording');
     expect(recordingCountLabel(4)).toBe('4 recordings');
+  });
+});
+
+/**
+ * Playlists INSIDE the folder. The grouping is ordinary — a tag is a
+ * playlist, as it is for music — so the only part that can really go wrong is
+ * the reserved tag leaking in as a group of its own.
+ */
+describe('grouping recordings into playlists', () => {
+  const names = (index) => [...index.keys()].sort();
+
+  it('groups by the tags that are not the reserved one', () => {
+    const index = recordingPlaylistIndex([
+      row('a', [VOICE_RECORDINGS_TAG, 'Sermons']),
+      row('b', [VOICE_RECORDINGS_TAG, 'Sermons']),
+      row('c', [VOICE_RECORDINGS_TAG, 'Ideas']),
+    ]);
+    expect(names(index)).toEqual(['Ideas', 'Sermons']);
+    expect(index.get('Sermons').map((r) => r.id)).toEqual(['a', 'b']);
+  });
+
+  it('never offers the reserved tag as a playlist', () => {
+    // Left in, this would be a "Voice recordings" playlist inside Voice
+    // recordings holding every recording there is.
+    const index = recordingPlaylistIndex([row('a', [VOICE_RECORDINGS_TAG])]);
+    expect(index.size).toBe(0);
+  });
+
+  it('excludes it however it was typed', () => {
+    const index = recordingPlaylistIndex([
+      row('a', ['voice recordings', '  VOICE RECORDINGS  ', 'Sermons']),
+    ]);
+    expect(names(index)).toEqual(['Sermons']);
+  });
+
+  it('puts one recording on every playlist it carries', () => {
+    const index = recordingPlaylistIndex([row('a', [VOICE_RECORDINGS_TAG, 'Sermons', 'Ideas'])]);
+    expect(names(index)).toEqual(['Ideas', 'Sermons']);
+    expect(index.get('Ideas')).toHaveLength(1);
+  });
+
+  it('is empty for recordings with no playlists, rather than throwing', () => {
+    expect(recordingPlaylistIndex([row('a', []), row('b', undefined)]).size).toBe(0);
+    expect(recordingPlaylistIndex([]).size).toBe(0);
+    expect(recordingPlaylistIndex(null).size).toBe(0);
+  });
+
+  it('survives a row whose tags are junk', () => {
+    expect(recordingPlaylistIndex([{ id: 'a', tags: 'not json' }]).size).toBe(0);
+  });
+
+  it('keeps the caller’s order within a playlist', () => {
+    const index = recordingPlaylistIndex([
+      row('z', ['Sermons']), row('a', ['Sermons']), row('m', ['Sermons']),
+    ]);
+    expect(index.get('Sermons').map((r) => r.id)).toEqual(['z', 'a', 'm']);
   });
 });

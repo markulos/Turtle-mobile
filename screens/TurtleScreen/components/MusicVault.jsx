@@ -30,8 +30,8 @@ import {
 } from '../../../utils/transcriptionRecordings';
 import { captionAt } from '../../../utils/followAlong';
 import {
-  VOICE_RECORDINGS_LABEL, recordingCountLabel, tagsWithVoiceRecording,
-  tagsWithoutVoiceRecording, isVoiceRecording, audioTags,
+  VOICE_RECORDINGS_LABEL, VOICE_RECORDINGS_TAG, recordingCountLabel, recordingPlaylistIndex,
+  tagsWithVoiceRecording, tagsWithoutVoiceRecording, isVoiceRecording, audioTags,
 } from '../../../utils/voiceRecordings';
 // The vault's ONE search: the same pill, the same lift, the same result rows
 // the Boards and Files tabs use. Music had no search at all, which meant the
@@ -478,6 +478,50 @@ export default function MusicVault({
     if (status.state === 'done') { offline.remove(row?.id); return; }
     offline.download(row);
   }, [offline]);
+
+  // ── Playlists INSIDE Voice recordings ──────────────────────────────────
+  //
+  // A recording is an audio row carrying the `Voice recordings` tag (see
+  // utils/voiceRecordings). Its OTHER tags are playlists, exactly as they are
+  // for music — so organising recordings needs no new concept and no server
+  // change, only a list built from the rows this folder already holds.
+  //
+  // Built from `voiceRecordings` and NOT from the library's playlistIndex,
+  // which is deliberately computed from the music rows alone. The grouping
+  // itself (and the reserved-tag exclusion) is in utils/voiceRecordings,
+  // beside the rule that decides what a recording is.
+  const recordingIndex = useMemo(
+    () => recordingPlaylistIndex(voiceRecordings),
+    [voiceRecordings]
+  );
+
+  const recordingPlaylists = useMemo(
+    () => Array.from(recordingIndex.keys()).sort((a, b) => a.localeCompare(b)),
+    [recordingIndex]
+  );
+
+  const recordingsInPlaylist = useCallback(
+    // A new array: the index's own is shared, and sorting in place would
+    // reorder it under every other reader.
+    (name) => (recordingIndex.get(name) || []).slice().sort(byTitleNatural),
+    [recordingIndex]
+  );
+
+  /** Which half of the Voice recordings page is showing. */
+  const [recordingsTab, setRecordingsTab] = useState('recordings');
+  /** Level 2 inside the Playlists tab: a name, or null for the list of them. */
+  const [openRecordingPlaylist, setOpenRecordingPlaylist] = useState(null);
+  const openRecordingPlaylistRows = openRecordingPlaylist
+    ? recordingsInPlaylist(openRecordingPlaylist)
+    : [];
+  // A playlist whose last recording was moved back to music stops existing —
+  // and leaving the page open on it would strand you on a list that can never
+  // refill. Same reasoning as the music playlist page's own empty state.
+  useEffect(() => {
+    if (openRecordingPlaylist && !recordingIndex.has(openRecordingPlaylist)) {
+      setOpenRecordingPlaylist(null);
+    }
+  }, [openRecordingPlaylist, recordingIndex]);
 
   // The Voice recordings section — a pushed page like Playlists, holding the
   // audio that is NOT in the library.
@@ -1309,6 +1353,72 @@ export default function MusicVault({
     );
   }, [c, trackStyles, tracksInPlaylist]);
 
+  /**
+   * One playlist of recordings. Its own row rather than reusing the music
+   * one, because the count means something different — "4 recordings", not
+   * "4 tracks" — and the folder's own glyph is what says you are still
+   * inside Voice recordings and not in the music playlists.
+   */
+  const renderRecordingPlaylistRow = useCallback(({ item }) => {
+    const count = recordingsInPlaylist(item).length;
+    return (
+      <TouchableOpacity
+        {...TAP_ONLY}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={`${item}, ${recordingCountLabel(count)}`}
+        onPress={() => { tapHaptic(); setOpenRecordingPlaylist(item); }}
+        style={styles.row}
+      >
+        <View style={[styles.art, trackStyles.artTint]}>
+          <Icon name="playlist-music" size={22} color={MUSIC_TINT(c)} />
+        </View>
+        <View style={trackStyles.body}>
+          <Text style={trackStyles.titleIdle} numberOfLines={1}>{item}</Text>
+          <Text style={trackStyles.source} numberOfLines={1}>{recordingCountLabel(count)}</Text>
+        </View>
+        <Icon name="chevron-right" size={22} color={c.textTertiary} />
+      </TouchableOpacity>
+    );
+  }, [c, trackStyles, recordingsInPlaylist]);
+
+  /** The Recordings / Playlists switch at the top of the folder. */
+  const renderRecordingsTabs = useCallback(() => (
+    <View style={styles.tabBar}>
+      {[
+        { key: 'recordings', label: recordingCountLabel(voiceRecordings.length) },
+        {
+          key: 'playlists',
+          label: `${recordingPlaylists.length} playlist${recordingPlaylists.length === 1 ? '' : 's'}`,
+        },
+      ].map((t) => {
+        const on = recordingsTab === t.key;
+        return (
+          <TouchableOpacity
+            key={t.key}
+            {...TAP_ONLY}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: on }}
+            accessibilityLabel={t.key === 'recordings' ? 'Recordings' : 'Playlists'}
+            onPress={() => { tapHaptic(); setRecordingsTab(t.key); }}
+            style={[styles.tab, {
+              borderColor: on ? MUSIC_TINT(c) : c.border || c.textTertiary,
+              backgroundColor: on ? `${MUSIC_TINT(c)}1f` : 'transparent',
+            }]}
+          >
+            {/* The COUNT is the label. "Recordings (12)" and a tab that says
+                "Recordings" next to a page already titled Voice recordings is
+                the same word three times; the number is the part that is
+                actually worth reading. */}
+            <Text style={[styles.tabLabel, { color: on ? MUSIC_TINT(c) : c.textSecondary }]}>
+              {t.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  ), [c, recordingsTab, voiceRecordings.length, recordingPlaylists.length]);
+
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
     {/* The lifting layer. Permanently `lift` taller than the page (the negative
@@ -1709,7 +1819,17 @@ export default function MusicVault({
         </View>
       </EdgeSwipePage>
 
-      <EdgeSwipePage visible={recordingsOpen} onClose={() => setRecordingsOpen(false)}>
+      {/* Voice recordings. Two views of ONE folder, switched by the tabs
+          under the title: the flat list of everything filed here, and the
+          same recordings grouped by their other tags. A playlist opens as a
+          level-2 overlay, exactly as a music playlist does. */}
+      <EdgeSwipePage
+        visible={recordingsOpen}
+        onClose={() => setRecordingsOpen(false)}
+        // While a playlist is open on top, the parent's back-swipe must not
+        // fire underneath it — one drag would otherwise close both levels.
+        swipeEnabled={!openRecordingPlaylist}
+      >
         <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
           <View style={styles.pageHeader}>
             <TouchableOpacity
@@ -1725,34 +1845,103 @@ export default function MusicVault({
               {VOICE_RECORDINGS_LABEL}
             </Text>
           </View>
-          <Animated.FlatList {...SCROLL_INDICATOR}
-            onScroll={chromeScroll}
-            scrollEventThrottle={16}
-            testID="voice-recordings-list"
-            data={voiceRecordings}
-            keyExtractor={(t) => String(t.id)}
-            renderItem={({ item }) => renderTrack({
-              item,
-              queue: voiceRecordings,
-              // Standing down to show the menu lands you in the library — which
-              // is where the track itself goes if you pick "Move back to music",
-              // so the two agree.
-              onOptions: (id) => { setRecordingsOpen(false); setSheetId(id); },
-            })}
-            extraData={`${current}:${isPlaying}:${ready}:${voiceRecordings.length}:${offlineSignature}`}
-            contentContainerStyle={{ paddingBottom: listPadBottom }}
-            ItemSeparatorComponent={() => <View style={styles.trackSep} />}
-            ListEmptyComponent={(
-              <View style={styles.pageEmpty}>
-                <Icon name="microphone-outline" size={40} color={c.textTertiary} />
-                <Text style={{ color: c.textSecondary, marginTop: 12, textAlign: 'center' }}>
-                  Nothing filed here yet. Open a track's ⋯ menu in your music and
-                  move it to {VOICE_RECORDINGS_LABEL} — it leaves the library and
-                  stops playing with everything else.
+
+          {/* Only once something is filed. An empty folder has one thing to
+              say — how to put something in it — and a pair of tabs reading
+              "0 recordings / 0 playlists" above that is noise. */}
+          {voiceRecordings.length > 0 ? renderRecordingsTabs() : null}
+
+          {recordingsTab === 'playlists' ? (
+            <Animated.FlatList {...SCROLL_INDICATOR}
+              onScroll={chromeScroll}
+              scrollEventThrottle={16}
+              testID="voice-recording-playlists-list"
+              data={recordingPlaylists}
+              keyExtractor={(name) => name}
+              renderItem={renderRecordingPlaylistRow}
+              extraData={`${recordingPlaylists.length}:${voiceRecordings.length}`}
+              contentContainerStyle={{ paddingBottom: listPadBottom }}
+              ItemSeparatorComponent={() => <View style={styles.trackSep} />}
+              ListEmptyComponent={(
+                <View style={styles.pageEmpty}>
+                  <Icon name="playlist-music-outline" size={40} color={c.textTertiary} />
+                  <Text style={{ color: c.textSecondary, marginTop: 12, textAlign: 'center' }}>
+                    No playlists in here yet. Open a recording's ⋯ menu and use
+                    “Add to playlist” — the name you give it becomes a group in
+                    this folder, kept apart from your music playlists.
+                  </Text>
+                </View>
+              )}
+            />
+          ) : (
+            <Animated.FlatList {...SCROLL_INDICATOR}
+              onScroll={chromeScroll}
+              scrollEventThrottle={16}
+              testID="voice-recordings-list"
+              data={voiceRecordings}
+              keyExtractor={(t) => String(t.id)}
+              renderItem={({ item }) => renderTrack({
+                item,
+                queue: voiceRecordings,
+                // Standing down to show the menu lands you in the library — which
+                // is where the track itself goes if you pick "Move back to music",
+                // so the two agree.
+                onOptions: (id) => { setRecordingsOpen(false); setSheetId(id); },
+              })}
+              extraData={`${current}:${isPlaying}:${ready}:${voiceRecordings.length}:${offlineSignature}`}
+              contentContainerStyle={{ paddingBottom: listPadBottom }}
+              ItemSeparatorComponent={() => <View style={styles.trackSep} />}
+              ListEmptyComponent={(
+                <View style={styles.pageEmpty}>
+                  <Icon name="microphone-outline" size={40} color={c.textTertiary} />
+                  <Text style={{ color: c.textSecondary, marginTop: 12, textAlign: 'center' }}>
+                    Nothing filed here yet. Open a track's ⋯ menu in your music and
+                    move it to {VOICE_RECORDINGS_LABEL} — it leaves the library and
+                    stops playing with everything else.
+                  </Text>
+                </View>
+              )}
+            />
+          )}
+
+          {/* Level 2: one playlist's recordings. An overlay page so the back
+              swipe returns to the playlist list rather than all the way out,
+              same as the music playlists page. */}
+          <EdgeSwipePage overlay visible={!!openRecordingPlaylist} onClose={() => setOpenRecordingPlaylist(null)}>
+            <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
+              <View style={styles.pageHeader}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to recording playlists"
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  onPress={() => { tapHaptic(); setOpenRecordingPlaylist(null); }}
+                  style={styles.pageBackBtn}
+                >
+                  <Icon name="chevron-left" size={28} color={c.textPrimary} />
+                </TouchableOpacity>
+                <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>
+                  {openRecordingPlaylist || ''}
                 </Text>
               </View>
-            )}
-          />
+              <Animated.FlatList {...SCROLL_INDICATOR}
+                onScroll={chromeScroll}
+                scrollEventThrottle={16}
+                testID="voice-recording-playlist-tracks"
+                data={openRecordingPlaylistRows}
+                keyExtractor={(t) => String(t.id)}
+                // The queue is THIS playlist, so skip walks the group you
+                // opened rather than every recording you have.
+                renderItem={({ item }) => renderTrack({
+                  item,
+                  queue: openRecordingPlaylistRows,
+                  onOptions: (id) => { setOpenRecordingPlaylist(null); setRecordingsOpen(false); setSheetId(id); },
+                })}
+                extraData={`${current}:${isPlaying}:${ready}:${openRecordingPlaylistRows.length}:${offlineSignature}`}
+                contentContainerStyle={{ paddingBottom: listPadBottom }}
+                ItemSeparatorComponent={() => <View style={styles.trackSep} />}
+              />
+            </View>
+          </EdgeSwipePage>
         </View>
       </EdgeSwipePage>
 
@@ -1933,8 +2122,20 @@ export default function MusicVault({
         subtitle={sheetTrack ? (sourceOf(sheetTrack) || 'Audio') : ''}
         isActive={!!sheetTrack && String(sheetTrack.id) === String(activeTrack?.mediaId)}
         isPlaying={isPlaying}
-        playlists={playlists}
-        currentPlaylists={sheetTrack ? tagsOf(sheetTrack) : []}
+        // A recording is offered the playlists that exist INSIDE its folder,
+        // not the music ones. Tags are global, so either list would "work" —
+        // but suggesting your albums while filing a sermon is how a recording
+        // ends up tagged into a music playlist it can never be seen in (the
+        // library's playlist index is built from music rows only).
+        playlists={sheetTrack && isVoiceRecording(sheetTrack) ? recordingPlaylists : playlists}
+        // The reserved tag is never a playlist. Left in, it would show as one
+        // the recording is "already on" — and the sheet draws those as a tick,
+        // one tap from a write that silently moves the recording back into the
+        // music library. That is what "Move back to music" is for, with a
+        // label saying so.
+        currentPlaylists={sheetTrack
+          ? tagsOf(sheetTrack).filter((t) => String(t).trim().toLowerCase() !== VOICE_RECORDINGS_TAG.toLowerCase())
+          : []}
         busy={sheetBusy}
         transcriptState={sheetTranscriptState}
         onPlay={sheetPlay}
@@ -1980,6 +2181,16 @@ const styles = StyleSheet.create({
   pageBackBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   pageTitle: { flex: 1, fontSize: 22, fontWeight: '600' },
   pageEmpty: { alignItems: 'center', justifyContent: 'center', padding: 32, paddingTop: 80 },
+  // The Recordings / Playlists switch. A segmented control rather than two
+  // pushed pages: these are two views of the SAME folder, and making one of
+  // them a destination you navigate into would imply it holds different
+  // things. Inset 16 to sit on the rows' own left edge.
+  tabBar: { flexDirection: 'row', gap: 6, paddingHorizontal: 16, paddingBottom: 10 },
+  tab: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  tabLabel: { fontSize: 13, fontWeight: '700' },
   art: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   error: { marginHorizontal: 16, marginBottom: 8, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
   nowBar: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8 },

@@ -107,6 +107,36 @@ export function tagsWithoutVoiceRecording(row) {
   return audioTags(row).filter((t) => !isTheTag(t));
 }
 
+/**
+ * Recordings grouped by playlist: a Map of name → the rows carrying it.
+ *
+ * A recording's OTHER tags are playlists, exactly as they are for music — so
+ * organising this folder needs no new concept, no new column and no server
+ * change. What it does need is the reserved tag kept OUT of the result: it is
+ * what put the row in this folder, not a group within it, and leaving it in
+ * would produce a "Voice recordings" playlist inside Voice recordings holding
+ * every recording there is.
+ *
+ * Lives here rather than in the screen because the exclusion has to use the
+ * same case- and space-insensitive rule as `isVoiceRecording`. Two copies of
+ * that comparison is how a recording tagged "voice recordings" ends up listed
+ * as a playlist on one surface and not the other.
+ *
+ * Insertion order is the caller's order; the caller sorts.
+ */
+export function recordingPlaylistIndex(rows) {
+  const byName = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    for (const tag of audioTags(row)) {
+      if (isTheTag(tag)) continue;
+      const list = byName.get(tag);
+      if (list) list.push(row);
+      else byName.set(tag, [row]);
+    }
+  }
+  return byName;
+}
+
 /** "3 recordings" / "1 recording" / "" — the section row's own count. */
 export function recordingCountLabel(count) {
   const n = Number(count) || 0;

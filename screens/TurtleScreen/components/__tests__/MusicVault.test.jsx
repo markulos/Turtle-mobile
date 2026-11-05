@@ -287,6 +287,85 @@ describe('MusicVault', () => {
       expect(view.getByText('Voice memo')).toBeTruthy();
     });
 
+    /**
+     * Playlists INSIDE the folder. A recording's other tags are playlists,
+     * exactly as they are for music — so the thing worth testing is that the
+     * folder groups by them WITHOUT offering the reserved tag as one, and
+     * that opening a group narrows both the list and the play queue.
+     */
+    describe('the playlists tab', () => {
+      const ORIGINAL = mockMusicPlayer.recordings;
+      beforeEach(() => {
+        mockMusicPlayer.recordings = [
+          { id: 'memo', filename: 'Voice memo.m4a', rawUrl: '/media/memo.m4a', tags: '["Voice recordings"]' },
+          { id: 'sermon1', filename: 'Sunday.m4a', rawUrl: '/media/s1.m4a', tags: '["Voice recordings","Sermons"]' },
+          { id: 'sermon2', filename: 'Vespers.m4a', rawUrl: '/media/s2.m4a', tags: '["Voice recordings","Sermons"]' },
+          { id: 'idea', filename: 'Shed plan.m4a', rawUrl: '/media/i.m4a', tags: '["Voice recordings","Ideas"]' },
+        ];
+      });
+      afterEach(() => { mockMusicPlayer.recordings = ORIGINAL; });
+
+      const openFolder = async (view) => {
+        await fireEvent.press(view.getByTestId('music-voice-recordings-row'));
+      };
+
+      test('groups the recordings by their other tags', async () => {
+        const view = await render(<MusicVault onClose={jest.fn()} />);
+        await openFolder(view);
+        await fireEvent.press(view.getByLabelText('Playlists'));
+
+        expect(view.getByTestId('voice-recording-playlists-list')).toBeTruthy();
+        expect(view.getByText('Sermons')).toBeTruthy();
+        expect(view.getByText('Ideas')).toBeTruthy();
+        expect(view.getByText('2 recordings')).toBeTruthy();
+      });
+
+      test('never lists the reserved tag as a playlist', async () => {
+        // It is what put the row in this folder, not a group within it —
+        // listed, it would be a playlist holding every recording there is.
+        const view = await render(<MusicVault onClose={jest.fn()} />);
+        await openFolder(view);
+        await fireEvent.press(view.getByLabelText('Playlists'));
+        expect(view.queryByTestId('voice-recording-playlists-list')).toBeTruthy();
+        // The exact label a leaked reserved-tag playlist would carry. Neither
+        // a text query nor a loose prefix works here: "Voice recordings" is
+        // also the page title AND the library's folder row (labelled
+        // "Voice recordings, 4"), both still mounted behind this page.
+        expect(view.queryByLabelText('Voice recordings, 4 recordings')).toBeNull();
+        expect(view.getByLabelText('Sermons, 2 recordings')).toBeTruthy();
+      });
+
+      test('opening one lists only its recordings, and plays only those', async () => {
+        const view = await render(<MusicVault onClose={jest.fn()} />);
+        await openFolder(view);
+        await fireEvent.press(view.getByLabelText('Playlists'));
+        await fireEvent.press(view.getByText('Sermons'));
+
+        expect(view.getByTestId('voice-recording-playlist-tracks')).toBeTruthy();
+        expect(view.getByText('Sunday')).toBeTruthy();
+        expect(view.queryByText('Shed plan')).toBeNull();
+
+        await fireEvent.press(view.getByText('Sunday'));
+        // The queue is the PLAYLIST, so Next walks the group you opened
+        // rather than every recording in the folder.
+        const [rows] = mockPlayRows.mock.calls[0];
+        expect(rows.map((r) => r.id)).toEqual(['sermon1', 'sermon2']);
+      });
+
+      test('the recordings tab still lists everything', async () => {
+        const view = await render(<MusicVault onClose={jest.fn()} />);
+        await openFolder(view);
+        await fireEvent.press(view.getByLabelText('Playlists'));
+        await fireEvent.press(view.getByLabelText('Recordings'));
+
+        expect(view.getByTestId('voice-recordings-list')).toBeTruthy();
+        // Including the one on no playlist at all, which is the row that
+        // would be lost if the folder only ever showed groups.
+        expect(view.getByText('Voice memo')).toBeTruthy();
+        expect(view.getByText('Sunday')).toBeTruthy();
+      });
+    });
+
     test('playing one inside the folder uses its OWN queue', async () => {
       const view = await render(<MusicVault onClose={jest.fn()} />);
       await fireEvent.press(view.getByTestId('music-voice-recordings-row'));
