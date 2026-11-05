@@ -23,8 +23,13 @@ export function useOfflineMusic(store = musicOfflineStore) {
     [getBaseUrl, getMediaBaseUrl]
   );
 
+  // The track's own name goes with it: the store saves the file under that
+  // name's extension, and a local file with no extension does not play (see
+  // the note in musicOfflineStore). rawUrl is no help — it is /media/raw/<id>.
+  const nameOf = (row) => row?.originalName || row?.filename || '';
+
   const download = useCallback(
-    (row) => store.download(row?.id, resolveMediaUrl(row?.rawUrl || row?.url, mediaBase)),
+    (row) => store.download(row?.id, resolveMediaUrl(row?.rawUrl || row?.url, mediaBase), nameOf(row)),
     [mediaBase, store]
   );
 
@@ -38,7 +43,7 @@ export function useOfflineMusic(store = musicOfflineStore) {
     async (rows) => {
       for (const row of rows || []) {
         if (store.isDownloaded(row?.id)) continue;
-        await store.download(row?.id, resolveMediaUrl(row?.rawUrl || row?.url, mediaBase));
+        await store.download(row?.id, resolveMediaUrl(row?.rawUrl || row?.url, mediaBase), nameOf(row));
       }
     },
     [mediaBase, store]

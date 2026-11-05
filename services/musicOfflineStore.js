@@ -32,13 +32,73 @@ export const OFFLINE_DIR = `${FileSystem.documentDirectory || ''}music-offline/`
  * it is scrubbed: a `..` or a separator sneaking into a path is the kind of
  * thing that writes outside the directory it was meant to.
  */
-export function fileNameFor(mediaId) {
+export function safeId(mediaId) {
   return String(mediaId).replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-export function pathFor(mediaId) {
-  return `${OFFLINE_DIR}${fileNameFor(mediaId)}`;
+/**
+ * ── Why the file keeps an extension ───────────────────────────────────
+ *
+ * It is not decoration. A downloaded track is handed to the player as a
+ * `file://` URL, and on iOS AVURLAsset works out the container format from
+ * the path extension — there is no Content-Type on a local file to fall
+ * back to. Saved as a bare `42`, the asset fails to load and the track
+ * simply does not play, while every streamed track is fine because the
+ * pond's response carries its type in a header.
+ *
+ * So the name is `<id>.<ext>`, and the id is read back off it.
+ */
+const EXT_BY_TYPE = {
+  'audio/mpeg': 'mp3',
+  'audio/mp3': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/x-m4a': 'm4a',
+  'audio/aac': 'aac',
+  'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
+  'audio/flac': 'flac',
+  'audio/x-flac': 'flac',
+  'audio/ogg': 'ogg',
+  'audio/opus': 'opus',
+  'audio/webm': 'webm',
+};
+
+/** Last resort. Wrong for a FLAC, but a guess beats no extension at all. */
+const FALLBACK_EXT = 'mp3';
+
+/**
+ * The extension to save under: the one the track's own filename carries,
+ * else one derived from what the pond said it was sending, else mp3.
+ */
+export function extensionFor(fileName, contentType) {
+  const fromName = /\.([a-zA-Z0-9]{2,5})$/.exec(String(fileName || '').trim());
+  if (fromName) return fromName[1].toLowerCase();
+  const type = String(contentType || '').split(';')[0].trim().toLowerCase();
+  return EXT_BY_TYPE[type] || FALLBACK_EXT;
 }
+
+export function fileNameFor(mediaId, ext) {
+  return `${safeId(mediaId)}.${String(ext || FALLBACK_EXT).toLowerCase()}`;
+}
+
+/**
+ * The id back off a stored file name, or null if this is not one of ours.
+ *
+ * Null for a name with NO extension, which is how the first build of this
+ * feature wrote them: those files cannot play, so they are not downloads —
+ * they are rubbish to be swept, and the row goes back to offering a
+ * download that will work.
+ */
+export function idFromFileName(name) {
+  const m = /^(.+)\.([a-zA-Z0-9]{2,5})$/.exec(String(name || ''));
+  if (!m) return null;
+  // A part-file is an interrupted download, never a finished one.
+  if (m[2].toLowerCase() === PART_EXT) return null;
+  return m[1];
+}
+
+/** Downloads land here first, so a partial file is never mistaken for a track. */
+const PART_EXT = 'part';
 
 export function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
@@ -57,10 +117,10 @@ const EMPTY = {
 };
 
 export function createOfflineMusicStore(fs = FileSystem, dir = OFFLINE_DIR) {
-  const downloaded = new Map(); // mediaId -> bytes
-  const inFlight = new Map();   // mediaId -> { progress }
-  const failed = new Map();     // mediaId -> message
-  const tasks = new Map();      // mediaId -> resumable download
+  const downloaded = new Map(); // id -> { bytes, file }
+  const inFlight = new Map();   // id -> { progress }
+  const failed = new Map();     // id -> message
+  const tasks = new Map();      // id -> resumable download
   // Cancels that arrived before the download had registered its task. Without
   // this, a stop tapped in the moment between "downloading" appearing on the
   // row and the task existing does nothing at all, and the track is kept
@@ -71,11 +131,9 @@ export function createOfflineMusicStore(fs = FileSystem, dir = OFFLINE_DIR) {
   let loading = null;
   let snapshot = EMPTY;
 
-  const filePath = (mediaId) => `${dir}${fileNameFor(mediaId)}`;
-
   function rebuild() {
     let totalBytes = 0;
-    for (const n of downloaded.values()) totalBytes += n;
+    for (const entry of downloaded.values()) totalBytes += entry.bytes;
     // A fresh object every time: useSyncExternalStore compares by identity
     // and would never re-render if these were mutated in place.
     snapshot = {
@@ -99,16 +157,20 @@ export function createOfflineMusicStore(fs = FileSystem, dir = OFFLINE_DIR) {
         } else {
           const names = await fs.readDirectoryAsync(dir);
           for (const name of names) {
-            const stat = await fs.getInfoAsync(`${dir}${name}`).catch(() => null);
-            // A zero-byte file is a download that died mid-flight. Sweeping
-            // it here rather than listing it means the row offers to fetch
-            // it again instead of claiming a track that will not play.
-            if (!stat?.exists) continue;
-            if (!stat.size) {
+            const id = idFromFileName(name);
+            const stat = id ? await fs.getInfoAsync(`${dir}${name}`).catch(() => null) : null;
+            // Three kinds of rubbish are swept rather than listed, because
+            // each would otherwise show a tick on a row that cannot play:
+            //   • no extension — written by the first build of this feature,
+            //     and unplayable on iOS for the reason at the top of the file
+            //   • a leftover .part — an interrupted download
+            //   • zero bytes — a download that died the instant it started
+            // Swept, the row goes back to offering a download that works.
+            if (!id || !stat?.exists || !stat.size) {
               await fs.deleteAsync(`${dir}${name}`, { idempotent: true }).catch(() => {});
               continue;
             }
-            downloaded.set(name, stat.size);
+            downloaded.set(id, { bytes: stat.size, file: name });
           }
         }
       } catch {
@@ -130,24 +192,21 @@ export function createOfflineMusicStore(fs = FileSystem, dir = OFFLINE_DIR) {
     getSnapshot: () => snapshot,
     load,
 
-    isDownloaded: (mediaId) => downloaded.has(fileNameFor(mediaId)),
-
-    /** The `file://` URI to play, or null. Fed straight to the track mapper. */
-    localUri: (mediaId) => (downloaded.has(fileNameFor(mediaId)) ? filePath(mediaId) : null),
+    isDownloaded: (mediaId) => downloaded.has(String(mediaId)),
 
     /** Every downloaded id → its local URI, for building a whole queue. */
     localUris() {
       const out = {};
-      for (const name of downloaded.keys()) out[name] = `${dir}${name}`;
+      for (const [id, entry] of downloaded) out[id] = `${dir}${entry.file}`;
       return out;
     },
 
     statusOf(mediaId) {
-      const key = fileNameFor(mediaId);
+      const key = String(mediaId);
       const live = inFlight.get(key);
       if (live) return { state: 'downloading', progress: live.progress };
-      const bytes = downloaded.get(key);
-      if (bytes !== undefined) return { state: 'done', bytes };
+      const entry = downloaded.get(key);
+      if (entry) return { state: 'done', bytes: entry.bytes };
       const error = failed.get(key);
       if (error) return { state: 'failed', error };
       return { state: 'absent' };
@@ -155,14 +214,16 @@ export function createOfflineMusicStore(fs = FileSystem, dir = OFFLINE_DIR) {
 
     /**
      * Fetch a track and keep it. `url` is the absolute media URL; the caller
-     * owns resolving it, exactly as the player does.
+     * owns resolving it, exactly as the player does. `fileName` is the
+     * track's own name, used only to work out what to save it as — see the
+     * note on extensions at the top of this file.
      *
      * Already here or already arriving is a no-op, not an error — the control
      * is a toggle and a double tap must not start two downloads of the same
      * 8 MB file.
      */
-    async download(mediaId, url) {
-      const key = fileNameFor(mediaId);
+    async download(mediaId, url, fileName) {
+      const key = String(mediaId);
       if (downloaded.has(key) || inFlight.has(key)) return true;
       if (!url) return false;
 
@@ -171,7 +232,11 @@ export function createOfflineMusicStore(fs = FileSystem, dir = OFFLINE_DIR) {
       inFlight.set(key, { progress: 0 });
       rebuild();
 
-      const dest = `${dir}${key}`;
+      // Written to a .part first and moved into place only once it is whole.
+      // An interrupted download then cannot be mistaken for a track: the
+      // directory read skips .part files, so there is nothing to sweep up
+      // later and nothing that ever shows a tick it has not earned.
+      const dest = `${dir}${safeId(mediaId)}.${PART_EXT}`;
       await fs.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {});
 
       let lastPct = -1;
@@ -228,14 +293,32 @@ export function createOfflineMusicStore(fs = FileSystem, dir = OFFLINE_DIR) {
         return false;
       }
 
-      downloaded.set(key, stat.size);
+      // Now it is whole, give it its real name. The track's own filename
+      // decides the extension; the pond's Content-Type is the fallback for a
+      // row whose name has none.
+      const headers = res.headers || {};
+      const contentType = headers['content-type'] || headers['Content-Type'];
+      const file = fileNameFor(mediaId, extensionFor(fileName, contentType));
+      try {
+        await fs.moveAsync({ from: dest, to: `${dir}${file}` });
+      } catch (error) {
+        // The bytes are here but unnamed, and an unnamed file will not play.
+        // Better to drop it and let the row offer again than to keep
+        // something that shows a tick and then silently refuses.
+        await fs.deleteAsync(dest, { idempotent: true }).catch(() => {});
+        failed.set(key, error?.message || 'Could not store the download');
+        rebuild();
+        return false;
+      }
+
+      downloaded.set(key, { bytes: stat.size, file });
       rebuild();
       return true;
     },
 
     /** Stop an in-flight download. Nothing is kept. */
     async cancel(mediaId) {
-      const key = fileNameFor(mediaId);
+      const key = String(mediaId);
       const task = tasks.get(key);
       if (!task && !inFlight.has(key)) return;
       // The intent is recorded whether or not the task exists yet, and
@@ -246,14 +329,21 @@ export function createOfflineMusicStore(fs = FileSystem, dir = OFFLINE_DIR) {
       tasks.delete(key);
       rebuild();
       await task?.cancelAsync?.().catch(() => {});
-      await fs.deleteAsync(`${dir}${key}`, { idempotent: true }).catch(() => {});
+      // The part-file, which is all a cancelled download ever wrote.
+      await fs.deleteAsync(`${dir}${safeId(mediaId)}.${PART_EXT}`, { idempotent: true }).catch(() => {});
     },
 
     async remove(mediaId) {
-      const key = fileNameFor(mediaId);
+      const key = String(mediaId);
+      // The stored name, not a rebuilt one: the extension was decided at
+      // download time from the track's own filename, so guessing it back
+      // here would leave the file on disk for anything but an mp3.
+      const entry = downloaded.get(key);
       await this.cancel(mediaId);
       failed.delete(key);
-      await fs.deleteAsync(`${dir}${key}`, { idempotent: true }).catch(() => {});
+      if (entry) {
+        await fs.deleteAsync(`${dir}${entry.file}`, { idempotent: true }).catch(() => {});
+      }
       downloaded.delete(key);
       rebuild();
     },
