@@ -1147,6 +1147,20 @@ export default function MusicVault({
       playlists.length ? playlists.slice(0, 2).join(' · ') : null,
     ].filter(Boolean).join(' · ');
     return (
+      // ── Why the inset is HERE, and not in the shared row ──────────────
+      // VaultResultRow is paddingHorizontal: 2, which is right: the other
+      // nine surfaces that use it pad at the CONTAINER level instead
+      // (FilesVault's styles.rows, the photo boards page's content, the
+      // people picker's panel — all 16). Music is the odd one out, because
+      // its search rows share one FlatList with the library rows, and those
+      // carry their own 16. Padding that list would double-indent the
+      // library; raising the shared row would double-indent the other nine.
+      //
+      // 14 here plus the row's own 2 is 16 — the same inset as a library
+      // row, and the same as the hairline between them (styles.trackSep is
+      // marginHorizontal: 16), which is what the rows were failing to line
+      // up with.
+      <View style={styles.searchRowInset}>
       <VaultResultRow
         theme={theme}
         name={titleOf(item)}
@@ -1171,7 +1185,8 @@ export default function MusicVault({
             <Icon name="dots-horizontal" size={22} color={c.textTertiary} />
           </TouchableOpacity>
         )}
-      />
+        />
+      </View>
     );
   }, [theme, c, activeTrack, isPlaying, playTrack]);
 
@@ -2177,6 +2192,10 @@ const styles = StyleSheet.create({
   // "6 tracks" / "Nothing matches …", above the result rows.
   resultCount: { fontSize: 12, fontWeight: '700', paddingHorizontal: 18, paddingTop: 2, paddingBottom: 10 },
   moreBtn: { paddingLeft: 2, paddingVertical: 2 },
+  // 14 + the shared result row's own 2 = 16, the inset every other row and
+  // hairline on this screen uses. See the note in renderSearchRow for why
+  // this lives here rather than on the row or the list.
+  searchRowInset: { paddingHorizontal: 14 },
   pageHeader: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingBottom: 10 },
   pageBackBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   pageTitle: { flex: 1, fontSize: 22, fontWeight: '600' },
