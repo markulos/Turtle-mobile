@@ -15,11 +15,24 @@
  *     server says why (the signed URL is bound to the IP that asked for it, so
  *     a URL resolved on the pond 403s on the phone).
  *
- *   • a result is DOWNLOADED by handing its ordinary watch URL to
- *     /api/downloads, which is the same ghost-download queue a shared link has
- *     always gone through — so progress shows up in the DownloadsPill, and the
- *     finished track lands in the Audio album with everything else. There is
- *     no separate web-download path to keep honest.
+ *   • a result is DOWNLOADED by handing its ordinary watch URL to the
+ *     downloads queue, which is the same ghost-download queue a shared link
+ *     has always gone through — so progress shows up in the DownloadsPill, and
+ *     the finished track lands in the Audio album with everything else. There
+ *     is no separate web-download path to keep honest.
+ *
+ * ── Paths here do NOT start with `/api` ─────────────────────────────────
+ * ServerContext's getBaseUrl() is already `<origin>/api` and every api.* call
+ * appends to it, so `api.get('/api/music/web/search')` asks for
+ * `/api/api/music/web/search`. That is a 404, and a 404 is the one status this
+ * feature reads as "this pond predates the feature" — so all three calls in
+ * this file (search, download, preview) failed with a message blaming the
+ * SERVER, through a deploy that was already live and verified. Shipped broken
+ * 2026-11-11, found the same day.
+ *
+ * The rule: `api.*` takes a path relative to /api (`/downloads`, `/me`), and
+ * anything the server hands back as a root-relative URL already carries its
+ * own `/api` — join those to pondOrigin(), never to getBaseUrl().
  */
 
 /** Which half of the search field is lit. The library is the default. */
@@ -51,6 +64,18 @@ export function shouldSearchWeb(query) {
 }
 
 /**
+ * The pond's ORIGIN, from the API base every caller actually holds.
+ *
+ * ServerContext.getBaseUrl() is `<origin>/api`. Anything the SERVER hands back
+ * as a root-relative path — `previewUrl` here, and media URLs elsewhere —
+ * already carries its own `/api`, so joining the two doubles it. Trailing
+ * slash goes too, so the join is exact either way.
+ */
+export function pondOrigin(apiBaseUrl) {
+  return String(apiBaseUrl || '').replace(/\/+$/, '').replace(/\/api$/, '');
+}
+
+/**
  * The synthetic media id a web preview plays under.
  *
  * Prefixed because it shares a namespace with real media ids in the player's
@@ -79,15 +104,20 @@ export function webResultMeta(result) {
  * would be if it were already downloaded — which is also why previewing and
  * then downloading look the same on screen.
  *
- * `baseUrl` is the pond's origin: `previewUrl` comes back relative because the
- * phone, the browser and the tunnel each reach the pond differently.
+ * `previewUrl` arrives as a root-relative path that already starts `/api/…`,
+ * because the phone, the browser and the tunnel each reach the pond
+ * differently. `baseUrl` is therefore normalised through pondOrigin() rather
+ * than trusted: callers hold getBaseUrl(), which ends in `/api`, and joining
+ * the two is what produced `/api/api/music/web/preview/…`. Either form works
+ * now, which is the point — this is not a distinction worth remembering at
+ * four call sites.
  */
 export function webPreviewRow(result, baseUrl) {
   if (!result?.videoId || !result?.previewUrl || !baseUrl) return null;
   return {
     id: webRowId(result.videoId),
     // The pond, not YouTube. See the note at the top of this file.
-    rawUrl: `${String(baseUrl).replace(/\/$/, '')}${result.previewUrl}`,
+    rawUrl: `${pondOrigin(baseUrl)}${result.previewUrl}`,
     originalName: result.title,
     duration: result.duration ?? null,
     thumbUrl: result.thumbnail || null,
@@ -106,8 +136,11 @@ export function webPreviewRow(result, baseUrl) {
 export async function searchWebMusic(api, query, { limit = DEFAULT_LIMIT } = {}) {
   const q = String(query || '').trim();
   if (!q) return { query: '', results: [] };
+  // NO `/api` PREFIX. ServerContext's getBaseUrl() is already
+  // `<origin>/api`, and every api.* call appends to it — see the note at the
+  // top of this file about the 404 that cost a day.
   const body = await api.get(
-    `/api/music/web/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    `/music/web/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     { timeoutMs: SEARCH_TIMEOUT_MS },
   );
   return { query: body?.query || q, results: Array.isArray(body?.results) ? body.results : [] };
@@ -123,7 +156,8 @@ export async function searchWebMusic(api, query, { limit = DEFAULT_LIMIT } = {})
  */
 export async function enqueueWebDownload(api, result) {
   if (!result?.url) throw new Error('That result has no link to download');
-  return api.post('/api/downloads', { url: result.url, outputKind: 'audio' });
+  // `/downloads`, which is what DownloadsContext has always posted to.
+  return api.post('/downloads', { url: result.url, outputKind: 'audio' });
 }
 
 /**

@@ -11,6 +11,7 @@ import { Alert } from 'react-native';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import MusicVault from '../MusicVault';
 import { __resetForTests } from '../../../../services/offlineQueue';
+import { pondOrigin, webPreviewRow } from '../../../../services/webMusicSearch';
 
 const mockStore = new Map();
 jest.mock('@react-native-async-storage/async-storage', () => ({
@@ -85,7 +86,11 @@ jest.mock('../../../../context/MusicPlayerContext', () => ({ useMusicPlayer: () 
 jest.mock('../../../../context/ServerContext', () => ({
   useServer: () => ({
     api: mockApi,
-    getBaseUrl: () => 'http://pond.local',
+    // ENDS IN /api, exactly like the real one (ServerContext.getBaseUrl).
+    // It did not, and that single missing segment is why a doubled-/api 404
+    // shipped green: every path assertion below passed against a base the
+    // app never actually uses.
+    getBaseUrl: () => 'http://pond.local/api',
     getMediaBaseUrl: () => 'http://pond.local/api',
     isConnected: true,
   }),
@@ -108,7 +113,7 @@ const AFTER_DEBOUNCE = { timeout: 5000 };
 
 /** The vault fetches shares and track access of its own on mount, so "did it
  *  search the web" has to be asked of the web search's own endpoint. */
-const webSearches = () => mockApi.get.mock.calls.filter(([path]) => String(path).includes('/api/music/web/search'));
+const webSearches = () => mockApi.get.mock.calls.filter(([path]) => String(path).startsWith('/music/web/search'));
 
 /** Open the vault already searching, and switch the scope to the web. */
 async function searchingTheWeb(query = 'nightcall') {
@@ -164,7 +169,7 @@ describe('searching the web', () => {
     const view = await searchingTheWeb();
     await waitFor(() => {
       expect(mockApi.get).toHaveBeenCalledWith(
-        expect.stringContaining('/api/music/web/search?q=nightcall'),
+        expect.stringContaining('/music/web/search?q=nightcall'),
         expect.anything(),
       );
     }, AFTER_DEBOUNCE);
@@ -187,7 +192,7 @@ describe('searching the web', () => {
   });
 
   test('a pond that predates the feature says so, rather than finding nothing', async () => {
-    mockApi.get.mockImplementation(() => Promise.reject(new Error('API 404 on GET /api/music/web/search')));
+    mockApi.get.mockImplementation(() => Promise.reject(new Error('API 404 on GET /music/web/search')));
     const view = await searchingTheWeb();
     await waitFor(
       () => expect(view.getByText(/pond needs an update/)).toBeTruthy(),
@@ -197,7 +202,7 @@ describe('searching the web', () => {
 
   test('a pond with no yt-dlp passes its own sentence through', async () => {
     mockApi.get.mockImplementation(() => Promise.reject(new Error(
-      'API 503 on GET /api/music/web/search — {"success":false,"error":"This pond cannot search the web — yt-dlp is not installed."}',
+      'API 503 on GET /music/web/search — {"success":false,"error":"This pond cannot search the web — yt-dlp is not installed."}',
     )));
     const view = await searchingTheWeb();
     await waitFor(() => expect(view.getByText(/yt-dlp is not installed/)).toBeTruthy(), AFTER_DEBOUNCE);
@@ -270,7 +275,7 @@ describe('previewing and downloading a result', () => {
     await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
     await fireEvent.press(view.getByLabelText('Download Kavinsky - Nightcall'));
 
-    expect(mockApi.post).toHaveBeenCalledWith('/api/downloads', {
+    expect(mockApi.post).toHaveBeenCalledWith('/downloads', {
       url: 'https://www.youtube.com/watch?v=MV_3Dpw-BRY',
       outputKind: 'audio',
     });
@@ -285,7 +290,7 @@ describe('previewing and downloading a result', () => {
   test('a refused download says so and offers the key back', async () => {
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     mockApi.post.mockImplementation(() => Promise.reject(new Error(
-      'API 400 on POST /api/downloads — {"success":false,"error":"Only http(s) URLs"}',
+      'API 400 on POST /downloads — {"success":false,"error":"Only http(s) URLs"}',
     )));
     const view = await searchingTheWeb();
     await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
@@ -320,7 +325,7 @@ describe('waiting for results', () => {
   test('the first search shows placeholder rows, not an empty page', async () => {
     // A search that never settles, so the loading frame can be inspected.
     mockApi.get.mockImplementation((path) => (
-      String(path).includes('/api/music/web/search')
+      String(path).startsWith('/music/web/search')
         ? new Promise(() => {})
         : Promise.resolve({ success: true, results: [] })
     ));
@@ -347,5 +352,54 @@ describe('waiting for results', () => {
     const view = await searchingTheWeb();
     const status = await waitFor(() => view.getByText('1 result on YouTube'), AFTER_DEBOUNCE);
     expect(status.props.numberOfLines).toBe(1);
+  });
+});
+
+/**
+ * The 404 that was blamed on the server.
+ *
+ * getBaseUrl() is `<origin>/api` and every api.* call appends to it, so a path
+ * written as `/api/music/web/search` is fetched from
+ * `/api/api/music/web/search`. That 404s — and 404 is the ONE status this
+ * feature reads as "this pond predates the feature", so all three calls failed
+ * with a message blaming a deploy that was already live and verified.
+ *
+ * It shipped green because the mock's getBaseUrl() did not end in `/api`. It
+ * does now, and these pin the rule from both ends.
+ */
+describe('paths are relative to /api, never prefixed with it', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockStore.clear();
+    __resetForTests();
+    mockMusicPlayer.activeTrack = null;
+    mockApi.get.mockImplementation(() => Promise.resolve({ success: true, results: [RESULT] }));
+    mockApi.post.mockImplementation(() => Promise.resolve({ success: true, id: 'job_1' }));
+  });
+
+  test('NO call this screen makes starts with /api', async () => {
+    const view = await searchingTheWeb();
+    await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+    await fireEvent.press(view.getByLabelText('Download Kavinsky - Nightcall'));
+    await waitFor(() => expect(mockApi.post).toHaveBeenCalled());
+
+    const paths = [...mockApi.get.mock.calls, ...mockApi.post.mock.calls].map(([p]) => String(p));
+    expect(paths.length).toBeGreaterThan(0);
+    const doubled = paths.filter((p) => p.startsWith('/api/'));
+    expect(doubled).toEqual([]);
+  });
+
+  test('a preview URL is joined to the ORIGIN, so /api appears exactly once', () => {
+    // Called with the API base the real caller holds — the trap, directly.
+    const row = webPreviewRow(RESULT, 'http://pond.local/api');
+    expect(row.rawUrl).toBe('http://pond.local/api/music/web/preview/MV_3Dpw-BRY?token=abc.def');
+    expect(row.rawUrl).not.toContain('/api/api/');
+  });
+
+  test('pondOrigin strips the API base however it is handed over', () => {
+    expect(pondOrigin('http://pond.local/api')).toBe('http://pond.local');
+    expect(pondOrigin('http://pond.local/api/')).toBe('http://pond.local');
+    expect(pondOrigin('http://pond.local')).toBe('http://pond.local');
+    expect(pondOrigin('')).toBe('');
   });
 });
