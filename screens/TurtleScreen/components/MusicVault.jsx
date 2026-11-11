@@ -38,6 +38,16 @@ import {
 // only route to a track was to scroll the whole library.
 import { VaultResultRow, VaultSearchDock, useVaultSearch, PICKER_GAP } from './VaultSearchDock';
 import { rankTracks, trackCountLabel } from './trackSearch';
+// …and the same field's OTHER scope: the web. The library is still the
+// default; see services/webMusicSearch for what a web result is and why it
+// plays through the pond rather than from YouTube.
+import SearchScopeToggle from './SearchScopeToggle';
+import MusicWebResultRow from './MusicWebResultRow';
+import {
+  LIBRARY_SCOPE, WEB_SCOPE, WEB_DEBOUNCE_MS,
+  enqueueWebDownload, pondMessage, searchWebMusic, shouldSearchWeb,
+  webPreviewRow, webRowId, webSearchStatus,
+} from '../../../services/webMusicSearch';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 import { useOfflineMusic } from '../../../utils/useOfflineMusic';
 import { formatBytes } from '../../../services/musicOfflineStore';
@@ -60,6 +70,23 @@ const MUSIC_TINT = (c) => c.accent || c.accentInfo || c.primary;
 
 // Outbox key for a track rename — one pending rename per track, newest wins.
 const renameKey = (id) => `media:${id}:originalName`;
+
+// The two halves of the search field. "My library" leads because it is both
+// the default and the common errand; the web is the thing you reach for when
+// the library has already failed you.
+const SEARCH_SCOPES = [
+  { value: LIBRARY_SCOPE, label: 'My library', accessibilityLabel: 'Search my music library' },
+  { value: WEB_SCOPE, label: 'Web', accessibilityLabel: 'Search the web for music' },
+];
+
+// "No web search is happening", as ONE value rather than a fresh object each
+// time. The reset below returns this identity when it is already current, so
+// React bails out instead of re-rendering — and a re-render of this page is
+// not free: useFocusEffect refetches the library on each one.
+const NO_WEB_SEARCH = { results: [], loading: false, error: null, searched: '' };
+const clearedWebSearch = (prev) => (
+  prev.results.length || prev.loading || prev.error || prev.searched ? NO_WEB_SEARCH : prev
+);
 
 const fmtTime = (sec) => {
   if (!Number.isFinite(sec) || sec < 0) return '0:00';
@@ -191,10 +218,32 @@ export default function MusicVault({
       }
     });
   }, []);
+  /**
+   * The web result currently being previewed, if any.
+   *
+   * Declared up here with the rest of the page's state because `nowTrack`
+   * below needs it, and a `const` referenced above its declaration is a TDZ
+   * crash rather than an undefined. Set by previewWeb, further down.
+   */
+  const [previewRow, setPreviewRow] = useState(null);
   const current = visibleTracks.findIndex(
     (item) => String(item.id) === String(activeTrack?.mediaId)
   );
-  const nowTrack = current >= 0 ? visibleTracks[current] : null;
+  /**
+   * What the transport bar is for.
+   *
+   * The library first, by INDEX, exactly as before. The fallback is a web
+   * preview: it is deliberately not in `visibleTracks` (nothing is kept, so
+   * there is no row to be in), which left the one thing playing with no
+   * pause button on the page — only the lock screen's.
+   */
+  const previewing = !!previewRow && String(previewRow.id) === String(activeTrack?.mediaId);
+  const nowTrack = current >= 0 ? visibleTracks[current] : (previewing ? previewRow : null);
+  // Skip walks the QUEUE, and a preview's queue is one track long. Derived
+  // rather than read off `current` directly: at -1 (nothing of mine playing)
+  // "next" would otherwise test as enabled and skip into silence.
+  const canPrev = ready && current > 0;
+  const canNext = ready && current >= 0 && current < visibleTracks.length - 1;
   const barWidthRef = useRef(1);
 
   // The track whose "⋯" was tapped (null = sheet closed). Held by ID and
@@ -954,6 +1003,106 @@ export default function MusicVault({
   });
   const { searching, displayQuery, displayItems: displayTracks } = search;
 
+  // ── …and the web ──────────────────────────────────────────────────────
+  const [scope, setScope] = useState(LIBRARY_SCOPE);
+  const webScope = scope === WEB_SCOPE;
+  const [web, setWeb] = useState(NO_WEB_SEARCH);
+  // videoId → 'sending' | 'queued' | 'failed'. Held HERE rather than in the
+  // row so it survives the list re-rendering around it, and so a result that
+  // scrolls away and back still reads as already on its way.
+  const [webDownloads, setWebDownloads] = useState({});
+
+  /**
+   * Leaving search puts the scope back to the library.
+   *
+   * The scope is a property of the search you are doing, not a setting: coming
+   * back to the Music tab tomorrow and finding the field pointed at YouTube —
+   * with no results under it, because the query went too — would read as the
+   * tab being broken rather than as a remembered preference.
+   */
+  useEffect(() => {
+    if (searching) return;
+    setScope(LIBRARY_SCOPE);
+    setWeb(clearedWebSearch);
+  }, [searching]);
+
+  /**
+   * The web search itself: debounced, and last-one-wins.
+   *
+   * A generation counter rather than an aborted request, because `api.get`
+   * owns its own AbortController (for its timeout) and does not take a signal.
+   * The effect of an abandoned reply is the same either way — it is dropped —
+   * and the pond coalesces identical queries in flight, so the cost of not
+   * cancelling is bounded there rather than guessed at here.
+   */
+  const webRunRef = useRef(0);
+  // `displayQuery`, NOT `query`: cancelling empties the live query on the
+  // first frame while the page is still gliding down (see useVaultSearch), and
+  // keying off that would clear the results out from under an animation this
+  // page goes to some length to keep still. The frozen copy does not change
+  // during the glide, so the effect does not re-run at all.
+  const typed = displayQuery.trim();
+  useEffect(() => {
+    if (!searching || !webScope) return undefined;
+    if (!shouldSearchWeb(typed)) {
+      setWeb(clearedWebSearch);
+      return undefined;
+    }
+    const run = ++webRunRef.current;
+    setWeb((prev) => ({ ...prev, loading: true, error: null }));
+    const timer = setTimeout(async () => {
+      try {
+        const { results } = await searchWebMusic(api, typed);
+        if (webRunRef.current !== run) return;
+        setWeb({ results, loading: false, error: null, searched: typed });
+      } catch (e) {
+        if (webRunRef.current !== run) return;
+        setWeb({
+          results: [],
+          loading: false,
+          // The pond's own words where it has them — "this pond cannot search
+          // the web" and "could not reach YouTube" are different problems and
+          // only one of them is worth retrying. A 404 means this pond predates
+          // the feature, which no amount of retyping will fix.
+          error: /API 404/.test(e?.message || '')
+            ? 'This pond needs an update before it can search the web.'
+            : (pondMessage(e) || 'Could not search YouTube just now.'),
+          searched: typed,
+        });
+      }
+    }, WEB_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [api, searching, webScope, typed]);
+
+  /**
+   * Preview a result — play it, keeping nothing.
+   *
+   * `playRows` with a one-row queue, which is what a preview is: skip would
+   * otherwise walk into my library from a track that is not in it. The row is
+   * remembered so the transport bar can name what is playing (see nowTrack) —
+   * the player knows the id `yt:…` and nothing else about it.
+   */
+  const previewWeb = useCallback((result) => {
+    const row = webPreviewRow(result, getBaseUrl());
+    if (!row) return;
+    Keyboard.dismiss();
+    setPreviewRow(row);
+    playRows([row], row.id);
+  }, [getBaseUrl, playRows]);
+
+  /** Download a result: its ordinary watch URL, to the queue that has always
+   *  taken shared links. The DownloadsPill reports the rest, app-wide. */
+  const downloadWeb = useCallback(async (result) => {
+    setWebDownloads((prev) => ({ ...prev, [result.videoId]: 'sending' }));
+    try {
+      await enqueueWebDownload(api, result);
+      setWebDownloads((prev) => ({ ...prev, [result.videoId]: 'queued' }));
+    } catch (e) {
+      setWebDownloads((prev) => ({ ...prev, [result.videoId]: 'failed' }));
+      Alert.alert('Could not start that download', pondMessage(e) || 'The pond did not take the link.');
+    }
+  }, [api]);
+
   /**
    * What a list on this page must keep clear at its foot.
    *
@@ -1189,6 +1338,48 @@ export default function MusicVault({
       </View>
     );
   }, [theme, c, activeTrack, isPlaying, playTrack]);
+
+  /** One web result. Tap previews, the key downloads — see MusicWebResultRow. */
+  const renderWebRow = useCallback(({ item }) => (
+    <MusicWebResultRow
+      result={item}
+      theme={theme}
+      tint={MUSIC_TINT(c)}
+      playing={webRowId(item.videoId) === String(activeTrack?.mediaId)}
+      downloadState={webDownloads[item.videoId] || 'idle'}
+      onPreview={() => previewWeb(item)}
+      onDownload={() => downloadWeb(item)}
+    />
+  ), [theme, c, activeTrack, webDownloads, previewWeb, downloadWeb]);
+
+  /**
+   * The search header: the scope toggle, then one line about what is below it.
+   *
+   * Both scopes get the toggle — it is how you get BACK to your library as
+   * much as how you leave it — and both get a status line in the same place,
+   * so switching does not move the first row.
+   */
+  const searchHeader = useCallback(() => (
+    <View style={styles.searchHeader}>
+      <View style={styles.scopeToggle}>
+        <SearchScopeToggle
+          value={scope}
+          options={SEARCH_SCOPES}
+          onChange={setScope}
+          theme={theme}
+          testID="music-search-scope"
+        />
+      </View>
+      <Text style={[styles.resultCount, { color: c.textTertiary }]}>
+        {webScope
+          ? webSearchStatus({
+            query: displayQuery, loading: web.loading, error: web.error,
+            results: web.results, searched: web.searched,
+          })
+          : trackCountLabel(displayTracks.length)}
+      </Text>
+    </View>
+  ), [scope, theme, c, webScope, web, displayQuery, displayTracks.length]);
 
   // The library's two destination rows, pinned above the tracks: Playlists and
   // Transcribe. Not tracks — same row metrics so they read as part of the
@@ -1534,27 +1725,31 @@ export default function MusicVault({
           // the vault's result rows. `displayItems` rather than the matches
           // directly: during a cancel it is the frozen copy, so the rows do not
           // change under a page that is still gliding back down.
-          data={searching ? displayTracks : visibleTracks}
-          keyExtractor={(t) => String(t.id)}
-          renderItem={searching ? renderSearchRow : renderTrack}
+          // Three cases now, not two: the library browsing, the library
+          // searched, and the web searched. The web's rows are not media rows
+          // and have no `id`, so the key comes off the video.
+          data={searching ? (webScope ? web.results : displayTracks) : visibleTracks}
+          keyExtractor={(t) => String(t.id ?? t.videoId)}
+          renderItem={searching ? (webScope ? renderWebRow : renderSearchRow) : renderTrack}
           onScroll={chromeScrollMain}
           scrollEventThrottle={16}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
-          // While searching the count replaces the Playlists row: it is the one
-          // thing worth saying about a result set, and a destination row in the
-          // middle of matches is something to tap by accident.
-          ListHeaderComponent={searching ? (
-            <Text style={[styles.resultCount, { color: c.textTertiary }]}>
-              {trackCountLabel(displayTracks.length)}
-            </Text>
-          ) : headerRows}
-          ListEmptyComponent={searching ? (
+          // While searching the scope toggle and the count replace the
+          // Playlists row: they are the one thing worth saying about a result
+          // set, and a destination row in the middle of matches is something
+          // to tap by accident.
+          ListHeaderComponent={searching ? searchHeader : headerRows}
+          // Nothing to add in the WEB scope: the header's status line already
+          // says which of "keep typing", "searching", "nothing found" and
+          // "this pond needs an update" is true, and saying it twice over an
+          // empty list reads as two different failures.
+          ListEmptyComponent={searching && !webScope ? (
             <Text style={[styles.resultCount, { color: c.textTertiary }]}>
               Nothing matches “{displayQuery.trim()}”.
             </Text>
           ) : null}
-          extraData={`${current}:${isPlaying}:${ready}:${playlists.length}:${searching}:${offlineSignature}`}
+          extraData={`${current}:${isPlaying}:${ready}:${playlists.length}:${searching}:${scope}:${offlineSignature}`}
           // The transport bar, the dock, AND the lift — see libraryPadBottom.
           // listTopPad is the FLOATING DOCK's room, and this is the only list
           // under it — the pushed pages (playlists, voice recordings, shared)
@@ -1627,10 +1822,10 @@ export default function MusicVault({
               accessibilityRole="button"
               accessibilityLabel="Previous track"
               onPress={previous}
-              disabled={!ready || current <= 0}
+              disabled={!canPrev}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Icon name="skip-previous" size={30} color={ready && current > 0 ? c.textPrimary : c.textMuted} />
+              <Icon name="skip-previous" size={30} color={canPrev ? c.textPrimary : c.textMuted} />
             </TouchableOpacity>
             <TouchableOpacity
               accessibilityRole="button"
@@ -1645,10 +1840,10 @@ export default function MusicVault({
               accessibilityRole="button"
               accessibilityLabel="Next track"
               onPress={next}
-              disabled={!ready || current >= visibleTracks.length - 1}
+              disabled={!canNext}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Icon name="skip-next" size={30} color={ready && current < visibleTracks.length - 1 ? c.textPrimary : c.textMuted} />
+              <Icon name="skip-next" size={30} color={canNext ? c.textPrimary : c.textMuted} />
             </TouchableOpacity>
           </View>
         </View>
@@ -2191,6 +2386,10 @@ const styles = StyleSheet.create({
   trackSep: { height: StyleSheet.hairlineWidth, marginHorizontal: 16, backgroundColor: 'rgba(142,142,147,0.4)' },
   // "6 tracks" / "Nothing matches …", above the result rows.
   resultCount: { fontSize: 12, fontWeight: '700', paddingHorizontal: 18, paddingTop: 2, paddingBottom: 10 },
+  // The search header: the scope toggle, then the status line. 16 to line the
+  // toggle's box up with the rows beneath it and the dock's field above.
+  searchHeader: { paddingTop: 2 },
+  scopeToggle: { paddingHorizontal: 16, paddingBottom: 8 },
   moreBtn: { paddingLeft: 2, paddingVertical: 2 },
   // 14 + the shared result row's own 2 = 16, the inset every other row and
   // hairline on this screen uses. See the note in renderSearchRow for why
