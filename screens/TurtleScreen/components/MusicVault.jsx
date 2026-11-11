@@ -43,6 +43,7 @@ import { rankTracks, trackCountLabel } from './trackSearch';
 // plays through the pond rather than from YouTube.
 import SearchScopeToggle from './SearchScopeToggle';
 import MusicWebResultRow from './MusicWebResultRow';
+import MusicWebResultSkeleton from './MusicWebResultSkeleton';
 import {
   LIBRARY_SCOPE, WEB_SCOPE, WEB_DEBOUNCE_MS,
   enqueueWebDownload, pondMessage, searchWebMusic, shouldSearchWeb,
@@ -1370,7 +1371,11 @@ export default function MusicVault({
           testID="music-search-scope"
         />
       </View>
-      <Text style={[styles.resultCount, { color: c.textTertiary }]}>
+      {/* ONE line, always. "Searching YouTube for “<a long query>”…" wraps to
+          two lines where "12 results on YouTube" does not, so without this the
+          whole list below shifts up by a line at the exact moment the results
+          arrive — the jump being designed out here. */}
+      <Text style={[styles.resultCount, { color: c.textTertiary }]} numberOfLines={1}>
         {webScope
           ? webSearchStatus({
             query: displayQuery, loading: web.loading, error: web.error,
@@ -1744,11 +1749,22 @@ export default function MusicVault({
           // says which of "keep typing", "searching", "nothing found" and
           // "this pond needs an update" is true, and saying it twice over an
           // empty list reads as two different failures.
-          ListEmptyComponent={searching && !webScope ? (
-            <Text style={[styles.resultCount, { color: c.textTertiary }]}>
-              Nothing matches “{displayQuery.trim()}”.
-            </Text>
-          ) : null}
+          // Three empties, not two. The WEB scope still says nothing when a
+          // search has FINISHED and found nothing — the header's status line
+          // covers that, and saying it twice reads as two failures — but while
+          // the first search is in flight it shows placeholder rows, so the
+          // list has the same shape before and after the results land.
+          // (A refined search keeps the previous rows, so this is only ever
+          // the first search of a session.)
+          ListEmptyComponent={
+            searching && webScope && web.loading ? (
+              <MusicWebResultSkeleton theme={theme} />
+            ) : searching && !webScope ? (
+              <Text style={[styles.resultCount, { color: c.textTertiary }]}>
+                Nothing matches “{displayQuery.trim()}”.
+              </Text>
+            ) : null
+          }
           extraData={`${current}:${isPlaying}:${ready}:${playlists.length}:${searching}:${scope}:${offlineSignature}`}
           // The transport bar, the dock, AND the lift — see libraryPadBottom.
           // listTopPad is the FLOATING DOCK's room, and this is the only list

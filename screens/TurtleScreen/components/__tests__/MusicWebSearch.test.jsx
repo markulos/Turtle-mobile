@@ -299,3 +299,53 @@ describe('previewing and downloading a result', () => {
     alert.mockRestore();
   });
 });
+
+/**
+ * The loading state, which exists to stop the list moving.
+ *
+ * The rule: between "I have typed enough to search" and "the results are
+ * here", the list must never be a blank space that later fills. It is either
+ * placeholder rows (the first search) or the previous results (every search
+ * after that) — both the same shape as what arrives.
+ */
+describe('waiting for results', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockStore.clear();
+    __resetForTests();
+    mockMusicPlayer.activeTrack = null;
+    mockApi.post.mockImplementation(() => Promise.resolve({ success: true, id: 'job_1' }));
+  });
+
+  test('the first search shows placeholder rows, not an empty page', async () => {
+    // A search that never settles, so the loading frame can be inspected.
+    mockApi.get.mockImplementation((path) => (
+      String(path).includes('/api/music/web/search')
+        ? new Promise(() => {})
+        : Promise.resolve({ success: true, results: [] })
+    ));
+    const view = await searchingTheWeb();
+    await waitFor(() => expect(view.getByTestId('music-web-skeleton')).toBeTruthy(), AFTER_DEBOUNCE);
+  });
+
+  test('the placeholders give way to the results and leave nothing behind', async () => {
+    mockApi.get.mockImplementation(() => Promise.resolve({ success: true, results: [RESULT] }));
+    const view = await searchingTheWeb();
+    await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+    expect(view.queryByTestId('music-web-skeleton')).toBeNull();
+  });
+
+  test('a FINISHED search with no hits shows no placeholders — the status line says it', async () => {
+    mockApi.get.mockImplementation(() => Promise.resolve({ success: true, results: [] }));
+    const view = await searchingTheWeb();
+    await waitFor(() => expect(view.getByText(/Nothing on YouTube/)).toBeTruthy(), AFTER_DEBOUNCE);
+    expect(view.queryByTestId('music-web-skeleton')).toBeNull();
+  });
+
+  test('the status line is ONE line, so the list cannot shift when it changes', async () => {
+    mockApi.get.mockImplementation(() => Promise.resolve({ success: true, results: [RESULT] }));
+    const view = await searchingTheWeb();
+    const status = await waitFor(() => view.getByText('1 result on YouTube'), AFTER_DEBOUNCE);
+    expect(status.props.numberOfLines).toBe(1);
+  });
+});
