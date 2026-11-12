@@ -17,9 +17,6 @@ import {
 } from './tabBarLayout';
 import { TAB_SWITCH_BEZIER, TAB_SWITCH_MS } from './dockMotion';
 import { dockSurfaceStops } from './dockSurface';
-import {
-  chipShadeStops, chipSheenStops, CHIP_SHADE_SPAN, CHIP_SHEEN_SPAN,
-} from './chipRecess';
 
 /**
  * TabBarPill — ONE pill that slides from tab to tab behind the icons.
@@ -68,51 +65,44 @@ const SLIDE = {
 // glyph/chip contrast is then a single problem to solve instead of two.
 //
 //   surface — near-black, translucent enough that the blur still shows the page
-//             moving behind it, and no longer FLAT: it runs from a lifted top
-//             edge to a denser bottom one, because a slab is the one part of a
-//             floating-object treatment that does not behave like an object.
-//             The arithmetic, the two end colours and why the ramp is a
-//             smoothstep rather than two stops are all in dockSurface.js;
-//   edge    — a white hairline BEZEL: the device's thinnest renderable line, at
-//             enough alpha to actually read as a rim around the capsule rather
-//             than a barely-there seam. It's white in both themes because the
-//             surface under it is black in both, and because a lit edge is what
-//             makes the capsule sit as a physical object on the page instead of
-//             a soft shadow of one. 0.12 was tuned against a WHITE light-mode
-//             dock and disappeared once the surface went black;
+//             moving behind it, and no longer FLAT: it is darkest along the TOP
+//             edge and lifts toward the bottom, which is a channel cut into the
+//             page rather than a lozenge resting on it. The arithmetic, the two
+//             end colours and why the ramp runs this way round are all in
+//             dockSurface.js;
+//   edge    — a white hairline BEZEL: the device's thinnest renderable line,
+//             white in both themes because the surface under it is black in
+//             both. It is DIM — 0.16, down from 0.30 — because a bright rim all
+//             the way round, top edge included, is a lit object sitting on the
+//             page, and that is exactly the reading the recess is undoing. It
+//             still has a job: over a light page it keeps the capsule's outline
+//             from dissolving into the blur;
+//   lip     — the lit floor of the channel, a hairline along the INSIDE of the
+//             capsule's bottom edge. It is drawn inside the card's clip, which
+//             is what makes a straight line follow the capsule's curve at both
+//             ends instead of cutting across it, and it is brighter than the
+//             bezel: this is the one edge that should catch the light;
+//   ridge   — the hairlines between the icons, unchanged at 0.30. They are
+//             grooves across the floor rather than part of the capsule's rim,
+//             so they keep their own value rather than following the bezel
+//             down;
 //   chip    — the theme accent, the one saturated element and therefore what the
 //             eye tracks as it slides. Its glyph is INKED AGAINST the accent
 //             (`inkOn`, see tabBarActiveTintColor in App.js): white for every
 //             saturated colour, near-black once the accent is pale enough that
 //             white would disappear. The INACTIVE glyphs stay white-on-dark in
 //             both themes regardless — they sit on the capsule, not the chip,
-//             and a dark tint would vanish into it. The chip is CUT INTO the
-//             capsule rather than resting on it — see the two hairlines below
-//             and chipRecess.js;
-//   groove  — the crack where the capsule's face meets the wall of the cut. It
-//             is nearly-black on a nearly-black capsule and barely visible as a
-//             colour, which is correct: its job is to stop the accent bleeding
-//             straight into the capsule, so the chip has an EDGE rather than a
-//             soft join;
-//   lip     — the chamfer along the BOTTOM of the cut, the one face of the
-//             recess that is tilted up into the light. This is the ridge: a
-//             single point of it peeking out under the chip, following the same
-//             squircle. It is the difference between a hole and a dark square.
-const DOCK_EDGE = 'rgba(255,255,255,0.30)';
-const CHIP_GROOVE = 'rgba(0,0,0,0.45)';
-const CHIP_LIP = 'rgba(255,255,255,0.22)';
-// 1.5pt, so the ridge is ~4px of lit edge at @3x — a line you can see, which
-// is the whole point of it, while still being thinner than the glyph's own
-// stroke so it reads as an edge rather than as a second shape under the chip.
-const CHIP_LIP_DROP = 1.5;
+//             and a dark tint would vanish into it.
+const DOCK_EDGE = 'rgba(255,255,255,0.16)';
+const DOCK_LIP = 'rgba(255,255,255,0.30)';
+const DOCK_RIDGE = 'rgba(255,255,255,0.30)';
+// 1.5pt of lit floor: ~4px at @3x. A hairline disappears under the capsule's
+// own curve at this radius, and 2pt starts to read as a second bar.
+const DOCK_LIP_H = 1.5;
 
 // Built once: the stops do not depend on anything that changes — not the
-// theme, not the width, not which tab is up. Same for the chip's two washes:
-// they are black and white over whatever the accent happens to be, so they
-// survive an accent change without being rebuilt.
+// theme, not the width, not which tab is up.
 const SURFACE = dockSurfaceStops();
-const CHIP_SHADE_STOPS = chipShadeStops();
-const CHIP_SHEEN_STOPS = chipSheenStops();
 
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
@@ -205,25 +195,31 @@ export default function TabBarPill({ dragSlot, leadSlot }) {
           chat composer; the tint is pinned to 'dark' rather than following the
           theme, because a light-tinted blur under a near-black overlay just
           milks it out. */}
-      <View style={[styles.card, { borderColor: DOCK_EDGE }]}>
+      <View testID="dock-card" style={[styles.card, { borderColor: DOCK_EDGE }]}>
         <BlurView
           pointerEvents="none"
           style={StyleSheet.absoluteFill}
           {...blurProps(theme)}
           tint="dark"
         />
-        {/* …and the wash over it: lighter at the top edge, heavier at the
-            bottom, so the capsule reads as a lit surface rather than a slab.
-            Explicitly top-to-bottom rather than trusting the default, because
-            the whole point of this element is its direction. */}
+        {/* …and the wash over it: darkest along the top edge, lifting toward
+            the bottom, so the capsule reads as a channel cut into the page
+            rather than a slab resting on it. Explicitly top-to-bottom rather
+            than trusting the default, because the whole point of this element
+            is its direction. */}
         <LinearGradient
           pointerEvents="none"
+          testID="dock-wash"
           colors={SURFACE.colors}
           locations={SURFACE.locations}
           start={{ x: 0, y: 0 }}
           end={{ x: 0, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
+        {/* The lit floor of the channel. Inside the card, so the card's own
+            overflow clips this straight strip to the capsule's shape and it
+            curves up into both ends on its own. */}
+        <View pointerEvents="none" testID="dock-lip" style={styles.lip} />
       </View>
       {/* The ridges: one hairline between each pair of icons, drawn BEFORE the
           indicator so the chip passes over them rather than under. They are
@@ -234,68 +230,25 @@ export default function TabBarPill({ dragSlot, leadSlot }) {
           key={x}
           pointerEvents="none"
           testID="dock-ridge"
-          style={[styles.ridge, { left: x - StyleSheet.hairlineWidth / 2, backgroundColor: DOCK_EDGE }]}
+          style={[styles.ridge, { left: x - StyleSheet.hairlineWidth / 2, backgroundColor: DOCK_RIDGE }]}
         />
       ))}
       <Reanimated.View
         testID={underline ? 'dock-underline' : 'dock-chip'}
         style={[
           underline ? styles.underline : styles.pill,
-          // The LINE is painted here; the CHIP is painted on the view inside,
-          // because the recess needs something to hang off the outside of it
-          // (the lip) as well as something clipped to the inside (the washes).
-          underline && { backgroundColor: theme.colors.accent },
+          {
+            // The highlight colour from Settings. On a white dock a white chip
+            // would disappear, so the chip is the saturated element and the
+            // glyph on it goes white. The LINE is the accent for the same
+            // reason, and in that mode the active glyph takes the accent too
+            // (tabBarActiveTintColor in App.js) — there is no chip under it to
+            // be inked against.
+            backgroundColor: theme.colors.accent,
+          },
           pillStyle,
         ]}
-      >
-        {!underline && (
-          <>
-            {/* THE RIDGE. The same squircle as the chip, dropped a point and a
-                half, so all that shows is a lit crescent along the bottom
-                curve — the one face of a cut that tilts up into the light.
-                Drawn first so the chip covers the rest of it. */}
-            <View pointerEvents="none" testID="dock-chip-lip" style={styles.lip} />
-            <View
-              pointerEvents="none"
-              testID="dock-chip-face"
-              style={[
-                styles.chip,
-                {
-                  // The highlight colour from Settings. On a white dock a white
-                  // chip would disappear, so the chip is the saturated element
-                  // and the glyph on it goes white. In underline mode the line
-                  // takes the accent for the same reason, and the active glyph
-                  // with it (tabBarActiveTintColor in App.js) — there is no
-                  // chip under it to be inked against.
-                  backgroundColor: theme.colors.accent,
-                },
-              ]}
-            >
-              {/* The well's shadowed top wall, and its lit bottom one. Both are
-                  clipped to the squircle by the chip's overflow, so they follow
-                  the corners instead of cutting across them. */}
-              <LinearGradient
-                pointerEvents="none"
-                testID="dock-chip-shade"
-                colors={CHIP_SHADE_STOPS.colors}
-                locations={CHIP_SHADE_STOPS.locations}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 0, y: 1 }}
-                style={styles.chipShade}
-              />
-              <LinearGradient
-                pointerEvents="none"
-                testID="dock-chip-sheen"
-                colors={CHIP_SHEEN_STOPS.colors}
-                locations={CHIP_SHEEN_STOPS.locations}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 0, y: 1 }}
-                style={styles.chipSheen}
-              />
-            </View>
-          </>
-        )}
-      </Reanimated.View>
+      />
     </View>
   );
 }
@@ -318,12 +271,17 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     overflow: 'hidden',
   },
-  // The chip's FOOTPRINT — the travelling box, and nothing else. It carries no
-  // colour, no corners and above all NO SHADOW: it used to have a 6pt drop
-  // shadow offset 2pt down, which is the signature of a tile resting on a
-  // surface, and it read as exactly that — bevelled outward, proud of the dock.
-  // A recess is the same physics inverted, and every part of it is drawn by the
-  // layers below instead.
+  // The channel's lit floor — see DOCK_LIP. Full width and clipped to the
+  // capsule rather than inset by the radius, which is what lets it follow the
+  // curve into both rounded ends.
+  lip: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: DOCK_LIP_H,
+    backgroundColor: DOCK_LIP,
+  },
   pill: {
     position: 'absolute',
     // Centre line of the card (see PILL_TOP). The icon slot is the same square
@@ -332,47 +290,20 @@ const styles = StyleSheet.create({
     left: 0,
     width: PILL_SIZE,
     height: PILL_SIZE,
-  },
-  // The cut itself. Clips its two washes to the squircle, and carries the
-  // groove hairline so the accent ends on an edge rather than fading into the
-  // capsule.
-  chip: {
-    ...StyleSheet.absoluteFillObject,
     borderRadius: PILL_RADIUS,
     // The iOS superellipse rather than a circular arc — this is what separates
     // a squircle from a rounded square. iOS-only; Android ignores it and falls
     // back to the plain radius, which still reads correctly.
     borderCurve: 'continuous',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CHIP_GROOVE,
-    overflow: 'hidden',
-  },
-  // The ridge: the same shape, one point lower, so only its bottom curve is
-  // ever visible. Sized from the slot rather than filling it, because a
-  // bottom: -1 would be clipped by anything that ever clips this layer.
-  lip: {
-    position: 'absolute',
-    top: CHIP_LIP_DROP,
-    left: 0,
-    width: PILL_SIZE,
-    height: PILL_SIZE,
-    borderRadius: PILL_RADIUS,
-    borderCurve: 'continuous',
-    backgroundColor: CHIP_LIP,
-  },
-  chipShade: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: Math.round(PILL_SIZE * CHIP_SHADE_SPAN),
-  },
-  chipSheen: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: Math.round(PILL_SIZE * CHIP_SHEEN_SPAN),
+    backgroundColor: '#FFFFFF',
+    // Subtle lift. Offset is small and the radius soft so it reads as a card
+    // resting on the bar rather than floating above it; opacity is set per
+    // theme where the chip is rendered.
+    shadowColor: '#000000',
+    shadowOpacity: 0.18,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+    elevation: 4,
   },
   // The other treatment: a line under the glyph instead of a card behind it.
   // Positioned from the BOTTOM of the same content block the chip fills, so the

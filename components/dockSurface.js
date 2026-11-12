@@ -1,28 +1,36 @@
 /**
  * The dock capsule's FILL — the ghosted-black wash that sits over the blur.
  *
- * It was one flat colour (rgba(18,18,20,0.52)) and read as a slab: the capsule
- * is drawn as a piece of hardware floating over the page — a white bezel, a
- * superellipse, a shadow — and a flat face is the one part of that which does
- * not behave like an object. A surface in the world is lit from above, so the
- * wash now runs from a lifted top edge to a denser bottom one.
+ * It was one flat colour (rgba(18,18,20,0.52)) and read as a slab, so it became
+ * a gradient. The first gradient ran the WRONG WAY: lifted at the top edge,
+ * densest at the bottom, which is a surface lit from above — and a surface lit
+ * from above is a surface that BULGES TOWARD YOU. The capsule looked like a bar
+ * of soap sitting on the page.
+ *
+ * The dock is meant to read as a channel cut INTO the page, not a lozenge
+ * resting on it, so the wash is inverted: darkest along the top edge, easing to
+ * its lightest at the bottom. That is a trough — the top wall of a groove faces
+ * away from the light and the bottom wall faces into it. The lit hairline along
+ * the bottom of the capsule (TabBarPill) is the other half of the same reading.
  *
  * ── What changes down the capsule ──────────────────────────────────────────
  *
- * Both the colour and the alpha, which is what makes a ~56pt band read as
- * depth rather than as a tint:
+ *   alpha  0.80 → 0.66  — shut tight at the top, letting a little more of the
+ *                         blurred page through at the bottom.
+ *   colour  #060609 → #1A1A1E — near-black at the top edge, lifting to a dark
+ *                         charcoal rather than to a grey. Inverting the ramp
+ *                         put the LIGHT end at the bottom, where the old design
+ *                         had its anchor, so both ends had to come down in
+ *                         value or the capsule would read as a grey trough on a
+ *                         white page instead of a black one.
  *
- *   alpha  0.46 → 0.78  — the top lets more of the blurred page through, so it
- *                         catches whatever is behind the dock; the bottom shuts
- *                         it out and grounds the capsule.
- *   colour  #202024 → #040407 — and the dark end goes nearly to black, so the
- *                         contrast does not depend on opacity alone (over a
- *                         dark page the alphas have little to work with).
+ * ── Half the contrast it used to have ──────────────────────────────────────
  *
- * The AVERAGE is a shade denser than the flat 0.52 it replaces, deliberately:
- * the old value was tuned so the capsule still reads BLACK rather than washed
- * grey over a light page, and a gradient that dropped below it at the top
- * would lose that.
+ * The spread was 0.32 of alpha across 28 points of value, and at 69pt tall that
+ * was a visible light-to-dark sweep — the gradient had become a feature of the
+ * dock rather than a property of its surface. It is now 0.14 across 20 points:
+ * enough to tell you which way the light is coming from, not enough to look at.
+ * Depth should be something you notice only when it is wrong.
  *
  * ── Why the stops are computed ─────────────────────────────────────────────
  *
@@ -38,9 +46,9 @@
  * below a quantisation step on an 8-bit channel.
  */
 
-/** The lit top edge, and the grounded bottom one. */
-export const DOCK_SURFACE_TOP = { r: 32, g: 32, b: 36, a: 0.46 };
-export const DOCK_SURFACE_BOTTOM = { r: 4, g: 4, b: 7, a: 0.78 };
+/** The shadowed top edge of the channel, and its lit floor. */
+export const DOCK_SURFACE_TOP = { r: 6, g: 6, b: 9, a: 0.8 };
+export const DOCK_SURFACE_BOTTOM = { r: 26, g: 26, b: 30, a: 0.66 };
 
 /** How many stops the ramp is sampled into. */
 export const DOCK_SURFACE_STEPS = 7;

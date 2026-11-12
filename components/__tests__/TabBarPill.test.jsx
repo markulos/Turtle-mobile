@@ -2,8 +2,7 @@ import React from 'react';
 import { StyleSheet } from 'react-native';
 import { render } from '@testing-library/react-native';
 
-import { PILL_SIZE } from '../tabBarLayout';
-import { CHIP_SHADE, CHIP_SHEEN } from '../chipRecess';
+import { BAR_CONTENT_HEIGHT } from '../tabBarLayout';
 
 const ACCENT = '#1F8A9B';
 
@@ -47,84 +46,80 @@ import TabBarPill from '../TabBarPill';
 /** Every style on a node, flattened the way the renderer sees it. */
 const styleOf = (node) => StyleSheet.flatten(node.props.style) || {};
 
+/** 'rgba(r,g,b,a)' → the four numbers. */
+const parse = (css) => {
+  const m = /^rgba\((\d+),(\d+),(\d+),([\d.]+)\)$/.exec(css);
+  if (!m) throw new Error(`not an rgba string: ${css}`);
+  return { r: +m[1], g: +m[2], b: +m[3], a: +m[4] };
+};
+
 beforeEach(() => { indicator = 'chip'; });
 
-describe('the dock chip reads as CUT INTO the capsule', () => {
-  test('carries no drop shadow — the thing that made it look like a raised tile', async () => {
+describe('the dock capsule reads as a channel CUT INTO the page', () => {
+  test('the wash is painted top-to-bottom, darkest at the top edge', async () => {
     const { getByTestId } = await render(<TabBarPill />);
-    // A shadow offset DOWN from an opaque square is the signature of an object
-    // resting on a surface; it is why the chip read as bevelled outward. If
-    // this ever comes back, so does the bug — no matter what else is drawn.
-    for (const id of ['dock-chip', 'dock-chip-face', 'dock-chip-lip']) {
-      const s = styleOf(getByTestId(id));
-      expect(s.shadowOpacity || 0).toBe(0);
-      expect(s.elevation || 0).toBe(0);
-    }
+    const wash = getByTestId('dock-wash');
+
+    // Direction is declared, not defaulted — the whole element is its
+    // direction, and the default is not guaranteed to be vertical.
+    expect(wash.props.start).toEqual({ x: 0, y: 0 });
+    expect(wash.props.end).toEqual({ x: 0, y: 1 });
+
+    // Lit from above is a BULGE. This has to be the other way round: the first
+    // stop is the heaviest ink and the last the lightest.
+    const first = parse(wash.props.colors[0]);
+    const last = parse(wash.props.colors[wash.props.colors.length - 1]);
+    expect(first.a).toBeGreaterThan(last.a);
+    expect(first.r).toBeLessThan(last.r);
   });
 
-  test('is shadowed along its TOP edge and lit along its BOTTOM one', async () => {
+  test('a lit hairline runs along the INSIDE of the bottom edge', async () => {
     const { getByTestId } = await render(<TabBarPill />);
-    const shade = getByTestId('dock-chip-shade');
-    const sheen = getByTestId('dock-chip-sheen');
+    const lip = styleOf(getByTestId('dock-lip'));
 
-    // Anchored to opposite edges. Swapped, this is a dome: lit on top and
-    // shadowed underneath, which is exactly the protruding look it replaces.
-    expect(styleOf(shade).top).toBe(0);
-    expect(styleOf(shade).bottom).toBeUndefined();
-    expect(styleOf(sheen).bottom).toBe(0);
-    expect(styleOf(sheen).top).toBeUndefined();
-
-    // Black at the top edge fading to nothing; white at the bottom edge, same.
-    expect(shade.props.colors[0]).toBe(`rgba(0,0,0,${CHIP_SHADE.a})`);
-    expect(shade.props.colors[shade.props.colors.length - 1]).toBe('rgba(0,0,0,0)');
-    expect(sheen.props.colors[0]).toBe('rgba(255,255,255,0)');
-    expect(sheen.props.colors[sheen.props.colors.length - 1])
-      .toBe(`rgba(255,255,255,${CHIP_SHEEN.a})`);
-
-    // Neither band fills the chip: the middle stays the accent, which is what
-    // the eye tracks as the chip travels.
-    expect(styleOf(shade).height + styleOf(sheen).height).toBeLessThan(PILL_SIZE);
+    expect(lip.bottom).toBe(0);
+    expect(lip.top).toBeUndefined();
+    expect(lip.height).toBeLessThanOrEqual(2);
+    // Full width, NOT inset by the corner radius: it is clipped to the
+    // capsule's shape by the card's own overflow, which is what carries it up
+    // into the rounded ends. Inset instead and it stops short of both.
+    expect(lip.left).toBe(0);
+    expect(lip.right).toBe(0);
+    expect(parse(lip.backgroundColor)).toMatchObject({ r: 255, g: 255, b: 255 });
   });
 
-  test('the lip is the same squircle, one point lower, so only its bottom shows', async () => {
+  test('the lip is brighter than the bezel it sits inside', async () => {
     const { getByTestId } = await render(<TabBarPill />);
-    const face = styleOf(getByTestId('dock-chip-face'));
-    const lip = styleOf(getByTestId('dock-chip-lip'));
+    const lip = parse(styleOf(getByTestId('dock-lip')).backgroundColor);
+    const card = styleOf(getByTestId('dock-card'));
+    const bezel = parse(card.borderColor);
 
-    // Dropped by a point or so and no more: any further and the ridge stops
-    // being an edge and becomes a second shape sitting under the chip.
-    expect(lip.top).toBeGreaterThan(0);
-    expect(lip.top).toBeLessThanOrEqual(2);
-    expect(lip.height).toBe(PILL_SIZE);
-    // Same corner, or the ridge crosses the chip's own curve at the bottom
-    // corners instead of hugging it.
-    expect(lip.borderRadius).toBe(face.borderRadius);
-    expect(lip.borderCurve).toBe('continuous');
-    // Light, and far weaker than the face it sits under.
-    expect(lip.backgroundColor).toMatch(/^rgba\(255,255,255,0\.\d+\)$/);
+    // The capsule, not some other rounded box: radius is half its height.
+    expect(card.borderRadius).toBe(BAR_CONTENT_HEIGHT / 2);
+
+    // A bright rim all the way round — the top edge included — is a lit object
+    // resting on the page. Only the floor of the cut catches the light.
+    expect(lip.a).toBeGreaterThan(bezel.a);
+    expect(card.overflow).toBe('hidden');
   });
 
-  test('the face carries the accent and a dark groove where it meets the capsule', async () => {
+  test('the travelling chip is untouched — it still rests ON the capsule', async () => {
     const { getByTestId } = await render(<TabBarPill />);
-    const face = styleOf(getByTestId('dock-chip-face'));
+    const chip = styleOf(getByTestId('dock-chip'));
 
-    expect(face.backgroundColor).toBe(ACCENT);
-    expect(face.borderWidth).toBe(StyleSheet.hairlineWidth);
-    expect(face.borderColor).toMatch(/^rgba\(0,0,0,0\.\d+\)$/);
-    // The washes are clipped to the squircle rather than cutting its corners.
-    expect(face.overflow).toBe('hidden');
-    expect(face.borderCurve).toBe('continuous');
+    // The recess belongs to the backdrop. The chip is the one thing in the
+    // dock that IS raised, and its shadow is what says so.
+    expect(chip.backgroundColor).toBe(ACCENT);
+    expect(chip.shadowOpacity).toBeGreaterThan(0);
+    expect(chip.shadowOffset).toEqual({ width: 0, height: 2 });
   });
 
-  test('the underline treatment is untouched by any of it', async () => {
+  test('the underline treatment still takes the accent', async () => {
     indicator = 'underline';
     const { getByTestId, queryByTestId } = await render(<TabBarPill />);
-
-    // A 3pt line has no inside to be recessed and nothing to cast a ridge; it
-    // is ON the capsule, and it still takes the accent itself.
     expect(styleOf(getByTestId('dock-underline')).backgroundColor).toBe(ACCENT);
     expect(queryByTestId('dock-chip')).toBeNull();
-    expect(queryByTestId('dock-chip-lip')).toBeNull();
-    expect(queryByTestId('dock-chip-shade')).toBeNull();
+    // The capsule's recess is not an indicator treatment — it is there either way.
+    expect(queryByTestId('dock-lip')).not.toBeNull();
   });
 });

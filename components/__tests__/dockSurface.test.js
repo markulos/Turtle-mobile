@@ -37,11 +37,14 @@ describe('the dock capsule’s wash', () => {
     expect(stops[stops.length - 1]).toEqual(DOCK_SURFACE_BOTTOM);
   });
 
-  test('gets darker all the way down, and never back up', () => {
+  test('LIFTS all the way down, and never back up', () => {
+    // The direction is the whole design: dark at the top edge, lightest at the
+    // bottom. Run the other way — lit from above — and the capsule reads as a
+    // lozenge bulging off the page, which is what this replaced.
     for (let i = 1; i < stops.length; i += 1) {
-      expect(stops[i].a).toBeGreaterThanOrEqual(stops[i - 1].a);
-      expect(stops[i].r).toBeLessThanOrEqual(stops[i - 1].r);
-      expect(weight(stops[i])).toBeGreaterThan(weight(stops[i - 1]));
+      expect(stops[i].a).toBeLessThanOrEqual(stops[i - 1].a);
+      expect(stops[i].r).toBeGreaterThanOrEqual(stops[i - 1].r);
+      expect(weight(stops[i])).toBeLessThan(weight(stops[i - 1]));
     }
   });
 
@@ -49,26 +52,33 @@ describe('the dock capsule’s wash', () => {
     // A straight ramp would move by the same amount every step. This one moves
     // least at the ends and most in the middle: no rate change for the eye to
     // find where the wash meets the edge of the capsule.
-    const steps = stops.slice(1).map((s, i) => weight(s) - weight(stops[i]));
+    // Magnitudes: the ramp LIFTS, so every step is negative.
+    const steps = stops.slice(1).map((s, i) => Math.abs(weight(s) - weight(stops[i])));
     const middle = steps[Math.floor(steps.length / 2)];
     expect(middle).toBeGreaterThan(steps[0] * 1.5);
     expect(middle).toBeGreaterThan(steps[steps.length - 1] * 1.5);
   });
 
-  test('stays black over a light page — the top edge included', () => {
+  test('stays black over a light page — the LIT end included', () => {
     // The flat fill this replaced was 0.52, chosen so the capsule reads BLACK
-    // rather than washed grey over a white page. The lifted top must not undo
-    // that, and the average must not fall below it.
-    expect(stops[0].a).toBeGreaterThanOrEqual(0.42);
+    // rather than washed grey over a white page. Inverting the ramp moved the
+    // light end to the bottom, where the old design had its anchor, so the
+    // lightest stop is the one that has to be checked now.
+    const lightest = stops[stops.length - 1];
+    expect(lightest.a).toBeGreaterThanOrEqual(0.6);
+    expect((lightest.r + lightest.g + lightest.b) / 3).toBeLessThan(40);
     const mean = stops.reduce((sum, s) => sum + s.a, 0) / stops.length;
     expect(mean).toBeGreaterThanOrEqual(0.52);
   });
 
-  test('is a visible difference, not a tint', () => {
-    // The ask was "a little more contrasted": enough to see, not a stripe.
-    const spread = DOCK_SURFACE_BOTTOM.a - DOCK_SURFACE_TOP.a;
-    expect(spread).toBeGreaterThan(0.15);
-    expect(spread).toBeLessThan(0.45);
+  test('is a hint of depth, not a sweep', () => {
+    // It ran at 0.32 of alpha across 28 points of value, which at 69pt tall was
+    // a gradient you looked AT. Half that: enough to say which way the light
+    // comes from, and no more.
+    const spread = DOCK_SURFACE_TOP.a - DOCK_SURFACE_BOTTOM.a;
+    expect(spread).toBeGreaterThan(0.06);
+    expect(spread).toBeLessThanOrEqual(0.16);
+    expect(DOCK_SURFACE_BOTTOM.r - DOCK_SURFACE_TOP.r).toBeLessThanOrEqual(22);
   });
 
   test('survives a nonsense step count rather than returning a broken gradient', () => {
