@@ -10,6 +10,7 @@ import {
   BAR_CONTENT_HEIGHT, CARD_GAP_BOTTOM, PANEL_BOTTOM_GAP, PANEL_TOP_GAP,
   dockOccupied, panelBottomInset, panelTopInset,
   PILL_SIZE, BAR_VERTICAL_PAD, TAB_ITEM_PADDING, TAB_ICON_SLOT, clusterStart,
+  CARD_MARGIN_H, TAB_SLOT, slotAtX,
 } from '../tabBarLayout';
 
 describe('how much room the dock really takes', () => {
@@ -107,5 +108,66 @@ describe('the tab cluster', () => {
   // off the left of it.
   test('never starts left of the edge', () => {
     expect(clusterStart(200, 5)).toBe(0);
+  });
+});
+
+describe('slotAtX — which tab the dragging thumb is over', () => {
+  const W = 390;
+  const COUNT = 6;
+  // The centre of slot `i`, in window coordinates: the card's margin, the
+  // cluster's own inset inside it, i whole slots, and half of one more.
+  const centre = (i, count = COUNT, width = W) =>
+    CARD_MARGIN_H + clusterStart(width - CARD_MARGIN_H * 2, count) + TAB_SLOT * i + TAB_SLOT / 2;
+
+  // The load-bearing one: a thumb resting on an icon must read as that icon's
+  // whole number, or the chip sits off its glyph for the whole drag and the
+  // commit flips a slot early.
+  test('an icon’s centre is its own index, exactly', () => {
+    for (let i = 0; i < COUNT; i += 1) {
+      expect(slotAtX(centre(i), W, COUNT)).toBeCloseTo(i);
+    }
+  });
+
+  test('between two icons it is a fraction, so the chip can track the finger', () => {
+    const half = (centre(2) + centre(3)) / 2;
+    expect(slotAtX(half, W, COUNT)).toBeCloseTo(2.5);
+    expect(slotAtX(centre(2) + TAB_SLOT * 0.25, W, COUNT)).toBeCloseTo(2.25);
+  });
+
+  // Rounding is what the commit uses, and this is why it rounds rather than
+  // truncates: the tab flips as the thumb crosses the GAP between two icons,
+  // which is where the eye expects it — not as it touches the next icon's
+  // left edge.
+  test('the commit boundary falls in the gap between icons', () => {
+    const justBefore = (centre(2) + centre(3)) / 2 - 1;
+    const justAfter = (centre(2) + centre(3)) / 2 + 1;
+    expect(Math.round(slotAtX(justBefore, W, COUNT))).toBe(2);
+    expect(Math.round(slotAtX(justAfter, W, COUNT))).toBe(3);
+  });
+
+  // A thumb that runs off the end of the capsule holds the end tab. Without
+  // the clamp it would scrub into slots that do not exist, and the chip would
+  // leave the dock.
+  test('a thumb past either end holds at the end tab', () => {
+    expect(slotAtX(0, W, COUNT)).toBe(0);
+    expect(slotAtX(-200, W, COUNT)).toBe(0);
+    expect(slotAtX(W, W, COUNT)).toBe(COUNT - 1);
+    expect(slotAtX(W + 200, W, COUNT)).toBe(COUNT - 1);
+  });
+
+  // The Vault tab can be switched off in Settings, which shrinks the cluster
+  // and moves every slot. Nothing may be hard-coded to six.
+  test('it follows the cluster when a tab is hidden', () => {
+    expect(slotAtX(centre(4, 5), W, 5)).toBeCloseTo(4);
+    expect(slotAtX(centre(4, 5), W, 6)).not.toBeCloseTo(4);
+  });
+
+  test('is monotonic — a thumb moving right never moves the chip left', () => {
+    let last = -Infinity;
+    for (let x = 0; x <= W; x += 3) {
+      const p = slotAtX(x, W, COUNT);
+      expect(p).toBeGreaterThanOrEqual(last);
+      last = p;
+    }
   });
 });

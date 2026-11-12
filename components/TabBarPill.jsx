@@ -5,6 +5,7 @@ import { BlurView } from 'expo-blur';
 import { blurProps } from '../utils/frostedChat';
 import Reanimated, {
   useAnimatedStyle,
+  useSharedValue,
   withSpring,
 } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
@@ -27,6 +28,14 @@ import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, BAR_CONTENT_HEIGHT, cluster
  * Position comes from the navigator's own state (`state.index` / route count),
  * so it can never disagree with which tab is actually focused — including when
  * a tab is hidden, since the route list shrinks with it.
+ *
+ * …EXCEPT while a thumb is dragging along the dock (DockTabBar), when it comes
+ * from `dragSlot` instead: a FRACTIONAL slot position written on the UI thread.
+ * The two cannot drift, because a slot is converted to pixels here, once, by
+ * the formula below — whether the number came from the navigator or from a
+ * finger. On release the chip springs from wherever the thumb left it to the
+ * slot it landed on, which is why the drag position is read as a plain value
+ * and only the resting one is wrapped in a spring.
  */
 
 // Settles rather than wobbles: this tracks a selection, it isn't a flourish.
@@ -60,9 +69,15 @@ const DOCK_EDGE = 'rgba(255,255,255,0.30)';
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
 
-export default function TabBarPill() {
+export default function TabBarPill({ dragSlot }) {
   const { theme } = useTheme();
   const [barWidth, setBarWidth] = useState(0);
+  // Not dragging, and no dock to drag on (a test, a screenshot harness): -1 is
+  // the resting contract, so an absent value behaves exactly like a lifted
+  // finger. The hook runs unconditionally — the fallback is the VALUE, not the
+  // call.
+  const ownSlot = useSharedValue(-1);
+  const slot = dragSlot ?? ownSlot;
 
   // Read straight from the navigator: `index` is the focused tab and `routes`
   // is what's actually rendered, so a hidden tab shifts the geometry correctly.
@@ -75,12 +90,26 @@ export default function TabBarPill() {
   const start = clusterStart(barWidth, count);
   const offset = start + (TAB_SLOT - PILL_SIZE) / 2;
 
-  const pillStyle = useAnimatedStyle(() => ({
-    // Nothing to place until the bar has been measured; staying invisible
-    // avoids the square flashing at x=0 on the first frame.
-    opacity: withSpring(barWidth > 0 ? 1 : 0, SLIDE_SPRING),
-    transform: [{ translateX: withSpring(TAB_SLOT * index + offset, SLIDE_SPRING) }],
-  }), [barWidth, index, offset]);
+  const pillStyle = useAnimatedStyle(() => {
+    const dragging = slot.value >= 0;
+    // ONE formula for both: a slot (whole or fractional) times the slot width,
+    // from the cluster's own left edge. A dragged chip therefore lands exactly
+    // where a tapped one would.
+    const resting = TAB_SLOT * index + offset;
+    return {
+      // Nothing to place until the bar has been measured; staying invisible
+      // avoids the square flashing at x=0 on the first frame.
+      opacity: withSpring(barWidth > 0 ? 1 : 0, SLIDE_SPRING),
+      transform: [{
+        // Under the thumb: no spring. A spring here would be lag — the chip
+        // would trail the finger by the whole settling time, which reads as the
+        // dock being slow rather than as the chip being soft.
+        translateX: dragging
+          ? TAB_SLOT * slot.value + offset
+          : withSpring(resting, SLIDE_SPRING),
+      }],
+    };
+  }, [barWidth, index, offset]);
 
   return (
     <View

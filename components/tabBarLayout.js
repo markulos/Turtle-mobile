@@ -20,6 +20,19 @@
 // enough that the group stays a cluster instead of a bar.
 export const TAB_SLOT = 67;
 
+// The bar is a floating card, detached from the screen edges — matching the
+// chat composer's glass card, which uses the same 10pt side margin. The bottom
+// gap sits ON TOP of the safe-area inset so the card clears the home indicator
+// instead of resting on it.
+//
+// Declared UP HERE, with the geometry, rather than at the foot of the file
+// where they used to live: the worklets below (clusterStart, slotAtX) capture
+// what they reference at the moment they are DEFINED, so a constant declared
+// after them reaches the UI thread as undefined — and a drag computed from
+// undefined is a chip that vanishes.
+export const CARD_MARGIN_H = 10;
+export const CARD_GAP_BOTTOM = 8;
+
 // The chip itself: a perfect square, 1.5x the original 38pt so it reads as a
 // card carrying the glyph rather than a tight highlight around it.
 export const PILL_SIZE = 57;
@@ -37,12 +50,53 @@ export const PILL_RADIUS = Math.round((PILL_SIZE / (PHI * PHI * PHI)) * RADIUS_S
  * Clamped at 0 so a narrow screen (or an unexpectedly large tab count) degrades
  * to edge-to-edge rather than pushing the first tab off-screen.
  */
-export const clusterStart = (barWidth, count) =>
-  Math.max(0, (barWidth - count * TAB_SLOT) / 2);
+export const clusterStart = (barWidth, count) => {
+  // A worklet because the dock's DRAG reads it on the UI thread (see slotAtX).
+  // Callable from JS exactly as before — workletizing adds a second caller, it
+  // does not take the first one away.
+  'worklet';
+  return Math.max(0, (barWidth - count * TAB_SLOT) / 2);
+};
 
 /** Horizontal padding the BAR needs so its flex items form that same cluster. */
 export const clusterPadding = (screenWidth, count) =>
   clusterStart(screenWidth, count);
+
+/**
+ * WHICH TAB A FINGER IS OVER, as a CONTINUOUS slot position.
+ *
+ * This is the dock's drag (DockTabBar): a thumb sliding along the capsule
+ * carries the chip with it and switches tabs as it crosses them. Both halves of
+ * that need the same answer from the same place —
+ *
+ *   • the CHIP needs a fractional position, so it tracks the finger instead of
+ *     hopping slot to slot. 2.4 means "40% of the way from Photos to Vault";
+ *   • the NAVIGATION needs a whole one, which is `Math.round` of this. Rounding
+ *     (not truncating) is what makes the boundary fall on the midpoint BETWEEN
+ *     two icons rather than on an icon's left edge — so the tab flips when the
+ *     thumb passes the gap, which is where the eye expects it.
+ *
+ * `x` is in WINDOW coordinates (a gesture's absoluteX), which is why this takes
+ * the screen width rather than the bar's: the bar is inset by CARD_MARGIN_H
+ * either side, and the cluster is centred inside that. Returning a slot index —
+ * not a pixel offset — is also what keeps it honest with TabBarPill: the chip
+ * converts the slot with its OWN measured geometry, through the same
+ * `TAB_SLOT * i + offset` it uses at rest, so a drag cannot land the chip
+ * anywhere a tap could not.
+ *
+ * Clamped to a real slot: a thumb that slides past the last icon, or off the
+ * left end of the capsule, holds at the end tab rather than scrubbing into
+ * nothing.
+ */
+export const slotAtX = (x, screenWidth, count) => {
+  'worklet';
+  const left = CARD_MARGIN_H + clusterStart(screenWidth - CARD_MARGIN_H * 2, count);
+  // -0.5 puts the CENTRE of slot 0 at exactly 0: the pill's resting formula is
+  // measured from a slot's left edge, so a finger on an icon must read as that
+  // icon's whole number.
+  const raw = (x - left) / TAB_SLOT - 0.5;
+  return Math.min(count - 1, Math.max(0, raw));
+};
 
 // Breathing room above AND below the chip inside the bar. Applied as the bar's
 // paddingTop and (on top of the safe-area inset) its paddingBottom, so the
@@ -159,10 +213,6 @@ export const panelBottomInset = (insetsBottom = 0, overlaid = true) => (
     : (Number(insetsBottom) || 0) + PANEL_BOTTOM_GAP
 );
 
-// The bar is a floating card, detached from the screen edges — matching the
-// chat composer's glass card, which uses the same 10pt side margin. The bottom
-// gap sits ON TOP of the safe-area inset so the card clears the home indicator
-// instead of resting on it.
 // Chip's vertical position inside the card, derived from the card's own height
 // rather than assumed equal to the padding — this is the value that puts the
 // chip's CENTRE on the card's centre line, whatever the padding happens to be.
@@ -195,6 +245,3 @@ export const DOCK_CONTENT_Y_NUDGE = 8;
 
 export const PILL_TOP =
   Math.round((BAR_CONTENT_HEIGHT - PILL_SIZE) / 2) + CHIP_Y_NUDGE + DOCK_CONTENT_Y_NUDGE;
-
-export const CARD_MARGIN_H = 10;
-export const CARD_GAP_BOTTOM = 8;

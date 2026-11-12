@@ -12,6 +12,9 @@ import './services/backgroundUploadTask';
 import React, { useState, useEffect } from 'react';
 import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+// One shared value, owned by the navigator and read by both halves of the
+// dock's drag (see dragSlot in TabNavigator).
+import { useSharedValue } from 'react-native-reanimated';
 // Native keyboard tracking (build 4+). The provider alone changes nothing on
 // screen; it lets screens adopt useReanimatedKeyboardAnimation / KeyboardAware
 // views one at a time, replacing the RN Keyboard-event guesswork.
@@ -62,6 +65,7 @@ import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
+import DockTabBar from './components/DockTabBar';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
 import { AnimalGlyph } from './components/AnimalAvatar';
 import { useMyAvatarAnimal } from './utils/avatarChoice';
@@ -78,21 +82,35 @@ import PomodoroLiveEffects from './components/PomodoroLiveEffects';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
 import ErrorBoundary, { withBoundary } from './components/ErrorBoundary';
 import { withTabTiming } from './components/withTabTiming';
+import { withTabSkeleton } from './components/withTabSkeleton';
 
 // Guarded screens, built ONCE at module scope. A boundary created inside the
 // render would be a new component type on every pass, remounting the screen and
 // throwing away its state — see withBoundary. One tab crashing now costs that
 // tab; the other three stay usable.
 //
-// Timing sits INSIDE the boundary: it reports from an effect in the screen's
-// own commit, so wrapping it outside would time a subtree the boundary might
-// have replaced with an error card and call that "the tab appeared".
-const guarded = (Screen, name) => withBoundary(withTabTiming(Screen, name), name);
-const GuardedTasks = guarded(TasksScreen, 'Tasks');
-const GuardedNotes = guarded(NotesScreen, 'Notes');
-const GuardedPhotos = guarded(PhotosScreen, 'Photos');
-const GuardedVault = guarded(PasswordsScreen, 'Vault');
-const GuardedTurtle = guarded(TurtleScreen, 'Turtle');
+// Three wrappers, and the ORDER of them is load-bearing:
+//
+//   boundary ─ outermost, so a throw in the screen OR in its template shows
+//              the error card instead of blanking the app;
+//   skeleton ─ next, because it is the thing that decides whether the screen
+//              below it is mounted at all yet (withTabSkeleton);
+//   timing   ─ innermost, so it reports from the REAL screen's own commit. A
+//              frame that measured the template appearing would report a tab
+//              as ready while it was still a row of grey bars.
+const guarded = (Screen, name, kind) => withBoundary(
+  withTabSkeleton(withTabTiming(Screen, name), kind),
+  name,
+);
+const GuardedTasks = guarded(TasksScreen, 'Tasks', 'tasks');
+const GuardedNotes = guarded(NotesScreen, 'Notes', 'notes');
+const GuardedPhotos = guarded(PhotosScreen, 'Photos', 'photos');
+const GuardedVault = guarded(PasswordsScreen, 'Vault', 'vault');
+const GuardedTurtle = guarded(TurtleScreen, 'Turtle', 'turtle');
+// Profile carries no boundary or timing of its own (it never has); the template
+// is independent of both, so it gets one too rather than being the one tab that
+// opens on a blank page.
+const FramedProfile = withTabSkeleton(ProfileScreen, 'profile');
 import { useAppFonts } from './utils/fonts';
 
 // App-wide snappy touch feel: every TouchableOpacity gets a light press-in
@@ -118,6 +136,13 @@ function TabNavigator() {
   // need no adjustment.
   const tabCount = hideVaultButton ? 5 : 6;
   const [consoleOpen, setConsoleOpen] = useState(false);
+  // Where the dock's chip is while a thumb is dragging along the bar, as a
+  // fractional tab index (-1 = nobody is dragging). It lives HERE because the
+  // two halves of that gesture are built in two different places — the drag is
+  // in the custom `tabBar`, the chip is painted through `tabBarBackground` —
+  // and a shared value is the only thing both can hold that costs no re-render
+  // per frame. See DockTabBar.
+  const dragSlot = useSharedValue(-1);
   // An immersive page (the PDF reader) asks for the dock to go. `display:none`
   // is the only thing that actually removes it — the bar is the navigator's
   // own child and paints above every screen, so a page cannot cover it.
@@ -126,6 +151,11 @@ function TabNavigator() {
   return (
     <>
     <Tab.Navigator
+      // The real bar, wrapped in one gesture: the dock can be DRAGGED, so
+      // changing tabs is a thumb sliding along the capsule and not only a tap.
+      // Everything about how the bar looks still comes from screenOptions
+      // below — see DockTabBar for why it wraps rather than replaces.
+      tabBar={(props) => <DockTabBar {...props} dragSlot={dragSlot} />}
       // No tabPress haptic: tab switching is silent by request. (There used to
       // be a selection tick here for every tab.)
       screenOptions={({ route }) => ({
@@ -294,7 +324,7 @@ function TabNavigator() {
         // One accent pill that SLIDES between tabs, painted behind the buttons.
         // tabBarBackground is composited under navigation's own tab buttons, so
         // this adds the indicator without touching their layout or a11y.
-        tabBarBackground: () => <TabBarPill />,
+        tabBarBackground: () => <TabBarPill dragSlot={dragSlot} />,
         headerShown: false, // Hide default header
       })}
     >
@@ -359,7 +389,7 @@ function TabNavigator() {
           recorded here so it isn't "fixed" by accident later. */}
       <Tab.Screen
         name="Profile"
-        component={ProfileScreen}
+        component={FramedProfile}
         options={{ title: 'Profile' }}
       />
     </Tab.Navigator>
