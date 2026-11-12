@@ -2,11 +2,12 @@ import React from 'react';
 import { StyleSheet } from 'react-native';
 import { act, fireEvent, render, within } from '@testing-library/react-native';
 
-import { dockSkin } from '../dockSkins';
+import { dockSkin, activeInk } from '../dockSkins';
 
 const setDockStyle = jest.fn();
 const setDockIndicator = jest.fn();
 const setDockColor = jest.fn();
+const setDockInk = jest.fn();
 
 jest.mock('../../context/ThemeContext', () => ({
   DOCK_INDICATORS: ['chip', 'underline'],
@@ -29,11 +30,13 @@ jest.mock('../../context/ThemeContext', () => ({
     setDockIndicator: mockState().setDockIndicator,
     dockColor: mockState().colour,
     setDockColor: mockState().setDockColor,
+    dockInk: mockState().ink,
+    setDockInk: mockState().setDockInk,
   }),
 }));
 
-let state = { style: 'smoked', indicator: 'chip', colour: '#C8413B' };
-global.mockState = () => ({ ...state, setDockStyle, setDockIndicator, setDockColor });
+let state = { style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'auto' };
+global.mockState = () => ({ ...state, setDockStyle, setDockIndicator, setDockColor, setDockInk });
 
 jest.mock('expo-linear-gradient', () => {
   const { View } = require('react-native');
@@ -59,8 +62,9 @@ import DockStylePicker from '../DockStylePicker';
 const styleOf = (node) => StyleSheet.flatten(node.props.style) || {};
 
 beforeEach(() => {
-  state = { style: 'smoked', indicator: 'chip', colour: '#C8413B' };
+  state = { style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'auto' };
   setDockStyle.mockClear();
+  setDockInk.mockClear();
   setDockIndicator.mockClear();
   setDockColor.mockClear();
   impactHaptic.mockClear();
@@ -70,7 +74,8 @@ describe('Settings → Navigation → Navbar style', () => {
   test('offers every backdrop and every indicator', async () => {
     const { getByTestId } = await render(<DockStylePicker />);
     for (const id of ['dock-skin-smoked', 'dock-skin-paper', 'dock-skin-custom',
-      'dock-indicator-chip', 'dock-indicator-underline']) {
+      'dock-indicator-chip', 'dock-indicator-underline',
+      'dock-ink-auto', 'dock-ink-light', 'dock-ink-dark']) {
       expect(getByTestId(id)).toBeTruthy();
     }
   });
@@ -139,6 +144,31 @@ describe('Settings → Navigation → Navbar style', () => {
     const { getByTestId } = await render(<DockStylePicker />);
     const capsule = within(getByTestId('dock-skin-custom')).getByTestId('dock-preview-capsule');
     expect(styleOf(capsule).borderColor).toBe(dockSkin('custom', '#C8413B').edge);
+  });
+
+  test('the ink row overrides the contrast check, and says so', async () => {
+    const { getByTestId } = await render(<DockStylePicker />);
+    fireEvent.press(getByTestId('dock-ink-dark'));
+    expect(setDockInk).toHaveBeenCalledWith('dark');
+  });
+
+  test('each ink tile draws the glyph in the ink it is offering', async () => {
+    // 'Auto' included: it is a preview precisely BECAUSE the answer depends on
+    // your accent, and a tile labelled "Auto" showing nothing is a word, not a
+    // choice.
+    state = { style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'light' };
+    const { getByTestId } = await render(<DockStylePicker />);
+    for (const key of ['auto', 'light', 'dark']) {
+      const chip = within(getByTestId(`dock-ink-${key}`)).getByTestId('dock-preview-glyph');
+      expect(styleOf(chip).backgroundColor).toBe(activeInk(key, '#1F8A9B'));
+    }
+  });
+
+  test('the dock previews use the ink you have chosen, not the derived one', async () => {
+    state = { style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'dark' };
+    const { getByTestId } = await render(<DockStylePicker />);
+    const chip = within(getByTestId('dock-skin-smoked')).getByTestId('dock-preview-glyph');
+    expect(styleOf(chip).backgroundColor).toBe(activeInk('dark', '#1F8A9B'));
   });
 
   test('the selected tile is the one marked, and it follows the setting', async () => {

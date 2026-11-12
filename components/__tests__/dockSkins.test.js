@@ -5,8 +5,11 @@ import {
   dockSkin,
   dockSkins,
   customDockSkin,
+  activeInk,
+  DOCK_INKS,
+  DEFAULT_DOCK_INK,
 } from '../dockSkins';
-import { inkOn } from '../../utils/accentColor';
+import { INK_DARK, INK_LIGHT, inkOn } from '../../utils/accentColor';
 
 /** 'rgba(r,g,b,a)' → the four numbers. */
 const parse = (css) => {
@@ -153,6 +156,36 @@ describe('the dock’s skins', () => {
       // A colour passed alongside a fixed skin changes nothing about it.
       expect(dockSkin('paper', '#C8413B')).toBe(dockSkin('paper'));
       expect(dockSkins('#C8413B')[2].colour).toBe('#C8413B');
+    });
+  });
+
+  describe('the active glyph’s ink', () => {
+    test('auto is the contrast check, for any accent', () => {
+      for (const accent of ['#1F8A9B', '#F5E6A8', '#000000', '#FFFFFF', '#C8413B']) {
+        expect(activeInk('auto', accent)).toBe(inkOn(accent));
+      }
+    });
+
+    test('an override IGNORES the accent — that is the whole point of it', () => {
+      // Including when the contrast check would have said the opposite. The
+      // setting exists because on a mid-toned accent the two answers are close
+      // enough that it is taste, and taste beats the formula.
+      for (const accent of ['#1F8A9B', '#F5E6A8', '#000000', '#FFFFFF']) {
+        expect(activeInk('light', accent)).toBe(INK_LIGHT);
+        expect(activeInk('dark', accent)).toBe(INK_DARK);
+      }
+    });
+
+    test('black is the app’s ink, not #000', () => {
+      // True black on a saturated colour reads as a hole punched in the chip.
+      expect(activeInk('dark', '#1F8A9B')).toBe('#1F2024');
+    });
+
+    test('a mode that is not a mode falls back to auto', () => {
+      for (const bad of [null, undefined, '', 'white', 42]) {
+        expect(activeInk(bad, '#1F8A9B')).toBe(inkOn('#1F8A9B'));
+      }
+      expect(DOCK_INKS).toContain(DEFAULT_DOCK_INK);
     });
   });
 

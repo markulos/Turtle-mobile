@@ -1046,6 +1046,22 @@ export default function SettingsScreen({ active = true }) {
                 </TouchableOpacity>
               </View>
               </SettingsItem>
+
+              <SettingsItem terms={SETTING_TERMS.dockStyle}>
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Navbar style</Text>
+                  <Text style={styles.settingDescription}>
+                    What the bottom bar is made of, how it marks the tab you are on, and the
+                    colour of that tab's icon. Each option draws itself — the bar changes the
+                    moment you pick one.
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.dockStyleBlock}>
+                <DockStylePicker />
+              </View>
+              </SettingsItem>
             </SettingsSection>
 
             )}
@@ -1078,21 +1094,6 @@ export default function SettingsScreen({ active = true }) {
 
             {(searching || tabKey === 'general') && (
             <SettingsSection title="Navigation" icon="dock-bottom" query={searchQuery} styles={styles} theme={theme}>
-              <SettingsItem terms={SETTING_TERMS.dockStyle}>
-              <View style={styles.settingRow}>
-                <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>Navbar style</Text>
-                  <Text style={styles.settingDescription}>
-                    What the bottom bar is made of, and how it marks the tab you are on. Each
-                    option draws itself — the bar changes the moment you pick one.
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.dockStyleBlock}>
-                <DockStylePicker />
-              </View>
-              </SettingsItem>
-
               <SettingsItem terms={SETTING_TERMS.hideVault}>
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>

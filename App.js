@@ -65,13 +65,12 @@ import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
-import { dockSkin } from './components/dockSkins';
+import { activeInk, dockSkin } from './components/dockSkins';
 import DockTabBar from './components/DockTabBar';
 import { TAB_SWITCH_SPEC, forTabTurn } from './components/dockMotion';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
 import { AnimalGlyph } from './components/AnimalAvatar';
 import { useMyAvatarAnimal } from './utils/avatarChoice';
-import { inkOn } from './utils/accentColor';
 import ProfileScreen from './screens/ProfileScreen';
 import VaultUnlockApproval from './components/VaultUnlockApproval';
 import GestureProbeOverlay from './components/GestureProbeOverlay';
@@ -125,7 +124,7 @@ function TabNavigator() {
   // No isDark here: the dock's material is a SKIN chosen in Settings, not a
   // function of light/dark mode, so nothing in this navigator's chrome
   // branches on the theme.
-  const { theme, hideVaultButton, dockStyle, dockColor } = useTheme();
+  const { theme, hideVaultButton, dockStyle, dockColor, dockInk } = useTheme();
   const skin = dockSkin(dockStyle, dockColor);
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
@@ -269,11 +268,14 @@ function TabNavigator() {
         },
         // Active sits ON the accent chip, so its ink is derived from the chosen
         // highlight colour: white was right for every saturated preset and
-        // invisible the moment the accent could be a pale pink. Inactive
+        // invisible the moment the accent could be a pale pink. Derived
+        // UNLESS Settings says otherwise — the contrast check optimises for
+        // legibility, and on a mid-toned accent which of the two answers looks
+        // right is a matter of taste (dockSkins' activeInk). Inactive
         // follows the DOCK's SKIN, not the app theme — the glyphs sit on the
         // capsule, so white-on-smoked and dark-on-paper are properties of the
         // material, and a theme-derived tint would vanish into one of them.
-        tabBarActiveTintColor: inkOn(theme.colors.accent),
+        tabBarActiveTintColor: activeInk(dockInk, theme.colors.accent),
         tabBarInactiveTintColor: skin.inactiveTint,
         // Icons only — no text labels. Cleaner look and lets the
         // larger turtle icon breathe without crowding from a label

@@ -13,11 +13,11 @@
  * than no preview, because it is believed. CUSTOM previews the colour you
  * chose for it, whether or not it is the skin you are on.
  *
- * TWO AXES, TWO ROWS. What the capsule is MADE OF (the skin) and how it MARKS
- * the tab you are on (the indicator) are independent, so they are separate
- * rows rather than four combined options — and each row's previews are drawn
- * with the OTHER axis set to what you currently have, so every tile shows the
- * dock you would actually get.
+ * THREE AXES, THREE ROWS. What the capsule is MADE OF (the skin), how it
+ * MARKS the tab you are on (the indicator), and the INK on that tab's glyph
+ * are independent, so they are separate rows rather than a dozen combined
+ * options — and each row's previews are drawn with the OTHER axes set to what
+ * you currently have, so every tile shows the dock you would actually get.
  *
  * The indicator choice had been shipped with no control at all: the setting
  * existed, persisted and was read by the dock, and there was no way to reach
@@ -29,10 +29,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { useTheme, DOCK_INDICATORS } from '../context/ThemeContext';
-import { DOCK_STYLES, dockSkin } from './dockSkins';
+import {
+  DOCK_STYLES, DOCK_INKS, DOCK_INK_LABELS, activeInk, dockSkin,
+} from './dockSkins';
 import AccentColorPicker from './AccentColorPicker';
 import { impactHaptic } from '../utils/haptics';
-import { inkOn } from '../utils/accentColor';
 
 // The miniature. Not a scaled copy of the real geometry — at a third the size
 // a scaled 57pt chip in a 67pt slot leaves sub-pixel gaps — but the same
@@ -50,7 +51,7 @@ const MINI_DOT = 8;
 const MINI_ACTIVE = 1;
 
 /** One miniature dock, drawn from a skin and an indicator treatment. */
-export function DockPreview({ skin, indicator, accent, theme }) {
+export function DockPreview({ skin, indicator, accent, ink, theme }) {
   const underline = indicator === 'underline';
   const dots = Array.from({ length: MINI_SLOTS }, (_, i) => i);
   return (
@@ -89,7 +90,7 @@ export function DockPreview({ skin, indicator, accent, theme }) {
             return (
               <View key={i} style={styles.cell}>
                 <View style={[styles.miniChip, { backgroundColor: accent }]}>
-                  <View style={[styles.miniDot, { backgroundColor: inkOn(accent) }]} />
+                  <View testID="dock-preview-glyph" style={[styles.miniDot, { backgroundColor: ink }]} />
                 </View>
               </View>
             );
@@ -153,11 +154,12 @@ const INDICATOR_LABELS = { chip: 'Chip', underline: 'Underline' };
 export default function DockStylePicker() {
   const {
     theme, dockStyle, setDockStyle, dockIndicator, setDockIndicator,
-    dockColor, setDockColor,
+    dockColor, setDockColor, dockInk, setDockInk,
   } = useTheme();
   const [colourOpen, setColourOpen] = useState(false);
   const accent = theme.colors.accent;
   const current = dockSkin(dockStyle, dockColor);
+  const ink = activeInk(dockInk, accent);
 
   const choose = (set, value, isCurrent) => () => {
     // Re-tapping the tile you are already on is not a change; firing a tick for
@@ -195,6 +197,7 @@ export default function DockStylePicker() {
                 skin={skin}
                 indicator={dockIndicator}
                 accent={accent}
+                ink={ink}
                 theme={theme}
               />
             </Tile>
@@ -224,12 +227,49 @@ export default function DockStylePicker() {
                 skin={current}
                 indicator={key}
                 accent={accent}
+                ink={ink}
                 theme={theme}
               />
             </Tile>
           );
         })}
       </View>
+
+      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
+        Active icon
+      </Text>
+      <View style={styles.row}>
+        {DOCK_INKS.map((key) => {
+          const selected = key === dockInk;
+          return (
+            <Tile
+              key={key}
+              testID={`dock-ink-${key}`}
+              label={DOCK_INK_LABELS[key]}
+              selected={selected}
+              theme={theme}
+              onPress={choose(setDockInk, key, selected)}
+            >
+              {/* Each tile draws the glyph in the ink it is offering, so the
+                  one that LOOKS right is the one you tap. 'Auto' draws
+                  whatever the contrast check currently answers for your
+                  accent — which is why it is a preview and not a word. */}
+              <DockPreview
+                skin={current}
+                indicator="chip"
+                accent={accent}
+                ink={activeInk(key, accent)}
+                theme={theme}
+              />
+            </Tile>
+          );
+        })}
+      </View>
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
+        {dockInk === 'auto'
+          ? 'Chosen for you from the highlight colour — whichever of black or white reads better on it.'
+          : 'Set by hand. Change the highlight colour and this stays as you left it.'}
+      </Text>
 
       {/* The same sheet the highlight colour uses — three labelled sliders and
           a hex field, already built and already holding the edge-swipe guard

@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { normalizeHex } from '../utils/accentColor';
-import { DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR } from '../components/dockSkins';
+import {
+  DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR, DOCK_INKS, DEFAULT_DOCK_INK,
+} from '../components/dockSkins';
 
 const THEME_STORAGE_KEY = '@connected_pass_theme';
 const TIME_FORMAT_STORAGE_KEY = '@connected_pass_time_format';
@@ -13,6 +15,7 @@ const CUSTOM_ACCENT_KEY = '@connected_pass_accent_custom';
 const DOCK_INDICATOR_KEY = '@connected_pass_dock_indicator';
 const DOCK_STYLE_KEY = '@connected_pass_dock_style';
 const DOCK_COLOR_KEY = '@connected_pass_dock_color';
+const DOCK_INK_KEY = '@connected_pass_dock_ink';
 
 /**
  * How the dock marks the tab you are on: the filled accent CHIP behind the
@@ -335,6 +338,10 @@ const ThemeContext = createContext({
   // another skin is selected, so the custom tile still previews what it was.
   dockColor: DEFAULT_DOCK_COLOR,
   setDockColor: () => {},
+  // The ink on the ACTIVE tab's glyph: 'auto' reads the accent, 'light' and
+  // 'dark' are the manual override. See DOCK_INKS.
+  dockInk: DEFAULT_DOCK_INK,
+  setDockInk: () => {},
   // The highlight colour: one of ACCENTS' keys, or CUSTOM_ACCENT for a colour
   // the user mixed themselves (`customAccent`, a '#RRGGBB').
   accent: DEFAULT_ACCENT,
@@ -358,6 +365,7 @@ export const ThemeProvider = ({ children }) => {
   const [dockIndicator, setDockIndicatorState] = useState(DEFAULT_DOCK_INDICATOR);
   const [dockStyle, setDockStyleState] = useState(DEFAULT_DOCK_STYLE);
   const [dockColor, setDockColorState] = useState(DEFAULT_DOCK_COLOR);
+  const [dockInk, setDockInkState] = useState(DEFAULT_DOCK_INK);
   const [accent, setAccentState] = useState(DEFAULT_ACCENT);
   // The user's own colour, '#RRGGBB', or null if they have never mixed one.
   // Remembered even while a preset is selected, so the custom swatch still
@@ -425,6 +433,10 @@ export const ThemeProvider = ({ children }) => {
       if (savedDockColor) {
         setDockColorState(savedDockColor);
       }
+      const savedInk = await AsyncStorage.getItem(DOCK_INK_KEY);
+      if (DOCK_INKS.includes(savedInk)) {
+        setDockInkState(savedInk);
+      }
     } catch (error) {
       console.error('Error loading theme:', error);
     } finally {
@@ -479,6 +491,16 @@ export const ThemeProvider = ({ children }) => {
       await AsyncStorage.setItem(DOCK_COLOR_KEY, next);
     } catch (error) {
       console.error('Error saving dock-colour setting:', error);
+    }
+  };
+
+  const setDockInk = async (mode) => {
+    const next = DOCK_INKS.includes(mode) ? mode : DEFAULT_DOCK_INK;
+    setDockInkState(next);
+    try {
+      await AsyncStorage.setItem(DOCK_INK_KEY, next);
+    } catch (error) {
+      console.error('Error saving dock-ink setting:', error);
     }
   };
 
@@ -597,9 +619,9 @@ export const ThemeProvider = ({ children }) => {
       showCalendarDayTasks, setShowCalendarDayTasks,
       calendarFreeScroll, setCalendarFreeScroll,
       dockIndicator, setDockIndicator,
-      dockStyle, setDockStyle, dockColor, setDockColor,
+      dockStyle, setDockStyle, dockColor, setDockColor, dockInk, setDockInk,
     }),
-    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, accent, accentColor, customAccent],
+    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, accent, accentColor, customAccent],
   );
 
   if (isLoading) {

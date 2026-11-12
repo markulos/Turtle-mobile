@@ -42,7 +42,7 @@
  */
 
 import { dockSurfaceStops } from './dockSurface';
-import { hexToRgb, inkOn, normalizeHex } from '../utils/accentColor';
+import { INK_DARK, INK_LIGHT, hexToRgb, inkOn, normalizeHex } from '../utils/accentColor';
 
 /** Every skin, in the order Settings offers them. */
 export const DOCK_STYLES = ['smoked', 'paper', 'custom'];
@@ -59,6 +59,34 @@ export const DEFAULT_DOCK_COLOR = '#2E2E36';
 
 /** How opaque a custom backdrop is. Short of solid, so the frost still reads. */
 const CUSTOM_ALPHA = 0.88;
+
+/**
+ * THE ACTIVE GLYPH'S INK — the icon ON the chip, and the one colour in the
+ * dock the app had always decided for you.
+ *
+ * 'auto' is `inkOn`: a contrast check against the accent, which answers white
+ * for every saturated colour and near-black once the accent is pale enough
+ * that white would disappear. It is right almost always, and "almost" is why
+ * this is a setting. The check optimises for CONTRAST, and a chip whose glyph
+ * is technically more legible is not always the one that looks right next to
+ * the rest of the bar — on a mid-toned accent the two answers are close
+ * enough that it is a matter of taste, and taste is the user's.
+ *
+ * So: override it, or leave it reading the colour. Black is the app's own ink
+ * (#1F2024), not #000 — the same near-black every dark glyph in the app uses,
+ * because true black on a saturated colour reads as a hole.
+ */
+export const DOCK_INKS = ['auto', 'light', 'dark'];
+export const DEFAULT_DOCK_INK = 'auto';
+
+export const DOCK_INK_LABELS = { auto: 'Auto', light: 'White', dark: 'Black' };
+
+/** The colour the active glyph is drawn in, given the mode and the accent. */
+export function activeInk(mode, accent) {
+  if (mode === 'light') return INK_LIGHT;
+  if (mode === 'dark') return INK_DARK;
+  return inkOn(accent);
+}
 
 const SKINS = {
   /**
