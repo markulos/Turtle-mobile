@@ -5,15 +5,20 @@
  * over the app, in Apple's chrome, and backing out of it is a different
  * gesture to every other page in the vault. For the one document type we can
  * actually render ourselves, this is the house page instead — same
- * EdgeSwipePage push, same left-edge swipe back, same header shape as
- * FolderPage — with the controls a reader wants and nothing else.
+ * EdgeSwipePage push, same header shape as FolderPage — with the controls a
+ * reader wants and nothing else.
+ *
+ * The one house habit it does NOT keep is the left-edge swipe back, because a
+ * zoomed page needs that finger for panning. See the note at the EdgeSwipePage
+ * below.
  *
  * CONTROLS, deliberately few:
  *   · page back / forward, with "4 of 31" between them
  *   · fit width ↔ fit page
  *   · the live zoom, but only once you have zoomed (pinch and double-tap are
  *     the native gestures and need no buttons; a "100%" that never changes is
- *     just noise on the bar)
+ *     just noise on the bar). It goes to MAX_ZOOM — far enough to look at a
+ *     signature or a hairline, not just to read the text
  *   · Open in … — the old share-sheet path, kept for printing, marking up, or
  *     anything PDFKit won't do
  *
@@ -44,6 +49,9 @@ import { getPdfModule } from '../../../../utils/pdfRenderer';
 // values; named here so the toggle below reads as what it does.
 const FIT_WIDTH = 0;
 const FIT_PAGE = 2;
+
+/** How far in a pinch may go, as a multiple of the fitted page. */
+const MAX_ZOOM = 10;
 
 // The lazy, defensive require lives in utils/pdfRenderer — the canvas draws
 // pages too and the guard is not worth having twice. Re-exported because
@@ -190,10 +198,21 @@ export default function PdfViewer({ visible, item, onClose, getFullUrl, theme })
   const pageLabel = pageCount > 0 ? `${page} of ${pageCount}` : '';
 
   return (
-    // The index panel lives on the left edge, which is also where the page's
-    // back-swipe starts — so while it is open the swipe is off, or dragging
-    // the drawer would close the whole reader behind it.
-    <EdgeSwipePage overlay visible={visible} onClose={onClose} swipeEnabled={!indexOpen}>
+    /**
+     * NO back-swipe on this page, unlike every other pushed page in the vault.
+     *
+     * A reader zoomed into a page spends the whole time dragging it around, and
+     * a drag that begins near the left edge is indistinguishable from the swipe
+     * that closes the page — so reading one column of a zoomed-in document
+     * closed the document, over and over. The gesture and the feature are
+     * asking for the same finger in the same place, and the feature wins: this
+     * is the one page whose entire content is a pannable surface.
+     *
+     * The chevron in the header is the way out, and it has always been there.
+     * (It also settles the index drawer, which lives on that same left edge and
+     * used to have to turn the swipe off while it was open.)
+     */
+    <EdgeSwipePage overlay visible={visible} onClose={onClose} swipeEnabled={false}>
       <View style={[styles.page, { backgroundColor: c.background }]}>
         <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
           <Pressable onPress={onClose} onPressIn={tapHaptic} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back" style={({ pressed }) => [styles.iconBtn, { opacity: pressed ? 0.6 : 1 }]}>
@@ -247,7 +266,12 @@ export default function PdfViewer({ visible, item, onClose, getFullUrl, theme })
               fitPolicy={fit}
               spacing={8}
               minScale={1}
-              maxScale={4}
+              // Ten, not four. Four is enough to read a page and not enough to
+              // look AT one — a stamp, a signature, the hairline in a drawing,
+              // the fine print in a scan. PDFKit re-renders the vectors at
+              // whatever scale it is asked for rather than magnifying a bitmap,
+              // so the deep end stays sharp and costs nothing until used.
+              maxScale={MAX_ZOOM}
               enablePaging={false}
               enableDoubleTapZoom
               enableAntialiasing

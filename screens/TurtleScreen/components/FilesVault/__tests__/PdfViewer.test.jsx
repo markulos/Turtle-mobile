@@ -229,16 +229,53 @@ describe('PdfViewer', () => {
     expect(mockSetPage).toHaveBeenCalledWith(3);
   });
 
-  // The drawer sits on the left edge, which is also where the page's
-  // back-swipe starts — dragging it must not close the reader behind it.
-  it('disables the page back-swipe while the index is open', async () => {
-    const { getByLabelText } = await render(<PdfViewer {...props()} />);
+  /**
+   * The reader has no back-swipe at all, and that is the point.
+   *
+   * Panning a zoomed-in page means dragging from wherever the eye is, which is
+   * routinely the left edge — the same gesture that closes a pushed page. It
+   * closed the document every time someone zoomed in and looked around. On the
+   * one page whose whole content is a pannable surface, the surface wins.
+   */
+  it('never arms the page back-swipe — a zoomed page needs that finger', async () => {
+    const { getByLabelText, getByTestId } = await render(<PdfViewer {...props()} />);
     await waitFor(() => expect(mockPdfProps).toBeTruthy());
     await act(async () => { mockPdfProps.onLoadComplete(11, '/p', { width: 1, height: 1 }, toc); });
-    expect(mockEdgeSwipeProps.swipeEnabled).toBe(true);
+    expect(mockEdgeSwipeProps.swipeEnabled).toBe(false);
 
+    // Including with the index drawer open, which is the case that used to be
+    // the ONLY reason it was ever turned off.
     await fireEvent.press(getByLabelText('Contents and pages'));
-    await waitFor(() => expect(mockEdgeSwipeProps.swipeEnabled).toBe(false));
+    await waitFor(() => getByTestId('pdf-index-mode-outline'));
+    expect(mockEdgeSwipeProps.swipeEnabled).toBe(false);
+  });
+
+  // The way out, now that the gesture is gone. It has always been there; this
+  // is what makes removing the swipe safe rather than a trap.
+  it('still closes from the header chevron', async () => {
+    const onClose = jest.fn();
+    const { getByLabelText } = await render(<PdfViewer {...props({ onClose })} />);
+    await waitFor(() => expect(mockPdfProps).toBeTruthy());
+    await fireEvent.press(getByLabelText('Back'));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  // Four is enough to read a page; ten is enough to look at one.
+  it('zooms in to ten times the fitted page', async () => {
+    await render(<PdfViewer {...props()} />);
+    await waitFor(() => expect(mockPdfProps).toBeTruthy());
+    expect(mockPdfProps.maxScale).toBe(10);
+    expect(mockPdfProps.minScale).toBe(1);
+  });
+
+  it('says how far in you are, once you are in at all', async () => {
+    const { queryByTestId, getByTestId } = await render(<PdfViewer {...props()} />);
+    await waitFor(() => expect(mockPdfProps).toBeTruthy());
+    // Nothing to say at the fitted size.
+    expect(queryByTestId('pdf-zoom-label')).toBeNull();
+
+    await act(async () => { mockPdfProps.onScaleChanged(9.6); });
+    await waitFor(() => expect(getByTestId('pdf-zoom-label').props.children).toBe('960%'));
   });
 
   it('canRenderPdf reports false when the native module is missing, and the page offers Open in…', async () => {
