@@ -1,10 +1,16 @@
 /**
- * Matching for the Settings search field.
+ * THE APP'S FUZZY MATCHER — one definition of "close enough", for every search
+ * field that filters a list of names in front of the user.
  *
- * Kept as pure functions, separate from the screen, because this is the part
- * with actual behaviour worth testing — the screen around it is layout.
+ * It was written for Settings and lived under that name for a while; the
+ * playlist picker in a track's ⋯ sheet is the second caller, and there will be
+ * more. A second copy of this would be a second idea of what counts as a typo,
+ * so a field that filters names imports it rather than writing its own.
  *
- * The rule: EVERY token the user typed has to match somewhere in a setting's
+ * Kept as pure functions, separate from the screens, because this is the part
+ * with actual behaviour worth testing — the screens around it are layout.
+ *
+ * The rule: EVERY token the user typed has to match somewhere in the candidate's
  * terms. That makes typing more words narrow the result rather than widen it,
  * which is what people expect from a search box (and the opposite of an OR
  * match, where "dark cache" would show both dark mode and the cache row).
@@ -64,15 +70,20 @@ export function withinOneEdit(a, b) {
 }
 
 /**
- * Does one query token match this setting's terms?
+ * Does one query token match this candidate's terms?
  *
  * Single-character tokens are substring-only: at one character every word is
  * within one edit of every other, so fuzzy matching there returns the whole
- * settings list and looks broken.
+ * list and looks broken.
  */
 export function tokenMatches(token, normalizedTerms, termWords) {
   if (!token) return true;
   if (normalizedTerms.includes(token)) return true;
+  // The same terms with the spaces taken out, so a name typed as one word
+  // still finds it — "cocacola" against "Coca Cola", "frbishoy" against "Fr
+  // Bishoy Kamel". Substring-only: run against a string with no word breaks in
+  // it, an edit-distance pass would match far too much.
+  if (termWords.length > 1 && termWords.join('').includes(token)) return true;
   if (token.length < 4) return false;
   for (const w of termWords) {
     if (withinOneEdit(token, w)) return true;
@@ -93,9 +104,9 @@ export function tokenMatches(token, normalizedTerms, termWords) {
 }
 
 /**
- * True when a setting described by `terms` should stay visible for `query`.
+ * True when a candidate described by `terms` should stay visible for `query`.
  * An empty query matches everything — the caller uses that for the normal,
- * unfiltered screen.
+ * unfiltered list.
  */
 export function matchesQuery(query, terms) {
   const tokens = tokenize(query);

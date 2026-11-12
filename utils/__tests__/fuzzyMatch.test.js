@@ -1,4 +1,4 @@
-import { normalize, tokenize, withinOneEdit, matchesQuery } from '../settingsSearch';
+import { normalize, tokenize, withinOneEdit, matchesQuery } from '../fuzzyMatch';
 
 describe('normalize', () => {
   it('lowercases, strips accents and collapses punctuation', () => {

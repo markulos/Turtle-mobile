@@ -40,7 +40,7 @@ import * as SecureStore from 'expo-secure-store';
 import { clearAllCaches, getCacheSizeBytes, formatBytes } from '../utils/cacheManager';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../utils/haptics';
 import { isGestureProbeEnabled, setGestureProbeEnabled, subscribeDebugSettings } from '../utils/debugSettings';
-import { matchesQuery } from '../utils/settingsSearch';
+import { matchesQuery } from '../utils/fuzzyMatch';
 import { useVaultUploadActions } from '../context/VaultUploadContext';
 import { useOfflineMedia } from '../context/OfflineMediaContext';
 import { getAutoUploadSettings, setAutoUploadEnabled, runAutoUpload } from '../services/cameraRollAutoUpload';
@@ -227,7 +227,7 @@ export default function SettingsScreen({ active = true }) {
   // ── Settings search ─────────────────────────────────────────
   // Filters in place rather than offering a jump list: the point is to see the
   // control itself, already live, without knowing which tab Turtle filed it
-  // under. Matching (including typo tolerance) lives in utils/settingsSearch.
+  // under. Matching (including typo tolerance) lives in utils/fuzzyMatch.
   const [search, setSearch] = useState('');
   const searchQuery = search.trim();
   const searching = searchQuery.length > 0;

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
@@ -21,6 +21,7 @@ import { usePondAccess } from '../../../utils/usePondAccess';
 import AnimalAvatar from '../../../components/AnimalAvatar';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { INPUT_FIELD } from '../../../utils/inputField';
+import { playlistPicks } from '../../../utils/playlistSearch';
 import { Image } from 'expo-image';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
@@ -42,7 +43,8 @@ const CLOSE_MS = 200;
  * Three pages inside one card:
  *   1. actions — play/pause, share, rename, add to playlist, delete
  *   2. rename — edit the track's title in place
- *   3. playlists — pick an existing playlist or type a new one
+ *   3. playlists — search your playlists, and make the one you typed if it
+ *      isn't one yet
  * Both sub-pages are PAGES, not second sheets, for the same iOS reason.
  */
 export default function TrackActionsSheet({
@@ -101,7 +103,7 @@ export default function TrackActionsSheet({
   // stands down while the playlist list below is scrolled.
   const { panHandlers, dragY: drag, scrollProps } = useSheetDismiss(onClose, visible);
 
-  // Keyboard lift for the "New playlist…" field — the SAME technique as the
+  // Keyboard lift for the playlist search field — the SAME technique as the
   // Turtle chat composer: one useAnimatedKeyboard shared value driving a
   // translateY on the UI thread, so the card rides the keyboard frame-for-frame
   // instead of being covered by it (or jumping to meet it a beat late, which is
@@ -127,7 +129,15 @@ export default function TrackActionsSheet({
   // seed would let the card peek above the edge before it was measured.
   const [cardH, setCardH] = useState(600);
   const [page, setPage] = useState('actions');
-  const [newPlaylist, setNewPlaylist] = useState('');
+  const [playlistQuery, setPlaylistQuery] = useState('');
+  // What the playlist page shows for what has been typed: the playlists that
+  // match, and the name to offer for creation when none of them IS what was
+  // typed. The rules live in utils/playlistSearch, so "does this one already
+  // exist?" is tested arithmetic rather than a condition inside a render.
+  const picks = useMemo(
+    () => playlistPicks(playlistQuery, playlists),
+    [playlistQuery, playlists],
+  );
   // Draft title for the rename page. Seeded from `title` each time that page is
   // opened (not on every render) so typing isn't clobbered by a library refresh.
   const [draftTitle, setDraftTitle] = useState('');
@@ -150,7 +160,7 @@ export default function TrackActionsSheet({
     if (visible) {
       setMounted(true);
       setPage('actions');
-      setNewPlaylist('');
+      setPlaylistQuery('');
       setDraftTitle('');
       drag.setValue(0);
       Animated.timing(anim, {
@@ -199,6 +209,23 @@ export default function TrackActionsSheet({
   if (!mounted || !track) return null;
 
   const rowBorder = { borderTopColor: c.border };
+
+  // "Make the one you typed." Built once and placed in one of two spots by the
+  // playlist page below — the row is the same offer either way, only its rank
+  // among the matches changes.
+  const createRow = picks.createName ? (
+    <ActionRow
+      testID="playlist-create"
+      icon="plus"
+      label={`New playlist “${picks.createName}”`}
+      color={tint}
+      style={rowBorder}
+      onPress={() => {
+        impactHaptic('medium');
+        onAddToPlaylist?.(picks.createName);
+      }}
+    />
+  ) : null;
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
@@ -549,32 +576,59 @@ export default function TrackActionsSheet({
               </View>
             </View>
 
+            {/* ONE field for both jobs. It was a "New playlist…" box, which
+                made finding one a scroll through every playlist you own and
+                creating one the only thing the keyboard was good for. Typing
+                now filters the list (fuzzily — utils/fuzzyMatch, the same
+                matcher the Settings search uses), and a name that is NOT one
+                of your playlists turns into the create row below. What exists
+                and what doesn't are then the same gesture. */}
             <View style={[styles.newRow, rowBorder]}>
-              <Icon name="plus" size={20} color={c.textSecondary} />
+              <Icon name="magnify" size={20} color={c.textSecondary} />
               <AppTextInput
+                testID="playlist-search"
                 style={[styles.newInput, { color: c.textPrimary }]}
-                placeholder="New playlist…"
+                placeholder="Search or name a playlist…"
                 placeholderTextColor={c.textMuted}
-                value={newPlaylist}
-                onChangeText={setNewPlaylist}
+                value={playlistQuery}
+                onChangeText={setPlaylistQuery}
+                autoCorrect={false}
                 returnKeyType="done"
+                // The keyboard's key never guesses between a playlist you have
+                // and one you don't: it takes the ONLY match when exactly one
+                // is left standing, and creates only when NOTHING matched.
+                // Anything else is a tap on a row.
+                //
+                // Which matters more than it sounds: "down" is not "Download",
+                // so a create row is showing for almost every half-typed
+                // search. A Return that took the first row on screen would
+                // quietly make a playlist called "down" every time somebody
+                // filtered and hit the key out of habit.
                 onSubmitEditing={() => {
-                  const name = newPlaylist.trim();
-                  if (!name) return;
+                  const only = picks.matches.length === 1 ? picks.matches[0] : null;
+                  if (only) {
+                    if (currentPlaylists.includes(only)) return;
+                    impactHaptic('medium');
+                    onAddToPlaylist?.(only);
+                    return;
+                  }
+                  if (picks.matches.length > 0 || !picks.createName) return;
                   impactHaptic('medium');
-                  onAddToPlaylist?.(name);
+                  onAddToPlaylist?.(picks.createName);
                 }}
               />
-              {newPlaylist.trim() ? (
+              {playlistQuery ? (
                 <TouchableOpacity
                   accessibilityRole="button"
-                  accessibilityLabel={`Create playlist ${newPlaylist.trim()}`}
+                  accessibilityLabel="Clear playlist search"
+                  testID="playlist-search-clear"
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   onPress={() => {
-                    impactHaptic('medium');
-                    onAddToPlaylist?.(newPlaylist.trim());
+                    tapHaptic();
+                    setPlaylistQuery('');
                   }}
                 >
-                  <Text style={[styles.createText, { color: tint }]}>Create</Text>
+                  <Icon name="close-circle" size={18} color={c.textMuted} />
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -587,29 +641,40 @@ export default function TrackActionsSheet({
               {...SCROLL_INDICATOR}
               {...scrollProps}
             >
-              {playlists.length === 0 ? (
+              {/* Nothing matched, so the only thing left to do is make it:
+                  first row, under the thumb, no scrolling past misses. When
+                  something DID match, the same row goes at the bottom (below)
+                  — a playlist you already have outranks one you have only
+                  half-typed, and "down" is not "Download". */}
+              {picks.createName && picks.matches.length === 0 ? createRow : null}
+
+              {picks.matches.map((name) => {
+                const already = currentPlaylists.includes(name);
+                return (
+                  <ActionRow
+                    key={name}
+                    icon={already ? 'check' : 'playlist-music'}
+                    label={name}
+                    color={already ? (tint) : c.textPrimary}
+                    style={rowBorder}
+                    disabled={already}
+                    onPress={() => {
+                      impactHaptic('medium');
+                      onAddToPlaylist?.(name);
+                    }}
+                  />
+                );
+              })}
+
+              {picks.createName && picks.matches.length > 0 ? createRow : null}
+
+              {/* Only when the list is empty for a reason the create row
+                  does not already answer: nothing typed and nothing to show. */}
+              {playlists.length === 0 && !picks.createName ? (
                 <Text style={[styles.empty, { color: c.textTertiary }]}>
                   No playlists yet — type a name above to make the first one.
                 </Text>
-              ) : (
-                playlists.map((name) => {
-                  const already = currentPlaylists.includes(name);
-                  return (
-                    <ActionRow
-                      key={name}
-                      icon={already ? 'check' : 'playlist-music'}
-                      label={name}
-                      color={already ? (tint) : c.textPrimary}
-                      style={rowBorder}
-                      disabled={already}
-                      onPress={() => {
-                        impactHaptic('medium');
-                        onAddToPlaylist?.(name);
-                      }}
-                    />
-                  );
-                })
-              )}
+              ) : null}
             </ScrollView>
           </>
         )}
