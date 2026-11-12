@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { normalizeHex } from '../utils/accentColor';
-import { DOCK_STYLES, DEFAULT_DOCK_STYLE } from '../components/dockSkins';
+import { DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR } from '../components/dockSkins';
 
 const THEME_STORAGE_KEY = '@connected_pass_theme';
 const TIME_FORMAT_STORAGE_KEY = '@connected_pass_time_format';
@@ -12,6 +12,7 @@ const ACCENT_KEY = '@connected_pass_accent';
 const CUSTOM_ACCENT_KEY = '@connected_pass_accent_custom';
 const DOCK_INDICATOR_KEY = '@connected_pass_dock_indicator';
 const DOCK_STYLE_KEY = '@connected_pass_dock_style';
+const DOCK_COLOR_KEY = '@connected_pass_dock_color';
 
 /**
  * How the dock marks the tab you are on: the filled accent CHIP behind the
@@ -330,6 +331,10 @@ const ThemeContext = createContext({
   // lives in components/dockSkins.
   dockStyle: DEFAULT_DOCK_STYLE,
   setDockStyle: () => {},
+  // The colour behind the 'custom' skin, '#RRGGBB'. Remembered even while
+  // another skin is selected, so the custom tile still previews what it was.
+  dockColor: DEFAULT_DOCK_COLOR,
+  setDockColor: () => {},
   // The highlight colour: one of ACCENTS' keys, or CUSTOM_ACCENT for a colour
   // the user mixed themselves (`customAccent`, a '#RRGGBB').
   accent: DEFAULT_ACCENT,
@@ -352,6 +357,7 @@ export const ThemeProvider = ({ children }) => {
   const [calendarFreeScroll, setCalendarFreeScrollState] = useState(false);
   const [dockIndicator, setDockIndicatorState] = useState(DEFAULT_DOCK_INDICATOR);
   const [dockStyle, setDockStyleState] = useState(DEFAULT_DOCK_STYLE);
+  const [dockColor, setDockColorState] = useState(DEFAULT_DOCK_COLOR);
   const [accent, setAccentState] = useState(DEFAULT_ACCENT);
   // The user's own colour, '#RRGGBB', or null if they have never mixed one.
   // Remembered even while a preset is selected, so the custom swatch still
@@ -413,6 +419,12 @@ export const ThemeProvider = ({ children }) => {
       if (DOCK_STYLES.includes(savedSkin)) {
         setDockStyleState(savedSkin);
       }
+      // Validated as a colour, not trusted as a string: the dock paints this
+      // directly, and 'undefined' as a fill is an invisible nav bar.
+      const savedDockColor = normalizeHex(await AsyncStorage.getItem(DOCK_COLOR_KEY));
+      if (savedDockColor) {
+        setDockColorState(savedDockColor);
+      }
     } catch (error) {
       console.error('Error loading theme:', error);
     } finally {
@@ -457,6 +469,16 @@ export const ThemeProvider = ({ children }) => {
       await AsyncStorage.setItem(DOCK_STYLE_KEY, next);
     } catch (error) {
       console.error('Error saving dock-style setting:', error);
+    }
+  };
+
+  const setDockColor = async (hex) => {
+    const next = normalizeHex(hex) || DEFAULT_DOCK_COLOR;
+    setDockColorState(next);
+    try {
+      await AsyncStorage.setItem(DOCK_COLOR_KEY, next);
+    } catch (error) {
+      console.error('Error saving dock-colour setting:', error);
     }
   };
 
@@ -575,9 +597,9 @@ export const ThemeProvider = ({ children }) => {
       showCalendarDayTasks, setShowCalendarDayTasks,
       calendarFreeScroll, setCalendarFreeScroll,
       dockIndicator, setDockIndicator,
-      dockStyle, setDockStyle,
+      dockStyle, setDockStyle, dockColor, setDockColor,
     }),
-    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, accent, accentColor, customAccent],
+    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, accent, accentColor, customAccent],
   );
 
   if (isLoading) {

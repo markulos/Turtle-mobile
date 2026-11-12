@@ -37,6 +37,7 @@ import AppTextInput from './AppTextInput';
 import { panelBottomInset } from './tabBarLayout';
 import { useTheme } from '../context/ThemeContext';
 import { useSheetDismiss } from '../utils/useSheetDismiss';
+import { useSuppressEdgeSwipe } from '../utils/edgeSwipeGuard';
 import useKeyboardHeight from '../utils/useKeyboardHeight';
 import { depth } from '../utils/surfaceDepth';
 import { impactHaptic, markGesture } from '../utils/haptics';
@@ -166,8 +167,15 @@ function ColorSlider({ label, value, max, colors, thumbColor, onChange, theme, s
  *   onSelect     — (hex) => void, on "Use this colour"
  *   onClose      — () => void
  */
-export default function AccentColorPicker({ visible, initialColor, onSelect, onClose }) {
+export default function AccentColorPicker({ visible, initialColor, onSelect, onClose, testID }) {
   const { theme } = useTheme();
+  // THREE HORIZONTAL SLIDERS, sitting over a page that reads a rightward drag
+  // in its left 40% as "go back". Dragging hue or lightness to the right used
+  // to slide the Settings page away and close it mid-adjustment. The sheet
+  // holds the guard for as long as it is open — not just while a thumb is
+  // down, because the whole sheet is a surface you drag on and none of those
+  // drags are ever a back-swipe.
+  useSuppressEdgeSwipe(visible);
   const insets = useSafeAreaInsets();
   const keyboardH = useKeyboardHeight();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -274,7 +282,7 @@ export default function AccentColorPicker({ visible, initialColor, onSelect, onC
   if (!visible) return null;
 
   return (
-    <Modal visible transparent animationType="none" onRequestClose={handleCancel} statusBarTranslucent>
+    <Modal testID={testID} visible transparent animationType="none" onRequestClose={handleCancel} statusBarTranslucent>
       <View style={styles.root}>
         <Animated.View style={[styles.backdrop, { opacity: backdrop }]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={handleCancel} />

@@ -96,9 +96,11 @@ const DOCK_LIP_H = 1.5;
 // icons can never disagree about where a slot is.
 
 export default function TabBarPill({ dragSlot, leadSlot }) {
-  const { theme, dockIndicator, dockStyle } = useTheme();
-  // Every colour the capsule draws, from the skin chosen in Settings.
-  const skin = dockSkin(dockStyle);
+  const { theme, dockIndicator, dockStyle, dockColor } = useTheme();
+  // Every colour the capsule draws, from the skin chosen in Settings. The
+  // colour is only consulted by the 'custom' skin, and is passed always rather
+  // than conditionally so there is one call shape here and in App.js.
+  const skin = dockSkin(dockStyle, dockColor);
   const [barWidth, setBarWidth] = useState(0);
   // Not dragging, and no dock to drag on (a test, a screenshot harness): -1 is
   // the resting contract, so an absent value behaves exactly like a lifted

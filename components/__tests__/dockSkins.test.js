@@ -1,9 +1,12 @@
 import {
   DOCK_STYLES,
   DEFAULT_DOCK_STYLE,
+  DEFAULT_DOCK_COLOR,
   dockSkin,
   dockSkins,
+  customDockSkin,
 } from '../dockSkins';
+import { inkOn } from '../../utils/accentColor';
 
 /** 'rgba(r,g,b,a)' → the four numbers. */
 const parse = (css) => {
@@ -90,6 +93,67 @@ describe('the dock’s skins', () => {
     expect(skin.lip).toBeNull();
     expect(grey(parse(skin.edge))).toBeLessThan(60);
     expect(parse(skin.edge).a).toBeLessThan(0.3);
+  });
+
+  describe('custom — a skin built from one colour', () => {
+    // The worst cases a colour picker can produce, not a happy path: the two
+    // extremes, the mid greys where neither ink has much room, a saturated
+    // colour and a pale one.
+    const COLOURS = ['#000000', '#FFFFFF', '#808080', '#8A8A8A', '#C8413B', '#F5E6A8', '#1B4F72'];
+
+    test.each(COLOURS)('%s is painted, and painted flat', (hex) => {
+      const skin = customDockSkin(hex);
+      expect(skin.key).toBe('custom');
+      expect(skin.colour).toBe(hex);
+      const stops = skin.wash.colors.map(parse);
+      for (const stop of stops) expect(stop).toEqual(stops[0]);
+      expect(stops[0].a).toBeLessThan(1);
+      // Flat means flat: no lit floor invented on a colour nobody shaded.
+      expect(skin.lip).toBeNull();
+    });
+
+    test.each(COLOURS)('%s gets glyphs you can actually see', (hex) => {
+      // THE rule for a user-chosen colour. inkOn is the same contrast check
+      // the accent chip's glyph uses, so there is no colour you can pick that
+      // leaves the dock's icons invisible — including the mid greys, which is
+      // why the ink is heavier here than on the fixed skins.
+      const skin = customDockSkin(hex);
+      const ink = parse(skin.inactiveTint);
+      const want = inkOn(hex) === '#FFFFFF' ? 255 : 0;
+      expect(grey(ink)).toBe(want);
+      // Composited over the colour it sits on — the number the eye sees.
+      const base = parse(skin.wash.colors[0]);
+      const seen = grey(ink) * ink.a + grey(base) * (1 - ink.a);
+      expect(Math.abs(seen - grey(base))).toBeGreaterThan(70);
+    });
+
+    test.each(COLOURS)('%s frosts and edges the way its own value needs', (hex) => {
+      const skin = customDockSkin(hex);
+      const dark = inkOn(hex) === '#FFFFFF';
+      expect(skin.blurTint).toBe(dark ? 'dark' : 'light');
+      // A white hairline on a white bar is not an edge.
+      expect(grey(parse(skin.edge))).toBe(dark ? 255 : 0);
+    });
+
+    test('a colour that is not a colour falls back rather than painting nothing', () => {
+      for (const bad of [null, undefined, '', 'rebeccapurple', '#12', 42]) {
+        expect(customDockSkin(bad).colour).toBe(DEFAULT_DOCK_COLOR);
+      }
+    });
+
+    test('the default colour is not the accent’s job to supply', () => {
+      // The chip travels ON this surface; same colour for both and the one
+      // thing that has to stand out stops standing out.
+      expect(parse(customDockSkin(undefined).wash.colors[0]).a).toBeGreaterThan(0.5);
+      expect(DEFAULT_DOCK_COLOR).toMatch(/^#[0-9A-F]{6}$/);
+    });
+
+    test('dockSkin routes the colour through, and only for custom', () => {
+      expect(dockSkin('custom', '#C8413B').colour).toBe('#C8413B');
+      // A colour passed alongside a fixed skin changes nothing about it.
+      expect(dockSkin('paper', '#C8413B')).toBe(dockSkin('paper'));
+      expect(dockSkins('#C8413B')[2].colour).toBe('#C8413B');
+    });
   });
 
   test('an unknown or missing skin name still paints a dock', () => {

@@ -1,17 +1,17 @@
 /**
- * DockStylePicker — Settings → Navigation's two choices about the dock, each
- * shown as the thing it does rather than described in a sentence.
+ * DockStylePicker — Settings → Navigation's choices about the dock, each shown
+ * as the thing it does rather than described in a sentence.
  *
- * WHY PREVIEWS AND NOT A LIST OF WORDS. "Smoked glass" and "Paper" are the
- * names of materials; nobody can pick between two materials from their names,
- * and the dock is at the bottom of the screen BEHIND this sheet while you
- * choose. Each tile therefore draws a real miniature dock — the same skin
+ * WHY PREVIEWS AND NOT A LIST OF WORDS. "Smoked" and "Paper" are the names of
+ * materials; nobody can pick between two materials from their names, and the
+ * dock is at the bottom of the screen BEHIND this sheet while you choose. Each tile therefore draws a real miniature dock — the same skin
  * module the real one reads, over a scrap of page so the frost has something
  * to sit on — so the choice is made by looking at the answer.
  *
  * The previews are built from dockSkins and from the live accent, not from
  * copies of those values. A preview that can disagree with the dock is worse
- * than no preview, because it is believed.
+ * than no preview, because it is believed. CUSTOM previews the colour you
+ * chose for it, whether or not it is the skin you are on.
  *
  * TWO AXES, TWO ROWS. What the capsule is MADE OF (the skin) and how it MARKS
  * the tab you are on (the indicator) are independent, so they are separate
@@ -23,25 +23,31 @@
  * existed, persisted and was read by the dock, and there was no way to reach
  * it from the app. A preference nobody can see is not a preference.
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { useTheme, DOCK_INDICATORS } from '../context/ThemeContext';
 import { DOCK_STYLES, dockSkin } from './dockSkins';
+import AccentColorPicker from './AccentColorPicker';
 import { impactHaptic } from '../utils/haptics';
 import { inkOn } from '../utils/accentColor';
 
 // The miniature. Not a scaled copy of the real geometry — at a third the size
 // a scaled 57pt chip in a 67pt slot leaves sub-pixel gaps — but the same
-// SHAPE: a capsule of fully-rounded ends, four evenly spaced glyph dots, and
-// one marked tab.
-const MINI_H = 34;
-const MINI_SLOTS = 4;
-const MINI_CHIP = 24;
-const MINI_DOT = 9;
-const MINI_ACTIVE = 2;
+// SHAPE: a capsule of fully-rounded ends, evenly spaced glyph dots, and one
+// marked tab.
+//
+// Sized to STRETCH, not to a fixed width: three tiles across a phone leaves
+// each one about 100pt, and a capsule laid out from fixed 30pt cells would
+// overflow it. The capsule fills its tile and the cells divide what is there,
+// so a fourth skin would not break the row either.
+const MINI_H = 30;
+const MINI_SLOTS = 3;
+const MINI_CHIP = 22;
+const MINI_DOT = 8;
+const MINI_ACTIVE = 1;
 
 /** One miniature dock, drawn from a skin and an indicator treatment. */
 export function DockPreview({ skin, indicator, accent, theme }) {
@@ -147,9 +153,11 @@ const INDICATOR_LABELS = { chip: 'Chip', underline: 'Underline' };
 export default function DockStylePicker() {
   const {
     theme, dockStyle, setDockStyle, dockIndicator, setDockIndicator,
+    dockColor, setDockColor,
   } = useTheme();
+  const [colourOpen, setColourOpen] = useState(false);
   const accent = theme.colors.accent;
-  const current = dockSkin(dockStyle);
+  const current = dockSkin(dockStyle, dockColor);
 
   const choose = (set, value, isCurrent) => () => {
     // Re-tapping the tile you are already on is not a change; firing a tick for
@@ -166,8 +174,14 @@ export default function DockStylePicker() {
       </Text>
       <View style={styles.row}>
         {DOCK_STYLES.map((key) => {
-          const skin = dockSkin(key);
+          const skin = dockSkin(key, dockColor);
           const selected = key === current.key;
+          // The custom tile is a door as well as a choice: picking it has to
+          // ask WHICH colour, and tapping it again is how you change your mind
+          // later. Every other tile is just a choice.
+          const press = key === 'custom'
+            ? () => { if (!selected) { impactHaptic('light'); setDockStyle(key); } setColourOpen(true); }
+            : choose(setDockStyle, key, selected);
           return (
             <Tile
               key={key}
@@ -175,7 +189,7 @@ export default function DockStylePicker() {
               label={skin.name}
               selected={selected}
               theme={theme}
-              onPress={choose(setDockStyle, key, selected)}
+              onPress={press}
             >
               <DockPreview
                 skin={skin}
@@ -216,6 +230,18 @@ export default function DockStylePicker() {
           );
         })}
       </View>
+
+      {/* The same sheet the highlight colour uses — three labelled sliders and
+          a hex field, already built and already holding the edge-swipe guard
+          so dragging a slider cannot close the Settings page underneath it.
+          Opens on the colour the dock is wearing. */}
+      <AccentColorPicker
+        testID="accent-sheet"
+        visible={colourOpen}
+        initialColor={current.colour || dockColor}
+        onSelect={setDockColor}
+        onClose={() => setColourOpen(false)}
+      />
     </View>
   );
 }
@@ -230,7 +256,7 @@ const styles = StyleSheet.create({
   },
   // Equal halves with one gap: the tiles are a comparison, so neither may be
   // wider than the other.
-  row: { flexDirection: 'row', gap: 10 },
+  row: { flexDirection: 'row', gap: 8 },
   tile: {
     flex: 1,
     borderRadius: 14,
@@ -248,27 +274,29 @@ const styles = StyleSheet.create({
     gap: 5,
     paddingVertical: 8,
   },
-  tileLabel: { fontSize: 13, fontWeight: '600' },
+  tileLabel: { fontSize: 12, fontWeight: '600' },
   blurb: { fontSize: 12, lineHeight: 17, marginTop: 8 },
   page: {
-    height: 64,
+    height: 58,
     justifyContent: 'flex-end',
-    alignItems: 'center',
+    alignItems: 'stretch',
     paddingBottom: 7,
     overflow: 'hidden',
   },
   capsule: {
     flexDirection: 'row',
     alignItems: 'center',
+    alignSelf: 'stretch',
+    marginHorizontal: 8,
     height: MINI_H,
     borderRadius: MINI_H / 2,
     borderWidth: StyleSheet.hairlineWidth,
     borderCurve: 'continuous',
     overflow: 'hidden',
-    paddingHorizontal: 4,
+    paddingHorizontal: 3,
   },
   cell: {
-    width: 30,
+    flex: 1,
     height: MINI_H,
     alignItems: 'center',
     justifyContent: 'center',

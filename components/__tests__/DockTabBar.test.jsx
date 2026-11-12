@@ -26,6 +26,14 @@ jest.mock('react-native-gesture-handler', () => {
 // it — not about re-testing the library's rendering.
 jest.mock('@react-navigation/bottom-tabs', () => ({ BottomTabBar: () => null }));
 
+// The app-wide back-swipe guard. Mocked rather than exercised: what this file
+// is responsible for is that the dock TAKES it for the length of a drag and
+// gives it back — the guard's own counting has its own test.
+const releaseSwipe = jest.fn();
+const holdSwipe = jest.fn(() => releaseSwipe);
+jest.mock('../../utils/edgeSwipeGuard', () => ({ holdEdgeSwipe: () => mockHoldSwipe() }));
+global.mockHoldSwipe = () => holdSwipe();
+
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 59, right: 0, bottom: 34, left: 0 }),
 }));
@@ -70,6 +78,8 @@ const lift = () => {
   act(() => { mockPan.onFinalize(); });
 };
 
+beforeEach(() => { holdSwipe.mockClear(); releaseSwipe.mockClear(); });
+
 test('the chip tracks the thumb 1:1, and NOTHING changes tabs until it lifts', async () => {
   const props = buildProps(0);
   const dragSlot = { value: -1 };
@@ -81,6 +91,11 @@ test('the chip tracks the thumb 1:1, and NOTHING changes tabs until it lifts', a
   act(() => { mockPan.onStart({ absoluteX: onIcon(0) }); });
   expect(dragSlot.value).toBe(0);
   expect(props.navigation.dispatch).not.toHaveBeenCalled();
+  // A scrub along the dock is a rightward drag, which is the same shape as
+  // the back-swipe every pushed page listens for. The dock takes the guard
+  // for the duration, or dragging the chip closes the page underneath it.
+  expect(holdSwipe).toHaveBeenCalledTimes(1);
+  expect(releaseSwipe).not.toHaveBeenCalled();
 
   // Halfway to Notes: the chip is a FRACTION of the way across, which is the
   // whole point of tracking a finger rather than hopping between slots.
@@ -126,6 +141,10 @@ test('the chip tracks the thumb 1:1, and NOTHING changes tabs until it lifts', a
   // Aimed at THIS navigator, the way BottomTabBar aims its own: an action
   // without a target is handled by whichever navigator feels like it.
   expect(props.navigation.dispatch.mock.calls[0][0].target).toBe('tabs-1');
+
+  // …and the guard goes back. A leaked hold kills back-navigation app-wide
+  // for the rest of the session, with nothing on screen to explain it.
+  expect(releaseSwipe).toHaveBeenCalledTimes(1);
 });
 
 test('a scrub that comes home is not a tab change', async () => {
@@ -161,4 +180,7 @@ test('a gesture the system cancels chooses nothing', async () => {
   expect(props.navigation.dispatch).not.toHaveBeenCalled();
   expect(leadSlot.value).toBe(-1);
   expect(dragSlot.value).toBe(-1);
+  // Cancelled, not lifted — and the guard still has to come back, or a call
+  // arriving mid-scrub permanently disables the back-swipe.
+  expect(releaseSwipe).toHaveBeenCalledTimes(1);
 });

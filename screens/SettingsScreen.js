@@ -73,7 +73,7 @@ const SETTING_TERMS = {
   darkMode: 'dark mode theme appearance night light colour color',
   accent: 'highlight colour color accent theme appearance swatch pink light pink custom own pick picker hex shade hue rainbow',
   hideVault: 'hide vault button navbar tab bar navigation photos',
-  dockStyle: 'navbar style dock bar bottom appearance backdrop capsule white paper smoked glass dark black hairline border theme look chip underline active tab indicator highlight',
+  dockStyle: 'navbar style dock bar bottom appearance backdrop capsule white paper smoked glass dark black hairline border theme look chip underline active tab indicator highlight custom colour color own pick hex background shade',
   autoUpload: 'auto upload camera roll new photos videos background sync vault automatic icloud',
   cache: 'cache size storage space photos clear free disk measure',
   offline: 'offline saved photos kept downloaded plane no signal remove free space',

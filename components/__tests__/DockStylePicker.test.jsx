@@ -1,11 +1,12 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
-import { fireEvent, render, within } from '@testing-library/react-native';
+import { act, fireEvent, render, within } from '@testing-library/react-native';
 
 import { dockSkin } from '../dockSkins';
 
 const setDockStyle = jest.fn();
 const setDockIndicator = jest.fn();
+const setDockColor = jest.fn();
 
 jest.mock('../../context/ThemeContext', () => ({
   DOCK_INDICATORS: ['chip', 'underline'],
@@ -26,17 +27,28 @@ jest.mock('../../context/ThemeContext', () => ({
     setDockStyle: mockState().setDockStyle,
     dockIndicator: mockState().indicator,
     setDockIndicator: mockState().setDockIndicator,
+    dockColor: mockState().colour,
+    setDockColor: mockState().setDockColor,
   }),
 }));
 
-let state = { style: 'smoked', indicator: 'chip' };
-global.mockState = () => ({ ...state, setDockStyle, setDockIndicator });
+let state = { style: 'smoked', indicator: 'chip', colour: '#C8413B' };
+global.mockState = () => ({ ...state, setDockStyle, setDockIndicator, setDockColor });
 
 jest.mock('expo-linear-gradient', () => {
   const { View } = require('react-native');
   return { LinearGradient: (props) => <View {...props} /> };
 });
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
+
+// The colour sheet is a unit of its own (sliders, a hex field, safe-area and
+// keyboard wiring) with its own tests. What this file cares about is WHETHER
+// the picker opens it and WITH WHAT — so the stub keeps only the one piece of
+// the real contract that matters here: nothing is rendered until it is shown.
+jest.mock('../AccentColorPicker', () => {
+  const { View } = require('react-native');
+  return { __esModule: true, default: (props) => (props.visible ? <View {...props} /> : null) };
+});
 
 const impactHaptic = jest.fn();
 jest.mock('../../utils/haptics', () => ({ impactHaptic: (...a) => mockHaptic(...a) }));
@@ -47,16 +59,17 @@ import DockStylePicker from '../DockStylePicker';
 const styleOf = (node) => StyleSheet.flatten(node.props.style) || {};
 
 beforeEach(() => {
-  state = { style: 'smoked', indicator: 'chip' };
+  state = { style: 'smoked', indicator: 'chip', colour: '#C8413B' };
   setDockStyle.mockClear();
   setDockIndicator.mockClear();
+  setDockColor.mockClear();
   impactHaptic.mockClear();
 });
 
 describe('Settings → Navigation → Navbar style', () => {
-  test('offers both backdrops and both indicators', async () => {
+  test('offers every backdrop and every indicator', async () => {
     const { getByTestId } = await render(<DockStylePicker />);
-    for (const id of ['dock-skin-smoked', 'dock-skin-paper',
+    for (const id of ['dock-skin-smoked', 'dock-skin-paper', 'dock-skin-custom',
       'dock-indicator-chip', 'dock-indicator-underline']) {
       expect(getByTestId(id)).toBeTruthy();
     }
@@ -67,10 +80,10 @@ describe('Settings → Navigation → Navbar style', () => {
     // The preview is the whole control — one that can disagree with the dock
     // is worse than none, because it is believed. So it must be drawn from
     // dockSkins, not from a copy of those colours living in the picker.
-    for (const key of ['smoked', 'paper']) {
+    for (const key of ['smoked', 'paper', 'custom']) {
       const capsule = within(getByTestId(`dock-skin-${key}`))
         .getByTestId('dock-preview-capsule');
-      expect(styleOf(capsule).borderColor).toBe(dockSkin(key).edge);
+      expect(styleOf(capsule).borderColor).toBe(dockSkin(key, state.colour).edge);
     }
   });
 
@@ -94,6 +107,38 @@ describe('Settings → Navigation → Navbar style', () => {
     const { getByTestId } = await render(<DockStylePicker />);
     fireEvent.press(getByTestId('dock-indicator-underline'));
     expect(setDockIndicator).toHaveBeenCalledWith('underline');
+  });
+
+  test('the custom tile selects AND asks which colour', async () => {
+    const { getByTestId, queryByTestId } = await render(<DockStylePicker />);
+    // Nothing is asking yet.
+    expect(queryByTestId('accent-sheet')).toBeNull();
+
+    await act(async () => { fireEvent.press(getByTestId('dock-skin-custom')); });
+    // Choosing "custom" without being asked which colour would hand you
+    // whatever the last one was and no way to see that you had a say.
+    expect(setDockStyle).toHaveBeenCalledWith('custom');
+    expect(getByTestId('accent-sheet').props.visible).toBe(true);
+    // Opened on the colour the dock is wearing, not on a colour nobody chose.
+    expect(getByTestId('accent-sheet').props.initialColor).toBe('#C8413B');
+  });
+
+  test('tapping custom again reopens the colour sheet rather than doing nothing', async () => {
+    state = { style: 'custom', indicator: 'chip', colour: '#C8413B' };
+    const { getByTestId } = await render(<DockStylePicker />);
+
+    await act(async () => { fireEvent.press(getByTestId('dock-skin-custom')); });
+    // Already selected, so it is NOT a change — but it is the only way back to
+    // the colour, so it must still open the sheet.
+    expect(setDockStyle).not.toHaveBeenCalled();
+    expect(getByTestId('accent-sheet').props.visible).toBe(true);
+  });
+
+  test('the custom tile previews YOUR colour even when you are not on it', async () => {
+    // Otherwise the tile is a blank you have to select to see.
+    const { getByTestId } = await render(<DockStylePicker />);
+    const capsule = within(getByTestId('dock-skin-custom')).getByTestId('dock-preview-capsule');
+    expect(styleOf(capsule).borderColor).toBe(dockSkin('custom', '#C8413B').edge);
   });
 
   test('the selected tile is the one marked, and it follows the setting', async () => {

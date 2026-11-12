@@ -10,6 +10,11 @@
  * glyph tints and the Settings preview all read from here, so none of them can
  * disagree about what "paper" looks like.
  *
+ * The third one, CUSTOM, is not an entry: it is BUILT from a single colour the
+ * user picked, with everything else derived from it (see customDockSkin). That
+ * is the only honest way to do it — a colour picker asks one question, and a
+ * skin needs six answers.
+ *
  * It is deliberately NOT keyed by theme. A skin is a choice about the dock, not
  * about the app's light/dark mode: `paper` is white in dark mode too, the same
  * way `smoked` has always been black in light mode. One palette per skin means
@@ -37,10 +42,23 @@
  */
 
 import { dockSurfaceStops } from './dockSurface';
+import { hexToRgb, inkOn, normalizeHex } from '../utils/accentColor';
 
 /** Every skin, in the order Settings offers them. */
-export const DOCK_STYLES = ['smoked', 'paper'];
+export const DOCK_STYLES = ['smoked', 'paper', 'custom'];
 export const DEFAULT_DOCK_STYLE = 'smoked';
+
+/**
+ * What 'custom' is before anyone has chosen — a neutral slate, so the tile has
+ * something to preview and selecting it can never produce a dock made of
+ * nothing. Deliberately not the accent: the backdrop and the chip that travels
+ * on it would then be the same colour, and the chip is the one thing on the
+ * dock that has to stand out.
+ */
+export const DEFAULT_DOCK_COLOR = '#2E2E36';
+
+/** How opaque a custom backdrop is. Short of solid, so the frost still reads. */
+const CUSTOM_ALPHA = 0.88;
 
 const SKINS = {
   /**
@@ -50,7 +68,7 @@ const SKINS = {
    */
   smoked: {
     key: 'smoked',
-    name: 'Smoked glass',
+    name: 'Smoked',
     blurb: 'A near-black capsule, frosted, with the page blurred behind it.',
     wash: dockSurfaceStops(),
     blurTint: 'dark',
@@ -84,17 +102,59 @@ const SKINS = {
 };
 
 /**
+ * A skin built from ONE COLOUR the user picked.
+ *
+ * Everything else is derived, because a colour picker cannot ask six
+ * questions. The one that matters is the INK: `inkOn` is the same contrast
+ * check the accent chip's glyph uses, so a dark backdrop gets white glyphs and
+ * a pale one gets near-black, and there is no colour you can choose that
+ * leaves the dock's icons invisible. The edge follows the ink for the same
+ * reason — a white hairline on a white bar is not an edge.
+ *
+ * Flat, like paper: a wash would need a second colour nobody chose, and
+ * shading someone's chosen colour darker is a good way to not give them the
+ * colour they chose.
+ */
+export function customDockSkin(hex) {
+  const colour = normalizeHex(hex) || DEFAULT_DOCK_COLOR;
+  const { r, g, b } = hexToRgb(colour) || { r: 46, g: 46, b: 54 };
+  const fill = `rgba(${r},${g},${b},${CUSTOM_ALPHA})`;
+  // Which way the contrast check went. `lightInk` means the surface is DARK.
+  const lightInk = inkOn(colour) === '#FFFFFF';
+  return {
+    key: 'custom',
+    name: 'Custom',
+    colour,
+    blurb: `Your own colour: ${colour}. Tap again to change it.`,
+    wash: { colors: [fill, fill], locations: [0, 1] },
+    // The frost follows the SURFACE, not the theme: a dark tint under a pale
+    // custom colour greys it, and a light one under a dark colour milks it.
+    blurTint: lightInk ? 'dark' : 'light',
+    edge: lightInk ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.16)',
+    lip: null,
+    ridge: lightInk ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.12)',
+    // Heavier than the fixed skins' 0.55/0.45: those sit on colours tuned
+    // against their ink, and a custom colour can land anywhere — including the
+    // mid greys, where neither white nor black has much room. The extra weight
+    // is what keeps the worst case legible.
+    inactiveTint: lightInk ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.58)',
+  };
+}
+
+/**
  * The palette for a skin name — and the DEFAULT for anything else.
  *
  * Unknown input has to return a working dock rather than undefined: the name
  * comes from AsyncStorage, so a build that drops a skin would otherwise leave
  * everyone who chose it with a nav bar made of nothing.
  */
-export function dockSkin(name) {
+export function dockSkin(name, customColour) {
+  if (name === 'custom') return customDockSkin(customColour);
   return SKINS[name] || SKINS[DEFAULT_DOCK_STYLE];
 }
 
 /** Every skin, in offer order — for the Settings picker. */
-export const dockSkins = () => DOCK_STYLES.map(dockSkin);
+export const dockSkins = (customColour) =>
+  DOCK_STYLES.map((key) => dockSkin(key, customColour));
 
 export default dockSkin;

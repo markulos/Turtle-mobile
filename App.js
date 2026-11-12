@@ -125,8 +125,8 @@ function TabNavigator() {
   // No isDark here: the dock's material is a SKIN chosen in Settings, not a
   // function of light/dark mode, so nothing in this navigator's chrome
   // branches on the theme.
-  const { theme, hideVaultButton, dockStyle } = useTheme();
-  const skin = dockSkin(dockStyle);
+  const { theme, hideVaultButton, dockStyle, dockColor } = useTheme();
+  const skin = dockSkin(dockStyle, dockColor);
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   // The avatar tab needs to know WHOSE avatar to draw…

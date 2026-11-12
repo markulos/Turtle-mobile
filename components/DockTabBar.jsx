@@ -7,6 +7,7 @@ import { BottomTabBar } from '@react-navigation/bottom-tabs';
 import { CommonActions } from '@react-navigation/native';
 
 import { dockOccupied, slotAtX } from './tabBarLayout';
+import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 
 /**
  * DockTabBar — the bottom nav, with a thumb you can DRAG along it.
@@ -124,13 +125,27 @@ export default function DockTabBar({ dragSlot, leadSlot, ...props }) {
   // else waiting on interactions stands still until the thumb is up, and the
   // tab that was landed on mounts then.
   const holdRef = useRef(null);
+  // …and, for the same duration, the EDGE-SWIPE GUARD. A scrub along the dock
+  // is a rightward drag low on the screen, which is exactly the shape of the
+  // back-swipe every pushed page listens for (EdgeSwipePage's grab zone is the
+  // whole left panel). Without this, dragging the chip from the left of the
+  // dock can close the page the dock is sitting on.
+  const swipeRef = useRef(null);
   const hold = useCallback(() => {
     if (holdRef.current == null) holdRef.current = InteractionManager.createInteractionHandle();
+    if (swipeRef.current == null) swipeRef.current = holdEdgeSwipe();
   }, []);
   const release = useCallback(() => {
     if (holdRef.current != null) {
       InteractionManager.clearInteractionHandle(holdRef.current);
       holdRef.current = null;
+    }
+    // Released from onFinalize, so a gesture the SYSTEM cancels gives the
+    // guard back too. A leaked hold here would kill back-navigation app-wide
+    // for the rest of the session.
+    if (swipeRef.current != null) {
+      swipeRef.current();
+      swipeRef.current = null;
     }
   }, []);
   // A handle leaked by an unmount mid-drag would stall every deferred mount in

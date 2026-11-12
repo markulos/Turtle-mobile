@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 import { useTheme } from '../../../context/ThemeContext';
+import { useEdgeSwipeSuppressed } from '../../../utils/edgeSwipeGuard';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 // Where a back-swipe may START. Not a bezel strip — the whole LEFT PANEL of the
@@ -62,8 +63,16 @@ export default function EdgeSwipePage({ visible, onClose, children, overlay = fa
   // .current live. Callers set swipeEnabled={false} while an in-tree overlay
   // (e.g. an open lightbox) is up, so the left-edge back-swipe can't leak
   // through and close the whole page from under it.
+  //
+  // AND the app-wide guard: a control somewhere inside this page may own a
+  // horizontal drag of its own (a colour slider, the dock's chip). The grab
+  // zone here is the whole left panel, so without this that drag is ALSO a
+  // back-swipe and the page closes out from under the thing being dragged.
+  // See utils/edgeSwipeGuard — it is opt-in, so no page loses its swipe
+  // except where a real conflict is declared.
+  const suppressed = useEdgeSwipeSuppressed();
   const swipeEnabledRef = useRef(swipeEnabled);
-  swipeEnabledRef.current = swipeEnabled;
+  swipeEnabledRef.current = swipeEnabled && !suppressed;
 
   // Keep the last-visible children so the page still renders its content while
   // animating OUT (after the caller has already cleared the backing data).
