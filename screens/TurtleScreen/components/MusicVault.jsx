@@ -46,8 +46,8 @@ import MusicWebResultRow from './MusicWebResultRow';
 import MusicWebResultSkeleton from './MusicWebResultSkeleton';
 import {
   LIBRARY_SCOPE, WEB_SCOPE, WEB_DEBOUNCE_MS,
-  enqueueWebDownload, pondMessage, searchWebMusic, shouldSearchWeb,
-  webPreviewRow, webRowId, webSearchStatus,
+  createRowWarmer, enqueueWebDownload, pondMessage, searchWebMusic, shouldSearchWeb,
+  warmWebMusic, webPreviewRow, webRowId, webSearchStatus,
 } from '../../../services/webMusicSearch';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 import { useOfflineMusic } from '../../../utils/useOfflineMusic';
@@ -85,6 +85,15 @@ const SEARCH_SCOPES = [
 // React bails out instead of re-rendering — and a re-render of this page is
 // not free: useFocusEffect refetches the library on each one.
 const NO_WEB_SEARCH = { results: [], loading: false, error: null, searched: '' };
+
+/**
+ * When a row counts as being looked at.
+ *
+ * Half a row visible is "on screen" — a row the thumb is holding at the very
+ * bottom edge is the next one you read. How long a scroll settles before the
+ * pond hears about it is createRowWarmer's business.
+ */
+const VISIBLE_ROWS = { itemVisiblePercentThreshold: 50 };
 const clearedWebSearch = (prev) => (
   prev.results.length || prev.loading || prev.error || prev.searched ? NO_WEB_SEARCH : prev
 );
@@ -1077,6 +1086,36 @@ export default function MusicVault({
   }, [api, searching, webScope, typed]);
 
   /**
+   * ── Warming the rows you are looking at ──────────────────────────────────
+   *
+   * A web row cannot play until the pond has turned the video into a playable
+   * URL, which takes a second or two and cannot be started by the phone. The
+   * pond warms a search's first few rows by itself; past that it is guessing,
+   * and this is the part that is not a guess — the rows on screen.
+   *
+   * Three things keep it from being chatter:
+   *   • `askedRef` remembers what the pond has been told, for this result set.
+   *     Scrolling fires a viewability change per row that crosses the line, and
+   *     a row that crosses it four times is still one video;
+   *   • a short timer coalesces a flick of the thumb into one request;
+   *   • nothing is awaited and nothing is shown. It is a hint.
+   */
+  // `api` through a ref, and the warmer built once: FlatList refuses a new
+  // onViewableItemsChanged after mount ("Changing onViewableItemsChanged on
+  // the fly is not supported"), so the callback it is handed has to outlive
+  // every render.
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const warmerRef = useRef(null);
+  if (!warmerRef.current) {
+    warmerRef.current = createRowWarmer({ send: (ids) => warmWebMusic(apiRef.current, ids) });
+  }
+  const onRowsVisible = useRef((info) => warmerRef.current.onVisible(info)).current;
+
+  useEffect(() => { warmerRef.current.reset(); }, [web.searched, web.results]);
+  useEffect(() => () => warmerRef.current.cancel(), []);
+
+  /**
    * Preview a result — play it, keeping nothing.
    *
    * `playRows` with a one-row queue, which is what a preview is: skip would
@@ -1752,6 +1791,11 @@ export default function MusicVault({
           // set, and a destination row in the middle of matches is something
           // to tap by accident.
           ListHeaderComponent={searching ? searchHeader : headerRows}
+          // Which rows are being looked at — the pond resolves those, so the
+          // tap that follows plays at once. See warmRows. Both props are
+          // mount-stable on purpose: FlatList will not take a new one.
+          onViewableItemsChanged={onRowsVisible}
+          viewabilityConfig={VISIBLE_ROWS}
           // Nothing to add in the WEB scope: the header's status line already
           // says which of "keep typing", "searching", "nothing found" and
           // "this pond needs an update" is true, and saying it twice over an

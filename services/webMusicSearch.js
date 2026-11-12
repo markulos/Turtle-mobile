@@ -147,6 +147,115 @@ export async function searchWebMusic(api, query, { limit = DEFAULT_LIMIT } = {})
 }
 
 /**
+ * Tell the pond which rows are on screen, so a tap does not wait.
+ *
+ * Resolving a YouTube video to a playable URL is the one real wait left before
+ * a preview plays — ~1-2s on the pond, and nothing can start until it is done.
+ * The pond warms a search's first few rows on its own, but ranking is a guess
+ * about attention and this is not one: these are the rows being LOOKED at.
+ *
+ * Fire-and-forget, and silent about everything:
+ *   • the answer carries nothing worth reading (how much was already resolved
+ *     is the pond's business);
+ *   • a 404 is an older pond that has no such route, which is not an error on
+ *     a screen — the preview still works, it is just slower;
+ *   • a failed hint is a hint that did not happen. The tap behind it reports
+ *     for itself.
+ */
+export async function warmWebMusic(api, videoIds) {
+  const ids = Array.isArray(videoIds) ? videoIds.filter((v) => typeof v === 'string' && v) : [];
+  if (!ids.length) return false;
+  try {
+    // NO `/api` prefix — see the note at the top of this file.
+    await api.post('/music/web/warm', { videoIds: ids });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Which of these rows the pond has not been told about yet.
+ *
+ * Scrolling fires a viewability change for every row that crosses the line, and
+ * most of them have been named already — a list of rows the pond is holding a
+ * URL for is a request that costs a round trip to say nothing. Pure, and
+ * `asked` is left for the caller to add to, so a failed send can be retried.
+ */
+export function unwarmedIds(videoIds, asked) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(videoIds) ? videoIds : []) {
+    const id = typeof raw === 'string' ? raw : '';
+    if (!id || seen.has(id) || asked?.has?.(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/**
+ * How long a scroll is allowed to settle before the pond is told about it.
+ *
+ * Shorter than the pause before a tap, and long enough that a flick down a
+ * list of fifteen is one request rather than fifteen.
+ */
+export const WARM_COALESCE_MS = 250;
+
+/**
+ * The thing a FlatList's `onViewableItemsChanged` can be pointed at.
+ *
+ * Lives here rather than in the vault because this is the whole of the
+ * behaviour — what counts as a new row, how a flick becomes one request, when
+ * the slate is wiped — and none of it is drawing. The vault keeps the four
+ * lines that connect it to a list.
+ *
+ * `send` takes the ids so the caller can hold the pond's api however it likes;
+ * it is never awaited, because nothing on screen depends on the answer.
+ */
+export function createRowWarmer({ send, delayMs = WARM_COALESCE_MS } = {}) {
+  const asked = new Set();
+  let queued = [];
+  let timer = null;
+
+  const flush = () => {
+    timer = null;
+    const batch = queued;
+    queued = [];
+    if (batch.length) send(batch);
+  };
+
+  return {
+    /** A viewability report. Library rows have no videoId, so the same list in
+     *  another scope is a no-op rather than a special case. */
+    onVisible(info) {
+      const ids = unwarmedIds(
+        (info?.viewableItems || []).map((v) => v?.item?.videoId),
+        asked,
+      );
+      if (!ids.length) return;
+      for (const id of ids) asked.add(id);
+      queued.push(...ids);
+      if (!timer) timer = setTimeout(flush, delayMs);
+    },
+    /** A new result set is a new list of ids worth naming — including the SAME
+     *  query searched again, which is how a stale URL gets re-resolved. */
+    reset() {
+      asked.clear();
+      queued = [];
+      if (timer) clearTimeout(timer);
+      timer = null;
+    },
+    /** On unmount: a request for rows nobody is looking at any more. */
+    cancel() {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      queued = [];
+    },
+  };
+}
+
+/**
  * Send a result to the pond's download queue as audio.
  *
  * `outputKind: 'audio'` is the whole of "as an mp3" from the caller's side: the

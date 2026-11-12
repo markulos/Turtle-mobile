@@ -1,11 +1,15 @@
 import {
   LIBRARY_SCOPE,
+  WARM_COALESCE_MS,
   WEB_SCOPE,
+  createRowWarmer,
   enqueueWebDownload,
   isWebRowId,
   pondMessage,
   searchWebMusic,
   shouldSearchWeb,
+  unwarmedIds,
+  warmWebMusic,
   webPreviewRow,
   webResultMeta,
   webRowId,
@@ -151,6 +155,128 @@ describe('downloading', () => {
     const api = { post: jest.fn() };
     await expect(enqueueWebDownload(api, { videoId: 'x' })).rejects.toThrow(/no link/);
     expect(api.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('warming the rows on screen', () => {
+  test('names them to the pond, relative to /api', async () => {
+    const api = { post: jest.fn(() => Promise.resolve({ success: true, accepted: 2 })) };
+    expect(await warmWebMusic(api, ['MV_3Dpw-BRY', 'OcDiOUQBFd4'])).toBe(true);
+    expect(api.post).toHaveBeenCalledWith('/music/web/warm', {
+      videoIds: ['MV_3Dpw-BRY', 'OcDiOUQBFd4'],
+    });
+  });
+
+  test('an empty list never leaves the phone', async () => {
+    const api = { post: jest.fn() };
+    expect(await warmWebMusic(api, [])).toBe(false);
+    expect(await warmWebMusic(api, null)).toBe(false);
+    expect(await warmWebMusic(api, [null, 42, ''])).toBe(false);
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  test('a pond that has no such route is not an error on a screen', async () => {
+    // An older pond 404s this, and the preview still works — it is just
+    // slower. A hint that failed is a hint that did not happen.
+    const api = { post: jest.fn(() => Promise.reject(new Error('API 404 on POST /music/web/warm'))) };
+    expect(await warmWebMusic(api, ['MV_3Dpw-BRY'])).toBe(false);
+  });
+
+  test('only the rows the pond has not been told about are sent', () => {
+    const asked = new Set(['MV_3Dpw-BRY']);
+    // Scrolling fires a viewability change per row that crosses the line, and
+    // the same row crosses it over and over.
+    expect(unwarmedIds(['MV_3Dpw-BRY', 'OcDiOUQBFd4', 'OcDiOUQBFd4'], asked))
+      .toEqual(['OcDiOUQBFd4']);
+    expect(unwarmedIds(['MV_3Dpw-BRY'], asked)).toEqual([]);
+    // The caller adds to `asked` itself, so a send that failed can be retried.
+    expect(asked.has('OcDiOUQBFd4')).toBe(false);
+  });
+
+  test('library rows are not web rows, so they ask for nothing', () => {
+    // The same FlatList draws both scopes; a library row has no videoId.
+    expect(unwarmedIds([undefined, null, ''], new Set())).toEqual([]);
+    expect(unwarmedIds(undefined, new Set())).toEqual([]);
+  });
+});
+
+describe('the row warmer a list reports visibility to', () => {
+  const viewable = (...results) => ({ viewableItems: results.map((item) => ({ item })) });
+  const SECOND = { ...RESULT, videoId: 'OcDiOUQBFd4' };
+
+  beforeEach(() => { jest.useFakeTimers(); });
+  afterEach(() => { jest.useRealTimers(); });
+
+  test('a flick of the thumb is one request, not one per row', () => {
+    const send = jest.fn();
+    const warmer = createRowWarmer({ send });
+
+    // Several viewability changes in quick succession, as a scroll produces.
+    warmer.onVisible(viewable(RESULT));
+    warmer.onVisible(viewable(RESULT, SECOND));
+    expect(send).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(WARM_COALESCE_MS);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith([RESULT.videoId, SECOND.videoId]);
+  });
+
+  test('the same rows crossing the line again cost nothing', () => {
+    const send = jest.fn();
+    const warmer = createRowWarmer({ send });
+
+    warmer.onVisible(viewable(RESULT));
+    jest.advanceTimersByTime(WARM_COALESCE_MS);
+    // Scrolling back up over a row the pond is already holding a URL for.
+    warmer.onVisible(viewable(RESULT));
+    jest.advanceTimersByTime(WARM_COALESCE_MS * 4);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  test('rows with no video id are not rows the pond can warm', () => {
+    const send = jest.fn();
+    const warmer = createRowWarmer({ send });
+
+    // A library match: an id, a filename, no videoId.
+    warmer.onVisible(viewable({ id: 'one', filename: 'Nightcall.mp3' }));
+    warmer.onVisible({ viewableItems: [] });
+    warmer.onVisible(undefined);
+    jest.advanceTimersByTime(WARM_COALESCE_MS * 4);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test('a new result set starts over — the old ids mean nothing now', () => {
+    const send = jest.fn();
+    const warmer = createRowWarmer({ send });
+
+    warmer.onVisible(viewable(RESULT));
+    jest.advanceTimersByTime(WARM_COALESCE_MS);
+    // The same query, searched again: the pond may have dropped that URL, and
+    // re-naming the row is how it gets resolved again.
+    warmer.reset();
+    warmer.onVisible(viewable(RESULT));
+    jest.advanceTimersByTime(WARM_COALESCE_MS);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  test('a reset mid-flick drops the batch it was about to send', () => {
+    const send = jest.fn();
+    const warmer = createRowWarmer({ send });
+
+    warmer.onVisible(viewable(RESULT));
+    warmer.reset();
+    jest.advanceTimersByTime(WARM_COALESCE_MS * 4);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test('leaving the screen cancels a request for rows nobody is looking at', () => {
+    const send = jest.fn();
+    const warmer = createRowWarmer({ send });
+
+    warmer.onVisible(viewable(RESULT));
+    warmer.cancel();
+    jest.advanceTimersByTime(WARM_COALESCE_MS * 4);
+    expect(send).not.toHaveBeenCalled();
   });
 });
 
