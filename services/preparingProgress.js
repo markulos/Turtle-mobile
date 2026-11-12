@@ -36,11 +36,16 @@
  *
  * A number that cannot change is not progress, it is a frozen clock, and the
  * one thing it reliably communicates is that the app has stopped noticing. So
- * the honest version has a third state: past STALLED_AFTER_MS with still no
- * audio in hand, the percentage stops being the message and the words say what
- * is actually known — this is taking longer than it should, and here is the
- * way out. The percentage is NOT shown in that state; there is nothing it
- * could add that "still nothing" does not already say better.
+ * the honest version has a third state: once the estimate has run out of room
+ * with still no audio in hand, the percentage stops being the message and the
+ * words say what is actually known — this is taking longer than it should, and
+ * here is the way out. The percentage is NOT shown in that state; there is
+ * nothing it could add that "still nothing" does not already say better.
+ *
+ * The invariant that falls out of it, and the one worth keeping: **a frozen
+ * percentage is never shown.** The handover happens exactly when the number
+ * stops moving, not a fixed interval later — see STALLED_AFTER_MS, which is
+ * why that constant is computed from the curve rather than picked.
  *
  * ── Why these constants ─────────────────────────────────────────────────
  * RESOLVE_HALF_MS is the measured middle of a cold resolve, so the estimate
@@ -65,21 +70,29 @@ export const BUFFER_TARGET_SEC = 3;
 export const MAX_PERCENT = 99;
 
 /**
- * Waiting this long with no audio at all stops being a wait and starts being a
- * problem worth offering a way out of.
+ * When the estimate runs out of room: the moment `preparingPercent` can no
+ * longer return anything new.
  *
- * Twenty seconds is chosen against what the pond actually does, not picked for
- * roundness. A warmed row resolves in 0 ms and a cold one in 1-2s, so neither
- * gets near the ceiling; the slowest healthy path is the fallback to spawning
- * yt-dlp.exe at ~3.6s, which shows ~56%. Reaching 69 AT ALL already means
- * something unusual, and this leaves another eleven seconds on top of that
- * before changing the words.
+ * DERIVED, not chosen. The curve reaches its cap when
+ * `CEILING * (1 - 2**(-t/HALF))` first floors to `CEILING - 1`, which is at
+ * `HALF * log2(CEILING)` — about 9.2s for the constants above. Computing it
+ * means the two can never drift apart: retune the curve and this moves with it.
  *
- * It is deliberately not the pond's own 25s request timeout. The point is to
- * speak BEFORE the thing gives up, while pressing it again is still the
- * cheapest fix available.
+ * The first attempt at this picked twenty seconds instead, reasoning that
+ * reaching the cap at all already means something unusual so a further margin
+ * on top was cheap. That was backwards, and it is the whole of the bug Mark
+ * reported twice: the number froze at 69% at 9.2s and the words did not change
+ * until 20s, leaving nearly eleven seconds of a screen whose only moving part
+ * had stopped. A margin on top of "the display has stopped working" is not
+ * caution, it is the lie extended.
+ *
+ * So the rule is now an invariant rather than a threshold: **a frozen
+ * percentage is never shown.** The instant the number cannot move, the words
+ * take over. Everything healthy is far below this anyway — a warmed row
+ * resolves in 0 ms, a cold one in 1-2s, and the slowest healthy path (the pond
+ * falling back to spawning yt-dlp.exe, ~3.6s) shows ~56%.
  */
-export const STALLED_AFTER_MS = 20_000;
+export const STALLED_AFTER_MS = Math.round(RESOLVE_HALF_MS * Math.log2(RESOLVE_CEILING));
 
 /**
  * The percentage to show, 0-99.

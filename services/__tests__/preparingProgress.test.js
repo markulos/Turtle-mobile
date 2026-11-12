@@ -78,7 +78,7 @@ describe('rubbish in', () => {
 });
 
 describe('when the wait stops being one', () => {
-  test('a number pinned at the ceiling for twenty seconds is a stall', () => {
+  test('a number pinned at the ceiling is a stall', () => {
     // The bug this exists for: the estimate tops out at 69 and then has
     // nowhere to go, so a preview that never produced a byte sat there for
     // ever and the screen read as "working on it".
@@ -86,10 +86,34 @@ describe('when the wait stops being one', () => {
     expect(preparingStalled({ elapsedMs: STALLED_AFTER_MS })).toBe(true);
   });
 
+  // THE INVARIANT, and the reason this file has a test that scans: a frozen
+  // percentage is never shown. The first version of the stall state missed it
+  // by picking 20s out of the air while the number actually stops moving at
+  // ~9.2s, which left eleven seconds of frozen "69%" on screen — reported as
+  // "still gets stuck at 69%", because it still was.
+  //
+  // Asserted by walking the clock rather than by restating the formula: a test
+  // that recomputes `HALF * log2(CEILING)` would agree with a wrong constant
+  // as happily as a right one. This asks the real question instead — is there
+  // any millisecond at which the number has stopped and the words have not
+  // taken over?
+  test('the words take over on the very millisecond the number stops moving', () => {
+    let firstFrozen = null;
+    for (let t = 0; t <= 60_000; t += 1) {
+      if (preparingPercent({ elapsedMs: t }) === RESOLVE_CEILING - 1) { firstFrozen = t; break; }
+    }
+    expect(firstFrozen).not.toBeNull();
+    expect(preparingStalled({ elapsedMs: firstFrozen })).toBe(true);
+    // And one tick earlier the number was still climbing, so it must NOT have.
+    expect(preparingPercent({ elapsedMs: firstFrozen - 1 })).toBeLessThan(RESOLVE_CEILING - 1);
+    expect(preparingStalled({ elapsedMs: firstFrozen - 1 })).toBe(false);
+  });
+
   test('but not before — a slow resolve is still a resolve', () => {
     expect(preparingStalled({ elapsedMs: 0 })).toBe(false);
     // The slowest HEALTHY path is the pond falling back to spawning
-    // yt-dlp.exe, ~3.6s. Nothing about that deserves an alarm.
+    // yt-dlp.exe, ~3.6s. Nothing about that deserves an alarm, and the number
+    // is still visibly moving there (~56%).
     expect(preparingStalled({ elapsedMs: 3600 })).toBe(false);
     expect(preparingStalled({ elapsedMs: STALLED_AFTER_MS - 1 })).toBe(false);
   });

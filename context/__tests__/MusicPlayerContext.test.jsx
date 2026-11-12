@@ -239,20 +239,28 @@ describe('MusicPlayerProvider', () => {
       beforeEach(() => { jest.useFakeTimers(); });
       afterEach(() => { jest.useRealTimers(); });
 
-      test('turns true once the estimate has been pinned at the ceiling', async () => {
+      test('turns true as the estimate reaches the ceiling, not later', async () => {
         // The reported bug: "it loads fast and then slows down and gets stuck
         // at 69%". 69 is the cap, and with no bytes it stays there for ever.
+        //
+        // Reported TWICE, because the first fix left the handover at 20s while
+        // the number actually stops at ~9.2s. The screen Mark was describing
+        // was the gap between the two, so what this test guards is that there
+        // is no gap: by the time the number is pinned, the words have changed.
         mockActiveTrack = { mediaId: 'yt:abc' };
         mockPlaying = false;
         mockPlaybackState = 'buffering';
         mockProgress = { position: 0, duration: 0, buffered: 0 };
         const view = await mount();
 
-        await waitSeconds(10);
-        expect(pct(view)).toBe(RESOLVE_CEILING - 1);
-        expect(stalled(view)).toBe('false');   // pinned, but not yet worth saying
+        // A second before the cap the number is still climbing on its own, and
+        // a moving number needs no sentence.
+        await waitSeconds(9);
+        expect(pct(view)).toBeLessThan(RESOLVE_CEILING - 1);
+        expect(stalled(view)).toBe('false');
 
-        await waitSeconds(11);
+        await waitSeconds(1);
+        expect(pct(view)).toBe(RESOLVE_CEILING - 1);
         expect(stalled(view)).toBe('true');
       });
 
