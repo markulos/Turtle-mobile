@@ -65,6 +65,7 @@ import DownloadsPill from './components/DownloadsPill';
 import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
+import { dockSkin } from './components/dockSkins';
 import DockTabBar from './components/DockTabBar';
 import { TAB_SWITCH_SPEC, forTabTurn } from './components/dockMotion';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
@@ -121,9 +122,11 @@ installGlobalTouchFeedback();
 const Tab = createBottomTabNavigator();
 
 function TabNavigator() {
-  // No isDark here any more: the dock is ghosted black in BOTH themes, so
-  // nothing in this navigator's chrome branches on the theme.
-  const { theme, hideVaultButton } = useTheme();
+  // No isDark here: the dock's material is a SKIN chosen in Settings, not a
+  // function of light/dark mode, so nothing in this navigator's chrome
+  // branches on the theme.
+  const { theme, hideVaultButton, dockStyle } = useTheme();
+  const skin = dockSkin(dockStyle);
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   // The avatar tab needs to know WHOSE avatar to draw…
@@ -266,12 +269,12 @@ function TabNavigator() {
         },
         // Active sits ON the accent chip, so its ink is derived from the chosen
         // highlight colour: white was right for every saturated preset and
-        // invisible the moment the accent could be a pale pink. Inactive follows
-        // the DOCK, not the app theme — the capsule is ghosted black in both
-        // themes now (see TabBarPill), so a dark light-mode tint would vanish
-        // into it.
+        // invisible the moment the accent could be a pale pink. Inactive
+        // follows the DOCK's SKIN, not the app theme — the glyphs sit on the
+        // capsule, so white-on-smoked and dark-on-paper are properties of the
+        // material, and a theme-derived tint would vanish into one of them.
         tabBarActiveTintColor: inkOn(theme.colors.accent),
-        tabBarInactiveTintColor: 'rgba(255,255,255,0.55)',
+        tabBarInactiveTintColor: skin.inactiveTint,
         // Icons only — no text labels. Cleaner look and lets the
         // larger turtle icon breathe without crowding from a label
         // sitting under it.

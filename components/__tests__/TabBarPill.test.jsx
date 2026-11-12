@@ -3,20 +3,23 @@ import { StyleSheet } from 'react-native';
 import { render } from '@testing-library/react-native';
 
 import { BAR_CONTENT_HEIGHT } from '../tabBarLayout';
+import { dockSkin } from '../dockSkins';
 
 const ACCENT = '#1F8A9B';
 
 jest.mock('../../context/ThemeContext', () => ({
   useTheme: () => ({
     theme: { mode: 'dark', colors: { accent: '#1F8A9B' } },
-    dockIndicator: mockIndicator(),
+    dockIndicator: mockSettings().indicator,
+    dockStyle: mockSettings().style,
   }),
 }));
 
-// Which indicator Settings is on, swapped per test. A function rather than a
-// let, because the mock factory is hoisted above everything else in the file.
+// What Settings is set to, swapped per test. A function rather than a let,
+// because the mock factory is hoisted above everything else in the file.
 let indicator = 'chip';
-global.mockIndicator = () => indicator;
+let style = 'smoked';
+global.mockSettings = () => ({ indicator, style });
 
 jest.mock('expo-blur', () => ({ BlurView: () => null }));
 
@@ -53,7 +56,7 @@ const parse = (css) => {
   return { r: +m[1], g: +m[2], b: +m[3], a: +m[4] };
 };
 
-beforeEach(() => { indicator = 'chip'; });
+beforeEach(() => { indicator = 'chip'; style = 'smoked'; });
 
 describe('the dock capsule reads as a channel CUT INTO the page', () => {
   test('the wash is painted top-to-bottom, darkest at the top edge', async () => {
@@ -112,6 +115,19 @@ describe('the dock capsule reads as a channel CUT INTO the page', () => {
     expect(chip.backgroundColor).toBe(ACCENT);
     expect(chip.shadowOpacity).toBeGreaterThan(0);
     expect(chip.shadowOffset).toEqual({ width: 0, height: 2 });
+  });
+
+  test('a different skin repaints the capsule — all of it, from the skin', async () => {
+    style = 'paper';
+    const paper = dockSkin('paper');
+    const { getByTestId, queryByTestId } = await render(<TabBarPill />);
+
+    expect(styleOf(getByTestId('dock-card')).borderColor).toBe(paper.edge);
+    expect(getByTestId('dock-wash').props.colors).toEqual(paper.wash.colors);
+    // Paper describes no depth, so there is no floor to light. The lip must be
+    // ABSENT rather than drawn in a colour nobody can see — a white hairline
+    // left on a white bar is the kind of thing that survives a review.
+    expect(queryByTestId('dock-lip')).toBeNull();
   });
 
   test('the underline treatment still takes the accent', async () => {

@@ -33,6 +33,7 @@ import TranscriptionPanel from '../components/TranscriptionPanel';
 import { useServer } from '../context/ServerContext';
 import { useTheme, ACCENTS, CUSTOM_ACCENT } from '../context/ThemeContext';
 import AccentColorPicker from '../components/AccentColorPicker';
+import DockStylePicker from '../components/DockStylePicker';
 import { inkOn } from '../utils/accentColor';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../context/AuthContext';
@@ -72,6 +73,7 @@ const SETTING_TERMS = {
   darkMode: 'dark mode theme appearance night light colour color',
   accent: 'highlight colour color accent theme appearance swatch pink light pink custom own pick picker hex shade hue rainbow',
   hideVault: 'hide vault button navbar tab bar navigation photos',
+  dockStyle: 'navbar style dock bar bottom appearance backdrop capsule white paper smoked glass dark black hairline border theme look chip underline active tab indicator highlight',
   autoUpload: 'auto upload camera roll new photos videos background sync vault automatic icloud',
   cache: 'cache size storage space photos clear free disk measure',
   offline: 'offline saved photos kept downloaded plane no signal remove free space',
@@ -1076,6 +1078,21 @@ export default function SettingsScreen({ active = true }) {
 
             {(searching || tabKey === 'general') && (
             <SettingsSection title="Navigation" icon="dock-bottom" query={searchQuery} styles={styles} theme={theme}>
+              <SettingsItem terms={SETTING_TERMS.dockStyle}>
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Navbar style</Text>
+                  <Text style={styles.settingDescription}>
+                    What the bottom bar is made of, and how it marks the tab you are on. Each
+                    option draws itself — the bar changes the moment you pick one.
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.dockStyleBlock}>
+                <DockStylePicker />
+              </View>
+              </SettingsItem>
+
               <SettingsItem terms={SETTING_TERMS.hideVault}>
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
@@ -1822,6 +1839,14 @@ const createStyles = (theme) => StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 12,
+    paddingHorizontal: 4,
+    paddingBottom: 8,
+  },
+  // The navbar-style previews. Same 4pt side breathing room as the accent
+  // swatches above them, so the two controls in this screen that are made of
+  // tiles line up with each other.
+  dockStyleBlock: {
+    marginTop: 12,
     paddingHorizontal: 4,
     paddingBottom: 8,
   },

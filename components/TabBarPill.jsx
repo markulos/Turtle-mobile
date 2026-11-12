@@ -16,7 +16,7 @@ import {
   UNDERLINE_W, UNDERLINE_H, indicatorOffset, ridgeOffsets,
 } from './tabBarLayout';
 import { TAB_SWITCH_BEZIER, TAB_SWITCH_MS } from './dockMotion';
-import { dockSurfaceStops } from './dockSurface';
+import { dockSkin } from './dockSkins';
 
 /**
  * TabBarPill — ONE pill that slides from tab to tab behind the icons.
@@ -59,56 +59,46 @@ const SLIDE = {
   easing: Easing.bezier(...TAB_SWITCH_BEZIER).factory(),
 };
 
-// The dock's palette — ONE set for BOTH themes: a ghosted-black capsule, the
-// dark treatment applied in light mode too. It reads as a floating piece of
-// hardware over the page rather than a panel that restyles itself, and the
-// glyph/chip contrast is then a single problem to solve instead of two.
+// The dock's palette lives in dockSkins — one entry per SKIN, because what the
+// capsule is made of is a setting now (Settings → Navigation) rather than a
+// constant. Every colour below comes from the chosen skin:
 //
-//   surface — near-black, translucent enough that the blur still shows the page
-//             moving behind it, and no longer FLAT: it is darkest along the TOP
-//             edge and lifts toward the bottom, which is a channel cut into the
-//             page rather than a lozenge resting on it. The arithmetic, the two
-//             end colours and why the ramp runs this way round are all in
-//             dockSurface.js;
-//   edge    — a white hairline BEZEL: the device's thinnest renderable line,
-//             white in both themes because the surface under it is black in
-//             both. It is DIM — 0.16, down from 0.30 — because a bright rim all
-//             the way round, top edge included, is a lit object sitting on the
-//             page, and that is exactly the reading the recess is undoing. It
-//             still has a job: over a light page it keeps the capsule's outline
-//             from dissolving into the blur;
-//   lip     — the lit floor of the channel, a hairline along the INSIDE of the
-//             capsule's bottom edge. It is drawn inside the card's clip, which
-//             is what makes a straight line follow the capsule's curve at both
-//             ends instead of cutting across it, and it is brighter than the
-//             bezel: this is the one edge that should catch the light;
-//   ridge   — the hairlines between the icons, unchanged at 0.30. They are
-//             grooves across the floor rather than part of the capsule's rim,
-//             so they keep their own value rather than following the bezel
-//             down;
-//   chip    — the theme accent, the one saturated element and therefore what the
-//             eye tracks as it slides. Its glyph is INKED AGAINST the accent
-//             (`inkOn`, see tabBarActiveTintColor in App.js): white for every
-//             saturated colour, near-black once the accent is pale enough that
-//             white would disappear. The INACTIVE glyphs stay white-on-dark in
-//             both themes regardless — they sit on the capsule, not the chip,
-//             and a dark tint would vanish into it.
-const DOCK_EDGE = 'rgba(255,255,255,0.16)';
-const DOCK_LIP = 'rgba(255,255,255,0.30)';
-const DOCK_RIDGE = 'rgba(255,255,255,0.30)';
-// 1.5pt of lit floor: ~4px at @3x. A hairline disappears under the capsule's
-// own curve at this radius, and 2pt starts to read as a second bar.
-const DOCK_LIP_H = 1.5;
+//   wash    — the fill over the blur. 'smoked' is near-black and darkest along
+//             its TOP edge, lifting toward the bottom, which is a channel cut
+//             into the page rather than a lozenge resting on it (the ramp and
+//             why it runs this way round are in dockSurface.js). 'paper' is
+//             flat white and describes no depth at all;
+//   edge    — the hairline around the capsule: the device's thinnest
+//             renderable line, DIM on smoked because a bright rim all the way
+//             round is a lit object sitting on the page, dark on paper because
+//             the surface under it went white. Either way it keeps the
+//             capsule's outline from dissolving into the blur;
+//   lip     — the lit hairline along the INSIDE of the bottom edge, drawn
+//             inside the card's clip so a straight strip follows the capsule's
+//             curve into both ends. null on a skin with no depth to describe;
+//   ridge   — the hairlines between the icons. Grooves across the floor rather
+//             than part of the rim, so they keep their own value rather than
+//             following the edge;
+//   chip    — the theme accent, the one saturated element and therefore what
+//             the eye tracks as it slides. Skin-independent: its glyph is
+//             INKED AGAINST the accent (`inkOn`, see tabBarActiveTintColor in
+//             App.js) — white for every saturated colour, near-black once the
+//             accent is pale enough that white would disappear. The INACTIVE
+//             glyphs are the skin's business, because they sit on the capsule
+//             rather than on the chip (dockSkins' inactiveTint).
 
-// Built once: the stops do not depend on anything that changes — not the
-// theme, not the width, not which tab is up.
-const SURFACE = dockSurfaceStops();
+// How thick the lip is, for the skins that have one: 1.5pt, ~4px at @3x. A
+// hairline disappears under the capsule's own curve at this radius, and 2pt
+// starts to read as a second bar.
+const DOCK_LIP_H = 1.5;
 
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
 
 export default function TabBarPill({ dragSlot, leadSlot }) {
-  const { theme, dockIndicator } = useTheme();
+  const { theme, dockIndicator, dockStyle } = useTheme();
+  // Every colour the capsule draws, from the skin chosen in Settings.
+  const skin = dockSkin(dockStyle);
   const [barWidth, setBarWidth] = useState(0);
   // Not dragging, and no dock to drag on (a test, a screenshot harness): -1 is
   // the resting contract, so an absent value behaves exactly like a lifted
@@ -190,28 +180,28 @@ export default function TabBarPill({ dragSlot, leadSlot }) {
         setBarWidth((prev) => (prev === w ? prev : w));
       }}
     >
-      {/* Ghosted-black frosted capsule, in BOTH themes. Blur params still come
-          from the app's shared frost module so it's the same material as the
-          chat composer; the tint is pinned to 'dark' rather than following the
-          theme, because a light-tinted blur under a near-black overlay just
-          milks it out. */}
-      <View testID="dock-card" style={[styles.card, { borderColor: DOCK_EDGE }]}>
+      {/* The frosted capsule, in whichever material Settings chose. Blur params
+          still come from the app's shared frost module so it's the same glass
+          as the chat composer; only the TINT is the skin's, and it follows the
+          skin rather than the theme — a light-tinted blur under a near-black
+          wash just milks it out, and a dark one under a white wash greys it. */}
+      <View testID="dock-card" style={[styles.card, { borderColor: skin.edge }]}>
         <BlurView
           pointerEvents="none"
           style={StyleSheet.absoluteFill}
           {...blurProps(theme)}
-          tint="dark"
+          tint={skin.blurTint}
         />
-        {/* …and the wash over it: darkest along the top edge, lifting toward
-            the bottom, so the capsule reads as a channel cut into the page
-            rather than a slab resting on it. Explicitly top-to-bottom rather
-            than trusting the default, because the whole point of this element
-            is its direction. */}
+        {/* …and the wash over it. Always painted as a gradient even for a flat
+            skin, which hands it the same colour twice — one code path rather
+            than a branch per skin. Explicitly top-to-bottom rather than
+            trusting the default, because for the skins that DO shade, the
+            direction is the whole point of the element. */}
         <LinearGradient
           pointerEvents="none"
           testID="dock-wash"
-          colors={SURFACE.colors}
-          locations={SURFACE.locations}
+          colors={skin.wash.colors}
+          locations={skin.wash.locations}
           start={{ x: 0, y: 0 }}
           end={{ x: 0, y: 1 }}
           style={StyleSheet.absoluteFill}
@@ -219,7 +209,13 @@ export default function TabBarPill({ dragSlot, leadSlot }) {
         {/* The lit floor of the channel. Inside the card, so the card's own
             overflow clips this straight strip to the capsule's shape and it
             curves up into both ends on its own. */}
-        <View pointerEvents="none" testID="dock-lip" style={styles.lip} />
+        {skin.lip && (
+          <View
+            pointerEvents="none"
+            testID="dock-lip"
+            style={[styles.lip, { backgroundColor: skin.lip }]}
+          />
+        )}
       </View>
       {/* The ridges: one hairline between each pair of icons, drawn BEFORE the
           indicator so the chip passes over them rather than under. They are
@@ -230,7 +226,7 @@ export default function TabBarPill({ dragSlot, leadSlot }) {
           key={x}
           pointerEvents="none"
           testID="dock-ridge"
-          style={[styles.ridge, { left: x - StyleSheet.hairlineWidth / 2, backgroundColor: DOCK_RIDGE }]}
+          style={[styles.ridge, { left: x - StyleSheet.hairlineWidth / 2, backgroundColor: skin.ridge }]}
         />
       ))}
       <Reanimated.View
@@ -271,7 +267,8 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     overflow: 'hidden',
   },
-  // The channel's lit floor — see DOCK_LIP. Full width and clipped to the
+  // The channel's lit floor — the skin supplies its colour. Full width and
+  // clipped to the
   // capsule rather than inset by the radius, which is what lets it follow the
   // curve into both rounded ends.
   lip: {
@@ -280,7 +277,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     height: DOCK_LIP_H,
-    backgroundColor: DOCK_LIP,
   },
   pill: {
     position: 'absolute',
