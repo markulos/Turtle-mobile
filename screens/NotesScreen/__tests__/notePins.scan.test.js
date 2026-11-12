@@ -106,6 +106,42 @@ test('the long press offers to pin, and says which way it goes', () => {
   expect(sheet.indexOf('Pin to top')).toBeLessThan(sheet.indexOf('Delete'));
 });
 
+describe('the open note can pin itself', () => {
+  // Pinning used to live only in the list's long press — which is the one
+  // place you are not while you are reading the note you want kept at the top.
+  test('the composer is told, and given the way back', () => {
+    const sig = between('function ComposerModal(', 'const [content, setContent]');
+    expect(sig).toMatch(/pinned = false/);
+    expect(sig).toMatch(/onTogglePin/);
+  });
+
+  test('the nav bar draws the pin, in both states, on the right', () => {
+    // The right-hand cluster: everything between the back key and Done.
+    const right = between('accessibilityLabel="Back to notes"', 'accessibilityLabel="Save note"');
+    expect(right).toMatch(/testID="note-pin"/);
+    expect(right).toMatch(/onPress=\{onTogglePin\}/);
+    // Filled when pinned, outline when not — the control is always there, so
+    // it has to carry the state itself (unlike the rows, where the glyph only
+    // appears at all for a pinned note).
+    expect(right).toMatch(/name=\{pinned \? 'pin' : 'pin-outline'\}/);
+  });
+
+  test('…but not for a note that does not exist yet', () => {
+    // A pin is a note id in a list of them. A capture still being written has
+    // no id to put there, so the control would be a press that does nothing.
+    const right = between('accessibilityLabel="Back to notes"', 'testID="note-pin"');
+    expect(right).toMatch(/initialNote\?\.id/);
+  });
+
+  test('it is the list’s own pin, not a copy', () => {
+    const props = between('<ComposerModal', 'onPersistMedia');
+    // The same set the list sorts by: unpin from the long press while the note
+    // is open and the glyph in the note empties with it.
+    expect(props).toMatch(/pinned=\{[^}]*pinnedSet\.has\(String\(editingNote\.id\)\)\}/);
+    expect(props).toMatch(/togglePin\(editingNote\)/);
+  });
+});
+
 test('a deleted note takes its pin with it, but only once the delete lands', () => {
   // Landmarks have to be CODE: the comments are blanked above.
   const del = between('const performDelete = async (note) => {', 'const openEditNote = useCallback(');

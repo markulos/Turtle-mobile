@@ -1512,6 +1512,11 @@ export default function NotesScreen() {
         initialMode={TAB_COMPOSER_MODE[filter] || 'todo'}
         activeTopic={selectedTopic && selectedTopic !== UNTAGGED ? selectedTopic : null}
         allTags={allTags}
+        // Read from the same set the list sorts by, so the glyph in the note
+        // is showing the pin, not a copy of it: unpin from the list's long
+        // press while the note is open and the icon here empties too.
+        pinned={!!editingNote && pinnedSet.has(String(editingNote.id))}
+        onTogglePin={editingNote ? () => togglePin(editingNote) : undefined}
         onClose={() => { setComposerOpen(false); setEditingNote(null); }}
         onSubmit={async (payload) => {
           // Which store a save lands in follows the KIND the composer settled
@@ -2605,7 +2610,15 @@ const linkCardStyles = (theme, isDark) => StyleSheet.create({
 });
 
 // ── Composer modal ──────────────────────────────────────────
-function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic = null, allTags = [], onClose, onSubmit, onPersistMedia, theme, isDark }) {
+function ComposerModal({
+  visible, initialNote, initialMode = 'todo', activeTopic = null, allTags = [],
+  // Is the note being edited pinned to the top of the list, and the way to
+  // change that. The same pair the rows take (NoteRow, LinkNoteCard), from the
+  // same store — so the pin here and the pin in the list are one state, not
+  // two that have to be kept in step.
+  pinned = false, onTogglePin,
+  onClose, onSubmit, onPersistMedia, theme, isDark,
+}) {
   const [content, setContent] = useState('');
   const [description, setDescription] = useState('');
   // Composer mode: 'note' | 'todo' | 'feedback'. To-do is the default for a new
@@ -3126,6 +3139,31 @@ function ComposerModal({ visible, initialNote, initialMode = 'todo', activeTopic
             <Icon name="chevron-left" size={30} color={theme.colors.accent || theme.colors.accentInfo} />
           </TouchableOpacity>
           <View style={{ flex: 1 }} />
+          {/* The pin, where the note itself is — pinning used to live only in
+              the list's long press, which you cannot reach while you are
+              reading the thing you want to keep at the top.
+
+              Only for a note that EXISTS: a pin is a note id in a list of
+              them, and a capture still being written has no id to put there.
+              It appears the moment the note is saved and reopened. */}
+          {onTogglePin && initialNote?.id ? (
+            <TouchableOpacity
+              onPress={onTogglePin}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.navIconBtn}
+              testID="note-pin"
+              accessibilityRole="button"
+              // The label says what the press will DO, not what the note is —
+              // the filled glyph already carries the state for everyone else.
+              accessibilityLabel={pinned ? 'Unpin from top' : 'Pin to top'}
+            >
+              <Icon
+                name={pinned ? 'pin' : 'pin-outline'}
+                size={20}
+                color={pinned ? (theme.colors.accent || theme.colors.accentInfo) : theme.colors.textSecondary}
+              />
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity
             onPress={() => { tapHaptic(); Keyboard.dismiss(); setSettingsOpen(true); }}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
