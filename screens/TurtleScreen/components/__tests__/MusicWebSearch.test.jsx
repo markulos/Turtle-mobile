@@ -53,6 +53,7 @@ const mockMusicPlayer = {
   activeTrack: null,
   isPlaying: false,
   preparing: false,
+  preparingPct: 0,
   position: 0,
   duration: 0,
   playMedia: mockPlayMedia,
@@ -130,6 +131,7 @@ describe('the search scope toggle', () => {
     __resetForTests();
     mockMusicPlayer.activeTrack = null;
     mockMusicPlayer.preparing = false;
+    mockMusicPlayer.preparingPct = 0;
     mockApi.get.mockImplementation(() => Promise.resolve({ success: true, results: [RESULT] }));
     mockApi.post.mockImplementation(() => Promise.resolve({ success: true, id: 'job_1' }));
   });
@@ -282,23 +284,38 @@ describe('previewing and downloading a result', () => {
     test('the tapped row says so, in place of its channel line', async () => {
       mockMusicPlayer.activeTrack = { mediaId: 'yt:MV_3Dpw-BRY' };
       mockMusicPlayer.preparing = true;
+      mockMusicPlayer.preparingPct = 42;
       const view = await searchingTheWeb();
       await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
-      expect(view.getByText('Finding the audio...')).toBeTruthy();
-      expect(view.getByLabelText('Finding the audio for Kavinsky - Nightcall')).toBeTruthy();
+      // With how far along it is: a bare spinner says "something is
+      // happening", a number says whether it is worth waiting out.
+      expect(view.getByText('Finding the audio... 42%')).toBeTruthy();
+      expect(view.getByLabelText('Finding the audio... 42% for Kavinsky - Nightcall')).toBeTruthy();
+    });
+
+    test('the ring in the row is filled to the same number', async () => {
+      mockMusicPlayer.activeTrack = { mediaId: 'yt:MV_3Dpw-BRY' };
+      mockMusicPlayer.preparing = true;
+      mockMusicPlayer.preparingPct = 42;
+      const view = await searchingTheWeb();
+      await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+      const [ring] = view.getAllByRole('progressbar');
+      expect(ring.props.accessibilityValue).toMatchObject({ min: 0, max: 100, now: 42 });
     });
 
     test('the transport bar says it where the play button is', async () => {
       mockMusicPlayer.activeTrack = { mediaId: 'yt:MV_3Dpw-BRY' };
       mockMusicPlayer.preparing = true;
+      mockMusicPlayer.preparingPct = 42;
       const view = await searchingTheWeb();
       await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
       // Pressed by its waiting label: the row renames itself the moment it
       // starts waiting, which is the point of the test above.
-      await fireEvent.press(view.getByLabelText('Finding the audio for Kavinsky - Nightcall'));
+      await fireEvent.press(view.getByLabelText('Finding the audio... 42% for Kavinsky - Nightcall'));
       // The bar's play control reads as busy rather than as an idle Play that
-      // was just pressed and ignored.
-      await waitFor(() => expect(view.getByLabelText('Finding the audio')).toBeTruthy());
+      // was just pressed and ignored - and carries the SAME number as the row,
+      // because it is the same wait.
+      await waitFor(() => expect(view.getByLabelText('Finding the audio... 42%')).toBeTruthy());
       expect(view.queryByLabelText('Play')).toBeNull();
     });
 
@@ -308,7 +325,7 @@ describe('previewing and downloading a result', () => {
       mockMusicPlayer.preparing = true;
       const view = await searchingTheWeb();
       await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
-      expect(view.queryByText('Finding the audio...')).toBeNull();
+      expect(view.queryByText(/Finding the audio/)).toBeNull();
       expect(view.getByLabelText('Preview Kavinsky - Nightcall')).toBeTruthy();
     });
 
@@ -319,7 +336,7 @@ describe('previewing and downloading a result', () => {
       try {
         const view = await searchingTheWeb();
         await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
-        expect(view.queryByText('Finding the audio...')).toBeNull();
+        expect(view.queryByText(/Finding the audio/)).toBeNull();
       } finally {
         mockMusicPlayer.isPlaying = false;
       }

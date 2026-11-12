@@ -22,8 +22,12 @@ import { buildMusicQueue } from '../services/musicTrackMapper';
 import { partitionVoiceRecordings } from '../utils/voiceRecordings';
 import { musicPlayerService } from '../services/musicPlayerService';
 import { musicOfflineStore } from '../services/musicOfflineStore';
+import { preparingPercent } from '../services/preparingProgress';
 
 const MusicPlayerContext = createContext(null);
+
+/** How often the "finding the audio" percentage is recomputed. */
+const PREPARING_TICK_MS = 150;
 
 export function MusicPlayerProvider({ children }) {
   const { isAuthenticated, authIdentity, authGeneration } = useAuth();
@@ -64,7 +68,7 @@ export function MusicPlayerProvider({ children }) {
   const activeTrack = useActiveMediaItem();
   const isPlaying = useIsPlaying();
   const playbackState = usePlaybackState();
-  const { position, duration } = useProgress(0.5);
+  const { position, duration, buffered } = useProgress(0.5);
 
   /**
    * Asked for, nothing audible yet.
@@ -83,6 +87,48 @@ export function MusicPlayerProvider({ children }) {
    * a position of zero makes it worth different words.
    */
   const preparing = !!activeTrack && !isPlaying && playbackState === PlaybackState.Buffering;
+
+  /**
+   * …and how far along that wait is, 0-99.
+   *
+   * The clock is kept here rather than in the two places that draw it, so the
+   * row and the transport bar can never disagree about the same wait. It only
+   * ticks WHILE preparing, and it starts again from zero for each track: this
+   * is the progress of one attempt to play one thing, not a running total.
+   *
+   * services/preparingProgress.js holds the arithmetic and the argument for
+   * why the first half of it is an estimate at all.
+   */
+  const [preparingPct, setPreparingPct] = useState(0);
+  const preparingSinceRef = useRef(0);
+  const preparingKey = preparing ? String(activeTrack?.mediaId ?? activeTrack?.id ?? '') : '';
+  // `buffered` is an absolute position, so the amount IN HAND is the part of
+  // it ahead of where we are — which is also the right quantity when this is a
+  // stall in the middle of a track rather than a start.
+  const bufferedAheadSec = Math.max(0, (Number(buffered) || 0) - (Number(position) || 0));
+  const bufferedAheadRef = useRef(bufferedAheadSec);
+  bufferedAheadRef.current = bufferedAheadSec;
+
+  useEffect(() => {
+    if (!preparingKey) {
+      preparingSinceRef.current = 0;
+      setPreparingPct(0);
+      return undefined;
+    }
+    preparingSinceRef.current = Date.now();
+    setPreparingPct(0);
+    // Faster than useProgress's half-second poll: the estimated half is a
+    // local clock, and at 500ms it visibly steps rather than moves.
+    const tick = setInterval(() => {
+      setPreparingPct((last) => preparingPercent({
+        elapsedMs: Date.now() - preparingSinceRef.current,
+        bufferedAheadSec: bufferedAheadRef.current,
+        floor: last,
+      }));
+    }, PREPARING_TICK_MS);
+    return () => clearInterval(tick);
+  }, [preparingKey]);
+
   const mediaBase = useMemo(
     () => (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, ''),
     [getBaseUrl, getMediaBaseUrl]
@@ -358,6 +404,7 @@ export function MusicPlayerProvider({ children }) {
       activeTrack,
       isPlaying,
       preparing,
+      preparingPct,
       position,
       duration,
       refreshLibrary,
@@ -381,6 +428,7 @@ export function MusicPlayerProvider({ children }) {
       activeTrack,
       isPlaying,
       preparing,
+      preparingPct,
       position,
       duration,
       refreshLibrary,

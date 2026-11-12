@@ -3,6 +3,7 @@ import { AppState, Button, Text, View } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { MusicPlayerProvider, useMusicPlayer } from '../MusicPlayerContext';
 import { musicPlayerService } from '../../services/musicPlayerService';
+import { preparingPercent } from '../../services/preparingProgress';
 
 const mockApiGet = jest.fn();
 const mockServer = {
@@ -15,6 +16,7 @@ let mockActiveTrack = null;
 let mockPlaying = false;
 /** Drives `preparing` — see the hook of the same name in the provider. */
 let mockPlaybackState = 'ready';
+let mockProgress = { position: 12, duration: 180, buffered: 12 };
 let mockMediaVersion = 0;
 let mockAuth = {
   isAuthenticated: true,
@@ -52,7 +54,7 @@ jest.mock('@rntp/player', () => ({
   useActiveMediaItem: () => mockActiveTrack,
   useIsPlaying: () => mockPlaying,
   usePlaybackState: () => mockPlaybackState,
-  useProgress: () => ({ position: 12, duration: 180 }),
+  useProgress: () => mockProgress,
 }));
 jest.mock('../../services/musicPlayerService', () => ({
   musicPlayerService: {
@@ -81,6 +83,7 @@ function Probe({ visible = true }) {
       <Text testID="ready">{String(music.ready)}</Text>
       <Text testID="position">{music.position}</Text>
       <Text testID="preparing">{String(music.preparing)}</Text>
+      <Text testID="preparing-pct">{String(music.preparingPct)}</Text>
       <Button title="play-two" onPress={() => music.playMedia('two')} />
       <Button title="play-one" onPress={() => music.playMedia('one')} />
       <Button title="play-memo" onPress={() => music.playMedia('memo')} />
@@ -104,6 +107,7 @@ describe('MusicPlayerProvider', () => {
     mockActiveTrack = null;
     mockPlaying = false;
     mockPlaybackState = 'ready';
+    mockProgress = { position: 12, duration: 180, buffered: 12 };
     mockMediaVersion = 0;
     mockAuth = {
       isAuthenticated: true,
@@ -170,6 +174,49 @@ describe('MusicPlayerProvider', () => {
       mockPlaybackState = 'buffering';
       const view = await mount();
       await waitFor(() => expect(view.getByTestId('preparing').props.children).toBe('false'));
+    });
+
+    /**
+     * …and how far along it is. The arithmetic is tested in
+     * services/__tests__/preparingProgress.test.js; what matters here is that
+     * the provider feeds it the right things and resets it per attempt.
+     */
+    describe('preparingPct', () => {
+      const pct = (view) => Number(view.getByTestId('preparing-pct').props.children);
+
+      test('climbs while the wait is still an estimate', async () => {
+        mockActiveTrack = { mediaId: 'yt:abc' };
+        mockPlaying = false;
+        mockPlaybackState = 'buffering';
+        // Nothing buffered ahead of where we are: the resolving half.
+        mockProgress = { position: 0, duration: 0, buffered: 0 };
+        const view = await mount();
+        await waitFor(() => expect(pct(view)).toBeGreaterThan(0), { timeout: 3000 });
+        const early = pct(view);
+        await waitFor(() => expect(pct(view)).toBeGreaterThan(early), { timeout: 3000 });
+      });
+
+      test('reads the buffer the player has IN HAND, not its position', async () => {
+        // `buffered` is absolute, so a track 12s in with 15s buffered has
+        // three seconds in hand — which is what the number is about. Reading
+        // it as fifteen would show a full ring the instant anything arrived.
+        mockActiveTrack = { mediaId: 'yt:abc' };
+        mockPlaying = false;
+        mockPlaybackState = 'buffering';
+        mockProgress = { position: 12, duration: 180, buffered: 13.5 };
+        const view = await mount();
+        await waitFor(() => expect(pct(view)).toBe(
+          preparingPercent({ bufferedAheadSec: 1.5 }),
+        ), { timeout: 3000 });
+      });
+
+      test('is nothing at all when nothing is being prepared', async () => {
+        mockActiveTrack = { mediaId: 'yt:abc' };
+        mockPlaying = true;
+        mockPlaybackState = 'ready';
+        const view = await mount();
+        await waitFor(() => expect(pct(view)).toBe(0));
+      });
     });
   });
 

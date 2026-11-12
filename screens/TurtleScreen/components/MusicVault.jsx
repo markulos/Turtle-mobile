@@ -44,6 +44,8 @@ import { rankTracks, trackCountLabel } from './trackSearch';
 import SearchScopeToggle from './SearchScopeToggle';
 import MusicWebResultRow from './MusicWebResultRow';
 import MusicWebResultSkeleton from './MusicWebResultSkeleton';
+import PreparingRing from './PreparingRing';
+import { preparingLabel } from '../../../services/preparingProgress';
 import {
   LIBRARY_SCOPE, WEB_SCOPE, WEB_DEBOUNCE_MS,
   createRowWarmer, enqueueWebDownload, pondMessage, searchWebMusic, shouldSearchWeb,
@@ -158,6 +160,7 @@ export default function MusicVault({
     activeTrack,
     isPlaying,
     preparing,
+    preparingPct,
     position,
     duration,
     playMedia,
@@ -255,6 +258,9 @@ export default function MusicVault({
   // "next" would otherwise test as enabled and skip into silence.
   const canPrev = ready && current > 0;
   const canNext = ready && current >= 0 && current < visibleTracks.length - 1;
+  // The same sentence the tapped ROW shows — built in one place, so one wait
+  // cannot read as two different numbers on the same screen.
+  const waitingLabel = preparingLabel(preparingPct);
   const barWidthRef = useRef(1);
 
   // The track whose "⋯" was tapped (null = sheet closed). Held by ID and
@@ -1390,14 +1396,20 @@ export default function MusicVault({
         tint={MUSIC_TINT(c)}
         playing={active}
         // Only the row that was actually tapped waits — see `preparing` in
-        // MusicPlayerContext for what the player is doing while it does.
+        // MusicPlayerContext for what the player is doing while it does, and
+        // preparingProgress.js for how much of the percentage is measured.
         preparing={active && preparing}
+        // Only the waiting row gets the ticking number. Handing it to all
+        // fifteen would re-render the whole list seven times a second for a
+        // percentage fourteen of them do not draw — React.memo can only skip a
+        // row whose props actually held still.
+        preparingPct={active ? preparingPct : 0}
         downloadState={webDownloads[item.videoId] || 'idle'}
         onPreview={() => previewWeb(item)}
         onDownload={() => downloadWeb(item)}
       />
     );
-  }, [theme, c, activeTrack, preparing, webDownloads, previewWeb, downloadWeb]);
+  }, [theme, c, activeTrack, preparing, preparingPct, webDownloads, previewWeb, downloadWeb]);
 
   /**
    * The search header: the scope toggle, then one line about what is below it.
@@ -1887,7 +1899,7 @@ export default function MusicVault({
                   button is, so it is where someone decides the tap did not
                   work and presses it again — which only restarts the wait. */}
               <Text style={{ fontSize: 12, color: c.textTertiary }} numberOfLines={1}>
-                {preparing ? 'Finding the audio...' : (sourceOf(nowTrack) || 'audio')}
+                {preparing ? waitingLabel : (sourceOf(nowTrack) || 'audio')}
               </Text>
             </View>
             <TouchableOpacity
@@ -1901,7 +1913,7 @@ export default function MusicVault({
             </TouchableOpacity>
             <TouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel={preparing ? 'Finding the audio' : isPlaying ? 'Pause' : 'Play'}
+              accessibilityLabel={preparing ? waitingLabel : isPlaying ? 'Pause' : 'Play'}
               onPress={togglePlayback}
               disabled={!ready}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -1910,7 +1922,11 @@ export default function MusicVault({
                   wait you have changed your mind about - but it no longer
                   LOOKS like a play button that did nothing. */}
               {preparing
-                ? <View style={styles.transportSpinner}><ActivityIndicator size="small" color={MUSIC_TINT(c)} /></View>
+                ? (
+                  <View style={styles.transportSpinner}>
+                    <PreparingRing percent={preparingPct} tint={MUSIC_TINT(c)} track={c.border} />
+                  </View>
+                )
                 : <Icon name={isPlaying ? 'pause-circle' : 'play-circle'} size={44} color={MUSIC_TINT(c)} />}
             </TouchableOpacity>
             <TouchableOpacity

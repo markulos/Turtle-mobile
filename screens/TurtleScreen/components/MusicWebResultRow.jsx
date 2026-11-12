@@ -19,7 +19,9 @@ import { ActivityIndicator, StyleSheet, TouchableOpacity, View } from 'react-nat
 import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { VaultResultRow } from './VaultSearchDock';
+import PreparingRing from './PreparingRing';
 import { webResultMeta } from '../../../services/webMusicSearch';
+import { preparingLabel } from '../../../services/preparingProgress';
 
 /** The download key's four states. `queued` is terminal on this screen: from
  *  there the DownloadsPill owns the progress, app-wide. */
@@ -59,9 +61,14 @@ function DownloadKey({ state, label, tint, c, onPress }) {
 }
 
 function MusicWebResultRow({
-  result, theme, tint, playing, preparing, downloadState, onPreview, onDownload,
+  result, theme, tint, playing, preparing, preparingPct = 0, downloadState, onPreview, onDownload,
 }) {
   const c = theme.colors;
+  // The percentage goes in the WORDS, not inside the ring: at 20pt a ring has
+  // no room for legible type, and this line is already the one saying what the
+  // wait is for. See services/preparingProgress.js for what the number means —
+  // the first half of it is an estimate, deliberately.
+  const waiting = preparingLabel(preparingPct);
   return (
     <View style={styles.inset}>
       <VaultResultRow
@@ -70,8 +77,8 @@ function MusicWebResultRow({
         // While the pond is still turning this video into a playable URL the
         // row says so IN PLACE OF the channel line. Without it the row looked
         // identical to one that had been tapped and done nothing.
-        meta={preparing ? 'Finding the audio...' : webResultMeta(result)}
-        accessibilityLabel={preparing ? `Finding the audio for ${result.title}` : `Preview ${result.title}`}
+        meta={preparing ? waiting : webResultMeta(result)}
+        accessibilityLabel={preparing ? `${waiting} for ${result.title}` : `Preview ${result.title}`}
         onPress={onPreview}
         leading={result.thumbnail ? (
           <Image
@@ -94,11 +101,13 @@ function MusicWebResultRow({
           <View style={styles.trailing}>
             {/* While it is the playing track the row says so in the same place
                 a library row does — in the square — but the square is holding
-                a cover, so the marker comes here instead. A spinner takes that
-                spot while the pond is still finding the audio, so the marker
-                never jumps position between the two states. */}
+                a cover, so the marker comes here instead. A filling ring takes
+                that spot while the pond is still finding the audio, so the
+                marker never jumps position between the two states. */}
             {preparing
-              ? <ActivityIndicator size="small" color={tint} />
+              ? (
+                <PreparingRing percent={preparingPct} tint={tint} track={c.border} />
+              )
               : playing ? <Icon name="volume-high" size={18} color={tint} /> : null}
             <DownloadKey
               state={downloadState}
