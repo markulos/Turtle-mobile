@@ -327,3 +327,24 @@ describe('what the user is told', () => {
       .toBe('This pond needs an update.');
   });
 });
+
+describe('the playlist form, when the pond offers one', () => {
+  // YouTube's audio is DASH-segmented fMP4; AVPlayer will not stream it as a
+  // bare file past about an hour. hlsUrl is the same bytes as a playlist.
+  it('plays the playlist in preference to the file', () => {
+    const row = webPreviewRow(
+      { ...RESULT, hlsUrl: '/api/music/web/hls/MV_3Dpw-BRY/playlist.m3u8?token=abc.def' },
+      'http://pond.local/api'
+    );
+    expect(row.rawUrl).toBe('http://pond.local/api/music/web/hls/MV_3Dpw-BRY/playlist.m3u8?token=abc.def');
+  });
+
+  it('falls back to the file on a pond that has not deployed it', () => {
+    // The phone updates over the air and the pond waits for a restart, so this
+    // IS the normal order of events, not an edge case.
+    expect(webPreviewRow(RESULT, 'http://pond.local/api').rawUrl)
+      .toBe('http://pond.local/api/music/web/preview/MV_3Dpw-BRY?token=abc.def');
+    expect(webPreviewRow({ ...RESULT, hlsUrl: '' }, 'http://pond.local/api').rawUrl)
+      .toBe('http://pond.local/api/music/web/preview/MV_3Dpw-BRY?token=abc.def');
+  });
+});

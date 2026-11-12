@@ -117,7 +117,18 @@ export function webPreviewRow(result, baseUrl) {
   return {
     id: webRowId(result.videoId),
     // The pond, not YouTube. See the note at the top of this file.
-    rawUrl: `${pondOrigin(baseUrl)}${result.previewUrl}`,
+    //
+    // PREFER THE PLAYLIST. YouTube's audio is DASH-segmented fragmented MP4,
+    // which AVPlayer will not stream as a bare file past a certain length: a
+    // mix over an hour sits in `buffering` with nothing ever loaded, while a
+    // short song plays. `hlsUrl` is the same audio and the same bytes,
+    // described as an HLS playlist of byte ranges — see the pond's
+    // services/hlsFromSidx.js.
+    //
+    // Optional on purpose: a pond that has not deployed that route yet sends
+    // no `hlsUrl`, and this falls back to the file it always used. So the
+    // phone can take this update first and lose nothing by it.
+    rawUrl: `${pondOrigin(baseUrl)}${result.hlsUrl || result.previewUrl}`,
     originalName: result.title,
     duration: result.duration ?? null,
     thumbUrl: result.thumbnail || null,
