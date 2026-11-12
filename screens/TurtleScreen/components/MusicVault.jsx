@@ -161,6 +161,7 @@ export default function MusicVault({
     isPlaying,
     preparing,
     preparingPct,
+    preparingStalled,
     position,
     duration,
     playMedia,
@@ -260,7 +261,7 @@ export default function MusicVault({
   const canNext = ready && current >= 0 && current < visibleTracks.length - 1;
   // The same sentence the tapped ROW shows — built in one place, so one wait
   // cannot read as two different numbers on the same screen.
-  const waitingLabel = preparingLabel(preparingPct);
+  const waitingLabel = preparingLabel(preparingPct, { stalled: preparingStalled });
   const barWidthRef = useRef(1);
 
   // The track whose "⋯" was tapped (null = sheet closed). Held by ID and
@@ -1404,12 +1405,14 @@ export default function MusicVault({
         // percentage fourteen of them do not draw — React.memo can only skip a
         // row whose props actually held still.
         preparingPct={active ? preparingPct : 0}
+        preparingStalled={active && preparingStalled}
         downloadState={webDownloads[item.videoId] || 'idle'}
         onPreview={() => previewWeb(item)}
         onDownload={() => downloadWeb(item)}
       />
     );
-  }, [theme, c, activeTrack, preparing, preparingPct, webDownloads, previewWeb, downloadWeb]);
+  }, [theme, c, activeTrack, preparing, preparingPct, preparingStalled,
+    webDownloads, previewWeb, downloadWeb]);
 
   /**
    * The search header: the scope toggle, then one line about what is below it.
@@ -1920,14 +1923,17 @@ export default function MusicVault({
             >
               {/* Still tappable while preparing - it is how you call off a
                   wait you have changed your mind about - but it no longer
-                  LOOKS like a play button that did nothing. */}
-              {preparing
+                  LOOKS like a play button that did nothing. Once the wait has
+                  stalled it goes back to being a play key: the ring has
+                  nothing left to report, and pressing it again is the thing
+                  the line above has just asked for. */}
+              {preparing && !preparingStalled
                 ? (
                   <View style={styles.transportSpinner}>
                     <PreparingRing percent={preparingPct} tint={MUSIC_TINT(c)} track={c.border} />
                   </View>
                 )
-                : <Icon name={isPlaying ? 'pause-circle' : 'play-circle'} size={44} color={MUSIC_TINT(c)} />}
+                : <Icon name={preparing || !isPlaying ? 'play-circle' : 'pause-circle'} size={44} color={MUSIC_TINT(c)} />}
             </TouchableOpacity>
             <TouchableOpacity
               accessibilityRole="button"

@@ -3,7 +3,7 @@ import { AppState, Button, Text, View } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { MusicPlayerProvider, useMusicPlayer } from '../MusicPlayerContext';
 import { musicPlayerService } from '../../services/musicPlayerService';
-import { preparingPercent } from '../../services/preparingProgress';
+import { RESOLVE_CEILING, preparingPercent } from '../../services/preparingProgress';
 
 const mockApiGet = jest.fn();
 const mockServer = {
@@ -84,6 +84,7 @@ function Probe({ visible = true }) {
       <Text testID="position">{music.position}</Text>
       <Text testID="preparing">{String(music.preparing)}</Text>
       <Text testID="preparing-pct">{String(music.preparingPct)}</Text>
+      <Text testID="preparing-stalled">{String(music.preparingStalled)}</Text>
       <Button title="play-two" onPress={() => music.playMedia('two')} />
       <Button title="play-one" onPress={() => music.playMedia('one')} />
       <Button title="play-memo" onPress={() => music.playMedia('memo')} />
@@ -216,6 +217,79 @@ describe('MusicPlayerProvider', () => {
         mockPlaybackState = 'ready';
         const view = await mount();
         await waitFor(() => expect(pct(view)).toBe(0));
+      });
+    });
+
+    /**
+     * …and when it stops being a wait at all.
+     *
+     * Fake timers here and nowhere else in this file: the threshold is twenty
+     * seconds, and the alternative is a test suite that really waits for it.
+     * The provider reads Date.now() on the same tick as the interval, so both
+     * have to come from the same fake clock to move together.
+     */
+    describe('preparingStalled', () => {
+      const stalled = (view) => view.getByTestId('preparing-stalled').props.children;
+      const pct = (view) => Number(view.getByTestId('preparing-pct').props.children);
+      /** Run the provider's clock forward, letting its state settle. */
+      const waitSeconds = async (seconds) => {
+        await act(async () => { jest.advanceTimersByTime(seconds * 1000); });
+      };
+
+      beforeEach(() => { jest.useFakeTimers(); });
+      afterEach(() => { jest.useRealTimers(); });
+
+      test('turns true once the estimate has been pinned at the ceiling', async () => {
+        // The reported bug: "it loads fast and then slows down and gets stuck
+        // at 69%". 69 is the cap, and with no bytes it stays there for ever.
+        mockActiveTrack = { mediaId: 'yt:abc' };
+        mockPlaying = false;
+        mockPlaybackState = 'buffering';
+        mockProgress = { position: 0, duration: 0, buffered: 0 };
+        const view = await mount();
+
+        await waitSeconds(10);
+        expect(pct(view)).toBe(RESOLVE_CEILING - 1);
+        expect(stalled(view)).toBe('false');   // pinned, but not yet worth saying
+
+        await waitSeconds(11);
+        expect(stalled(view)).toBe('true');
+      });
+
+      test('stays false for a slow buffer, because that one is really moving', async () => {
+        mockActiveTrack = { mediaId: 'yt:abc' };
+        mockPlaying = false;
+        mockPlaybackState = 'buffering';
+        // Bytes in hand: the measured half, which has a number of its own.
+        mockProgress = { position: 0, duration: 600, buffered: 0.4 };
+        const view = await mount();
+
+        await waitSeconds(40);
+        expect(stalled(view)).toBe('false');
+        expect(pct(view)).toBeGreaterThanOrEqual(RESOLVE_CEILING);
+      });
+
+      test('clears when the next attempt starts, not when the last one ends', async () => {
+        // Otherwise the sentence that asked for a tap is still on screen after
+        // the tap, which reads as the retry having been ignored.
+        mockActiveTrack = { mediaId: 'yt:abc' };
+        mockPlaying = false;
+        mockPlaybackState = 'buffering';
+        mockProgress = { position: 0, duration: 0, buffered: 0 };
+        const view = await mount();
+        await waitSeconds(21);
+        expect(stalled(view)).toBe('true');
+
+        // A different track is now the one being prepared — a fresh attempt.
+        mockActiveTrack = { mediaId: 'yt:def' };
+        await view.rerender(
+          <MusicPlayerProvider>
+            <Probe />
+          </MusicPlayerProvider>
+        );
+        await waitSeconds(1);
+        expect(stalled(view)).toBe('false');
+        expect(pct(view)).toBeLessThan(RESOLVE_CEILING - 1);
       });
     });
   });

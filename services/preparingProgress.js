@@ -24,7 +24,23 @@
  *   • crossing into the second half is a real event (the first byte), and it
  *     is where the number jumps - the jump IS the information;
  *   • 100 is never shown by this at all. The only thing that means "done" is
- *     sound, and when that happens the caller stops asking.
+ *     sound, and when that happens the caller stops asking;
+ *   • and past STALLED_AFTER_MS the number stops being the message. See below.
+ *
+ * ── Where this went wrong, and the rule that came out of it ─────────────
+ * The first three bullets were all true and the screen still lied. A preview
+ * that never produced a byte sat at 69% — the cap — for as long as you cared
+ * to watch it, because the estimate had nowhere left to go and the measurement
+ * had nothing to say. Reported from the pond on 2026-11-12: "it loads fast and
+ * then slows down and gets stuck at 69%".
+ *
+ * A number that cannot change is not progress, it is a frozen clock, and the
+ * one thing it reliably communicates is that the app has stopped noticing. So
+ * the honest version has a third state: past STALLED_AFTER_MS with still no
+ * audio in hand, the percentage stops being the message and the words say what
+ * is actually known — this is taking longer than it should, and here is the
+ * way out. The percentage is NOT shown in that state; there is nothing it
+ * could add that "still nothing" does not already say better.
  *
  * ── Why these constants ─────────────────────────────────────────────────
  * RESOLVE_HALF_MS is the measured middle of a cold resolve, so the estimate
@@ -47,6 +63,23 @@ export const BUFFER_TARGET_SEC = 3;
 
 /** The highest number this will ever report. See the header: 100 is sound. */
 export const MAX_PERCENT = 99;
+
+/**
+ * Waiting this long with no audio at all stops being a wait and starts being a
+ * problem worth offering a way out of.
+ *
+ * Twenty seconds is chosen against what the pond actually does, not picked for
+ * roundness. A warmed row resolves in 0 ms and a cold one in 1-2s, so neither
+ * gets near the ceiling; the slowest healthy path is the fallback to spawning
+ * yt-dlp.exe at ~3.6s, which shows ~56%. Reaching 69 AT ALL already means
+ * something unusual, and this leaves another eleven seconds on top of that
+ * before changing the words.
+ *
+ * It is deliberately not the pond's own 25s request timeout. The point is to
+ * speak BEFORE the thing gives up, while pressing it again is still the
+ * cheapest fix available.
+ */
+export const STALLED_AFTER_MS = 20_000;
 
 /**
  * The percentage to show, 0-99.
@@ -85,12 +118,32 @@ export function preparingPercent({ elapsedMs = 0, bufferedAheadSec = 0, floor = 
 }
 
 /**
+ * Whether this wait has stopped being one.
+ *
+ * Only ever true while there is NOTHING in hand: once a byte has arrived the
+ * percentage is a measurement again and climbing, and a track that buffers
+ * slowly is a different situation from one that never started. A mid-track
+ * stall lands here too, which is correct — the audio stopped and tapping again
+ * is still the way out of it.
+ */
+export function preparingStalled({ elapsedMs = 0, bufferedAheadSec = 0 } = {}) {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < STALLED_AFTER_MS) return false;
+  return !(Number.isFinite(bufferedAheadSec) && bufferedAheadSec > 0);
+}
+
+/**
  * What the wait says, in the one place that decides it.
  *
  * Two surfaces show the same wait at the same moment — the tapped row and the
  * transport bar above the dock — and each building its own sentence is how the
  * same wait ends up reading as two different numbers on one screen.
+ *
+ * The stalled sentence names the way out, because on both surfaces the control
+ * is the thing you already tapped: the row re-previews, and the transport's
+ * play key cancels and starts over. Neither grows a new button — what was
+ * missing was never a control, it was anyone saying the control was there.
  */
-export function preparingLabel(percent) {
+export function preparingLabel(percent, { stalled = false } = {}) {
+  if (stalled) return 'Still finding the audio - tap to try again';
   return `Finding the audio... ${Math.round(Number(percent) || 0)}%`;
 }

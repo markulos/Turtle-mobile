@@ -22,7 +22,7 @@ import { buildMusicQueue } from '../services/musicTrackMapper';
 import { partitionVoiceRecordings } from '../utils/voiceRecordings';
 import { musicPlayerService } from '../services/musicPlayerService';
 import { musicOfflineStore } from '../services/musicOfflineStore';
-import { preparingPercent } from '../services/preparingProgress';
+import { preparingPercent, preparingStalled } from '../services/preparingProgress';
 
 const MusicPlayerContext = createContext(null);
 
@@ -100,6 +100,14 @@ export function MusicPlayerProvider({ children }) {
    * why the first half of it is an estimate at all.
    */
   const [preparingPct, setPreparingPct] = useState(0);
+  /**
+   * …and whether that wait has gone on long enough to stop calling it one.
+   *
+   * Kept beside the percentage and on the same tick, because they are two
+   * readings of one clock: the moment this turns true is the moment the
+   * percentage stops being worth showing. See preparingStalled().
+   */
+  const [preparingStalledNow, setPreparingStalledNow] = useState(false);
   const preparingSinceRef = useRef(0);
   const preparingKey = preparing ? String(activeTrack?.mediaId ?? activeTrack?.id ?? '') : '';
   // `buffered` is an absolute position, so the amount IN HAND is the part of
@@ -113,18 +121,24 @@ export function MusicPlayerProvider({ children }) {
     if (!preparingKey) {
       preparingSinceRef.current = 0;
       setPreparingPct(0);
+      setPreparingStalledNow(false);
       return undefined;
     }
     preparingSinceRef.current = Date.now();
     setPreparingPct(0);
+    // Cleared on every new attempt, including the retry this state exists to
+    // invite: tapping again must look like a fresh start, or the words that
+    // asked for the tap are still on screen after it.
+    setPreparingStalledNow(false);
     // Faster than useProgress's half-second poll: the estimated half is a
     // local clock, and at 500ms it visibly steps rather than moves.
     const tick = setInterval(() => {
-      setPreparingPct((last) => preparingPercent({
-        elapsedMs: Date.now() - preparingSinceRef.current,
-        bufferedAheadSec: bufferedAheadRef.current,
-        floor: last,
-      }));
+      const elapsedMs = Date.now() - preparingSinceRef.current;
+      const bufferedAheadSec = bufferedAheadRef.current;
+      setPreparingPct((last) => preparingPercent({ elapsedMs, bufferedAheadSec, floor: last }));
+      // Set from the reading each tick rather than latched, so the bytes
+      // finally arriving takes the sentence back off the screen by itself.
+      setPreparingStalledNow(preparingStalled({ elapsedMs, bufferedAheadSec }));
     }, PREPARING_TICK_MS);
     return () => clearInterval(tick);
   }, [preparingKey]);
@@ -405,6 +419,7 @@ export function MusicPlayerProvider({ children }) {
       isPlaying,
       preparing,
       preparingPct,
+      preparingStalled: preparingStalledNow,
       position,
       duration,
       refreshLibrary,
@@ -429,6 +444,7 @@ export function MusicPlayerProvider({ children }) {
       isPlaying,
       preparing,
       preparingPct,
+      preparingStalledNow,
       position,
       duration,
       refreshLibrary,

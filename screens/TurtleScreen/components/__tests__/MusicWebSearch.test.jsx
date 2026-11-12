@@ -54,6 +54,7 @@ const mockMusicPlayer = {
   isPlaying: false,
   preparing: false,
   preparingPct: 0,
+  preparingStalled: false,
   position: 0,
   duration: 0,
   playMedia: mockPlayMedia,
@@ -132,6 +133,7 @@ describe('the search scope toggle', () => {
     mockMusicPlayer.activeTrack = null;
     mockMusicPlayer.preparing = false;
     mockMusicPlayer.preparingPct = 0;
+    mockMusicPlayer.preparingStalled = false;
     mockApi.get.mockImplementation(() => Promise.resolve({ success: true, results: [RESULT] }));
     mockApi.post.mockImplementation(() => Promise.resolve({ success: true, id: 'job_1' }));
   });
@@ -327,6 +329,60 @@ describe('previewing and downloading a result', () => {
       await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
       expect(view.queryByText(/Finding the audio/)).toBeNull();
       expect(view.getByLabelText('Preview Kavinsky - Nightcall')).toBeTruthy();
+    });
+
+    /**
+     * …and when it never finds it. Reported 2026-11-12: a preview that
+     * produced no bytes sat on "Finding the audio... 69%" indefinitely,
+     * because 69 is the cap on the estimated half and the measured half never
+     * started. A frozen number reads as an app that has stopped noticing.
+     */
+    describe('and when it has been looking too long', () => {
+      const stalled = () => {
+        mockMusicPlayer.activeTrack = { mediaId: 'yt:MV_3Dpw-BRY' };
+        mockMusicPlayer.preparing = true;
+        mockMusicPlayer.preparingPct = 69;
+        mockMusicPlayer.preparingStalled = true;
+      };
+
+      test('the row drops the frozen number and names the way out', async () => {
+        stalled();
+        const view = await searchingTheWeb();
+        await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+        expect(view.getByText('Still finding the audio - tap to try again')).toBeTruthy();
+        // The number is GONE, not appended to. It is the part that was lying.
+        expect(view.queryByText(/69%/)).toBeNull();
+      });
+
+      test('and the tap it asks for is the row itself', async () => {
+        stalled();
+        const view = await searchingTheWeb();
+        await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+        const row = view.getByLabelText('Still finding the audio for Kavinsky - Nightcall, tap to try again');
+        await fireEvent.press(row);
+        // Pressed it, and it previews again — the control was always there,
+        // nothing had ever said so.
+        expect(mockPlayRows).toHaveBeenCalled();
+      });
+
+      test('the ring goes, because it has nothing left to report', async () => {
+        stalled();
+        const view = await searchingTheWeb();
+        await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+        // A progress ring stuck at 69 beside the words "tap to try again" is
+        // two different claims about one wait.
+        expect(view.queryAllByRole('progressbar')).toHaveLength(0);
+      });
+
+      test('the transport bar agrees, and its play key is a play key again', async () => {
+        stalled();
+        const view = await searchingTheWeb();
+        await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+        await fireEvent.press(
+          view.getByLabelText('Still finding the audio for Kavinsky - Nightcall, tap to try again'),
+        );
+        await waitFor(() => expect(view.getByLabelText('Still finding the audio - tap to try again')).toBeTruthy());
+      });
     });
 
     test('once it plays, the wait is gone', async () => {

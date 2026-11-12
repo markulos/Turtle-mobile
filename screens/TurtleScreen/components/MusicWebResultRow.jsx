@@ -61,14 +61,16 @@ function DownloadKey({ state, label, tint, c, onPress }) {
 }
 
 function MusicWebResultRow({
-  result, theme, tint, playing, preparing, preparingPct = 0, downloadState, onPreview, onDownload,
+  result, theme, tint, playing, preparing, preparingPct = 0, preparingStalled = false,
+  downloadState, onPreview, onDownload,
 }) {
   const c = theme.colors;
   // The percentage goes in the WORDS, not inside the ring: at 20pt a ring has
   // no room for legible type, and this line is already the one saying what the
   // wait is for. See services/preparingProgress.js for what the number means —
-  // the first half of it is an estimate, deliberately.
-  const waiting = preparingLabel(preparingPct);
+  // the first half of it is an estimate, deliberately, and past twenty seconds
+  // with nothing in hand the words drop the number and say so instead.
+  const waiting = preparingLabel(preparingPct, { stalled: preparingStalled });
   return (
     <View style={styles.inset}>
       <VaultResultRow
@@ -78,7 +80,16 @@ function MusicWebResultRow({
         // row says so IN PLACE OF the channel line. Without it the row looked
         // identical to one that had been tapped and done nothing.
         meta={preparing ? waiting : webResultMeta(result)}
-        accessibilityLabel={preparing ? `${waiting} for ${result.title}` : `Preview ${result.title}`}
+        // The row IS the retry — tapping it previews again — so once the wait
+        // has stalled the label has to offer that, not keep narrating a
+        // percentage that has stopped moving.
+        accessibilityLabel={
+          preparing
+            ? (preparingStalled
+              ? `Still finding the audio for ${result.title}, tap to try again`
+              : `${waiting} for ${result.title}`)
+            : `Preview ${result.title}`
+        }
         onPress={onPreview}
         leading={result.thumbnail ? (
           <Image
@@ -105,9 +116,14 @@ function MusicWebResultRow({
                 that spot while the pond is still finding the audio, so the
                 marker never jumps position between the two states. */}
             {preparing
-              ? (
-                <PreparingRing percent={preparingPct} tint={tint} track={c.border} />
-              )
+              ? (preparingStalled
+                // A ring frozen at 69% is the thing being fixed here. The
+                // glyph that replaces it is the one the words just promised,
+                // in the slot the eye is already on - saying "tap to try
+                // again" while a progress ring spins beside it is two
+                // different claims about the same wait.
+                ? <Icon name="refresh" size={18} color={c.textTertiary} />
+                : <PreparingRing percent={preparingPct} tint={tint} track={c.border} />)
               : playing ? <Icon name="volume-high" size={18} color={tint} /> : null}
             <DownloadKey
               state={downloadState}

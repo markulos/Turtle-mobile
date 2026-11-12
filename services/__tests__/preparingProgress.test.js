@@ -3,8 +3,10 @@ import {
   MAX_PERCENT,
   RESOLVE_CEILING,
   RESOLVE_HALF_MS,
+  STALLED_AFTER_MS,
   preparingLabel,
   preparingPercent,
+  preparingStalled,
 } from '../preparingProgress';
 
 describe('while the pond is still resolving', () => {
@@ -75,6 +77,40 @@ describe('rubbish in', () => {
   });
 });
 
+describe('when the wait stops being one', () => {
+  test('a number pinned at the ceiling for twenty seconds is a stall', () => {
+    // The bug this exists for: the estimate tops out at 69 and then has
+    // nowhere to go, so a preview that never produced a byte sat there for
+    // ever and the screen read as "working on it".
+    expect(preparingPercent({ elapsedMs: STALLED_AFTER_MS })).toBe(RESOLVE_CEILING - 1);
+    expect(preparingStalled({ elapsedMs: STALLED_AFTER_MS })).toBe(true);
+  });
+
+  test('but not before — a slow resolve is still a resolve', () => {
+    expect(preparingStalled({ elapsedMs: 0 })).toBe(false);
+    // The slowest HEALTHY path is the pond falling back to spawning
+    // yt-dlp.exe, ~3.6s. Nothing about that deserves an alarm.
+    expect(preparingStalled({ elapsedMs: 3600 })).toBe(false);
+    expect(preparingStalled({ elapsedMs: STALLED_AFTER_MS - 1 })).toBe(false);
+  });
+
+  test('bytes in hand mean it is slow, not stuck, however long it takes', () => {
+    // A long track that buffers for a minute is a different situation, and it
+    // has a real percentage climbing to say so.
+    expect(preparingStalled({ elapsedMs: 60_000, bufferedAheadSec: 0.5 })).toBe(false);
+    // …and it goes back to false on its own when the bytes finally arrive,
+    // because nothing here latches.
+    expect(preparingStalled({ elapsedMs: 1e9, bufferedAheadSec: 2 })).toBe(false);
+  });
+
+  test('rubbish in is not a stall', () => {
+    expect(preparingStalled()).toBe(false);
+    expect(preparingStalled({ elapsedMs: NaN })).toBe(false);
+    expect(preparingStalled({ elapsedMs: Infinity })).toBe(false);
+    expect(preparingStalled({ elapsedMs: 1e9, bufferedAheadSec: NaN })).toBe(true);
+  });
+});
+
 describe('the sentence both surfaces show', () => {
   test('carries the number, rounded', () => {
     expect(preparingLabel(0)).toBe('Finding the audio... 0%');
@@ -84,5 +120,14 @@ describe('the sentence both surfaces show', () => {
   test('says something sane with nothing to say', () => {
     expect(preparingLabel(undefined)).toBe('Finding the audio... 0%');
     expect(preparingLabel(NaN)).toBe('Finding the audio... 0%');
+  });
+
+  test('drops the number once it has stopped meaning anything', () => {
+    // Deliberately NOT "Finding the audio... 69%" with an extra clause: the
+    // percentage is the part that was lying, so it goes.
+    expect(preparingLabel(69, { stalled: true })).toBe('Still finding the audio - tap to try again');
+    expect(preparingLabel(69, { stalled: true })).not.toMatch(/%/);
+    // And the option is opt-in, so every existing caller reads the same.
+    expect(preparingLabel(69, { stalled: false })).toBe('Finding the audio... 69%');
   });
 });
