@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useNavigationState } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { blurProps } from '../utils/frostedChat';
 import Reanimated, {
   Easing,
@@ -15,6 +16,7 @@ import {
   UNDERLINE_W, UNDERLINE_H, indicatorOffset, ridgeOffsets,
 } from './tabBarLayout';
 import { TAB_SWITCH_BEZIER, TAB_SWITCH_MS } from './dockMotion';
+import { dockSurfaceStops } from './dockSurface';
 
 /**
  * TabBarPill — ONE pill that slides from tab to tab behind the icons.
@@ -63,8 +65,11 @@ const SLIDE = {
 // glyph/chip contrast is then a single problem to solve instead of two.
 //
 //   surface — near-black, translucent enough that the blur still shows the page
-//             moving behind it. A shade stronger than the chat frost's 0.4 so it
-//             still reads BLACK (not washed grey) over a light page;
+//             moving behind it, and no longer FLAT: it runs from a lifted top
+//             edge to a denser bottom one, because a slab is the one part of a
+//             floating-object treatment that does not behave like an object.
+//             The arithmetic, the two end colours and why the ramp is a
+//             smoothstep rather than two stops are all in dockSurface.js;
 //   edge    — a white hairline BEZEL: the device's thinnest renderable line, at
 //             enough alpha to actually read as a rim around the capsule rather
 //             than a barely-there seam. It's white in both themes because the
@@ -79,8 +84,11 @@ const SLIDE = {
 //             white would disappear. The INACTIVE glyphs stay white-on-dark in
 //             both themes regardless — they sit on the capsule, not the chip,
 //             and a dark tint would vanish into it.
-const DOCK_SURFACE = 'rgba(18,18,20,0.52)';
 const DOCK_EDGE = 'rgba(255,255,255,0.30)';
+
+// Built once: the stops do not depend on anything that changes — not the
+// theme, not the width, not which tab is up.
+const SURFACE = dockSurfaceStops();
 
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
@@ -180,9 +188,17 @@ export default function TabBarPill({ dragSlot, leadSlot }) {
           {...blurProps(theme)}
           tint="dark"
         />
-        <View
+        {/* …and the wash over it: lighter at the top edge, heavier at the
+            bottom, so the capsule reads as a lit surface rather than a slab.
+            Explicitly top-to-bottom rather than trusting the default, because
+            the whole point of this element is its direction. */}
+        <LinearGradient
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: DOCK_SURFACE }]}
+          colors={SURFACE.colors}
+          locations={SURFACE.locations}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={StyleSheet.absoluteFill}
         />
       </View>
       {/* The ridges: one hairline between each pair of icons, drawn BEFORE the
