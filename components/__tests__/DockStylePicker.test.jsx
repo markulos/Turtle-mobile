@@ -3,11 +3,13 @@ import { StyleSheet } from 'react-native';
 import { act, fireEvent, render, within } from '@testing-library/react-native';
 
 import { dockSkin, activeInk } from '../dockSkins';
+import { DOCK_PALETTES } from '../dockPalettes';
 
 const setDockStyle = jest.fn();
 const setDockIndicator = jest.fn();
 const setDockColor = jest.fn();
 const setDockInk = jest.fn();
+const setCustomAccent = jest.fn();
 
 jest.mock('../../context/ThemeContext', () => ({
   DOCK_INDICATORS: ['chip', 'underline'],
@@ -32,11 +34,15 @@ jest.mock('../../context/ThemeContext', () => ({
     setDockColor: mockState().setDockColor,
     dockInk: mockState().ink,
     setDockInk: mockState().setDockInk,
+    accentColor: mockState().accentColor,
+    setCustomAccent: mockState().setCustomAccent,
   }),
 }));
 
-let state = { style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'auto' };
-global.mockState = () => ({ ...state, setDockStyle, setDockIndicator, setDockColor, setDockInk });
+let state = { style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'auto', accentColor: '#1F8A9B' };
+global.mockState = () => ({
+  ...state, setDockStyle, setDockIndicator, setDockColor, setDockInk, setCustomAccent,
+});
 
 jest.mock('expo-linear-gradient', () => {
   const { View } = require('react-native');
@@ -62,9 +68,10 @@ import DockStylePicker from '../DockStylePicker';
 const styleOf = (node) => StyleSheet.flatten(node.props.style) || {};
 
 beforeEach(() => {
-  state = { style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'auto' };
+  state = { style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'auto', accentColor: '#1F8A9B' };
   setDockStyle.mockClear();
   setDockInk.mockClear();
+  setCustomAccent.mockClear();
   setDockIndicator.mockClear();
   setDockColor.mockClear();
   impactHaptic.mockClear();
@@ -75,7 +82,8 @@ describe('Settings → Navigation → Navbar style', () => {
     const { getByTestId } = await render(<DockStylePicker />);
     for (const id of ['dock-skin-smoked', 'dock-skin-paper', 'dock-skin-custom',
       'dock-indicator-chip', 'dock-indicator-underline',
-      'dock-ink-auto', 'dock-ink-light', 'dock-ink-dark']) {
+      'dock-ink-auto', 'dock-ink-light', 'dock-ink-dark',
+      ...DOCK_PALETTES.map((p) => `dock-palette-${p.key}`)]) {
       expect(getByTestId(id)).toBeTruthy();
     }
   });
@@ -169,6 +177,59 @@ describe('Settings → Navigation → Navbar style', () => {
     const { getByTestId } = await render(<DockStylePicker />);
     const chip = within(getByTestId('dock-skin-smoked')).getByTestId('dock-preview-glyph');
     expect(styleOf(chip).backgroundColor).toBe(activeInk('dark', '#1F8A9B'));
+  });
+
+  test('a palette writes the whole look in one tap', async () => {
+    const p = DOCK_PALETTES[2];
+    const { getByTestId } = await render(<DockStylePicker />);
+    fireEvent.press(getByTestId(`dock-palette-${p.key}`));
+
+    // All four, or it is half a look: the backdrop needs the custom SKIN
+    // selected to be visible at all, and the chip is the app's accent.
+    expect(setDockStyle).toHaveBeenCalledWith('custom');
+    expect(setDockColor).toHaveBeenCalledWith(p.backdrop);
+    expect(setDockInk).toHaveBeenCalledWith(p.ink);
+    expect(setCustomAccent).toHaveBeenCalledWith(p.accent);
+    expect(impactHaptic).toHaveBeenCalledTimes(1);
+  });
+
+  test('the palette you are wearing is ticked, and editing it un-ticks it', async () => {
+    const p = DOCK_PALETTES[0];
+    state = {
+      style: 'custom', indicator: 'chip', colour: p.backdrop, ink: p.ink, accentColor: p.accent,
+    };
+    const on = await render(<DockStylePicker />);
+    expect(on.getByTestId(`dock-palette-${p.key}`).props.accessibilityState)
+      .toMatchObject({ selected: true });
+
+    // Nudge one of the four it wrote. The tile must let go rather than keep a
+    // tick on a look that has since been edited — it is recomputed, not saved.
+    state = { ...state, ink: 'auto' };
+    const off = await render(<DockStylePicker />);
+    expect(off.getByTestId(`dock-palette-${p.key}`).props.accessibilityState)
+      .toMatchObject({ selected: false });
+  });
+
+  test('re-tapping the palette you are on writes nothing', async () => {
+    const p = DOCK_PALETTES[0];
+    state = {
+      style: 'custom', indicator: 'chip', colour: p.backdrop, ink: p.ink, accentColor: p.accent,
+    };
+    const { getByTestId } = await render(<DockStylePicker />);
+    fireEvent.press(getByTestId(`dock-palette-${p.key}`));
+    expect(setCustomAccent).not.toHaveBeenCalled();
+    expect(impactHaptic).not.toHaveBeenCalled();
+  });
+
+  test('each palette tile previews its OWN pairing, not the dock you are on', async () => {
+    const { getByTestId } = await render(<DockStylePicker />);
+    for (const p of DOCK_PALETTES) {
+      const tile = within(getByTestId(`dock-palette-${p.key}`));
+      expect(styleOf(tile.getByTestId('dock-preview-capsule')).borderColor)
+        .toBe(dockSkin('custom', p.backdrop).edge);
+      expect(styleOf(tile.getByTestId('dock-preview-glyph')).backgroundColor)
+        .toBe(activeInk(p.ink, p.accent));
+    }
   });
 
   test('the selected tile is the one marked, and it follows the setting', async () => {

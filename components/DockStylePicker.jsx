@@ -33,6 +33,7 @@ import {
   DOCK_STYLES, DOCK_INKS, DOCK_INK_LABELS, activeInk, dockSkin,
 } from './dockSkins';
 import AccentColorPicker from './AccentColorPicker';
+import { DOCK_PALETTES, matchingPalette, paletteSkin } from './dockPalettes';
 import { impactHaptic } from '../utils/haptics';
 
 // The miniature. Not a scaled copy of the real geometry — at a third the size
@@ -115,7 +116,7 @@ export function DockPreview({ skin, indicator, accent, ink, theme }) {
 }
 
 /** One tappable tile: a preview, a name, and whether it is the one you're on. */
-function Tile({ label, selected, onPress, theme, children, testID }) {
+function Tile({ label, selected, onPress, theme, children, testID, style }) {
   return (
     <TouchableOpacity
       testID={testID}
@@ -128,6 +129,7 @@ function Tile({ label, selected, onPress, theme, children, testID }) {
         styles.tile,
         { borderColor: selected ? theme.colors.accent : theme.colors.border },
         selected && styles.tileSelected,
+        style,
       ]}
     >
       {children}
@@ -155,11 +157,27 @@ export default function DockStylePicker() {
   const {
     theme, dockStyle, setDockStyle, dockIndicator, setDockIndicator,
     dockColor, setDockColor, dockInk, setDockInk,
+    accentColor, setCustomAccent,
   } = useTheme();
   const [colourOpen, setColourOpen] = useState(false);
   const accent = theme.colors.accent;
   const current = dockSkin(dockStyle, dockColor);
   const ink = activeInk(dockInk, accent);
+  // Recomputed, never stored — see matchingPalette. Nudge any one of the four
+  // settings a palette wrote and the tick leaves it, which is the truth.
+  const palette = matchingPalette({ dockStyle, dockColor, accentColor, dockInk });
+
+  // One tap, four settings. The accent goes through setCustomAccent, which is
+  // also what switches the app onto a custom highlight — a palette that set
+  // the bar and left the highlight on the old preset would be half a look.
+  const applyPalette = (p) => () => {
+    if (p.key === palette) return;
+    impactHaptic('light');
+    setDockStyle('custom');
+    setDockColor(p.backdrop);
+    setDockInk(p.ink);
+    setCustomAccent(p.accent);
+  };
 
   const choose = (set, value, isCurrent) => () => {
     // Re-tapping the tile you are already on is not a change; firing a tick for
@@ -171,7 +189,44 @@ export default function DockStylePicker() {
 
   return (
     <View>
+      {/* The quick way in, so it comes first: the three rows under it are the
+          same decisions taken one at a time. Wrapped rather than scrolled —
+          a horizontal scroller hides options, and five is few enough to show
+          all of at once. */}
       <Text style={[styles.rowTitle, { color: theme.colors.textSecondary }]}>
+        Palettes
+      </Text>
+      <View style={[styles.row, styles.rowWrap]}>
+        {DOCK_PALETTES.map((p) => {
+          const selected = p.key === palette;
+          return (
+            <Tile
+              key={p.key}
+              testID={`dock-palette-${p.key}`}
+              label={p.name}
+              selected={selected}
+              theme={theme}
+              style={styles.thirdTile}
+              onPress={applyPalette(p)}
+            >
+              <DockPreview
+                skin={paletteSkin(p)}
+                indicator={dockIndicator}
+                accent={p.accent}
+                ink={activeInk(p.ink, p.accent)}
+                theme={theme}
+              />
+            </Tile>
+          );
+        })}
+      </View>
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
+        A backdrop and the highlight that goes on it, paired. The highlight is
+        used across the whole app, not just here — and everything below stays
+        editable afterwards.
+      </Text>
+
+      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
         Backdrop
       </Text>
       <View style={styles.row}>
@@ -297,6 +352,11 @@ const styles = StyleSheet.create({
   // Equal halves with one gap: the tiles are a comparison, so neither may be
   // wider than the other.
   row: { flexDirection: 'row', gap: 8 },
+  rowWrap: { flexWrap: 'wrap' },
+  // Three to a line, so five palettes are 3 + 2 rather than a scroller. The
+  // flexBasis is what makes the second line's two tiles stay the width of the
+  // first line's three instead of stretching to half the row each.
+  thirdTile: { flexGrow: 0, flexBasis: '31.5%' },
   tile: {
     flex: 1,
     borderRadius: 14,
