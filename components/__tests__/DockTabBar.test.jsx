@@ -86,6 +86,15 @@ test('a thumb dragged along the dock carries the chip and changes tabs as it cro
   // in order, and never a repeat for the frames spent on the same icon.
   act(() => { mockPan.onUpdate({ absoluteX: onIcon(1) }); });
   act(() => { mockPan.onUpdate({ absoluteX: onIcon(1) + 3 }); });
+  // Parked in the gap between two icons, wobbling the way a thumb does: the
+  // chip keeps tracking, and the tab does NOT flip back and forth (the dead
+  // band in commitSlotAt — this is the "twitchy" the first version shipped).
+  const gap = (onIcon(1) + onIcon(2)) / 2;
+  [-3, 2, -1, 3, -2].forEach((jitter) => {
+    act(() => { mockPan.onUpdate({ absoluteX: gap + jitter }); });
+  });
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Notes-1']);
+
   act(() => { mockPan.onUpdate({ absoluteX: onIcon(4) }); });
   expect(navigatedTo(props.navigation.dispatch)).toEqual(['Notes-1', 'Turtle-4']);
   expect(dragSlot.value).toBeCloseTo(4);

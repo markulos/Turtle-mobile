@@ -10,7 +10,7 @@ import {
   BAR_CONTENT_HEIGHT, CARD_GAP_BOTTOM, PANEL_BOTTOM_GAP, PANEL_TOP_GAP,
   dockOccupied, panelBottomInset, panelTopInset,
   PILL_SIZE, BAR_VERTICAL_PAD, TAB_ITEM_PADDING, TAB_ICON_SLOT, clusterStart,
-  CARD_MARGIN_H, TAB_SLOT, slotAtX,
+  CARD_MARGIN_H, TAB_SLOT, slotAtX, commitSlotAt, SLOT_COMMIT_HYSTERESIS,
 } from '../tabBarLayout';
 
 describe('how much room the dock really takes', () => {
@@ -134,17 +134,6 @@ describe('slotAtX — which tab the dragging thumb is over', () => {
     expect(slotAtX(centre(2) + TAB_SLOT * 0.25, W, COUNT)).toBeCloseTo(2.25);
   });
 
-  // Rounding is what the commit uses, and this is why it rounds rather than
-  // truncates: the tab flips as the thumb crosses the GAP between two icons,
-  // which is where the eye expects it — not as it touches the next icon's
-  // left edge.
-  test('the commit boundary falls in the gap between icons', () => {
-    const justBefore = (centre(2) + centre(3)) / 2 - 1;
-    const justAfter = (centre(2) + centre(3)) / 2 + 1;
-    expect(Math.round(slotAtX(justBefore, W, COUNT))).toBe(2);
-    expect(Math.round(slotAtX(justAfter, W, COUNT))).toBe(3);
-  });
-
   // A thumb that runs off the end of the capsule holds the end tab. Without
   // the clamp it would scrub into slots that do not exist, and the chip would
   // leave the dock.
@@ -160,6 +149,51 @@ describe('slotAtX — which tab the dragging thumb is over', () => {
   test('it follows the cluster when a tab is hidden', () => {
     expect(slotAtX(centre(4, 5), W, 5)).toBeCloseTo(4);
     expect(slotAtX(centre(4, 5), W, 6)).not.toBeCloseTo(4);
+  });
+
+  // The commit, as opposed to where the chip is drawn. The first version of
+  // this drag used Math.round, which puts the boundary exactly on the midpoint
+  // between two icons — and a thumb held there flipped the tab back and forth
+  // several times a second. That was the "twitchy".
+  describe('commitSlotAt — which tab a drag has actually chosen', () => {
+    test('the first frame of a drag takes the nearest tab', () => {
+      expect(commitSlotAt(2.4, -1)).toBe(2);
+      expect(commitSlotAt(2.6, -1)).toBe(3);
+    });
+
+    test('a thumb parked near the boundary holds the tab it is on', () => {
+      // Both sides of the midpoint, from either neighbour: no flip either way.
+      expect(commitSlotAt(2.5, 2)).toBe(2);
+      expect(commitSlotAt(2.5, 3)).toBe(3);
+      expect(commitSlotAt(2.55, 2)).toBe(2);
+      expect(commitSlotAt(2.45, 3)).toBe(3);
+    });
+
+    test('a deliberate slide still commits before the thumb reaches the icon', () => {
+      expect(commitSlotAt(2 + SLOT_COMMIT_HYSTERESIS + 0.01, 2)).toBe(3);
+      expect(commitSlotAt(2 - SLOT_COMMIT_HYSTERESIS - 0.01, 2)).toBe(1);
+      // …and well before it: landing ON the next icon is unambiguous.
+      expect(commitSlotAt(3, 2)).toBe(3);
+    });
+
+    test('a fast scrub across the dock commits every tab it crosses, in order', () => {
+      let committed = -1;
+      const path = [];
+      // One slot every frame, 0 → 5, as a flick across the capsule.
+      for (let p = 0; p <= 5; p += 0.25) {
+        const next = commitSlotAt(p, committed);
+        if (next !== committed) path.push(next);
+        committed = next;
+      }
+      expect(path).toEqual([0, 1, 2, 3, 4, 5]);
+    });
+
+    // The dead band must be narrower than a slot, or a slide could cross a
+    // whole icon without the tab ever changing.
+    test('the dead band is narrower than the gap it sits in', () => {
+      expect(SLOT_COMMIT_HYSTERESIS).toBeGreaterThan(0.5);
+      expect(SLOT_COMMIT_HYSTERESIS).toBeLessThan(1);
+    });
   });
 
   test('is monotonic — a thumb moving right never moves the chip left', () => {

@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomTabBar } from '@react-navigation/bottom-tabs';
 import { CommonActions } from '@react-navigation/native';
 
-import { dockOccupied, slotAtX } from './tabBarLayout';
+import { commitSlotAt, dockOccupied, slotAtX } from './tabBarLayout';
 
 /**
  * DockTabBar — the bottom nav, with a thumb you can DRAG along it.
@@ -56,10 +56,12 @@ import { dockOccupied, slotAtX } from './tabBarLayout';
  * crossed icon during a fast scrub is a buzz, not feedback.
  */
 
-// How far the thumb must travel sideways before this becomes a drag. Small
-// enough that a deliberate slide feels immediate, large enough that the wobble
-// in a press never steals it from the button underneath.
-const DRAG_SLOP = 8;
+// How far the thumb must travel sideways before this becomes a drag. 8 was too
+// little: the roll of a thumb settling onto an icon is a few points of sideways
+// travel, so ordinary taps were being read as the start of a scrub. 12 is still
+// inside the distance a deliberate slide covers in its first frames, so the
+// drag has not become harder to start — only harder to start by accident.
+const DRAG_SLOP = 12;
 
 export default function DockTabBar({ dragSlot, ...props }) {
   const { state, navigation } = props;
@@ -139,7 +141,11 @@ export default function DockTabBar({ dragSlot, ...props }) {
     .onUpdate((e) => {
       const p = slotAtX(e.absoluteX, width, count);
       slot.value = p;
-      const i = Math.round(p);
+      // NOT Math.round: a thumb held near the midpoint between two icons is
+      // never quite still, and plain rounding flipped the tab back and forth
+      // under it several times a second. commitSlotAt keeps a dead band around
+      // the tab you are on — see SLOT_COMMIT_HYSTERESIS.
+      const i = commitSlotAt(p, committed.value);
       if (i !== committed.value) {
         committed.value = i;
         runOnJS(goToIndex)(i);

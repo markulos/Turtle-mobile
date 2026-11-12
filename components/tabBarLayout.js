@@ -98,6 +98,31 @@ export const slotAtX = (x, screenWidth, count) => {
   return Math.min(count - 1, Math.max(0, raw));
 };
 
+/**
+ * How far past an icon the thumb must be before the tab actually changes, as a
+ * fraction of one slot. Plain rounding puts the boundary exactly on the midpoint
+ * between two icons, which means a thumb PARKED near that midpoint — and a thumb
+ * is never still — flips the tab back and forth several times a second. That is
+ * the "twitchy" in the first version of this drag.
+ *
+ * 0.62 leaves a dead band of about a quarter of a slot (~16pt) around whichever
+ * tab is current: enough that holding still holds still, small enough that a
+ * deliberate slide to the next icon still commits before the thumb gets there.
+ */
+export const SLOT_COMMIT_HYSTERESIS = 0.62;
+
+/**
+ * Which tab a drag at continuous position `p` should actually be on, given what
+ * it is already on. `committed` < 0 means nothing yet (the first frame of a
+ * drag), where the nearest tab is the right answer.
+ */
+export const commitSlotAt = (p, committed) => {
+  'worklet';
+  if (committed < 0) return Math.round(p);
+  if (Math.abs(p - committed) <= SLOT_COMMIT_HYSTERESIS) return committed;
+  return Math.round(p);
+};
+
 // Breathing room above AND below the chip inside the bar. Applied as the bar's
 // paddingTop and (on top of the safe-area inset) its paddingBottom, so the
 // bar's inner content box is EXACTLY PILL_SIZE tall.

@@ -66,6 +66,7 @@ import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
 import DockTabBar from './components/DockTabBar';
+import { TAB_SWITCH_SPEC } from './components/dockMotion';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
 import { AnimalGlyph } from './components/AnimalAvatar';
 import { useMyAvatarAnimal } from './utils/avatarChoice';
@@ -159,6 +160,18 @@ function TabNavigator() {
       // No tabPress haptic: tab switching is silent by request. (There used to
       // be a selection tick here for every tab.)
       screenOptions={({ route }) => ({
+        // The page TURNS now instead of being swapped. 'shift' is v7's
+        // fade-and-translate — the leaving page fades out and slides 50pt the
+        // way the selection is going, the arriving one comes in from the other
+        // side — on the same short ease-out, and the same 170ms, as the chip
+        // travelling to meet it (see dockMotion). An instant swap under a
+        // moving chip is what made this read as a lurch rather than a turn.
+        //
+        // Safe against the lazy:false note below: a transition only puts a
+        // transform and an opacity on screens that have already mounted and
+        // measured. Nothing here mounts a screen hidden.
+        animation: 'shift',
+        transitionSpec: TAB_SWITCH_SPEC,
         // NOTE: lazy:false + freezeOnBlur:true were tried here for instant tab
         // switches and REVERTED — screens mounted hidden at boot measure their
         // layouts wrong (zero-height grids, mis-sized scrubbers) and freeze

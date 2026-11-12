@@ -4,12 +4,14 @@ import { useNavigationState } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import { blurProps } from '../utils/frostedChat';
 import Reanimated, {
+  Easing,
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, BAR_CONTENT_HEIGHT, clusterStart } from './tabBarLayout';
+import { CHIP_FOLLOW_MS, TAB_SWITCH_MS } from './dockMotion';
 
 /**
  * TabBarPill — ONE pill that slides from tab to tab behind the icons.
@@ -38,8 +40,12 @@ import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, BAR_CONTENT_HEIGHT, cluster
  * and only the resting one is wrapped in a spring.
  */
 
-// Settles rather than wobbles: this tracks a selection, it isn't a flourish.
-const SLIDE_SPRING = { damping: 20, stiffness: 220, mass: 0.7 };
+// A short ease-out, NOT a spring — and the same one the pages travel on, so the
+// chip and the screen it selects arrive together. See dockMotion for the
+// number, and for why a spring was the wrong instrument here.
+const SLIDE = { duration: TAB_SWITCH_MS, easing: Easing.out(Easing.cubic) };
+// Behind the thumb, not behind a switch: smoothing, measured in dockMotion.
+const FOLLOW = { duration: CHIP_FOLLOW_MS, easing: Easing.out(Easing.quad) };
 
 // The dock's palette — ONE set for BOTH themes: a ghosted-black capsule, the
 // dark treatment applied in light mode too. It reads as a floating piece of
@@ -95,18 +101,20 @@ export default function TabBarPill({ dragSlot }) {
     // ONE formula for both: a slot (whole or fractional) times the slot width,
     // from the cluster's own left edge. A dragged chip therefore lands exactly
     // where a tapped one would.
-    const resting = TAB_SLOT * index + offset;
+    const target = dragging
+      ? TAB_SLOT * slot.value + offset
+      : TAB_SLOT * index + offset;
     return {
       // Nothing to place until the bar has been measured; staying invisible
       // avoids the square flashing at x=0 on the first frame.
-      opacity: withSpring(barWidth > 0 ? 1 : 0, SLIDE_SPRING),
+      opacity: withTiming(barWidth > 0 ? 1 : 0, SLIDE),
       transform: [{
-        // Under the thumb: no spring. A spring here would be lag — the chip
-        // would trail the finger by the whole settling time, which reads as the
-        // dock being slow rather than as the chip being soft.
-        translateX: dragging
-          ? TAB_SLOT * slot.value + offset
-          : withSpring(resting, SLIDE_SPRING),
+        // Two speeds, one curve family. Under the thumb the chip is being
+        // SMOOTHED, so the follow is short — re-aimed every frame at the new
+        // finger position, which is what makes it a filter rather than an
+        // animation. Off the thumb it is TRAVELLING to a selection, on the
+        // same 170ms as the page behind it.
+        translateX: withTiming(target, dragging ? FOLLOW : SLIDE),
       }],
     };
   }, [barWidth, index, offset]);
