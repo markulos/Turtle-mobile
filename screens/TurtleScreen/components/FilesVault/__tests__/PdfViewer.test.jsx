@@ -260,12 +260,38 @@ describe('PdfViewer', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  // Four is enough to read a page; ten is enough to look at one.
-  it('zooms in to ten times the fitted page', async () => {
+  /**
+   * The cap is a fraction of the PAGE, not a magnification: the native side
+   * scales relative to the fitted page, so 1/scale is the share of the page
+   * left on screen. 100 therefore means "down to 1% of it", and means the same
+   * on an A4 letter and an A1 drawing.
+   */
+  it('zooms until only 1% of the page is left, whatever the page is', async () => {
     await render(<PdfViewer {...props()} />);
     await waitFor(() => expect(mockPdfProps).toBeTruthy());
-    expect(mockPdfProps.maxScale).toBe(10);
+    expect(mockPdfProps.maxScale).toBe(100);
     expect(mockPdfProps.minScale).toBe(1);
+  });
+
+  // Pinching out of 100x is a dozen gestures. The readout is the way back.
+  it('tapping the zoom readout puts the page back to the fit', async () => {
+    const { getByTestId, queryByTestId } = await render(<PdfViewer {...props()} />);
+    await waitFor(() => expect(mockPdfProps).toBeTruthy());
+    await act(async () => { mockPdfProps.onLoadComplete(9); });
+    await act(async () => { mockPdfProps.onPageChanged(4, 9); });
+    await act(async () => { mockPdfProps.onScaleChanged(37.5); });
+    await waitFor(() => expect(getByTestId('pdf-zoom-label').props.children).toBe('3750%'));
+
+    const fitBefore = mockPdfProps.fitPolicy;
+    await fireEvent.press(getByTestId('pdf-zoom-reset'));
+
+    // Gone from the bar, because there is nothing left to undo.
+    await waitFor(() => expect(queryByTestId('pdf-zoom-label')).toBeNull());
+    // Back at the fitted size, on the page the reader was on, and WITHOUT
+    // having flipped the fit policy — which is what made the fit key a poor
+    // substitute for this.
+    expect(mockPdfProps.fitPolicy).toBe(fitBefore);
+    expect(mockPdfProps.page).toBe(4);
   });
 
   it('says how far in you are, once you are in at all', async () => {

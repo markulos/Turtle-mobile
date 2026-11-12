@@ -17,8 +17,9 @@
  *   · fit width ↔ fit page
  *   · the live zoom, but only once you have zoomed (pinch and double-tap are
  *     the native gestures and need no buttons; a "100%" that never changes is
- *     just noise on the bar). It goes to MAX_ZOOM — far enough to look at a
- *     signature or a hairline, not just to read the text
+ *     just noise on the bar) — and tapping it puts the page back to the fit,
+ *     which is the way out of a deep zoom. See MIN_VISIBLE_PAGE_FRACTION for
+ *     how deep that goes and why it is written as a fraction of the page
  *   · Open in … — the old share-sheet path, kept for printing, marking up, or
  *     anything PDFKit won't do
  *
@@ -50,8 +51,32 @@ import { getPdfModule } from '../../../../utils/pdfRenderer';
 const FIT_WIDTH = 0;
 const FIT_PAGE = 2;
 
-/** How far in a pinch may go, as a multiple of the fitted page. */
-const MAX_ZOOM = 10;
+/**
+ * How far in a pinch may go, written as the least of the page you can be
+ * looking at rather than as a magnification.
+ *
+ * ── Why this is the honest way to express it ────────────────────────────
+ * react-native-pdf's `scale` is relative to the FITTED page, not to the
+ * document's natural size: the native side keeps `fixScaleFactor` (view ÷ page
+ * along whichever axis the fit policy chose) and sets the real
+ * PDFKit scale to `fixScaleFactor * scale` (RNPDFPdfView.mm, ~line 454).
+ *
+ * The useful consequence: along that axis, the fraction of the PAGE on screen
+ * is exactly `1 / scale`. So a cap is naturally stated as "you may zoom until
+ * only this much of the page is left", and it means the same thing on every
+ * document — 1% of an A4 letter and 1% of an A1 drawing both fill the screen,
+ * which a fixed "10x" does not. No page measuring is needed to honour it.
+ *
+ * 1% of a 1000-point-wide page is 10 points across the screen. That is the
+ * point: deep enough to look at the hairline rather than the drawing.
+ *
+ * NOTE: a SCANNED pdf is a bitmap and will go soft long before this — its
+ * limit is the resolution it was scanned at, not the cap. A vector one
+ * (anything drawn or typeset) stays sharp all the way down, because PDFKit
+ * re-renders the curves at whatever scale it is asked for.
+ */
+const MIN_VISIBLE_PAGE_FRACTION = 0.01;
+const MAX_ZOOM = 1 / MIN_VISIBLE_PAGE_FRACTION;
 
 // The lazy, defensive require lives in utils/pdfRenderer — the canvas draws
 // pages too and the guard is not worth having twice. Re-exported because
@@ -192,6 +217,29 @@ export default function PdfViewer({ visible, item, onClose, getFullUrl, theme })
     }
   }, [item, getFullUrl]);
 
+  /**
+   * Back to the fitted page, in one tap, from however far in you are.
+   *
+   * Pinching out of 100x takes a dozen gestures, and the only existing way
+   * back was the fit key — which also flips you to the other fit policy, so it
+   * takes two presses and leaves you somewhere you did not ask to be. Deep
+   * zoom without a way out is a trap, so the zoom readout IS the way out: it
+   * is already on the bar, and it is only ever there when there is something
+   * to undo.
+   *
+   * The remount (via `fit`'s key) is what actually resets the native view —
+   * the same mechanism the fit toggle uses — because `scale` as a prop is
+   * clamped and re-applied, not re-anchored. Flipping to the same value would
+   * not remount, so this re-keys on a counter instead.
+   */
+  const [zoomResets, setZoomResets] = useState(0);
+  const resetZoom = useCallback(() => {
+    impactHaptic('light');
+    setJumpTo(page);
+    setScale(1);
+    setZoomResets((n) => n + 1);
+  }, [page]);
+
   const source = useMemo(() => (uri ? { uri, cache: false } : null), [uri]);
   // Only worth saying once it is not 100% — see the header note.
   const zoomLabel = Math.abs(scale - 1) > 0.02 ? `${Math.round(scale * 100)}%` : null;
@@ -259,18 +307,13 @@ export default function PdfViewer({ visible, item, onClose, getFullUrl, theme })
             <Pdf
               // Remount on a fit change so the new fitPolicy is picked up; the
               // page below puts the reader back where they were.
-              key={`fit-${fit}`}
+              key={`fit-${fit}-${zoomResets}`}
               ref={pdfRef}
               source={source}
               page={jumpTo}
               fitPolicy={fit}
               spacing={8}
               minScale={1}
-              // Ten, not four. Four is enough to read a page and not enough to
-              // look AT one — a stamp, a signature, the hairline in a drawing,
-              // the fine print in a scan. PDFKit re-renders the vectors at
-              // whatever scale it is asked for rather than magnifying a bitmap,
-              // so the deep end stays sharp and costs nothing until used.
               maxScale={MAX_ZOOM}
               enablePaging={false}
               enableDoubleTapZoom
@@ -319,7 +362,19 @@ export default function PdfViewer({ visible, item, onClose, getFullUrl, theme })
               testID="pdf-index"
             />
             <View style={styles.barSpacer} />
-            {!!zoomLabel && <Text style={[styles.zoomLabel, { color: c.textMuted }]} numberOfLines={1} testID="pdf-zoom-label">{zoomLabel}</Text>}
+            {!!zoomLabel && (
+              <Pressable
+                onPress={resetZoom}
+                onPressIn={tapHaptic}
+                accessibilityRole="button"
+                accessibilityLabel={`Zoom ${zoomLabel}. Back to the fitted page`}
+                hitSlop={10}
+                testID="pdf-zoom-reset"
+                style={({ pressed }) => [styles.zoomKey, { opacity: pressed ? 0.6 : 1 }]}
+              >
+                <Text style={[styles.zoomLabel, { color: c.textMuted }]} numberOfLines={1} testID="pdf-zoom-label">{zoomLabel}</Text>
+              </Pressable>
+            )}
             <BarKey
               icon={fit === FIT_WIDTH ? 'fit-to-page-outline' : 'arrow-expand-horizontal'}
               label={fit === FIT_WIDTH ? 'Fit whole page' : 'Fit width'}
@@ -365,5 +420,10 @@ const styles = StyleSheet.create({
   // don't shuffle sideways as the page number grows.
   pageLabel: { fontSize: 13.5, fontWeight: '700', minWidth: 74, textAlign: 'center', flexShrink: 1 },
   barSpacer: { flex: 1 },
-  zoomLabel: { fontSize: 12, fontWeight: '600', flexShrink: 1, marginRight: 2 },
+  // The readout is a control now (tap = back to the fitted page), so it gets
+  // a touch target rather than being bare text on the bar. Height matches the
+  // keys either side of it; the width is its own, since "10000%" is as wide as
+  // this ever gets.
+  zoomKey: { height: 44, justifyContent: 'center', paddingHorizontal: 6 },
+  zoomLabel: { fontSize: 12, fontWeight: '600', flexShrink: 1 },
 });
