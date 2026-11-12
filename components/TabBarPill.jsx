@@ -17,6 +17,9 @@ import {
 } from './tabBarLayout';
 import { TAB_SWITCH_BEZIER, TAB_SWITCH_MS } from './dockMotion';
 import { dockSurfaceStops } from './dockSurface';
+import {
+  chipShadeStops, chipSheenStops, CHIP_SHADE_SPAN, CHIP_SHEEN_SPAN,
+} from './chipRecess';
 
 /**
  * TabBarPill — ONE pill that slides from tab to tab behind the icons.
@@ -83,12 +86,33 @@ const SLIDE = {
 //             saturated colour, near-black once the accent is pale enough that
 //             white would disappear. The INACTIVE glyphs stay white-on-dark in
 //             both themes regardless — they sit on the capsule, not the chip,
-//             and a dark tint would vanish into it.
+//             and a dark tint would vanish into it. The chip is CUT INTO the
+//             capsule rather than resting on it — see the two hairlines below
+//             and chipRecess.js;
+//   groove  — the crack where the capsule's face meets the wall of the cut. It
+//             is nearly-black on a nearly-black capsule and barely visible as a
+//             colour, which is correct: its job is to stop the accent bleeding
+//             straight into the capsule, so the chip has an EDGE rather than a
+//             soft join;
+//   lip     — the chamfer along the BOTTOM of the cut, the one face of the
+//             recess that is tilted up into the light. This is the ridge: a
+//             single point of it peeking out under the chip, following the same
+//             squircle. It is the difference between a hole and a dark square.
 const DOCK_EDGE = 'rgba(255,255,255,0.30)';
+const CHIP_GROOVE = 'rgba(0,0,0,0.45)';
+const CHIP_LIP = 'rgba(255,255,255,0.22)';
+// 1.5pt, so the ridge is ~4px of lit edge at @3x — a line you can see, which
+// is the whole point of it, while still being thinner than the glyph's own
+// stroke so it reads as an edge rather than as a second shape under the chip.
+const CHIP_LIP_DROP = 1.5;
 
 // Built once: the stops do not depend on anything that changes — not the
-// theme, not the width, not which tab is up.
+// theme, not the width, not which tab is up. Same for the chip's two washes:
+// they are black and white over whatever the accent happens to be, so they
+// survive an accent change without being rebuilt.
 const SURFACE = dockSurfaceStops();
+const CHIP_SHADE_STOPS = chipShadeStops();
+const CHIP_SHEEN_STOPS = chipSheenStops();
 
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
@@ -217,18 +241,61 @@ export default function TabBarPill({ dragSlot, leadSlot }) {
         testID={underline ? 'dock-underline' : 'dock-chip'}
         style={[
           underline ? styles.underline : styles.pill,
-          {
-            // The highlight colour from Settings. On a white dock a white chip
-            // would disappear, so the chip is the saturated element and the
-            // glyph on it goes white. The LINE is the accent for the same
-            // reason, and in that mode the active glyph takes the accent too
-            // (tabBarActiveTintColor in App.js) — there is no chip under it to
-            // be inked against.
-            backgroundColor: theme.colors.accent,
-          },
+          // The LINE is painted here; the CHIP is painted on the view inside,
+          // because the recess needs something to hang off the outside of it
+          // (the lip) as well as something clipped to the inside (the washes).
+          underline && { backgroundColor: theme.colors.accent },
           pillStyle,
         ]}
-      />
+      >
+        {!underline && (
+          <>
+            {/* THE RIDGE. The same squircle as the chip, dropped a point and a
+                half, so all that shows is a lit crescent along the bottom
+                curve — the one face of a cut that tilts up into the light.
+                Drawn first so the chip covers the rest of it. */}
+            <View pointerEvents="none" testID="dock-chip-lip" style={styles.lip} />
+            <View
+              pointerEvents="none"
+              testID="dock-chip-face"
+              style={[
+                styles.chip,
+                {
+                  // The highlight colour from Settings. On a white dock a white
+                  // chip would disappear, so the chip is the saturated element
+                  // and the glyph on it goes white. In underline mode the line
+                  // takes the accent for the same reason, and the active glyph
+                  // with it (tabBarActiveTintColor in App.js) — there is no
+                  // chip under it to be inked against.
+                  backgroundColor: theme.colors.accent,
+                },
+              ]}
+            >
+              {/* The well's shadowed top wall, and its lit bottom one. Both are
+                  clipped to the squircle by the chip's overflow, so they follow
+                  the corners instead of cutting across them. */}
+              <LinearGradient
+                pointerEvents="none"
+                testID="dock-chip-shade"
+                colors={CHIP_SHADE_STOPS.colors}
+                locations={CHIP_SHADE_STOPS.locations}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={styles.chipShade}
+              />
+              <LinearGradient
+                pointerEvents="none"
+                testID="dock-chip-sheen"
+                colors={CHIP_SHEEN_STOPS.colors}
+                locations={CHIP_SHEEN_STOPS.locations}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={styles.chipSheen}
+              />
+            </View>
+          </>
+        )}
+      </Reanimated.View>
     </View>
   );
 }
@@ -251,6 +318,12 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     overflow: 'hidden',
   },
+  // The chip's FOOTPRINT — the travelling box, and nothing else. It carries no
+  // colour, no corners and above all NO SHADOW: it used to have a 6pt drop
+  // shadow offset 2pt down, which is the signature of a tile resting on a
+  // surface, and it read as exactly that — bevelled outward, proud of the dock.
+  // A recess is the same physics inverted, and every part of it is drawn by the
+  // layers below instead.
   pill: {
     position: 'absolute',
     // Centre line of the card (see PILL_TOP). The icon slot is the same square
@@ -259,20 +332,47 @@ const styles = StyleSheet.create({
     left: 0,
     width: PILL_SIZE,
     height: PILL_SIZE,
+  },
+  // The cut itself. Clips its two washes to the squircle, and carries the
+  // groove hairline so the accent ends on an edge rather than fading into the
+  // capsule.
+  chip: {
+    ...StyleSheet.absoluteFillObject,
     borderRadius: PILL_RADIUS,
     // The iOS superellipse rather than a circular arc — this is what separates
     // a squircle from a rounded square. iOS-only; Android ignores it and falls
     // back to the plain radius, which still reads correctly.
     borderCurve: 'continuous',
-    backgroundColor: '#FFFFFF',
-    // Subtle lift. Offset is small and the radius soft so it reads as a card
-    // resting on the bar rather than floating above it; opacity is set per
-    // theme where the chip is rendered.
-    shadowColor: '#000000',
-    shadowOpacity: 0.18,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CHIP_GROOVE,
+    overflow: 'hidden',
+  },
+  // The ridge: the same shape, one point lower, so only its bottom curve is
+  // ever visible. Sized from the slot rather than filling it, because a
+  // bottom: -1 would be clipped by anything that ever clips this layer.
+  lip: {
+    position: 'absolute',
+    top: CHIP_LIP_DROP,
+    left: 0,
+    width: PILL_SIZE,
+    height: PILL_SIZE,
+    borderRadius: PILL_RADIUS,
+    borderCurve: 'continuous',
+    backgroundColor: CHIP_LIP,
+  },
+  chipShade: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: Math.round(PILL_SIZE * CHIP_SHADE_SPAN),
+  },
+  chipSheen: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: Math.round(PILL_SIZE * CHIP_SHEEN_SPAN),
   },
   // The other treatment: a line under the glyph instead of a card behind it.
   // Positioned from the BOTTOM of the same content block the chip fills, so the
