@@ -52,6 +52,7 @@ const mockMusicPlayer = {
   setupError: null,
   activeTrack: null,
   isPlaying: false,
+  preparing: false,
   position: 0,
   duration: 0,
   playMedia: mockPlayMedia,
@@ -128,6 +129,7 @@ describe('the search scope toggle', () => {
     mockStore.clear();
     __resetForTests();
     mockMusicPlayer.activeTrack = null;
+    mockMusicPlayer.preparing = false;
     mockApi.get.mockImplementation(() => Promise.resolve({ success: true, results: [RESULT] }));
     mockApi.post.mockImplementation(() => Promise.resolve({ success: true, id: 'job_1' }));
   });
@@ -268,6 +270,60 @@ describe('previewing and downloading a result', () => {
     } finally {
       mockMusicPlayer.isPlaying = false;
     }
+  });
+
+  /**
+   * The pond spends seconds resolving a YouTube video to a signed audio URL
+   * before a byte can play. That wait used to be indistinguishable from a tap
+   * that did nothing, so people pressed play again - which cancels the wait
+   * and starts it over. These pin that it is now said out loud.
+   */
+  describe('while the pond is still finding the audio', () => {
+    test('the tapped row says so, in place of its channel line', async () => {
+      mockMusicPlayer.activeTrack = { mediaId: 'yt:MV_3Dpw-BRY' };
+      mockMusicPlayer.preparing = true;
+      const view = await searchingTheWeb();
+      await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+      expect(view.getByText('Finding the audio...')).toBeTruthy();
+      expect(view.getByLabelText('Finding the audio for Kavinsky - Nightcall')).toBeTruthy();
+    });
+
+    test('the transport bar says it where the play button is', async () => {
+      mockMusicPlayer.activeTrack = { mediaId: 'yt:MV_3Dpw-BRY' };
+      mockMusicPlayer.preparing = true;
+      const view = await searchingTheWeb();
+      await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+      // Pressed by its waiting label: the row renames itself the moment it
+      // starts waiting, which is the point of the test above.
+      await fireEvent.press(view.getByLabelText('Finding the audio for Kavinsky - Nightcall'));
+      // The bar's play control reads as busy rather than as an idle Play that
+      // was just pressed and ignored.
+      await waitFor(() => expect(view.getByLabelText('Finding the audio')).toBeTruthy());
+      expect(view.queryByLabelText('Play')).toBeNull();
+    });
+
+    test('a row that is NOT the one waiting keeps its channel line', async () => {
+      // Another track entirely is loading; this row must not borrow its state.
+      mockMusicPlayer.activeTrack = { mediaId: 'yt:SOMETHINGELSE' };
+      mockMusicPlayer.preparing = true;
+      const view = await searchingTheWeb();
+      await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+      expect(view.queryByText('Finding the audio...')).toBeNull();
+      expect(view.getByLabelText('Preview Kavinsky - Nightcall')).toBeTruthy();
+    });
+
+    test('once it plays, the wait is gone', async () => {
+      mockMusicPlayer.activeTrack = { mediaId: 'yt:MV_3Dpw-BRY' };
+      mockMusicPlayer.preparing = false;
+      mockMusicPlayer.isPlaying = true;
+      try {
+        const view = await searchingTheWeb();
+        await waitFor(() => expect(view.getByText('Kavinsky - Nightcall')).toBeTruthy(), AFTER_DEBOUNCE);
+        expect(view.queryByText('Finding the audio...')).toBeNull();
+      } finally {
+        mockMusicPlayer.isPlaying = false;
+      }
+    });
   });
 
   test('the download key sends the watch link to the queue, then becomes a receipt', async () => {

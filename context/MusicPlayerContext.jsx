@@ -8,8 +8,10 @@ import React, {
   useState,
 } from 'react';
 import {
+  PlaybackState,
   useActiveMediaItem,
   useIsPlaying,
+  usePlaybackState,
   useProgress,
 } from '@rntp/player';
 import { AppState } from 'react-native';
@@ -61,7 +63,26 @@ export function MusicPlayerProvider({ children }) {
   const lastMediaVersionRef = useRef(mediaVersion);
   const activeTrack = useActiveMediaItem();
   const isPlaying = useIsPlaying();
+  const playbackState = usePlaybackState();
   const { position, duration } = useProgress(0.5);
+
+  /**
+   * Asked for, nothing audible yet.
+   *
+   * Worth telling the UI about because of ONE case in particular: a YouTube
+   * search result. Playing one makes the pond resolve the video to a signed
+   * audio URL first, and that is seconds of work the player spends with the
+   * track loaded, not playing, and no bytes yet. On screen that looked exactly
+   * like a track that had failed to start, so the honest response was to press
+   * play again - which cancels and restarts the same wait.
+   *
+   * `Buffering` and not playing is the precise shape of it. A track the user
+   * PAUSED sits in `Ready`, not `Buffering`, so pausing at 0:00 does not read
+   * as loading; a stall in the middle of a track does land here, which is
+   * fine - it is the same "waiting for audio", and the caller decides whether
+   * a position of zero makes it worth different words.
+   */
+  const preparing = !!activeTrack && !isPlaying && playbackState === PlaybackState.Buffering;
   const mediaBase = useMemo(
     () => (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, ''),
     [getBaseUrl, getMediaBaseUrl]
@@ -336,6 +357,7 @@ export function MusicPlayerProvider({ children }) {
       libraryError,
       activeTrack,
       isPlaying,
+      preparing,
       position,
       duration,
       refreshLibrary,
@@ -358,6 +380,7 @@ export function MusicPlayerProvider({ children }) {
       libraryError,
       activeTrack,
       isPlaying,
+      preparing,
       position,
       duration,
       refreshLibrary,

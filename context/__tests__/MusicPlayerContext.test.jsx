@@ -13,6 +13,8 @@ const mockServer = {
 let mockAuthenticated = true;
 let mockActiveTrack = null;
 let mockPlaying = false;
+/** Drives `preparing` — see the hook of the same name in the provider. */
+let mockPlaybackState = 'ready';
 let mockMediaVersion = 0;
 let mockAuth = {
   isAuthenticated: true,
@@ -44,8 +46,12 @@ jest.mock('../DownloadsContext', () => ({
   useMediaVersion: () => ({ mediaVersion: mockMediaVersion }),
 }));
 jest.mock('@rntp/player', () => ({
+  // The real enum, by value, so a mock state is the same string the provider
+  // compares against.
+  PlaybackState: { Idle: 'idle', Ready: 'ready', Buffering: 'buffering', Ended: 'ended', Error: 'error' },
   useActiveMediaItem: () => mockActiveTrack,
   useIsPlaying: () => mockPlaying,
+  usePlaybackState: () => mockPlaybackState,
   useProgress: () => ({ position: 12, duration: 180 }),
 }));
 jest.mock('../../services/musicPlayerService', () => ({
@@ -74,6 +80,7 @@ function Probe({ visible = true }) {
       <Text testID="loading">{String(music.loading)}</Text>
       <Text testID="ready">{String(music.ready)}</Text>
       <Text testID="position">{music.position}</Text>
+      <Text testID="preparing">{String(music.preparing)}</Text>
       <Button title="play-two" onPress={() => music.playMedia('two')} />
       <Button title="play-one" onPress={() => music.playMedia('one')} />
       <Button title="play-memo" onPress={() => music.playMedia('memo')} />
@@ -96,6 +103,7 @@ describe('MusicPlayerProvider', () => {
     mockAuthenticated = true;
     mockActiveTrack = null;
     mockPlaying = false;
+    mockPlaybackState = 'ready';
     mockMediaVersion = 0;
     mockAuth = {
       isAuthenticated: true,
@@ -115,6 +123,53 @@ describe('MusicPlayerProvider', () => {
         { id: 'one', filename: 'one.mp3', rawUrl: '/media/one.mp3' },
         { id: 'two', filename: 'two.mp3', rawUrl: '/media/two.mp3' },
       ],
+    });
+  });
+
+  /**
+   * `preparing` is what the YouTube-preview rows and the transport bar read to
+   * say "Finding the audio...". It has to mean "asked for, nothing audible
+   * yet" and NOT "paused", or every pause at 0:00 would claim to be loading.
+   */
+  describe('preparing', () => {
+    const mount = async () => render(
+      <MusicPlayerProvider>
+        <Probe />
+      </MusicPlayerProvider>
+    );
+
+    test('is true while a loaded track is buffering and silent', async () => {
+      mockActiveTrack = { mediaId: 'yt:abc' };
+      mockPlaying = false;
+      mockPlaybackState = 'buffering';
+      const view = await mount();
+      await waitFor(() => expect(view.getByTestId('preparing').props.children).toBe('true'));
+    });
+
+    test('is false for a track the user merely paused', async () => {
+      // A paused track is Ready, not Buffering. This is the distinction the
+      // whole flag rests on.
+      mockActiveTrack = { mediaId: 'yt:abc' };
+      mockPlaying = false;
+      mockPlaybackState = 'ready';
+      const view = await mount();
+      await waitFor(() => expect(view.getByTestId('preparing').props.children).toBe('false'));
+    });
+
+    test('is false once audio is actually coming out', async () => {
+      mockActiveTrack = { mediaId: 'yt:abc' };
+      mockPlaying = true;
+      mockPlaybackState = 'buffering';
+      const view = await mount();
+      await waitFor(() => expect(view.getByTestId('preparing').props.children).toBe('false'));
+    });
+
+    test('is false when nothing is loaded at all', async () => {
+      mockActiveTrack = null;
+      mockPlaying = false;
+      mockPlaybackState = 'buffering';
+      const view = await mount();
+      await waitFor(() => expect(view.getByTestId('preparing').props.children).toBe('false'));
     });
   });
 

@@ -148,6 +148,7 @@ export default function MusicVault({
     setupError,
     activeTrack,
     isPlaying,
+    preparing,
     position,
     duration,
     playMedia,
@@ -1341,17 +1342,23 @@ export default function MusicVault({
   }, [theme, c, activeTrack, isPlaying, playTrack]);
 
   /** One web result. Tap previews, the key downloads — see MusicWebResultRow. */
-  const renderWebRow = useCallback(({ item }) => (
-    <MusicWebResultRow
-      result={item}
-      theme={theme}
-      tint={MUSIC_TINT(c)}
-      playing={webRowId(item.videoId) === String(activeTrack?.mediaId)}
-      downloadState={webDownloads[item.videoId] || 'idle'}
-      onPreview={() => previewWeb(item)}
-      onDownload={() => downloadWeb(item)}
-    />
-  ), [theme, c, activeTrack, webDownloads, previewWeb, downloadWeb]);
+  const renderWebRow = useCallback(({ item }) => {
+    const active = webRowId(item.videoId) === String(activeTrack?.mediaId);
+    return (
+      <MusicWebResultRow
+        result={item}
+        theme={theme}
+        tint={MUSIC_TINT(c)}
+        playing={active}
+        // Only the row that was actually tapped waits — see `preparing` in
+        // MusicPlayerContext for what the player is doing while it does.
+        preparing={active && preparing}
+        downloadState={webDownloads[item.videoId] || 'idle'}
+        onPreview={() => previewWeb(item)}
+        onDownload={() => downloadWeb(item)}
+      />
+    );
+  }, [theme, c, activeTrack, preparing, webDownloads, previewWeb, downloadWeb]);
 
   /**
    * The search header: the scope toggle, then one line about what is below it.
@@ -1832,7 +1839,12 @@ export default function MusicVault({
             </View>
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 15, fontWeight: '700', color: c.textPrimary }} numberOfLines={1}>{titleOf(nowTrack)}</Text>
-              <Text style={{ fontSize: 12, color: c.textTertiary }} numberOfLines={1}>{sourceOf(nowTrack) || 'audio'}</Text>
+              {/* The source line carries the wait. This bar is where the play
+                  button is, so it is where someone decides the tap did not
+                  work and presses it again — which only restarts the wait. */}
+              <Text style={{ fontSize: 12, color: c.textTertiary }} numberOfLines={1}>
+                {preparing ? 'Finding the audio...' : (sourceOf(nowTrack) || 'audio')}
+              </Text>
             </View>
             <TouchableOpacity
               accessibilityRole="button"
@@ -1845,12 +1857,17 @@ export default function MusicVault({
             </TouchableOpacity>
             <TouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
+              accessibilityLabel={preparing ? 'Finding the audio' : isPlaying ? 'Pause' : 'Play'}
               onPress={togglePlayback}
               disabled={!ready}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Icon name={isPlaying ? 'pause-circle' : 'play-circle'} size={44} color={MUSIC_TINT(c)} />
+              {/* Still tappable while preparing - it is how you call off a
+                  wait you have changed your mind about - but it no longer
+                  LOOKS like a play button that did nothing. */}
+              {preparing
+                ? <View style={styles.transportSpinner}><ActivityIndicator size="small" color={MUSIC_TINT(c)} /></View>
+                : <Icon name={isPlaying ? 'pause-circle' : 'play-circle'} size={44} color={MUSIC_TINT(c)} />}
             </TouchableOpacity>
             <TouchableOpacity
               accessibilityRole="button"
@@ -2426,6 +2443,9 @@ const styles = StyleSheet.create({
   },
   tabLabel: { fontSize: 13, fontWeight: '700' },
   art: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  // The size of the play glyph it stands in for, so the transport's spacing
+  // does not shift when a track starts loading.
+  transportSpinner: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   error: { marginHorizontal: 16, marginBottom: 8, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
   nowBar: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8 },
   seekHit: { paddingVertical: 8, paddingHorizontal: 16 },

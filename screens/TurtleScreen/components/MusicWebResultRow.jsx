@@ -58,15 +58,20 @@ function DownloadKey({ state, label, tint, c, onPress }) {
   );
 }
 
-function MusicWebResultRow({ result, theme, tint, playing, downloadState, onPreview, onDownload }) {
+function MusicWebResultRow({
+  result, theme, tint, playing, preparing, downloadState, onPreview, onDownload,
+}) {
   const c = theme.colors;
   return (
     <View style={styles.inset}>
       <VaultResultRow
         theme={theme}
         name={result.title}
-        meta={webResultMeta(result)}
-        accessibilityLabel={`Preview ${result.title}`}
+        // While the pond is still turning this video into a playable URL the
+        // row says so IN PLACE OF the channel line. Without it the row looked
+        // identical to one that had been tapped and done nothing.
+        meta={preparing ? 'Finding the audio...' : webResultMeta(result)}
+        accessibilityLabel={preparing ? `Finding the audio for ${result.title}` : `Preview ${result.title}`}
         onPress={onPreview}
         leading={result.thumbnail ? (
           <Image
@@ -89,8 +94,12 @@ function MusicWebResultRow({ result, theme, tint, playing, downloadState, onPrev
           <View style={styles.trailing}>
             {/* While it is the playing track the row says so in the same place
                 a library row does — in the square — but the square is holding
-                a cover, so the marker comes here instead. */}
-            {playing ? <Icon name="volume-high" size={18} color={tint} /> : null}
+                a cover, so the marker comes here instead. A spinner takes that
+                spot while the pond is still finding the audio, so the marker
+                never jumps position between the two states. */}
+            {preparing
+              ? <ActivityIndicator size="small" color={tint} />
+              : playing ? <Icon name="volume-high" size={18} color={tint} /> : null}
             <DownloadKey
               state={downloadState}
               label={result.title}

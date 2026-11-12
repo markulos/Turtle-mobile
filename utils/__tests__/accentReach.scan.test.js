@@ -109,6 +109,7 @@ describe('an accent fill carries derived ink', () => {
   const CARRIES_NO_INK = new Set([
     'screens/TasksScreen/index.jsx',                          // the header's active-page bar
     'screens/TurtleScreen/components/MediaGallery.jsx',       // the gallery's tab underline
+    'screens/TurtleScreen/components/SearchScopeToggle.jsx',  // the music scope underline, same as those two
     'screens/TurtleScreen/components/PhotoVaultBoardsPage.jsx', // the "live board" dot
     'screens/ProfileScreen/components/MessagesPage.jsx',       // the unread dot on a thread row
     'components/TabBarPill.jsx',                              // chip; glyph inked in App.js

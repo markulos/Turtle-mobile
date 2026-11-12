@@ -105,8 +105,12 @@ describe('searching', () => {
   test('asks the pond, encoded, and hands back the rows', async () => {
     const api = { get: jest.fn(() => Promise.resolve({ success: true, query: 'nightcall', results: [RESULT] })) };
     const out = await searchWebMusic(api, '  nightcall & drive  ');
+    // NO `/api` PREFIX: getBaseUrl() already ends in /api and api.* appends to
+    // it, so asserting the prefixed path here is what let the doubled-/api 404
+    // ship green in the first place (fixed in 5784625; this expectation was
+    // left behind pointing at the broken shape).
     expect(api.get).toHaveBeenCalledWith(
-      '/api/music/web/search?q=nightcall%20%26%20drive&limit=15',
+      '/music/web/search?q=nightcall%20%26%20drive&limit=15',
       expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     expect(out.results).toEqual([RESULT]);
@@ -135,7 +139,8 @@ describe('downloading', () => {
   test('sends the watch URL to the queue that already takes shared links', async () => {
     const api = { post: jest.fn(() => Promise.resolve({ success: true, id: 'job_1' })) };
     await enqueueWebDownload(api, RESULT);
-    expect(api.post).toHaveBeenCalledWith('/api/downloads', {
+    // Relative to /api, like every other api.* call. See above.
+    expect(api.post).toHaveBeenCalledWith('/downloads', {
       url: 'https://www.youtube.com/watch?v=MV_3Dpw-BRY',
       // The whole of "as audio" from the caller's side.
       outputKind: 'audio',
