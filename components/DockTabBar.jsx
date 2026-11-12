@@ -6,16 +6,30 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomTabBar } from '@react-navigation/bottom-tabs';
 import { CommonActions } from '@react-navigation/native';
 
-import { commitSlotAt, dockOccupied, slotAtX } from './tabBarLayout';
+import { dockOccupied, slotAtX } from './tabBarLayout';
 
 /**
  * DockTabBar — the bottom nav, with a thumb you can DRAG along it.
  *
  * Tapping a tab was the only way to change tabs, which makes every switch a
  * lift-aim-press cycle even when you are moving one slot. Dragging makes the
- * dock a single control you scrub: the chip comes with your thumb, the pages
- * change as you cross each icon, and you can overshoot and come back without
- * ever letting go. Tapping is untouched — a press still goes straight to
+ * dock a single control you scrub, and the gesture has two halves that do not
+ * overlap:
+ *
+ *   WHILE THE THUMB IS DOWN, the chip tracks it 1:1 and nothing else moves.
+ *   No navigate, so no page swap and no icon changing colour mid-scrub. You
+ *   can run the length of the dock and come back without having committed to
+ *   anything.
+ *
+ *   ON RELEASE, the nearest tab to where you let go is the one you chose. It
+ *   is a single navigate, so the page turns and the icons take their new
+ *   colours once, together, while the chip travels to that slot on the app's
+ *   tab-switch curve (dockMotion).
+ *
+ * That split is the whole design. The first version committed a tab per icon
+ * crossed, which meant a scrub was five tab changes: five page transitions and
+ * five sets of icons lighting and unlighting under a thumb that was still
+ * moving. Tapping is untouched either way — a press still goes straight to
  * react-navigation's own button.
  *
  * ── Why this wraps BottomTabBar instead of replacing it ─────────────────────
@@ -63,7 +77,7 @@ import { commitSlotAt, dockOccupied, slotAtX } from './tabBarLayout';
 // drag has not become harder to start — only harder to start by accident.
 const DRAG_SLOP = 12;
 
-export default function DockTabBar({ dragSlot, ...props }) {
+export default function DockTabBar({ dragSlot, leadSlot, ...props }) {
   const { state, navigation } = props;
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -77,9 +91,13 @@ export default function DockTabBar({ dragSlot, ...props }) {
   const ownSlot = useSharedValue(-1);
   const slot = dragSlot ?? ownSlot;
 
-  // Which tab the drag has already committed to, on the UI thread: without it
-  // every frame of a drag would re-dispatch the same navigate.
-  const committed = useSharedValue(-1);
+  // The slot the lifted thumb CHOSE, written on the UI thread at the moment of
+  // release — before React has heard about the navigate, let alone re-rendered.
+  // Without it the chip would aim at the old tab for the few frames the
+  // navigator takes to agree, which is a visible flick backwards on the way to
+  // the new one. See TabBarPill, which spends it as soon as `index` catches up.
+  const ownLead = useSharedValue(-1);
+  const lead = leadSlot ?? ownLead;
 
   // The navigator's state through a ref, NOT captured in the callback below.
   // `state` is a new object on every navigation — including the ones this
@@ -92,20 +110,19 @@ export default function DockTabBar({ dragSlot, ...props }) {
   const goToIndex = useCallback((i) => {
     const current = stateRef.current;
     const route = current.routes[i];
-    // "Already there" covers both the tab the drag started on and the frames
-    // spent on an icon after it has been committed.
+    // A scrub that wanders off and comes back lands on the tab it started on,
+    // and that is not a tab change — the chip simply returns to where it was.
     if (!route || route.key === current.routes[current.index]?.key) return;
     // The same dispatch BottomTabBar's own onPress makes, minus the `tabPress`
-    // event: nothing in the app listens for it, and emitting one per icon
-    // crossed would turn a single scrub into five presses for anything that
-    // later did.
+    // event: nothing in the app listens for it, and a drag is not a press.
     navigation.dispatch({ ...CommonActions.navigate(route), target: current.key });
   }, [navigation]);
 
-  // Held for the duration of a drag so that a tab crossed on the way cannot
-  // mount its real screen mid-gesture — withTabSkeleton waits on interactions,
-  // so a passed-through tab shows its template and nothing else. The landed
-  // tab mounts the moment the thumb lifts.
+  // Held for the duration of a drag so that nothing deferred runs under the
+  // thumb. The chip tracks the finger 1:1 now, which means every frame of the
+  // gesture is a frame someone can see go wrong; withTabSkeleton and anything
+  // else waiting on interactions stands still until the thumb is up, and the
+  // tab that was landed on mounts then.
   const holdRef = useRef(null);
   const hold = useCallback(() => {
     if (holdRef.current == null) holdRef.current = InteractionManager.createInteractionHandle();
@@ -131,36 +148,38 @@ export default function DockTabBar({ dragSlot, ...props }) {
     // are hopped over with runOnJS and do not block the tracking.
     .onStart((e) => {
       runOnJS(hold)();
-      // -1 rather than the focused index: "nothing committed yet". goToIndex
-      // ignores the tab we are already on, so this cannot navigate to where
-      // we already are — and it keeps the focused index out of the worklet's
-      // closure, which is what makes the gesture stable for the whole drag.
-      committed.value = -1;
       slot.value = slotAtX(e.absoluteX, width, count);
     })
+    // 1:1 with the finger, and NOTHING else. The chip is the only thing that
+    // moves during a scrub: no navigate, so no page swap and no icon changing
+    // colour under a thumb that has not decided yet. A drag is a question, and
+    // the answer is given on release.
     .onUpdate((e) => {
-      const p = slotAtX(e.absoluteX, width, count);
-      slot.value = p;
-      // NOT Math.round: a thumb held near the midpoint between two icons is
-      // never quite still, and plain rounding flipped the tab back and forth
-      // under it several times a second. commitSlotAt keeps a dead band around
-      // the tab you are on — see SLOT_COMMIT_HYSTERESIS.
-      const i = commitSlotAt(p, committed.value);
-      if (i !== committed.value) {
-        committed.value = i;
-        runOnJS(goToIndex)(i);
-      }
+      slot.value = slotAtX(e.absoluteX, width, count);
     })
-    // onFinalize, not onEnd: a gesture cancelled by the system (a call coming
-    // in, a modal taking the touch) must still hand the chip back to the
-    // focused tab and let deferred mounts run, or the dock stays stuck under a
-    // finger that is no longer there.
+    // THE DECISION, and the only one: the nearest tab to where the thumb let
+    // go. Plain rounding is right HERE where it was wrong per-frame — a lift
+    // happens once, so there is no midpoint for a wobbling thumb to flip
+    // across, and nothing to hold a dead band against.
+    //
+    // onEnd, not onFinalize: this fires only for a real lift. A gesture the
+    // system cancels (a call coming in, a modal taking the touch) must NOT
+    // choose a tab on the user's behalf — it just hands the chip back.
+    .onEnd(() => {
+      const chosen = Math.round(slot.value);
+      // Set BEFORE the chip is released below, so the frame that starts the
+      // chip's travel already knows where it is going.
+      lead.value = chosen;
+      runOnJS(goToIndex)(chosen);
+    })
+    // Always, lift or cancel: the chip goes back to being the navigator's, and
+    // deferred work runs again. A stuck -1 would leave it parked under a finger
+    // that is no longer there.
     .onFinalize(() => {
       slot.value = -1;
-      committed.value = -1;
       runOnJS(release)();
     }),
-  [committed, count, goToIndex, hold, release, slot, width]);
+  [count, goToIndex, hold, lead, release, slot, width]);
 
   return (
     <GestureDetector gesture={pan}>

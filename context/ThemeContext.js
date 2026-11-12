@@ -9,6 +9,16 @@ const CALENDAR_DAY_TASKS_KEY = '@connected_pass_calendar_day_tasks';
 const CALENDAR_FREE_SCROLL_KEY = '@connected_pass_calendar_free_scroll';
 const ACCENT_KEY = '@connected_pass_accent';
 const CUSTOM_ACCENT_KEY = '@connected_pass_accent_custom';
+const DOCK_INDICATOR_KEY = '@connected_pass_dock_indicator';
+
+/**
+ * How the dock marks the tab you are on: the filled accent CHIP behind the
+ * glyph, or a thin accent LINE under it. Stored as a word rather than a boolean
+ * because this is a choice between two treatments, and a third ("none", a dot)
+ * is the obvious next request.
+ */
+export const DOCK_INDICATORS = ['chip', 'underline'];
+export const DEFAULT_DOCK_INDICATOR = 'chip';
 
 /**
  * The app-wide highlight colour, chosen in Settings.
@@ -309,6 +319,10 @@ const ThemeContext = createContext({
   // style) where months flow past without snapping to a boundary.
   calendarFreeScroll: false,
   setCalendarFreeScroll: () => {},
+  // 'chip' (the filled accent square behind the active glyph) | 'underline'
+  // (a thin accent line under it). See DOCK_INDICATORS.
+  dockIndicator: DEFAULT_DOCK_INDICATOR,
+  setDockIndicator: () => {},
   // The highlight colour: one of ACCENTS' keys, or CUSTOM_ACCENT for a colour
   // the user mixed themselves (`customAccent`, a '#RRGGBB').
   accent: DEFAULT_ACCENT,
@@ -329,6 +343,7 @@ export const ThemeProvider = ({ children }) => {
   const [hideVaultButton, setHideVaultButtonState] = useState(true);
   const [showCalendarDayTasks, setShowCalendarDayTasksState] = useState(false);
   const [calendarFreeScroll, setCalendarFreeScrollState] = useState(false);
+  const [dockIndicator, setDockIndicatorState] = useState(DEFAULT_DOCK_INDICATOR);
   const [accent, setAccentState] = useState(DEFAULT_ACCENT);
   // The user's own colour, '#RRGGBB', or null if they have never mixed one.
   // Remembered even while a preset is selected, so the custom swatch still
@@ -377,6 +392,13 @@ export const ThemeProvider = ({ children }) => {
       if (savedFreeScroll !== null) {
         setCalendarFreeScrollState(savedFreeScroll === 'true');
       }
+      // Checked against the list rather than trusted: a word from storage that
+      // is no longer a treatment we draw would leave the dock with no
+      // indicator at all.
+      const savedDock = await AsyncStorage.getItem(DOCK_INDICATOR_KEY);
+      if (DOCK_INDICATORS.includes(savedDock)) {
+        setDockIndicatorState(savedDock);
+      }
     } catch (error) {
       console.error('Error loading theme:', error);
     } finally {
@@ -401,6 +423,16 @@ export const ThemeProvider = ({ children }) => {
       await AsyncStorage.setItem(HIDE_VAULT_BUTTON_KEY, next ? 'true' : 'false');
     } catch (error) {
       console.error('Error saving hide-vault-button setting:', error);
+    }
+  };
+
+  const setDockIndicator = async (kind) => {
+    const next = DOCK_INDICATORS.includes(kind) ? kind : DEFAULT_DOCK_INDICATOR;
+    setDockIndicatorState(next);
+    try {
+      await AsyncStorage.setItem(DOCK_INDICATOR_KEY, next);
+    } catch (error) {
+      console.error('Error saving dock-indicator setting:', error);
     }
   };
 
@@ -518,8 +550,9 @@ export const ThemeProvider = ({ children }) => {
       hideVaultButton, setHideVaultButton,
       showCalendarDayTasks, setShowCalendarDayTasks,
       calendarFreeScroll, setCalendarFreeScroll,
+      dockIndicator, setDockIndicator,
     }),
-    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, accent, accentColor, customAccent],
+    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, accent, accentColor, customAccent],
   );
 
   if (isLoading) {

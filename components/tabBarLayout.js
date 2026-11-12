@@ -99,28 +99,53 @@ export const slotAtX = (x, screenWidth, count) => {
 };
 
 /**
- * How far past an icon the thumb must be before the tab actually changes, as a
- * fraction of one slot. Plain rounding puts the boundary exactly on the midpoint
- * between two icons, which means a thumb PARKED near that midpoint — and a thumb
- * is never still — flips the tab back and forth several times a second. That is
- * the "twitchy" in the first version of this drag.
+ * THE UNDERLINE — the dock's second indicator treatment (Settings → Navigation).
  *
- * 0.62 leaves a dead band of about a quarter of a slot (~16pt) around whichever
- * tab is current: enough that holding still holds still, small enough that a
- * deliberate slide to the next icon still commits before the thumb gets there.
+ * A thin accent line under the active glyph instead of the filled chip behind
+ * it. Same slot, same travel, a different mark: the chip reads as a button the
+ * icon sits on, the line as a rule the icon stands on.
+ *
+ * The width is a touch narrower than the glyph block so the line reads as
+ * UNDER the icon rather than as a box around it, and it is deliberately not
+ * the full slot — a line that touches the ridges either side of it would look
+ * like a filled cell.
+ *
+ * Its vertical place is measured off the BOTTOM of the content block, not off
+ * the glyph: the brand turtle is 36pt where every other glyph is 24, so a line
+ * positioned under "the icon" would be under one icon and through another. 7pt
+ * up from the block's bottom edge clears the turtle's descent and still leaves
+ * the line inside the capsule.
  */
-export const SLOT_COMMIT_HYSTERESIS = 0.62;
+export const UNDERLINE_W = 30;
+export const UNDERLINE_H = 3;
 
 /**
- * Which tab a drag at continuous position `p` should actually be on, given what
- * it is already on. `committed` < 0 means nothing yet (the first frame of a
- * drag), where the nearest tab is the right answer.
+ * Where an indicator of `indicatorWidth` sits inside the cluster, so that it is
+ * centred on slot 0. Both treatments go through this, which is what keeps the
+ * chip and the line travelling on exactly the same line of slots — the caller
+ * adds `TAB_SLOT * slot` to it, whole or fractional.
  */
-export const commitSlotAt = (p, committed) => {
+export const indicatorOffset = (start, indicatorWidth) => {
   'worklet';
-  if (committed < 0) return Math.round(p);
-  if (Math.abs(p - committed) <= SLOT_COMMIT_HYSTERESIS) return committed;
-  return Math.round(p);
+  return start + (TAB_SLOT - indicatorWidth) / 2;
+};
+
+/**
+ * THE RIDGES — a hairline between each pair of tab icons, evenly spaced.
+ *
+ * The x of each one, measured from the same cluster edge the icons and the
+ * indicator use: one at every slot BOUNDARY, which is what makes them even
+ * without anyone dividing the bar up a second way. count - 1 of them, so there
+ * is no ridge hanging off either end of the cluster.
+ *
+ * Returned as a list rather than drawn from an index so the spacing is a
+ * testable claim: the gaps between consecutive ridges are all one slot.
+ */
+export const ridgeOffsets = (barWidth, count) => {
+  const start = clusterStart(barWidth, count);
+  const xs = [];
+  for (let i = 1; i < count; i += 1) xs.push(start + TAB_SLOT * i);
+  return xs;
 };
 
 // Breathing room above AND below the chip inside the bar. Applied as the bar's

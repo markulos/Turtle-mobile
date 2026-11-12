@@ -129,10 +129,12 @@ export function forTabTurn({ current }) {
 }
 
 /**
- * The chip's follow while a thumb is dragging. Much shorter than a switch,
- * because this is not a transition — it is smoothing. A finger's position
- * arrives jittery and 1:1 tracking passes that jitter straight into the chip;
- * ~90ms of ease-out behind the thumb filters it out while still reading as
- * attached to the finger. Long enough to smooth, short enough not to lag.
+ * NOTHING HERE APPLIES WHILE A THUMB IS DOWN.
+ *
+ * There was briefly a CHIP_FOLLOW_MS — ~90ms of ease-out behind the finger, to
+ * filter the jitter a touch stream carries. It is gone: a filter is a lag, and
+ * under a fingertip there is something to measure the lag against. The chip
+ * takes the drag position raw (TabBarPill) and this curve is for the TRAVEL
+ * that happens after the release, when the dock is choosing a tab rather than
+ * being held.
  */
-export const CHIP_FOLLOW_MS = 90;

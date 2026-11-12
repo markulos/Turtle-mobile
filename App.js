@@ -144,6 +144,10 @@ function TabNavigator() {
   // and a shared value is the only thing both can hold that costs no re-render
   // per frame. See DockTabBar.
   const dragSlot = useSharedValue(-1);
+  // …and which slot the thumb let go on, for the handful of frames between the
+  // release and the navigator agreeing. Same two-places problem, same answer:
+  // the drag writes it, the chip reads it, neither waits for a render.
+  const leadSlot = useSharedValue(-1);
   // An immersive page (the PDF reader) asks for the dock to go. `display:none`
   // is the only thing that actually removes it — the bar is the navigator's
   // own child and paints above every screen, so a page cannot cover it.
@@ -156,7 +160,7 @@ function TabNavigator() {
       // changing tabs is a thumb sliding along the capsule and not only a tap.
       // Everything about how the bar looks still comes from screenOptions
       // below — see DockTabBar for why it wraps rather than replaces.
-      tabBar={(props) => <DockTabBar {...props} dragSlot={dragSlot} />}
+      tabBar={(props) => <DockTabBar {...props} dragSlot={dragSlot} leadSlot={leadSlot} />}
       // No tabPress haptic: tab switching is silent by request. (There used to
       // be a selection tick here for every tab.)
       screenOptions={({ route }) => ({
@@ -342,7 +346,7 @@ function TabNavigator() {
         // One accent pill that SLIDES between tabs, painted behind the buttons.
         // tabBarBackground is composited under navigation's own tab buttons, so
         // this adds the indicator without touching their layout or a11y.
-        tabBarBackground: () => <TabBarPill dragSlot={dragSlot} />,
+        tabBarBackground: () => <TabBarPill dragSlot={dragSlot} leadSlot={leadSlot} />,
         headerShown: false, // Hide default header
       })}
     >

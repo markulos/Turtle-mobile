@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useNavigationState } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
@@ -10,8 +10,11 @@ import Reanimated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
-import { TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, BAR_CONTENT_HEIGHT, clusterStart } from './tabBarLayout';
-import { CHIP_FOLLOW_MS, TAB_SWITCH_MS } from './dockMotion';
+import {
+  TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, BAR_CONTENT_HEIGHT, clusterStart,
+  UNDERLINE_W, UNDERLINE_H, indicatorOffset, ridgeOffsets,
+} from './tabBarLayout';
+import { TAB_SWITCH_BEZIER, TAB_SWITCH_MS } from './dockMotion';
 
 /**
  * TabBarPill — ONE pill that slides from tab to tab behind the icons.
@@ -35,17 +38,24 @@ import { CHIP_FOLLOW_MS, TAB_SWITCH_MS } from './dockMotion';
  * from `dragSlot` instead: a FRACTIONAL slot position written on the UI thread.
  * The two cannot drift, because a slot is converted to pixels here, once, by
  * the formula below — whether the number came from the navigator or from a
- * finger. On release the chip springs from wherever the thumb left it to the
- * slot it landed on, which is why the drag position is read as a plain value
- * and only the resting one is wrapped in a spring.
+ * finger.
+ *
+ * Under the thumb that position is taken RAW: no timing, no spring, no
+ * smoothing of any kind, so the chip is exactly where the finger is on every
+ * frame. (It briefly ran ~90ms behind, as a jitter filter. A filter is still a
+ * lag, and a control held directly under a fingertip is the one place a lag
+ * has something to be measured against.) Off the thumb the position is the
+ * tab's own slot and the chip TRAVELS there, on the same curve as the page.
  */
 
-// A short ease-out, NOT a spring — and the same one the pages travel on, so the
-// chip and the screen it selects arrive together. See dockMotion for the
-// number, and for why a spring was the wrong instrument here.
-const SLIDE = { duration: TAB_SWITCH_MS, easing: Easing.out(Easing.cubic) };
-// Behind the thumb, not behind a switch: smoothing, measured in dockMotion.
-const FOLLOW = { duration: CHIP_FOLLOW_MS, easing: Easing.out(Easing.quad) };
+// A timed curve, NOT a spring — and the same curve, from the same control
+// points, that the pages travel on, so the chip and the screen it selects move
+// as one thing and arrive together. See dockMotion for every number in here,
+// including why it starts from rest rather than at full speed.
+const SLIDE = {
+  duration: TAB_SWITCH_MS,
+  easing: Easing.bezier(...TAB_SWITCH_BEZIER).factory(),
+};
 
 // The dock's palette — ONE set for BOTH themes: a ghosted-black capsule, the
 // dark treatment applied in light mode too. It reads as a floating piece of
@@ -75,46 +85,76 @@ const DOCK_EDGE = 'rgba(255,255,255,0.30)';
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
 
-export default function TabBarPill({ dragSlot }) {
-  const { theme } = useTheme();
+export default function TabBarPill({ dragSlot, leadSlot }) {
+  const { theme, dockIndicator } = useTheme();
   const [barWidth, setBarWidth] = useState(0);
   // Not dragging, and no dock to drag on (a test, a screenshot harness): -1 is
   // the resting contract, so an absent value behaves exactly like a lifted
-  // finger. The hook runs unconditionally — the fallback is the VALUE, not the
+  // finger. The hooks run unconditionally — the fallback is the VALUE, not the
   // call.
   const ownSlot = useSharedValue(-1);
+  const ownLead = useSharedValue(-1);
   const slot = dragSlot ?? ownSlot;
+  const lead = leadSlot ?? ownLead;
 
   // Read straight from the navigator: `index` is the focused tab and `routes`
   // is what's actually rendered, so a hidden tab shifts the geometry correctly.
   const index = useNavigationState((state) => state?.index ?? 0);
   const count = useNavigationState((state) => state?.routes?.length ?? 1);
 
+  const underline = dockIndicator === 'underline';
+
   // The tabs are a CENTRED CLUSTER of fixed-width slots, not items stretched
-  // across the bar, so the chip is placed from the cluster's left edge — the
-  // same edge the bar's own padding creates.
+  // across the bar, so the indicator is placed from the cluster's left edge —
+  // the same edge the bar's own padding creates. Both treatments go through
+  // indicatorOffset, which is why swapping them cannot move the travel line.
   const start = clusterStart(barWidth, count);
-  const offset = start + (TAB_SLOT - PILL_SIZE) / 2;
+  const offset = indicatorOffset(start, underline ? UNDERLINE_W : PILL_SIZE);
+  const ridges = useMemo(
+    () => (barWidth > 0 ? ridgeOffsets(barWidth, count) : []),
+    [barWidth, count],
+  );
+
+  // THE NAVIGATOR IS THE SLOWEST OF THE THREE THINGS THAT KNOW.
+  //
+  // `index` arrives through React: the press is handled, a navigate is
+  // dispatched, the tree re-renders, and only then does this component learn
+  // where the chip belongs — and on a tab whose screen is mounting, that chain
+  // lands a few frames late. That lateness WAS the indicator's delay. So the
+  // chip takes its aim from whichever of the three knows first:
+  //
+  //   drag — a thumb on the capsule, fractional, straight off the UI thread;
+  //   lead — the slot a tap landed on, written by DockTabBar at touch-up,
+  //          before React has done anything about it;
+  //   index — the navigator, which is the truth and has the last word.
+  //
+  // A lead is spent the moment the navigator agrees with it (the effect below),
+  // so these never fight: the lead gets the chip moving, `index` confirms the
+  // same target, and withTiming is handed a value it is already travelling to —
+  // which Reanimated continues rather than restarts. That is what makes the
+  // travel one smooth move instead of a start, a hitch and a finish.
+  useEffect(() => { lead.value = -1; }, [index, lead]);
 
   const pillStyle = useAnimatedStyle(() => {
     const dragging = slot.value >= 0;
-    // ONE formula for both: a slot (whole or fractional) times the slot width,
-    // from the cluster's own left edge. A dragged chip therefore lands exactly
-    // where a tapped one would.
-    const target = dragging
-      ? TAB_SLOT * slot.value + offset
-      : TAB_SLOT * index + offset;
+    // ONE formula for all three: a slot (whole or fractional) times the slot
+    // width, from the cluster's own left edge. A dragged chip, a led chip and a
+    // navigated chip therefore all land in exactly the same place.
+    const aim = dragging ? slot.value : (lead.value >= 0 ? lead.value : index);
     return {
       // Nothing to place until the bar has been measured; staying invisible
       // avoids the square flashing at x=0 on the first frame.
       opacity: withTiming(barWidth > 0 ? 1 : 0, SLIDE),
       transform: [{
-        // Two speeds, one curve family. Under the thumb the chip is being
-        // SMOOTHED, so the follow is short — re-aimed every frame at the new
-        // finger position, which is what makes it a filter rather than an
-        // animation. Off the thumb it is TRAVELLING to a selection, on the
-        // same 170ms as the page behind it.
-        translateX: withTiming(target, dragging ? FOLLOW : SLIDE),
+        // Two states, and only one of them is an animation. Under the thumb
+        // the indicator IS the finger — the position is written straight out,
+        // so there is nothing between the two. Off the thumb it TRAVELS to the
+        // slot that was chosen, on the same curve and duration as the page
+        // behind it, which is what makes the release read as one movement
+        // rather than a snap followed by a page.
+        translateX: dragging
+          ? TAB_SLOT * aim + offset
+          : withTiming(TAB_SLOT * aim + offset, SLIDE),
       }],
     };
   }, [barWidth, index, offset]);
@@ -145,13 +185,29 @@ export default function TabBarPill({ dragSlot }) {
           style={[StyleSheet.absoluteFill, { backgroundColor: DOCK_SURFACE }]}
         />
       </View>
+      {/* The ridges: one hairline between each pair of icons, drawn BEFORE the
+          indicator so the chip passes over them rather than under. They are
+          beside the chip, not behind it — a 57pt chip in a 67pt slot leaves 5pt
+          of clearance either side, which is where these sit. */}
+      {ridges.map((x) => (
+        <View
+          key={x}
+          pointerEvents="none"
+          testID="dock-ridge"
+          style={[styles.ridge, { left: x - StyleSheet.hairlineWidth / 2, backgroundColor: DOCK_EDGE }]}
+        />
+      ))}
       <Reanimated.View
+        testID={underline ? 'dock-underline' : 'dock-chip'}
         style={[
-          styles.pill,
+          underline ? styles.underline : styles.pill,
           {
             // The highlight colour from Settings. On a white dock a white chip
             // would disappear, so the chip is the saturated element and the
-            // glyph on it goes white.
+            // glyph on it goes white. The LINE is the accent for the same
+            // reason, and in that mode the active glyph takes the accent too
+            // (tabBarActiveTintColor in App.js) — there is no chip under it to
+            // be inked against.
             backgroundColor: theme.colors.accent,
           },
           pillStyle,
@@ -201,5 +257,28 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 6,
     elevation: 4,
+  },
+  // The other treatment: a line under the glyph instead of a card behind it.
+  // Positioned from the BOTTOM of the same content block the chip fills, so the
+  // two travel on one line and neither can drift from the glyphs — and so the
+  // 36pt brand turtle clears it (see UNDERLINE_W/H).
+  underline: {
+    position: 'absolute',
+    top: PILL_TOP + PILL_SIZE - UNDERLINE_H - 4,
+    left: 0,
+    width: UNDERLINE_W,
+    height: UNDERLINE_H,
+    borderRadius: UNDERLINE_H / 2,
+    // No shadow: a 3pt line with a drop shadow reads as a smudge, and the line
+    // is ON the capsule rather than resting on it the way the chip is.
+  },
+  // One ridge. A hairline, full height of the icon block less a breath at each
+  // end, so it reads as a groove between two cells rather than as a divider
+  // cutting the capsule in half.
+  ridge: {
+    position: 'absolute',
+    top: PILL_TOP + 10,
+    width: StyleSheet.hairlineWidth,
+    height: PILL_SIZE - 20,
   },
 });
