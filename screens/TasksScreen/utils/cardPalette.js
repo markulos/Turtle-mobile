@@ -47,6 +47,15 @@ export function insetCardPalette(theme) {
       edge: 'rgba(255,255,255,0.04)',
       /** The top edge, a touch brighter still — a hint, not a ridge. */
       edgeTop: 'rgba(255,255,255,0.06)',
+      /**
+       * THE RIM OF AN OUTLINE CONTROL — a key with no fill, a field, a
+       * selectable cell. NOT the same thing as a panel's rim, and the reason
+       * this exists: when the panel rim faded to 0.04 (2026-11-13) every
+       * outline button that had been borrowing it faded with it, which turned
+       * "Stop" into white text floating on nothing. A panel is a surface and
+       * can be drawn by its fill; a control with no fill has only its edge.
+       */
+      control: 'rgba(255,255,255,0.22)',
       /** Small icon tile inside a card (the cup in the reference). */
       tile: '#322B29',
       shadow: {},
@@ -66,6 +75,8 @@ export function insetCardPalette(theme) {
       onText: '#211C1B',
       edge: 'rgba(255,255,255,0.05)',
       edgeTop: 'rgba(255,255,255,0.07)',
+      /** See the dark palette: an outline control has only its edge. */
+      control: 'rgba(255,255,255,0.24)',
       tile: '#302A28',
       shadow: {},
     };
@@ -143,6 +154,7 @@ export function boardCardPalette(theme, color) {
     // the app has just lost.
     edge: mixHex(card, '#FFFFFF', 0.07),
     edgeTop: mixHex(card, '#FFFFFF', 0.11),
+    control: mixHex(card, '#FFFFFF', 0.30),
     tile: mixHex(card, '#FFFFFF', 0.10),
   };
 }

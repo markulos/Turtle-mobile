@@ -141,7 +141,7 @@ function FocusDeck({
       testID="focus-deck"
       style={[
         styles.deck,
-        { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop },
+        { backgroundColor: pal.card },
         { transform: [{ scale: pulse }] },
       ]}
     >
@@ -206,7 +206,7 @@ function FocusDeck({
            the PICKER because a picker needs a list and a list needs a page. A
            jot needs neither. Sending you to another page to write one word is
            the interruption the whole idea exists to avoid. */
-        <View style={[styles.assign, { backgroundColor: pal.field, borderColor: pal.edge }]}>
+        <View style={[styles.assign, { backgroundColor: pal.field, borderColor: pal.control }]}>
           <Icon name="lightbulb-on-outline" size={16} color={pal.muted} />
           <AppTextInput
             style={[styles.jotInput, { color: pal.text }]}
@@ -251,7 +251,7 @@ function FocusDeck({
           testID="focus-assign"
           style={({ pressed }) => [
             styles.assign,
-            { backgroundColor: pal.tile, borderColor: pal.edge },
+            { backgroundColor: pal.tile, borderColor: pal.control },
             pressed && styles.pressed,
           ]}
         >
@@ -298,7 +298,7 @@ function FocusDeck({
           testID="focus-toggle"
           style={({ pressed }) => [
             styles.key, styles.keyWide,
-            { backgroundColor: 'transparent', borderColor: pal.edge },
+            { backgroundColor: 'transparent', borderColor: pal.control },
             pressed && styles.pressed,
           ]}
         >
@@ -315,7 +315,7 @@ function FocusDeck({
             testID="focus-start-break"
             style={({ pressed }) => [
               styles.key, styles.keyHalf,
-              { backgroundColor: 'transparent', borderColor: pal.edge },
+              { backgroundColor: 'transparent', borderColor: pal.control },
               pressed && styles.pressed,
             ]}
           >
@@ -384,7 +384,7 @@ function useCountUp(value, ms = 520) {
 function Tile({ icon, label, count, format, value, caption, pal, accent, enter, onPress, testID }) {
   const shown = useCountUp(count ?? 0);
   const text = count == null ? value : (format ? format(shown) : String(shown));
-  const skin = { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop };
+  const skin = { backgroundColor: pal.card };
   const body = (
     <>
       <View style={styles.tileTop}>
@@ -784,7 +784,7 @@ function FocusPage({
         The week{picked ? ` · ${new Date(picked.ms).toLocaleDateString('en-US', { weekday: 'long' })}, ${formatMinutes(picked.minutes)}` : ''}
       </Text>
       <Animated.View
-        style={[styles.panel, { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop }, enterAt(0.3, 0.7)]}
+        style={[styles.panel, { backgroundColor: pal.card }, enterAt(0.3, 0.7)]}
       >
         <WeekBars
           week={stats.week}
@@ -812,7 +812,7 @@ function FocusPage({
             testID={`focus-stats-key-${r.range}`}
             style={({ pressed }) => [
               styles.statKey,
-              { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop },
+              { backgroundColor: pal.card },
               pressed && styles.pressed,
             ]}
           >
@@ -838,7 +838,7 @@ function FocusPage({
         When you focus{stats.best ? ` · best ${formatMinutes(stats.best.minutes)}` : ''}
       </Text>
       <Animated.View
-        style={[styles.panel, { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop }, enterAt(0.38, 0.78)]}
+        style={[styles.panel, { backgroundColor: pal.card }, enterAt(0.38, 0.78)]}
       >
         <HourStrip byHour={stats.byHour} pal={pal} accent={accent} />
       </Animated.View>
@@ -867,7 +867,7 @@ function FocusPage({
             style={[
               styles.panel,
               styles.recentPanel,
-              { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop },
+              { backgroundColor: pal.card },
               enterAt(0.46, 0.86),
             ]}
             testID="focus-recent-panel"
@@ -932,7 +932,7 @@ function FocusPage({
         return (
           <View
             key={b.name}
-            style={[styles.row, { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop }]}
+            style={[styles.row, { backgroundColor: pal.card }]}
             testID={`focus-board-${b.name}`}
           >
             <View style={styles.rowTop}>
@@ -1006,7 +1006,7 @@ const styles = StyleSheet.create({
   body: { paddingHorizontal: 16, paddingTop: 4, gap: 10 },
   // The deck. The same inset card as the tiles below it, one size up: this is
   // the page's subject, so it gets the top of the screen and the big reading.
-  deck: { marginTop: 6, borderRadius: 16, borderWidth: 1, padding: 14, gap: 10 },
+  deck: { marginTop: 6, borderRadius: 24, borderCurve: 'continuous', padding: 16, gap: 10 },
   deckHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   badge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
   badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6 },
@@ -1064,24 +1064,24 @@ const styles = StyleSheet.create({
   // The grid cell, and the card that fills it. Split so a tile that OPENS
   // something can put a Pressable between them — see Tile.
   tileSlot: { flexGrow: 1, flexBasis: '47%' },
-  tileCard: { borderRadius: 14, borderWidth: 1, padding: 12, gap: 2 },
+  tileCard: { borderRadius: 22, borderCurve: 'continuous', padding: 14, gap: 2 },
   tileFill: { flex: 1 },
   tilePressed: { opacity: 0.72 },
   tileTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   iconTile: { width: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  label: { flex: 1, fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9, textTransform: 'uppercase' },
-  value: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5, marginTop: 4 },
+  label: { flex: 1, fontSize: 12.5, fontWeight: '600', letterSpacing: 0 },
+  value: { fontSize: 27, fontWeight: '800', letterSpacing: -0.6, marginTop: 6 },
   caption: { fontSize: 11.5 },
 
   // The four period keys. The same inset card and the same two-up grid as the
   // tiles above them, so the page reads as one set of furniture rather than
   // two — the chevron is what says this one opens.
-  statKey: { flexGrow: 1, flexBasis: '47%', borderRadius: 14, borderWidth: 1, padding: 12, gap: 2 },
+  statKey: { flexGrow: 1, flexBasis: '47%', borderRadius: 22, borderCurve: 'continuous', padding: 14, gap: 2 },
   statKeyTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  statKeyValue: { fontSize: 20, fontWeight: '800', letterSpacing: -0.5, marginTop: 4 },
+  statKeyValue: { fontSize: 23, fontWeight: '800', letterSpacing: -0.6, marginTop: 6 },
 
   section: { fontSize: 11, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase', marginTop: 8 },
-  panel: { borderRadius: 14, borderWidth: 1, padding: 14 },
+  panel: { borderRadius: 24, borderCurve: 'continuous', padding: 16 },
   bars: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 6 },
   barCol: { flex: 1, alignItems: 'center', gap: 6 },
   barSlot: { height: 64, justifyContent: 'flex-end' },
@@ -1112,7 +1112,7 @@ const styles = StyleSheet.create({
   recentMins: { fontSize: 12.5, fontWeight: '800', fontVariant: ['tabular-nums'], minWidth: 34, textAlign: 'right' },
   recentKey: { width: 16, alignItems: 'center', justifyContent: 'center' },
 
-  row: { borderRadius: 14, borderWidth: 1, padding: 12, gap: 6 },
+  row: { borderRadius: 20, borderCurve: 'continuous', padding: 14, gap: 6 },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   rowName: { flex: 1, fontSize: 14, fontWeight: '700' },
   rowFigure: { fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] },

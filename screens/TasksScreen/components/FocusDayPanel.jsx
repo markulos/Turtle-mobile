@@ -46,7 +46,7 @@ const markColor = (value, max, pal) => {
 function Card({ title, note, children, pal, testID }) {
   return (
     <View
-      style={[styles.card, { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop }]}
+      style={[styles.card, { backgroundColor: pal.card }]}
       testID={testID}
     >
       <Text style={[styles.cardTitle, { color: pal.text }]} numberOfLines={1}>{title}</Text>
@@ -353,7 +353,14 @@ const styles = StyleSheet.create({
 
   body: { paddingHorizontal: 16, paddingTop: 12 },
 
-  card: { borderRadius: 16, borderWidth: 1, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 14, marginBottom: 10 },
+  card: {
+    borderRadius: 24,
+    borderCurve: 'continuous',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 16,
+    marginBottom: 10,
+  },
   cardTitle: { fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9, textTransform: 'uppercase' },
   cardNote: { fontSize: 11.5, fontWeight: '600', marginTop: 3, lineHeight: 16 },
   cardFoot: { fontSize: 11.5, fontWeight: '600', marginTop: 10 },

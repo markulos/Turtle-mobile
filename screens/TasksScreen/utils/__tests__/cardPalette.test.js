@@ -92,6 +92,31 @@ describe('the panel separates by TONE, not by a line', () => {
   });
 });
 
+describe('an outline control is not a panel', () => {
+  // Added after a real regression: when the panel rim faded to 0.04
+  // (2026-11-13) every outline BUTTON that had been borrowing it faded with
+  // it, and "Stop" in the focus deck became white text floating on nothing.
+  // A panel is a surface and can be drawn by its fill; a control with no
+  // fill has only its edge, so it gets its own token.
+  for (const mode of ['dark', 'light']) {
+    test(`${mode}: the control rim is far stronger than the panel rim`, () => {
+      const pal = insetCardPalette({ mode });
+      const alpha = (css) => Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(css)[1]);
+      expect(alpha(pal.control)).toBeGreaterThan(alpha(pal.edge) * 3);
+      // Visible on its own against the card it sits on — the test that would
+      // have caught the regression.
+      expect(lum(mixHex(pal.card, '#FFFFFF', alpha(pal.control))))
+        .toBeGreaterThan(lum(pal.card) * 1.5);
+    });
+  }
+
+  test('a board-coloured card carries one too', () => {
+    const { card, control, edge } = boardCardPalette({ mode: 'dark' }, '#2979FF');
+    expect(lum(control)).toBeGreaterThan(lum(edge));
+    expect(lum(control)).toBeGreaterThan(lum(card));
+  });
+});
+
 describe('boardCardPalette', () => {
   test('no board → the plain card, IDENTICALLY (not a rebuild of it)', () => {
     // Same object shape AND same values: a boardless agenda row must be the
