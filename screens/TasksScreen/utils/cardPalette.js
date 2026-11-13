@@ -1,18 +1,40 @@
 // Task cards are INSET DARK panels (docs/STYLE-RULES.md §1) in BOTH modes:
-// a charcoal surface — never pitch black — with a hairline rim a touch
-// lighter than the panel and a lit top edge (the light catching the edge of
-// a recess), white text, muted captions. The Teenage-Engineering /
-// Scandinavian read of the reference tile. No drop shadow: a recess casts
-// none. On the light page the dark panel is what makes a task stand off the
-// page; on the dark page it sits a step ABOVE the black so it still reads
-// as a panel. TimelineTaskRow, TaskItem, the board rail, the Overview tiles
-// and the countdown badge all draw from this one palette.
+// a charcoal surface — never pitch black — carrying white text and muted
+// captions. No drop shadow: a recess casts none. On the light page the dark
+// panel is what makes a task stand off the page; on the dark page it sits a
+// step ABOVE the black so it still reads as a panel. TimelineTaskRow,
+// TaskItem, the board rail, the focus panels, the Overview tiles and the
+// countdown badge all draw from this one palette.
+//
+// ── Separated by TONE, not by a line (2026-11-13) ──────────────────────────
+//
+// The panel used to be drawn as a recess: a near-black fill with a hairline
+// rim and a brighter lit top edge, which is how you describe a cut when the
+// fill has nothing to say. At #17171A on a black page that rim WAS the card —
+// the eye found the outline first and the surface second, and a screen of
+// them read as wireframe.
+//
+// So the weight moved from the edge to the fill. The panel is paler, and the
+// rim is faded to roughly a third of what it was: still there, holding the
+// corner where a card sits against another card, but no longer the thing you
+// see. A card now reads as a lighter PLANE than the page, which is what a
+// panel is.
+//
+// ── And a hue ──────────────────────────────────────────────────────────────
+//
+// Not neutral grey: a warm taupe, red highest and blue lowest by a few points
+// at this lightness. Neutral charcoal on a pure-black page reads as an
+// absence of colour — slightly dead, and slightly blue on an OLED. A few
+// points of warmth is below the threshold of "a brown card" and above the
+// threshold of "lit by something". Cool slate and mauve were both rendered
+// against the same layout; warm is the one that stops the surface looking
+// switched off.
 export function insetCardPalette(theme) {
   const dark = theme?.mode === 'dark';
   return dark
     ? {
-      /** Charcoal, a step above the black page. */
-      card: '#17171A',
+      /** Warm charcoal, a clear step above the black page — see the note. */
+      card: '#241F1D',
       text: '#F2F2F4',
       sub: 'rgba(255,255,255,0.68)',
       muted: 'rgba(255,255,255,0.48)',
@@ -20,28 +42,31 @@ export function insetCardPalette(theme) {
       field: 'rgba(255,255,255,0.07)',
       track: 'rgba(255,255,255,0.14)',
       /** Text drawn ON a `text`-coloured badge — i.e. the card colour. */
-      onText: '#17171A',
-      /** The rim: a hairline lighter than the panel, all the way round. */
-      edge: 'rgba(255,255,255,0.11)',
-      /** The lit top edge of the recess. */
-      edgeTop: 'rgba(255,255,255,0.17)',
+      onText: '#241F1D',
+      /** The rim: faded almost out, holding the corner and nothing more. */
+      edge: 'rgba(255,255,255,0.04)',
+      /** The top edge, a touch brighter still — a hint, not a ridge. */
+      edgeTop: 'rgba(255,255,255,0.06)',
       /** Small icon tile inside a card (the cup in the reference). */
-      tile: '#242429',
+      tile: '#322B29',
       shadow: {},
     }
     : {
-      /** Charcoal on the white page — dark, not black. */
-      card: '#1F2024',
+      /** Charcoal on the white page — dark, not black, and the same warmth.
+       *  NOT lightened the way the dark-mode card was: this one already has
+       *  all the contrast it needs against a white page, and paling it would
+       *  spend that for nothing. */
+      card: '#211C1B',
       text: '#FFFFFF',
       sub: 'rgba(255,255,255,0.72)',
       muted: 'rgba(255,255,255,0.50)',
       border: 'rgba(255,255,255,0.10)',
       field: 'rgba(255,255,255,0.08)',
       track: 'rgba(255,255,255,0.16)',
-      onText: '#1F2024',
-      edge: 'rgba(255,255,255,0.12)',
-      edgeTop: 'rgba(255,255,255,0.20)',
-      tile: '#2C2D33',
+      onText: '#211C1B',
+      edge: 'rgba(255,255,255,0.05)',
+      edgeTop: 'rgba(255,255,255,0.07)',
+      tile: '#302A28',
       shadow: {},
     };
 }
@@ -112,10 +137,12 @@ export function boardCardPalette(theme, color) {
     card,
     /** Text drawn ON a `text`-coloured badge — i.e. this card's own colour. */
     onText: card,
-    // The rim and the lit top edge: the card's own colour lifted toward white,
-    // the same relationship the plain panel has with its charcoal.
-    edge: mixHex(card, '#FFFFFF', 0.20),
-    edgeTop: mixHex(card, '#FFFFFF', 0.30),
+    // The rim and the top edge: the card's own colour lifted toward white,
+    // the same relationship the plain panel has with its charcoal — and faded
+    // with it, or a board's card would keep the outline every other card in
+    // the app has just lost.
+    edge: mixHex(card, '#FFFFFF', 0.07),
+    edgeTop: mixHex(card, '#FFFFFF', 0.11),
     tile: mixHex(card, '#FFFFFF', 0.10),
   };
 }

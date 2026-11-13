@@ -47,6 +47,51 @@ const contrast = (a, b) => {
   return (hi + 0.05) / (lo + 0.05);
 };
 
+describe('the panel separates by TONE, not by a line', () => {
+  // The decision of 2026-11-13, as arithmetic. The panel used to be drawn as
+  // a recess — near-black fill, hairline rim, brighter lit top edge — and on
+  // a black page the rim WAS the card: the eye found the outline first and
+  // the surface second. The weight moved to the fill.
+  const dark = insetCardPalette({ mode: 'dark' });
+  const alpha = (css) => Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(css)[1]);
+
+  test('the fill alone lifts the card clear of a black page', () => {
+    // If this is the only thing you keep, keep this: a card has to be visible
+    // with the rim switched off entirely. The old near-black fill sat at
+    // 1.17 against the page, which is why it needed an outline to exist.
+    expect(contrast(dark.card, '#000000')).toBeGreaterThan(1.25);
+  });
+
+  test('the rim is a hint — a fraction of what it was', () => {
+    expect(alpha(dark.edge)).toBeLessThan(0.06);
+    expect(alpha(dark.edgeTop)).toBeLessThan(0.08);
+    // Still ordered, so the top edge keeps catching a touch more light than
+    // the sides. A rim at zero is a different decision and not this one.
+    expect(alpha(dark.edgeTop)).toBeGreaterThan(alpha(dark.edge));
+    expect(alpha(dark.edge)).toBeGreaterThan(0);
+  });
+
+  test('…and the fill out-weighs it, which is the whole inversion', () => {
+    // Like for like: what the card does against the page, against what the
+    // rim does against the card. Before the change the rim won.
+    const rimSeen = contrast(mixHex(dark.card, '#FFFFFF', alpha(dark.edge)), dark.card);
+    const fillSeen = contrast(dark.card, '#000000');
+    expect(fillSeen).toBeGreaterThan(rimSeen);
+  });
+
+  test('warm: red highest, blue lowest, and only just', () => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(dark.card.slice(i, i + 2), 16));
+    expect(r).toBeGreaterThan(g);
+    expect(g).toBeGreaterThan(b);
+    // Past about eight points it stops being "lit" and starts being brown.
+    expect(r - b).toBeLessThanOrEqual(8);
+  });
+
+  test('the icon tile still reads as a step above the card it sits on', () => {
+    expect(lum(dark.tile)).toBeGreaterThan(lum(dark.card));
+  });
+});
+
 describe('boardCardPalette', () => {
   test('no board → the plain card, IDENTICALLY (not a rebuild of it)', () => {
     // Same object shape AND same values: a boardless agenda row must be the
@@ -96,9 +141,15 @@ describe('boardCardPalette', () => {
 
   test('the rim is the card lifted toward white, as the plain panel is', () => {
     const { card, edge, edgeTop } = boardCardPalette(light, '#2979FF');
-    expect(edge).toBe(mixHex(card, '#FFFFFF', 0.20));
-    // The lit top edge is a step brighter than the rest of the rim.
+    // A LIFT toward white, asserted as a relationship rather than as the
+    // mixing constant: the rim faded app-wide on 2026-11-13, and a board's
+    // card has to fade with it or it keeps an outline nothing else has.
+    expect(lum(edge)).toBeGreaterThan(lum(card));
+    // The top edge is a step brighter than the rest of the rim.
     expect(lum(edgeTop)).toBeGreaterThan(lum(edge));
+    // …and it is a HINT. Before the fade this was a fifth of the way to
+    // white, and the rim was the first thing you saw on a card.
+    expect(lum(edge)).toBeLessThan(lum(mixHex(card, '#FFFFFF', 0.12)));
   });
 
   test('a colour it cannot read falls all the way back to the plain card', () => {

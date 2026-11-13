@@ -20,9 +20,15 @@
  * categorical set: eight colours would say "these are different KINDS" when
  * the only thing that differs is size. The four steps are the reference blue
  * ramp's 550/450/350/250, validated (`scripts/validate_palette.js --ordinal`)
- * against BOTH card surfaces — #1F2024 on the light page and #17171A on the
- * dark one — for monotone lightness, ≥0.06 step gaps, single hue, and the
- * light end clearing the surface. Both pass.
+ * against both card surfaces for monotone lightness, ≥0.06 step gaps, single
+ * hue, and the light end clearing the surface.
+ *
+ * Re-checked on 2026-11-13, when the card surfaces were paled and warmed
+ * (#241F1D dark / #211C1B light, see cardPalette): the darkest step now sits
+ * at 2.46:1 against the dark card rather than 2.70:1 — which is exactly the
+ * ratio it has always had against the LIGHT-mode card, so the ramp clears the
+ * surface by the same margin the app has been shipping. No change needed; the
+ * number is recorded here so the next person does not have to re-derive it.
  *
  * LATE IS THE ONE EXCEPTION and it is not a series: it is a status colour, so
  * it never appears without the word "late" beside it.

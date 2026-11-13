@@ -24,6 +24,7 @@ jest.mock('react-native-safe-area-context', () => ({
 }));
 
 import FocusPage from '../FocusPage';
+import { insetCardPalette } from '../../utils/cardPalette';
 import { playFocusComplete } from '../../../../services/focusChime';
 import { notifyHaptic } from '../../../../utils/haptics';
 
@@ -371,12 +372,18 @@ describe('the task the session is for', () => {
 describe('the deck is legible on the light page', () => {
   const styleOf = (testID) => StyleSheet.flatten(screen.getByTestId(testID).props.style);
   const light = { ...theme, mode: 'light', colors: { ...theme.colors, background: '#fff', textPrimary: '#111' } };
+  // Taken from the palette, not written as a hex: the claim here is "a dark
+  // CARD rather than the white page", and the card's exact charcoal is a
+  // taste call that has already been retuned once (2026-11-13, warmer and
+  // with the rim faded). A test that pins the hex fails on a repaint and
+  // says nothing about legibility.
+  const PAL = insetCardPalette(light);
 
   test('the clock and the key sit on a dark card, not on the white page', async () => {
     await render(<FocusPage {...props({ theme: light, active: running(60000) })} />);
     const deck = styleOf('focus-deck');
     // The inset card's charcoal, which is what makes the white ink legal.
-    expect(deck.backgroundColor).toBe('#1F2024');
+    expect(deck.backgroundColor).toBe(PAL.card);
     expect(deck.backgroundColor).not.toBe(light.colors.background);
     expect(styleOf('focus-clock').color).toBe('#FFFFFF');
   });
@@ -387,14 +394,14 @@ describe('the deck is legible on the light page', () => {
     // the same key drawn transparent on a white page: invisible.
     expect(styleOf('focus-toggle').backgroundColor).toBe('transparent');
     expect(screen.getByText('Stop')).toBeTruthy();
-    expect(styleOf('focus-deck').backgroundColor).toBe('#1F2024');
+    expect(styleOf('focus-deck').backgroundColor).toBe(PAL.card);
   });
 
   test('the idle key uses the palette’s own on-ink, not the card colour', async () => {
     await render(<FocusPage {...props({ theme: light })} />);
     const key = styleOf('focus-toggle');
-    expect(key.backgroundColor).toBe('#FFFFFF');        // pal.text
-    expect(StyleSheet.flatten(screen.getByText('Start session').props.style).color).toBe('#1F2024'); // pal.onText
+    expect(key.backgroundColor).toBe(PAL.text);
+    expect(StyleSheet.flatten(screen.getByText('Start session').props.style).color).toBe(PAL.onText);
   });
 
   // The same bug, one section further down: the recent rows were laid straight
@@ -403,7 +410,7 @@ describe('the deck is legible on the light page', () => {
   test('the recent blocks sit on a card too', async () => {
     await render(<FocusPage {...props({ theme: light })} />);
     const panel = styleOf('focus-recent-panel');
-    expect(panel.backgroundColor).toBe('#1F2024');
+    expect(panel.backgroundColor).toBe(PAL.card);
     expect(panel.backgroundColor).not.toBe(light.colors.background);
   });
 });

@@ -158,11 +158,22 @@ const TYPOGRAPHY = generateTypography();
 export const DARK_THEME = {
   mode: 'dark',
   colors: {
-    // Backgrounds - Pure black with subtle gradients
+    // Backgrounds — a pure-black page carrying WARM, PALER surfaces.
+    //
+    // They were near-black (#0A0A0A / #111111) and separated from the page by
+    // a hairline, which is a wireframe: the eye finds the outline first and
+    // the surface second. The weight moved to the fill — each rung is lighter
+    // than it was and carries a few points of warmth (red highest, blue
+    // lowest), because neutral charcoal on a pure-black OLED page reads as an
+    // absence of colour rather than as a lit surface. The same move the task
+    // cards made; see screens/TasksScreen/utils/cardPalette for the full note.
+    //
+    // The PAGE stays pure black. It is the thing everything else is measured
+    // against, and warming it would just make the whole app beige.
     background: '#000000',            // Pure black
-    surface: '#0A0A0A',               // Slightly lighter black
-    surfaceElevated: '#111111',       // Elevated cards
-    surfaceHighlight: '#1A1A1A',      // Highlight/selection
+    surface: '#141110',               // A warm step off the page
+    surfaceElevated: '#1C1817',       // Elevated cards
+    surfaceHighlight: '#262120',      // Highlight/selection
     
     // Primary - White for contrast on black
     primary: '#FFFFFF',               // White
@@ -183,16 +194,19 @@ export const DARK_THEME = {
     accentError: '#F87171',
     accentInfo: '#60A5FA',
     
-    // Borders - Very subtle
-    border: 'rgba(255, 255, 255, 0.08)',
-    borderStrong: 'rgba(255, 255, 255, 0.15)',
+    // Borders — FADED, now that the surfaces carry the separation themselves.
+    // A hairline is for holding a corner where two panels meet, not for
+    // drawing the panel. `borderStrong` is kept for the few places that are
+    // genuinely a rule (a divider between rows), and dropped with it.
+    border: 'rgba(255, 255, 255, 0.035)',
+    borderStrong: 'rgba(255, 255, 255, 0.09)',
     
     // Overlays
     overlay: 'rgba(0, 0, 0, 0.9)',
     overlayLight: 'rgba(0, 0, 0, 0.7)',
     
     // Input specific - Dark grey background, light grey text
-    inputBackground: '#0D0D0D',
+    inputBackground: '#171413',
     inputText: '#E0E0E0',
   },
   spacing: SPACING,
