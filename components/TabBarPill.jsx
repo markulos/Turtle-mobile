@@ -6,6 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { blurProps } from '../utils/frostedChat';
 import Reanimated, {
   Easing,
+  useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -64,6 +65,9 @@ import { resolveDockSkin } from './dockThemes';
 const EASE = Easing.bezier(...TAB_SWITCH_BEZIER).factory();
 // The first-layout fade-in, which is not a travel and has no distance.
 const FADE = { duration: CHIP_SLIDE_BASE_MS, easing: EASE };
+// The settle after a lifted thumb: always the shortest clock, because what is
+// left of the move is a fraction of a slot.
+const SETTLE = { duration: CHIP_SLIDE_BASE_MS, easing: EASE };
 
 // The dock's palette lives in dockSkins — one entry per SKIN, because what the
 // capsule is made of is a setting now (Settings → Navigation) rather than a
@@ -152,49 +156,99 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs }) {
   //          before React has done anything about it;
   //   index — the navigator, which is the truth and has the last word.
   //
-  // A lead is spent the moment the navigator agrees with it (the effect below),
-  // so these never fight: the lead gets the chip moving, `index` confirms the
-  // same target, and withTiming is handed a value it is already travelling to —
-  // which Reanimated continues rather than restarts. That is what makes the
-  // travel one smooth move instead of a start, a hitch and a finish.
+  // A lead is spent the moment the navigator agrees with it, so these never
+  // fight: the lead gets the chip moving and `index` lands on the same slot,
+  // which the driver below sees as no change at all.
   useEffect(() => { lead.value = -1; }, [index, lead]);
 
-  // A tab change made from SOMEWHERE ELSE — a deep link, the /command console,
-  // a guard bouncing you out of a tab — has no press and no gesture behind it,
-  // so nobody has said how far the chip is about to travel. Measure it here,
-  // from the slot it is leaving, and give the move its own clock like any
-  // other. (A press has already written this by the time `index` lands, with
-  // the same arithmetic; it is written again with the same answer.)
+  // ── THE CHIP'S POSITION ────────────────────────────────────────────────
+  //
+  // One shared value, in pixels, and the style does nothing but read it.
+  //
+  // This used to be computed inside useAnimatedStyle, with withTiming called
+  // in the style itself — and that is what jittered. A style worklet re-runs
+  // on every re-render AND on every change to any value it reads, and a
+  // `withTiming` inside it is re-created each time: a single tab change ran it
+  // four times (the duration arrives, the lead arrives, the navigator commits,
+  // the lead is spent), and each re-creation restarts the timing from the
+  // chip's current position with a fresh full duration. On a curve whose
+  // velocity is at its MAXIMUM on the first frame, a restart is a visible
+  // kick — four of them in 160ms is the jitter, and the repeatedly-restarted
+  // clock is why it also finished late.
+  //
+  // So the animation is started imperatively, exactly once per move, from the
+  // one place that can tell a move from a re-render: a reaction watching what
+  // the chip is actually aimed at. React can re-render as often as it likes
+  // now — the style reads a number, and nothing it does can restart a travel
+  // that is already in flight.
+  const x = useSharedValue(0);
+  const fade = useSharedValue(0);
+
+  // `index` and the geometry live in React state; the driver runs on the UI
+  // thread, so they are mirrored into shared values it can read. The mirror
+  // for `index` is written AFTER the duration, so the reaction never fires
+  // against a stale clock.
+  const indexSV = useSharedValue(index);
+  const offsetSV = useSharedValue(offset);
   const prevIndexRef = useRef(index);
   useEffect(() => {
     const from = prevIndexRef.current;
     prevIndexRef.current = index;
+    // A tab change made from SOMEWHERE ELSE — a deep link, the /command
+    // console, a guard bouncing you out of a tab — has no press and no gesture
+    // behind it, so nobody has said how far the chip is about to travel.
+    // Measure it from the slot it is leaving. A press has already written the
+    // same answer by now; writing it again changes nothing.
     if (from !== index) ms.value = chipSlideMs(index - from);
-  }, [index, ms]);
+    indexSV.value = index;
+  }, [index, indexSV, ms]);
+  useEffect(() => { offsetSV.value = offset; }, [offset, offsetSV]);
 
-  const pillStyle = useAnimatedStyle(() => {
-    const dragging = slot.value >= 0;
-    // ONE formula for all three: a slot (whole or fractional) times the slot
-    // width, from the cluster's own left edge. A dragged chip, a led chip and a
-    // navigated chip therefore all land in exactly the same place.
-    const aim = dragging ? slot.value : (lead.value >= 0 ? lead.value : index);
-    return {
-      // Nothing to place until the bar has been measured; staying invisible
-      // avoids the square flashing at x=0 on the first frame.
-      opacity: withTiming(barWidth > 0 ? 1 : 0, FADE),
-      transform: [{
-        // Two states, and only one of them is an animation. Under the thumb
-        // the indicator IS the finger — the position is written straight out,
-        // so there is nothing between the two. Off the thumb it TRAVELS to the
-        // slot that was chosen, on the shared curve and on a clock set by how
-        // far it has to go — so a hop to the next tab and a run across the
-        // whole dock read as the same object moving, not as two speeds.
-        translateX: dragging
-          ? TAB_SLOT * aim + offset
-          : withTiming(TAB_SLOT * aim + offset, { duration: ms.value, easing: EASE }),
-      }],
-    };
-  }, [barWidth, index, offset]);
+  // Nothing to place until the bar has been measured; staying invisible avoids
+  // the chip flashing at x=0 on the first frame.
+  useEffect(() => {
+    fade.value = withTiming(barWidth > 0 ? 1 : 0, FADE);
+  }, [barWidth, fade]);
+
+  useAnimatedReaction(
+    () => {
+      const dragging = slot.value >= 0;
+      return {
+        dragging,
+        // ONE formula for all three sources: a slot (whole or fractional)
+        // times the slot width, from the cluster's own left edge. A dragged
+        // chip, a led chip and a navigated chip land in the same place.
+        aim: dragging ? slot.value : (lead.value >= 0 ? lead.value : indexSV.value),
+        offset: offsetSV.value,
+      };
+    },
+    (cur, prev) => {
+      const px = TAB_SLOT * cur.aim + cur.offset;
+      // Under the thumb the chip IS the finger: written straight out, every
+      // frame, with nothing in between.
+      if (cur.dragging) { x.value = px; return; }
+      // First run, and any time the bar's geometry changes underneath it (a
+      // rotation, a tab being hidden in Settings): a layout is not a move, so
+      // the chip is PLACED rather than sent travelling.
+      if (!prev || cur.offset !== prev.offset) { x.value = px; return; }
+      // The thumb let go. What is left is a fraction of a slot, so it settles
+      // on the shortest clock the dock has rather than a full crossing's.
+      if (prev.dragging) { x.value = withTiming(px, SETTLE); return; }
+      // A real move, and the only path that starts a travel: the aim changed.
+      // Re-renders do not reach here, which is the whole point.
+      if (cur.aim !== prev.aim) {
+        x.value = withTiming(px, { duration: ms.value, easing: EASE });
+      }
+    },
+    [],
+  );
+
+  // Pure reads. No animation is created in here, so a re-render cannot
+  // restart one.
+  const pillStyle = useAnimatedStyle(() => ({
+    opacity: fade.value,
+    transform: [{ translateX: x.value }],
+  }));
 
   return (
     <View
