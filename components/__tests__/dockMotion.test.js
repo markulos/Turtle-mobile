@@ -127,18 +127,20 @@ describe('the tab switch curve', () => {
     // already looking at, so the duration that reads as a turn on a whole
     // screen reads as a delay on it. They share the curve, not the clock.
     expect(CHIP_SLIDE_MS).toBeLessThan(TAB_SWITCH_MS);
-    // Short enough to be "already there", long enough to be a move and not a
-    // teleport — below ~2 frames there is nothing left to see.
-    expect(CHIP_SLIDE_MS).toBeGreaterThanOrEqual(50);
-    expect(CHIP_SLIDE_MS).toBeLessThanOrEqual(120);
+    // Bounded from both sides because both were tried on the phone: 200 read
+    // as a delay, 75 was too fast to follow — at that speed the chip is just
+    // in its new place, which is a cut with extra steps.
+    expect(CHIP_SLIDE_MS).toBeGreaterThanOrEqual(120);
+    expect(CHIP_SLIDE_MS).toBeLessThanOrEqual(190);
   });
 
-  it('puts most of the chip travel in its first frame', () => {
-    // At 75ms a 60fps frame is 22% of the duration, and on this curve that is
-    // past the halfway point: what you see is the chip already there with a
-    // short smear behind it. This is the whole point of the two clocks.
+  it('is a third of the way through on the chip first frame', () => {
+    // Enough that the move has visibly begun before the eye settles, little
+    // enough that there are still six or seven frames of travel to watch.
     const { easing } = TAB_SWITCH_SPEC.config;
-    expect(easing((1000 / 60) / CHIP_SLIDE_MS)).toBeGreaterThan(0.5);
+    const firstFrame = easing((1000 / 60) / CHIP_SLIDE_MS);
+    expect(firstFrame).toBeGreaterThan(0.2);
+    expect(firstFrame).toBeLessThan(0.45);
   });
 
   it('rises all the way, without overshooting', () => {

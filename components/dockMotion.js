@@ -73,13 +73,15 @@ export const TAB_SWITCH_MS = 200;
  * reads as a delay on a chip, because the eye is already at the chip when the
  * move starts and has nowhere else to be during it.
  *
- * 75ms is four frames and a bit. On this curve more than half the travel is
- * done by the first of them, so what you see is the chip already there with a
- * short smear behind it — and the page arrives in its own time underneath. If
- * it ever reads as disconnected rather than as responsive, this is the number
- * to raise, not the curve to change.
+ * 160ms, landed on from both sides: 200 read as a delay, 75 was too fast to
+ * follow — the chip was simply in its new place, which is a cut with extra
+ * steps. At 160 on this curve a third of the travel is done by the first
+ * frame, it is 95% there in seven, and the rest is the settle. The page
+ * arrives in its own time underneath.
+ *
+ * This is the number to move if the dock ever feels wrong, not the curve.
  */
-export const CHIP_SLIDE_MS = 75;
+export const CHIP_SLIDE_MS = 160;
 
 /**
  * The curve, as control points, because two Easing implementations have to
