@@ -30,6 +30,49 @@ const sceneAt = (progress) => {
   };
 };
 
+/**
+ * A turn is TWO scenes at once: the one leaving runs 0 → +1 (or 0 → -1) while
+ * the one arriving runs from the opposite side to 0. `at` is how far through
+ * the turn we are, 0 → 1.
+ */
+const bothScenesAt = (at) => ({
+  leaving: sceneAt(at).opacity,
+  arriving: sceneAt(at - 1).opacity,
+});
+
+describe('what the turn shows THROUGH itself', () => {
+  it('has a window where NEITHER page is opaque — hence the app backdrop', () => {
+    // This is not a bug in the curve: the gap is what makes a turn read as a
+    // dissolve rather than a cut, and it is deliberate (see SCENE_SOLID_TO).
+    //
+    // It is, however, the reason App.js must paint ONE OPAQUE LAYER behind the
+    // navigator. Each scene's own background is inside the view being faded,
+    // so it goes translucent with it, and whatever sits under the navigator is
+    // what you actually see mid-turn. Left to the native root that is WHITE,
+    // and every tab change in dark mode flashed pale.
+    const mid = bothScenesAt(0.5);
+    expect(mid.leaving).toBeLessThan(1);
+    expect(mid.arriving).toBeLessThan(1);
+
+    // And stacking them does not save it. Their opacities sum to 1 at the
+    // midpoint, which LOOKS like full cover and is not: alpha composites
+    // rather than adds, so two layers at a and b leave (1-a)(1-b) of whatever
+    // is underneath showing through. Both sit at ~0.57 here, which covers
+    // ~0.82 — so nearly a fifth of the backdrop is visible at the worst frame,
+    // and over white that is the flash.
+    const covered = 1 - (1 - mid.leaving) * (1 - mid.arriving);
+    expect(covered).toBeLessThan(0.9);
+    expect(covered).toBeGreaterThan(0.6);
+  });
+
+  it('the window is in the MIDDLE, not at either end', () => {
+    // At both ends one page is fully solid, which is what stops the backdrop
+    // from ever being the thing you are looking at.
+    expect(bothScenesAt(0).leaving).toBe(1);
+    expect(bothScenesAt(1).arriving).toBe(1);
+  });
+});
+
 describe('the tab switch curve', () => {
   it('is long enough to be followed and short enough not to be waited on', () => {
     expect(TAB_SWITCH_MS).toBeGreaterThanOrEqual(200);

@@ -530,6 +530,16 @@ function AppContent() {
   return (
     <>
       <StatusBar style={isDark ? 'light' : 'dark'} />
+      {/* THE BACKDROP, and the reason a tab change flashed white.
+          A turn cross-fades the two pages (forTabTurn), and for the middle
+          ~40% of it NEITHER is opaque — at the midpoint they are about 0.57
+          and 0.43, which do not even add up to one. Each scene's own dark
+          background is INSIDE the view being faded, so it goes translucent
+          with it, and what shows through underneath is the native root view:
+          white. Giving the navigator a dark theme does not fix this, because
+          that colour is on the layer that is fading.
+          So: one opaque layer BEHIND the navigator that never animates. */}
+      <View style={[styles.appBackdrop, { backgroundColor: theme.colors.background }]}>
       <NavigationContainer
         theme={navTheme}
         // The handle a notification tap steers by — it has no component to
@@ -556,6 +566,7 @@ function AppContent() {
           <TabNavigator />
         </DevProfiler>
       </NavigationContainer>
+      </View>
     </>
   );
 }
@@ -690,3 +701,10 @@ export default function App() {
     </GestureHandlerRootView>
   );
 }
+
+const styles = StyleSheet.create({
+  // Behind the whole navigator: the one opaque layer a cross-fading tab turn
+  // can show through to. Never animated, never themed by the navigation
+  // library — see the comment at its usage.
+  appBackdrop: { flex: 1 },
+});
