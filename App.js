@@ -9,7 +9,7 @@ import './utils/installFont';
 // Defines the background upload-drain task at module scope on EVERY launch —
 // including the background launches iOS makes for it. Must run before the app.
 import './services/backgroundUploadTask';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 // One shared value, owned by the navigator and read by both halves of the
@@ -19,7 +19,11 @@ import { useSharedValue } from 'react-native-reanimated';
 // screen; it lets screens adopt useReanimatedKeyboardAnimation / KeyboardAware
 // views one at a time, replacing the RN Keyboard-event guesswork.
 import { KeyboardProvider } from 'react-native-keyboard-controller';
-import { NavigationContainer } from '@react-navigation/native';
+import {
+  NavigationContainer,
+  DefaultTheme as NavLightTheme,
+  DarkTheme as NavDarkTheme,
+} from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -66,6 +70,7 @@ import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
 import { activeInk, dockSkin } from './components/dockSkins';
+import { buildNavTheme } from './utils/navTheme';
 import { resolveDockSkin } from './components/dockThemes';
 import DockTabBar from './components/DockTabBar';
 import { TAB_SWITCH_SPEC, forTabTurn } from './components/dockMotion';
@@ -504,11 +509,19 @@ function AppContent() {
     );
   }
 
+  // What shows BETWEEN two cross-fading pages during a tab turn — see
+  // utils/navTheme for why the library's own default made that flash pale.
+  const navTheme = useMemo(
+    () => buildNavTheme(isDark, theme, { light: NavLightTheme, dark: NavDarkTheme }),
+    [isDark, theme],
+  );
+
   // Show main app if authenticated
   return (
     <>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <NavigationContainer
+        theme={navTheme}
         // The handle a notification tap steers by — it has no component to
         // navigate from. See services/navigationRef.
         ref={navigationRef}

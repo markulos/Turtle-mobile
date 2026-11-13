@@ -31,7 +31,7 @@ import PerfFindingsPanel from '../components/PerfFindingsPanel';
 import ShareUploadLimitCard from '../components/ShareUploadLimitCard';
 import TranscriptionPanel from '../components/TranscriptionPanel';
 import { useServer } from '../context/ServerContext';
-import { useTheme, ACCENTS, CUSTOM_ACCENT } from '../context/ThemeContext';
+import { useTheme, ACCENTS, CUSTOM_ACCENT, THEME_MODES } from '../context/ThemeContext';
 import AccentColorPicker from '../components/AccentColorPicker';
 import DockStylePicker from '../components/DockStylePicker';
 import { inkOn } from '../utils/accentColor';
@@ -70,7 +70,7 @@ const SEARCH_PAGE = { key: '__search__', label: 'Results', icon: 'magnify' };
  */
 const SETTING_TERMS = {
   profile: 'profile display name avatar photo picture alias points stats tasks pomodoros',
-  darkMode: 'dark mode theme appearance night light colour color',
+  darkMode: 'dark mode theme appearance night light colour color automatic auto system follow phone sunset sunrise schedule day',
   accent: 'highlight colour color accent theme appearance swatch pink light pink custom own pick picker hex shade hue rainbow',
   hideVault: 'hide vault button navbar tab bar navigation photos',
   dockStyle: 'navbar style dock bar bottom appearance backdrop capsule white paper smoked glass dark black hairline border theme look chip underline active tab indicator highlight custom colour color own pick hex background shade',
@@ -183,7 +183,7 @@ async function pollHealToCompletion(api, onProgress, { intervalMs = 2000, maxMs 
 }
 
 export default function SettingsScreen({ active = true }) {
-  const { theme, isDark, toggleTheme, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll, accent, setAccent, accentColor, customAccent, setCustomAccent } = useTheme();
+  const { theme, isDark, themeMode, setThemeMode, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll, accent, setAccent, accentColor, customAccent, setCustomAccent } = useTheme();
   // The custom-colour sheet, opened by the last swatch in the Appearance row.
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
   const { serverIP, isConnected, pondEnv, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
@@ -949,15 +949,54 @@ export default function SettingsScreen({ active = true }) {
               <SettingsItem terms={SETTING_TERMS.darkMode}>
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>Dark Mode</Text>
-                  <Text style={styles.settingDescription}>Use dark theme throughout the app</Text>
+                  <Text style={styles.settingLabel}>Appearance</Text>
+                  <Text style={styles.settingDescription}>
+                    {themeMode === 'system'
+                      ? `Following your phone — ${isDark ? 'dark' : 'light'} right now. It switches when your phone does, including at sunset if that is how your phone is set.`
+                      : `Pinned to ${themeMode}. Choose Automatic to follow your phone instead.`}
+                  </Text>
                 </View>
-                <Switch
-                  value={isDark}
-                  onValueChange={toggleTheme}
-                  trackColor={{ false: theme.colors.surfaceElevated, true: theme.colors.accent }}
-                  thumbColor={isDark ? inkOn(theme.colors.accent) : theme.colors.textTertiary}
-                />
+              </View>
+              <View style={styles.modeRow}>
+                {THEME_MODES.map((mode) => {
+                  const selected = themeMode === mode;
+                  const label = mode === 'system' ? 'Automatic' : (mode === 'dark' ? 'Dark' : 'Light');
+                  const icon = mode === 'system'
+                    ? 'theme-light-dark'
+                    : (mode === 'dark' ? 'weather-night' : 'white-balance-sunny');
+                  return (
+                    <TouchableOpacity
+                      key={mode}
+                      testID={`theme-mode-${mode}`}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={label}
+                      onPress={() => { if (!selected) { tapHaptic(); setThemeMode(mode); } }}
+                      style={[
+                        styles.modeKey,
+                        {
+                          borderColor: selected ? theme.colors.accent : theme.colors.border,
+                          backgroundColor: selected ? theme.colors.accent : 'transparent',
+                        },
+                      ]}
+                    >
+                      <Icon
+                        name={icon}
+                        size={16}
+                        color={selected ? inkOn(theme.colors.accent) : theme.colors.textSecondary}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.modeKeyLabel,
+                          { color: selected ? inkOn(theme.colors.accent) : theme.colors.textSecondary },
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
               </SettingsItem>
 
@@ -1843,6 +1882,27 @@ const createStyles = (theme) => StyleSheet.create({
     paddingHorizontal: 4,
     paddingBottom: 8,
   },
+  // Light / Dark / Automatic, as three keys rather than a switch: a switch
+  // has two positions and this has three, and "which one am I on" has to be
+  // answerable at a glance rather than by reading a sentence.
+  modeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 4,
+    paddingBottom: 8,
+  },
+  modeKey: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  modeKeyLabel: { fontSize: 13, fontWeight: '600' },
   // The navbar-style previews. Same 4pt side breathing room as the accent
   // swatches above them, so the two controls in this screen that are made of
   // tiles line up with each other.

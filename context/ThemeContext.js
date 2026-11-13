@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { normalizeHex } from '../utils/accentColor';
 import {
@@ -7,6 +8,33 @@ import {
 import { isDockTheme } from '../components/dockThemes';
 
 const THEME_STORAGE_KEY = '@connected_pass_theme';
+
+/**
+ * LIGHT, DARK, OR WHATEVER THE PHONE IS DOING.
+ *
+ * 'system' is the auto mode, and it is auto by DELEGATION — which is the
+ * whole trick. iOS and Android already own this problem: they read the
+ * ambient light sensor, they know the user's location and therefore the real
+ * sunset where they are and on this date, and they expose the answer as one
+ * value that updates live. Anything this app computed itself would be a worse
+ * version of that:
+ *
+ *   • a light sensor needs a native module, which changes the OTA runtime
+ *     fingerprint and so cannot ship over the air at all;
+ *   • a clock-and-calendar schedule needs LATITUDE to know when dusk is in
+ *     November, and asking for location permission to decide a colour is a
+ *     bad trade — without it, "19:00" is dusk in one hemisphere and midday in
+ *     the other.
+ *
+ * So: follow the system. It is the platform convention, it is what every
+ * other app on the phone does, and it is the one implementation that is
+ * already right on the first evening in a new timezone.
+ *
+ * Stored in the SAME key the old boolean used, which still reads correctly —
+ * 'dark' and 'light' were always the two values written there.
+ */
+export const THEME_MODES = ['system', 'light', 'dark'];
+export const DEFAULT_THEME_MODE = 'dark';
 const TIME_FORMAT_STORAGE_KEY = '@connected_pass_time_format';
 const HIDE_VAULT_BUTTON_KEY = '@connected_pass_hide_vault_button';
 const CALENDAR_DAY_TASKS_KEY = '@connected_pass_calendar_day_tasks';
@@ -311,6 +339,10 @@ const ThemeContext = createContext({
   theme: DARK_THEME,
   isDark: true,
   toggleTheme: () => {},
+  // 'system' (follow the phone), or 'light' / 'dark' pinned by hand. `isDark`
+  // is the ANSWER; this is the question. See THEME_MODES.
+  themeMode: DEFAULT_THEME_MODE,
+  setThemeMode: () => {},
   timeFormat: '12h', // '12h' (AM/PM, default) | '24h'
   setTimeFormat: () => {},
   // When true, the Vault tab is hidden from the bottom navbar; the vault is
@@ -359,7 +391,17 @@ const ThemeContext = createContext({
 });
 
 export const ThemeProvider = ({ children }) => {
-  const [isDark, setIsDark] = useState(true);
+  const [themeMode, setThemeModeState] = useState(DEFAULT_THEME_MODE);
+  // Live: the OS pushes a new value the moment it flips, so 'system' follows
+  // sunset without this app owning a timer or a subscription.
+  const systemScheme = useColorScheme();
+  // The one derivation. Every consumer still reads `isDark` and knows nothing
+  // about modes — which is why adding the auto mode touched no screen.
+  // A system that reports nothing (older Android, a simulator mid-launch)
+  // falls back to the app's own default rather than to light.
+  const isDark = themeMode === 'system'
+    ? (systemScheme ? systemScheme === 'dark' : DEFAULT_THEME_MODE === 'dark')
+    : themeMode === 'dark';
   const [timeFormat, setTimeFormatState] = useState('12h');
   // Defaults to HIDDEN now: the vault's entry point is the Profile tab's card,
   // and the /vault chat command still works as the secondary route. Keeping the
@@ -388,8 +430,8 @@ export const ThemeProvider = ({ children }) => {
   const loadTheme = async () => {
     try {
       const savedTheme = await AsyncStorage.getItem(THEME_STORAGE_KEY);
-      if (savedTheme !== null) {
-        setIsDark(savedTheme === 'dark');
+      if (THEME_MODES.includes(savedTheme)) {
+        setThemeModeState(savedTheme);
       }
       const savedFmt = await AsyncStorage.getItem(TIME_FORMAT_STORAGE_KEY);
       if (savedFmt === '24h' || savedFmt === '12h') {
@@ -590,15 +632,23 @@ export const ThemeProvider = ({ children }) => {
     return next;
   };
 
-  const toggleTheme = async () => {
-    const newIsDark = !isDark;
-    setIsDark(newIsDark);
+  const setThemeMode = async (mode) => {
+    const next = THEME_MODES.includes(mode) ? mode : DEFAULT_THEME_MODE;
+    setThemeModeState(next);
     try {
-      await AsyncStorage.setItem(THEME_STORAGE_KEY, newIsDark ? 'dark' : 'light');
+      await AsyncStorage.setItem(THEME_STORAGE_KEY, next);
     } catch (error) {
-      console.error('Error saving theme:', error);
+      console.error('Error saving theme mode:', error);
     }
   };
+
+  /**
+   * The old switch, still honoured: flipping it PINS the opposite of what you
+   * are looking at. From 'system' that means leaving auto — which is right,
+   * because the only reason to flip a switch you are watching is to disagree
+   * with what it is showing you.
+   */
+  const toggleTheme = () => setThemeMode(isDark ? 'light' : 'dark');
 
   // The chosen accent is folded into the palette here, once, so every consumer
   // of useTheme() picks it up with no change at the call site.
@@ -638,7 +688,7 @@ export const ThemeProvider = ({ children }) => {
   // values they expose.
   const value = useMemo(
     () => ({
-      theme, isDark, toggleTheme, timeFormat, setTimeFormat,
+      theme, isDark, toggleTheme, themeMode, setThemeMode, timeFormat, setTimeFormat,
       accent, setAccent, accentColor, customAccent, setCustomAccent,
       hideVaultButton, setHideVaultButton,
       showCalendarDayTasks, setShowCalendarDayTasks,
@@ -647,7 +697,7 @@ export const ThemeProvider = ({ children }) => {
       dockStyle, setDockStyle, dockColor, setDockColor, dockInk, setDockInk,
       dockTheme, setDockTheme,
     }),
-    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent],
+    [theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent],
   );
 
   if (isLoading) {
