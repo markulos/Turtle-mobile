@@ -2112,6 +2112,27 @@ export default function TurtleScreen() {
     );
   }, [styles, theme, getBaseUrl, runProposal, api, askAsUser, navigateFromBlock]);
 
+  // Smoothly ease the chat layout whenever a top-of-chat element is added or
+  // removed (the queued-task banner, the finished banner, or the pomodoro card).
+  // Without this the messages list snaps to its new height the instant the
+  // banner mounts, so the session view briefly collides with / is overset by the
+  // absolute header. Diffing a signature DURING render schedules the animation
+  // for THIS commit — a useEffect would fire one commit too late and miss the
+  // first appearance (the exact case the user hit).
+  //
+  // ABOVE the gallery's early return, and it has to stay there: it used to sit
+  // below, so opening the gallery rendered this component with one hook fewer
+  // than the render before it. React takes the whole screen down for that
+  // ("Rendered fewer hooks than during the previous render") — a crash sitting
+  // one tap away the entire time. Scanned for now, see
+  // utils/__tests__/hooksAfterReturn.scan.test.js.
+  const chatTopLayoutSig = `${claudeQueue.length > 0}|${showDoneBanner}|${!!pomodoro.state}`;
+  const prevChatTopLayoutSig = useRef(chatTopLayoutSig);
+  if (prevChatTopLayoutSig.current !== chatTopLayoutSig) {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    prevChatTopLayoutSig.current = chatTopLayoutSig;
+  }
+
   // Show Media Gallery overlay when open
   if (isGalleryOpen) {
     return (
@@ -2127,19 +2148,6 @@ export default function TurtleScreen() {
     );
   }
 
-  // Smoothly ease the chat layout whenever a top-of-chat element is added or
-  // removed (the queued-task banner, the finished banner, or the pomodoro card).
-  // Without this the messages list snaps to its new height the instant the
-  // banner mounts, so the session view briefly collides with / is overset by the
-  // absolute header. Diffing a signature DURING render schedules the animation
-  // for THIS commit — a useEffect would fire one commit too late and miss the
-  // first appearance (the exact case the user hit).
-  const chatTopLayoutSig = `${claudeQueue.length > 0}|${showDoneBanner}|${!!pomodoro.state}`;
-  const prevChatTopLayoutSig = useRef(chatTopLayoutSig);
-  if (prevChatTopLayoutSig.current !== chatTopLayoutSig) {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    prevChatTopLayoutSig.current = chatTopLayoutSig;
-  }
 
   return (
     <Reanimated.View

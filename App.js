@@ -452,6 +452,22 @@ function AppContent() {
   // duration of the share, so it works in either case.
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent();
 
+  // What shows BETWEEN two cross-fading pages during a tab turn — see
+  // utils/navTheme for why the library's own default made that flash pale.
+  //
+  // UP HERE, above every early return in this component, because that is
+  // where hooks have to live: AppContent returns early three times before the
+  // navigator (loading, a share intent, not signed in), so a useMemo further
+  // down runs on SOME renders and not others — and the render that first gets
+  // past those gates then has more hooks than the one before it, which React
+  // refuses outright ("Rendered more hooks than during the previous render").
+  // It took the app down on the first launch after the change, not at the
+  // moment of the tab turn it belongs to.
+  const navTheme = useMemo(
+    () => buildNavTheme(isDark, theme, { light: NavLightTheme, dark: NavDarkTheme }),
+    [isDark, theme],
+  );
+
   // Bound the on-disk cache: when the app is backgrounded/closed, sweep the
   // throwaway temp + leaked share files and (throttled) wipe expo-image's
   // persistent disk cache. Keeps the multi-GB bloat from ever building up while
@@ -509,12 +525,6 @@ function AppContent() {
     );
   }
 
-  // What shows BETWEEN two cross-fading pages during a tab turn — see
-  // utils/navTheme for why the library's own default made that flash pale.
-  const navTheme = useMemo(
-    () => buildNavTheme(isDark, theme, { light: NavLightTheme, dark: NavDarkTheme }),
-    [isDark, theme],
-  );
 
   // Show main app if authenticated
   return (
