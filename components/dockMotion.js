@@ -1,8 +1,9 @@
 import { Easing } from 'react-native';
 
 /**
- * How the dock MOVES — one curve, one duration, one travel, shared by the
- * indicator and the pages it belongs to.
+ * How the dock MOVES — one curve and one travel, shared by the indicator and
+ * the pages it belongs to, on two clocks: the chip is quick (CHIP_SLIDE_MS)
+ * and the pages take the longer TAB_SWITCH_MS behind it.
  *
  * ── Why a curve and not a spring ────────────────────────────────────────────
  *
@@ -57,9 +58,28 @@ import { Easing } from 'react-native';
  * the chip animates with Reanimated on the UI thread. Those are two different
  * Easing implementations, so the curve cannot be a single shared FUNCTION —
  * but the control points are shared data, and both sides build the same cubic
- * bezier from them. That is what keeps the chip and the page arriving together.
+ * bezier from them. They share the SHAPE of the move; they no longer share its
+ * length (see CHIP_SLIDE_MS).
  */
 export const TAB_SWITCH_MS = 200;
+
+/**
+ * The chip's own duration — and the one number here Mark set by eye.
+ *
+ * They used to be the same number, and the argument for that was that the
+ * selection and the screen it selects should arrive together. In practice the
+ * chip is a 60pt object sitting under the thumb that just moved it, and the
+ * page is the whole display: the same 200ms that reads as a turn on a screen
+ * reads as a delay on a chip, because the eye is already at the chip when the
+ * move starts and has nowhere else to be during it.
+ *
+ * 75ms is four frames and a bit. On this curve more than half the travel is
+ * done by the first of them, so what you see is the chip already there with a
+ * short smear behind it — and the page arrives in its own time underneath. If
+ * it ever reads as disconnected rather than as responsive, this is the number
+ * to raise, not the curve to change.
+ */
+export const CHIP_SLIDE_MS = 75;
 
 /**
  * The curve, as control points, because two Easing implementations have to

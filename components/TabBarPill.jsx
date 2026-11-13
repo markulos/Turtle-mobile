@@ -15,7 +15,7 @@ import {
   TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, BAR_CONTENT_HEIGHT, clusterStart,
   UNDERLINE_W, UNDERLINE_H, indicatorOffset, ridgeOffsets,
 } from './tabBarLayout';
-import { TAB_SWITCH_BEZIER, TAB_SWITCH_MS } from './dockMotion';
+import { CHIP_SLIDE_MS, TAB_SWITCH_BEZIER } from './dockMotion';
 import { dockSkin } from './dockSkins';
 import { resolveDockSkin } from './dockThemes';
 
@@ -51,13 +51,14 @@ import { resolveDockSkin } from './dockThemes';
  * tab's own slot and the chip TRAVELS there, on the same curve as the page.
  */
 
-// A timed curve, NOT a spring — and the same curve, from the same control
-// points, that the pages travel on, so the chip and the screen it selects move
-// as one thing and arrive together. See dockMotion for every number in here,
-// including why it leaves at full speed and only decelerates: the chip IS the
-// selection you just made, and a selection that eases IN reads as hesitation.
+// A timed curve, NOT a spring — the same curve the pages travel on, so the
+// move has one shape across the whole dock, but on the chip's own short clock
+// rather than the pages'. See dockMotion for every number in here: why it
+// leaves at full speed and only decelerates (the chip IS the selection you
+// just made, and a selection that eases IN reads as hesitation), and why it
+// now lands well before the page it selected does.
 const SLIDE = {
-  duration: TAB_SWITCH_MS,
+  duration: CHIP_SLIDE_MS,
   easing: Easing.bezier(...TAB_SWITCH_BEZIER).factory(),
 };
 

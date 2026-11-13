@@ -1,6 +1,7 @@
 import { Animated } from 'react-native';
 
 import {
+  CHIP_SLIDE_MS,
   TAB_SWITCH_BEZIER,
   PRESS_BEZIER,
   PRESS_SCALE,
@@ -119,6 +120,25 @@ describe('the tab switch curve', () => {
     // The landing is soft because the SECOND control point says so, which is
     // the half of the old curve that survived.
     expect(TAB_SWITCH_BEZIER[3]).toBe(1);
+  });
+
+  it('moves the chip on a much shorter clock than the pages', () => {
+    // Set by eye on the phone: the chip is a small object the thumb is
+    // already looking at, so the duration that reads as a turn on a whole
+    // screen reads as a delay on it. They share the curve, not the clock.
+    expect(CHIP_SLIDE_MS).toBeLessThan(TAB_SWITCH_MS);
+    // Short enough to be "already there", long enough to be a move and not a
+    // teleport — below ~2 frames there is nothing left to see.
+    expect(CHIP_SLIDE_MS).toBeGreaterThanOrEqual(50);
+    expect(CHIP_SLIDE_MS).toBeLessThanOrEqual(120);
+  });
+
+  it('puts most of the chip travel in its first frame', () => {
+    // At 75ms a 60fps frame is 22% of the duration, and on this curve that is
+    // past the halfway point: what you see is the chip already there with a
+    // short smear behind it. This is the whole point of the two clocks.
+    const { easing } = TAB_SWITCH_SPEC.config;
+    expect(easing((1000 / 60) / CHIP_SLIDE_MS)).toBeGreaterThan(0.5);
   });
 
   it('rises all the way, without overshooting', () => {
