@@ -3,7 +3,7 @@ import { Dimensions } from 'react-native';
 import { act, render } from '@testing-library/react-native';
 
 import { CARD_MARGIN_H, TAB_SLOT, clusterStart } from '../tabBarLayout';
-import { CHIP_SLIDE_MS } from '../dockMotion';
+import { CHIP_SLIDE_MAX_MS } from '../dockMotion';
 
 // The pan the dock built, so a test can actually drag it. A chain() stub would
 // let the whole gesture be wired to nothing and still pass.
@@ -94,7 +94,7 @@ const lift = () => {
  *  lift, so the screen waking up does not land on the frames the slide is
  *  made of. Run the clock past that to see them handed back. */
 const afterSlide = () => {
-  act(() => { jest.advanceTimersByTime(CHIP_SLIDE_MS + 1); });
+  act(() => { jest.advanceTimersByTime(CHIP_SLIDE_MAX_MS + 1); });
 };
 
 beforeEach(() => {

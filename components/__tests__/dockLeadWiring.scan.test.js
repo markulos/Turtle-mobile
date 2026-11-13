@@ -48,4 +48,15 @@ describe('the dock’s shared values reach both halves', () => {
     expect(APP).toMatch(/tabPress:/);
     expect(APP).toMatch(/leadSlot\.value = i/);
   });
+
+  test('the move carries its own duration, and both halves get it', () => {
+    // How long the chip takes depends on how far it is going, so the number
+    // travels with the move rather than living in the component. Same failure
+    // mode as the two above if it is not passed down: the chip silently falls
+    // back to its own value and every move takes the base duration.
+    expect(APP).toMatch(/const slideMs = useSharedValue\(/);
+    expect(APP).toMatch(/slideMs\.value = chipSlideMs\(/);
+    expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('slideMs={slideMs}');
+    expect(APP.match(/<TabBarPill[^>]*\/>/)[0]).toContain('slideMs={slideMs}');
+  });
 });

@@ -1,7 +1,9 @@
 import { Animated } from 'react-native';
 
 import {
-  CHIP_SLIDE_MS,
+  CHIP_SLIDE_BASE_MS,
+  CHIP_SLIDE_MAX_MS,
+  chipSlideMs,
   TAB_SWITCH_BEZIER,
   PRESS_BEZIER,
   PRESS_SCALE,
@@ -122,25 +124,55 @@ describe('the tab switch curve', () => {
     expect(TAB_SWITCH_BEZIER[3]).toBe(1);
   });
 
-  it('moves the chip on a much shorter clock than the pages', () => {
+  it('moves the chip on a shorter clock than the pages', () => {
     // Set by eye on the phone: the chip is a small object the thumb is
     // already looking at, so the duration that reads as a turn on a whole
     // screen reads as a delay on it. They share the curve, not the clock.
-    expect(CHIP_SLIDE_MS).toBeLessThan(TAB_SWITCH_MS);
-    // Bounded from both sides because both were tried on the phone: 200 read
-    // as a delay, 75 was too fast to follow — at that speed the chip is just
-    // in its new place, which is a cut with extra steps.
-    expect(CHIP_SLIDE_MS).toBeGreaterThanOrEqual(120);
-    expect(CHIP_SLIDE_MS).toBeLessThanOrEqual(190);
+    expect(CHIP_SLIDE_MAX_MS).toBeLessThanOrEqual(TAB_SWITCH_MS + 40);
+    expect(chipSlideMs(1)).toBeLessThan(TAB_SWITCH_MS);
+    // Bounded from both sides because both were tried: 200 read as a delay,
+    // 75 was too fast to follow, and 160 is where a two-slot move landed.
+    expect(chipSlideMs(2)).toBe(160);
+  });
+
+  it('takes longer the further it goes — the dock is ONE object', () => {
+    // The thing that read as erratic: a fixed duration makes a one-slot hop
+    // and a run across the whole dock the same move at five times the speed.
+    // Every platform spec says the same thing here — duration grows with
+    // distance — and this is that, as arithmetic.
+    expect(chipSlideMs(1)).toBeLessThan(chipSlideMs(2));
+    expect(chipSlideMs(2)).toBeLessThan(chipSlideMs(5));
+    // …but SUB-linearly. True constant velocity would put a dock-wide move
+    // past 600ms, which is no longer motion, it is waiting.
+    expect(chipSlideMs(5)).toBeLessThan(chipSlideMs(1) * 5);
+    expect(chipSlideMs(5)).toBeLessThanOrEqual(CHIP_SLIDE_MAX_MS);
+    // The speed spread is what the eye actually reads. Fixed, it was 5x.
+    const slow = (1 * 67) / chipSlideMs(1);
+    const fast = (5 * 67) / chipSlideMs(5);
+    expect(fast / slow).toBeLessThan(3);
+  });
+
+  it('never returns a duration of nothing, whatever it is handed', () => {
+    // Direction is not distance: a move left is as long as a move right.
+    expect(chipSlideMs(-3)).toBe(chipSlideMs(3));
+    // A settle under a lifted thumb is a fraction of a slot, and still has
+    // to take a moment — a zero-length animation is a jump.
+    expect(chipSlideMs(0)).toBe(CHIP_SLIDE_BASE_MS);
+    expect(chipSlideMs(0.4)).toBeGreaterThan(CHIP_SLIDE_BASE_MS);
+    expect(chipSlideMs(undefined)).toBe(CHIP_SLIDE_BASE_MS);
+    expect(chipSlideMs(Number.NaN)).toBe(CHIP_SLIDE_BASE_MS);
+    // And it cannot run away on a navigator with a lot of tabs.
+    expect(chipSlideMs(40)).toBe(CHIP_SLIDE_MAX_MS);
   });
 
   it('is a third of the way through on the chip first frame', () => {
     // Enough that the move has visibly begun before the eye settles, little
-    // enough that there are still six or seven frames of travel to watch.
+    // enough that there are still frames of travel to watch. Checked at the
+    // shortest clock, which is where a first frame covers the most ground.
     const { easing } = TAB_SWITCH_SPEC.config;
-    const firstFrame = easing((1000 / 60) / CHIP_SLIDE_MS);
+    const firstFrame = easing((1000 / 60) / CHIP_SLIDE_BASE_MS);
     expect(firstFrame).toBeGreaterThan(0.2);
-    expect(firstFrame).toBeLessThan(0.45);
+    expect(firstFrame).toBeLessThan(0.5);
   });
 
   it('rises all the way, without overshooting', () => {

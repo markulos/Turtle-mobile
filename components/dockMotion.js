@@ -2,8 +2,9 @@ import { Easing } from 'react-native';
 
 /**
  * How the dock MOVES — one curve and one travel, shared by the indicator and
- * the pages it belongs to, on two clocks: the chip is quick (CHIP_SLIDE_MS)
- * and the pages take the longer TAB_SWITCH_MS behind it.
+ * the pages it belongs to, on two clocks: the chip is quick and scales its
+ * time with the distance it is covering (chipSlideMs), and the pages take the
+ * flat, longer TAB_SWITCH_MS behind it.
  *
  * ── Why a curve and not a spring ────────────────────────────────────────────
  *
@@ -59,12 +60,12 @@ import { Easing } from 'react-native';
  * Easing implementations, so the curve cannot be a single shared FUNCTION —
  * but the control points are shared data, and both sides build the same cubic
  * bezier from them. They share the SHAPE of the move; they no longer share its
- * length (see CHIP_SLIDE_MS).
+ * length (see chipSlideMs).
  */
 export const TAB_SWITCH_MS = 200;
 
 /**
- * The chip's own duration — and the one number here Mark set by eye.
+ * The chip's own clock — the numbers here Mark set by eye.
  *
  * They used to be the same number, and the argument for that was that the
  * selection and the screen it selects should arrive together. In practice the
@@ -73,15 +74,50 @@ export const TAB_SWITCH_MS = 200;
  * reads as a delay on a chip, because the eye is already at the chip when the
  * move starts and has nowhere else to be during it.
  *
- * 160ms, landed on from both sides: 200 read as a delay, 75 was too fast to
- * follow — the chip was simply in its new place, which is a cut with extra
- * steps. At 160 on this curve a third of the travel is done by the first
- * frame, it is 95% there in seven, and the rest is the settle. The page
- * arrives in its own time underneath.
+ * ── Why it is not ONE number ───────────────────────────────────────────────
  *
- * This is the number to move if the dock ever feels wrong, not the curve.
+ * It was, and that was the thing that read as erratic. A slot is 67pt, so a
+ * fixed duration means tapping the next tab along and tapping across the
+ * whole dock are the same move at five times the speed: the same object
+ * behaving like five different ones depending on where your thumb happened to
+ * be. This is the one piece of motion guidance every platform spec agrees on
+ * — Material states it outright ("duration grows with distance"), and the
+ * reason is physical: a thing that covers five times the ground in the same
+ * time is not the same thing moving.
+ *
+ * So the duration GROWS with the distance, and sub-linearly. True constant
+ * velocity would put a dock-wide move at ~675ms, which is well past the
+ * ~400ms where motion stops reading as motion and starts reading as waiting.
+ * A base plus a per-slot increment is the shape every implementation of this
+ * guidance uses, and it narrows the speed spread from 5x to under 3x:
+ *
+ *   settle under a lifted thumb   110ms   (a fraction of a slot)
+ *   one slot                      135ms
+ *   two slots                     160ms   ← the number Mark settled on by eye
+ *   across the whole dock         235ms
+ *
+ * 160 is still in there, as the two-slot move it was judged on. The curve is
+ * unchanged — it is the clock that varies, never the shape.
  */
-export const CHIP_SLIDE_MS = 160;
+export const CHIP_SLIDE_BASE_MS = 110;
+export const CHIP_SLIDE_PER_SLOT_MS = 25;
+/** The ceiling, for the longest move the dock can be asked to make. */
+export const CHIP_SLIDE_MAX_MS = 240;
+
+/**
+ * How long the chip should take to cross `slots` slots.
+ *
+ * JS only, on purpose. It is called where a move BEGINS — the tab-press
+ * listener, and the effect that catches a navigate made from somewhere else —
+ * and the answer is written into a shared value the chip's worklet reads. The
+ * UI thread therefore never calls a function to find out how long to take; it
+ * reads a number. (A non-worklet function called on the UI thread is a crash
+ * in a release build, and the dock has been taken down that way before.)
+ */
+export function chipSlideMs(slots) {
+  const d = Number.isFinite(slots) ? Math.abs(slots) : 0;
+  return Math.min(CHIP_SLIDE_MAX_MS, Math.round(CHIP_SLIDE_BASE_MS + CHIP_SLIDE_PER_SLOT_MS * d));
+}
 
 /**
  * The curve, as control points, because two Easing implementations have to

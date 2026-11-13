@@ -9,7 +9,9 @@ import { BottomTabBar } from '@react-navigation/bottom-tabs';
 import { CommonActions } from '@react-navigation/native';
 
 import { dockOccupied, slotAtX } from './tabBarLayout';
-import { CHIP_SLIDE_MS, PRESS_BEZIER, PRESS_IN_MS, PRESS_OUT_MS, PRESS_SCALE } from './dockMotion';
+import {
+  CHIP_SLIDE_BASE_MS, CHIP_SLIDE_MAX_MS, PRESS_BEZIER, PRESS_IN_MS, PRESS_OUT_MS, PRESS_SCALE,
+} from './dockMotion';
 import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 
 /**
@@ -111,7 +113,7 @@ const DRAG_SLOP = 12;
 const PRESS_IN = { duration: PRESS_IN_MS, easing: Easing.bezier(...PRESS_BEZIER) };
 const PRESS_OUT = { duration: PRESS_OUT_MS, easing: Easing.bezier(...PRESS_BEZIER) };
 
-export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) {
+export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, ...props }) {
   const { state, navigation } = props;
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -132,6 +134,13 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
   // the new one. See TabBarPill, which spends it as soon as `index` catches up.
   const ownLead = useSharedValue(-1);
   const lead = leadSlot ?? ownLead;
+
+  // How long the settle after a lift should take. Always the shortest clock
+  // the dock has: the chip is already under the thumb, so what is left is a
+  // fraction of a slot, and giving that the duration of a full crossing is
+  // how a snap turns into a drift.
+  const ownMs = useSharedValue(CHIP_SLIDE_BASE_MS);
+  const ms = slideMs ?? ownMs;
 
   // 0 at rest, 1 while a finger is down. Nothing outside the dock needs it —
   // the scale is applied to the dock's own wrapper — so this one is local,
@@ -213,7 +222,10 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
     releaseTimerRef.current = setTimeout(() => {
       releaseTimerRef.current = null;
       release();
-    }, CHIP_SLIDE_MS);
+      // The longest a slide can take, not the one this move is taking: the
+      // handle is a backstop and a few spare frames cost nothing, where
+      // releasing early puts the mount back on top of the travel.
+    }, CHIP_SLIDE_MAX_MS);
   }, [release]);
   // A handle leaked by an unmount mid-drag would stall every deferred mount in
   // the app for the rest of the session. `release` clears the pending timer
@@ -262,6 +274,7 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
       // Set BEFORE the chip is released below, so the frame that starts the
       // chip's travel already knows where it is going.
       lead.value = chosen;
+      ms.value = CHIP_SLIDE_BASE_MS;
       runOnJS(goToIndex)(chosen);
     })
     // Always, lift or cancel: the chip goes back to being the navigator's, and
@@ -272,7 +285,7 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
       press.value = withTiming(0, PRESS_OUT);
       runOnJS(releaseAfterSlide)();
     }),
-  [count, goToIndex, hold, lead, press, releaseAfterSlide, slot, width]);
+  [count, goToIndex, hold, lead, ms, press, releaseAfterSlide, slot, width]);
 
   return (
     <GestureDetector gesture={pan}>

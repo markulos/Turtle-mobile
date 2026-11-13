@@ -73,7 +73,7 @@ import { activeInk, dockSkin } from './components/dockSkins';
 import { buildNavTheme } from './utils/navTheme';
 import { resolveDockSkin } from './components/dockThemes';
 import DockTabBar from './components/DockTabBar';
-import { TAB_SWITCH_SPEC, forTabTurn } from './components/dockMotion';
+import { CHIP_SLIDE_BASE_MS, TAB_SWITCH_SPEC, chipSlideMs, forTabTurn } from './components/dockMotion';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
 import { AnimalGlyph } from './components/AnimalAvatar';
 import { useMyAvatarAnimal } from './utils/avatarChoice';
@@ -158,6 +158,9 @@ function TabNavigator() {
   // release and the navigator agreeing. Same two-places problem, same answer:
   // the drag writes it, the chip reads it, neither waits for a render.
   const leadSlot = useSharedValue(-1);
+  // ...and how long that move should take, which depends on how far it goes.
+  // Written by whoever starts the move, read by the chip's worklet.
+  const slideMs = useSharedValue(CHIP_SLIDE_BASE_MS);
   // An immersive page (the PDF reader) asks for the dock to go. `display:none`
   // is the only thing that actually removes it — the bar is the navigator's
   // own child and paints above every screen, so a page cannot cover it.
@@ -170,7 +173,7 @@ function TabNavigator() {
       // changing tabs is a thumb sliding along the capsule and not only a tap.
       // Everything about how the bar looks still comes from screenOptions
       // below — see DockTabBar for why it wraps rather than replaces.
-      tabBar={(props) => <DockTabBar {...props} dragSlot={dragSlot} leadSlot={leadSlot} />}
+      tabBar={(props) => <DockTabBar {...props} dragSlot={dragSlot} leadSlot={leadSlot} slideMs={slideMs} />}
       // A TAP gets the same head start a DRAG already had.
       //
       // The drag writes `leadSlot` on the lift, from the gesture worklet, so
@@ -186,8 +189,15 @@ function TabNavigator() {
       // a press on the tab you are already on just re-states where the chip is.
       screenListeners={({ navigation, route }) => ({
         tabPress: () => {
-          const i = navigation.getState()?.routes?.findIndex((r) => r.key === route.key);
-          if (i >= 0) leadSlot.value = i;
+          const st = navigation.getState();
+          const i = st?.routes?.findIndex((r) => r.key === route.key);
+          if (i == null || i < 0) return;
+          // How far this move goes decides how long it takes — the chip is
+          // one object whether it hops one slot or crosses the dock, and it
+          // should not change speed depending on which. Worked out here, on
+          // the JS thread, and handed to the chip as a number.
+          slideMs.value = chipSlideMs(i - (st.index ?? i));
+          leadSlot.value = i;
         },
       })}
       // No tabPress haptic: tab switching is silent by request. (There used to
@@ -378,7 +388,7 @@ function TabNavigator() {
         // One accent pill that SLIDES between tabs, painted behind the buttons.
         // tabBarBackground is composited under navigation's own tab buttons, so
         // this adds the indicator without touching their layout or a11y.
-        tabBarBackground: () => <TabBarPill dragSlot={dragSlot} leadSlot={leadSlot} />,
+        tabBarBackground: () => <TabBarPill dragSlot={dragSlot} leadSlot={leadSlot} slideMs={slideMs} />,
         headerShown: false, // Hide default header
       })}
     >

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useNavigationState } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
@@ -15,7 +15,7 @@ import {
   TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, BAR_CONTENT_HEIGHT, clusterStart,
   UNDERLINE_W, UNDERLINE_H, indicatorOffset, ridgeOffsets,
 } from './tabBarLayout';
-import { CHIP_SLIDE_MS, TAB_SWITCH_BEZIER } from './dockMotion';
+import { CHIP_SLIDE_BASE_MS, TAB_SWITCH_BEZIER, chipSlideMs } from './dockMotion';
 import { dockSkin } from './dockSkins';
 import { resolveDockSkin } from './dockThemes';
 
@@ -57,10 +57,13 @@ import { resolveDockSkin } from './dockThemes';
 // leaves at full speed and only decelerates (the chip IS the selection you
 // just made, and a selection that eases IN reads as hesitation), and why it
 // now lands well before the page it selected does.
-const SLIDE = {
-  duration: CHIP_SLIDE_MS,
-  easing: Easing.bezier(...TAB_SWITCH_BEZIER).factory(),
-};
+// The curve, built once. `.factory()` is what makes it callable from the UI
+// thread. The DURATION is no longer part of it: how long the move takes is a
+// property of the MOVE — of how far it goes — rather than of the control, so
+// it arrives per-move through `slideMs` (see chipSlideMs in dockMotion).
+const EASE = Easing.bezier(...TAB_SWITCH_BEZIER).factory();
+// The first-layout fade-in, which is not a travel and has no distance.
+const FADE = { duration: CHIP_SLIDE_BASE_MS, easing: EASE };
 
 // The dock's palette lives in dockSkins — one entry per SKIN, because what the
 // capsule is made of is a setting now (Settings → Navigation) rather than a
@@ -98,7 +101,7 @@ const DOCK_LIP_H = 1.5;
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
 
-export default function TabBarPill({ dragSlot, leadSlot }) {
+export default function TabBarPill({ dragSlot, leadSlot, slideMs }) {
   const { theme, dockIndicator, dockStyle, dockColor, dockTheme } = useTheme();
   // Every colour the capsule draws, from the skin chosen in Settings — a
   // named theme if one is on, otherwise the chosen material. One resolver,
@@ -111,8 +114,12 @@ export default function TabBarPill({ dragSlot, leadSlot }) {
   // call.
   const ownSlot = useSharedValue(-1);
   const ownLead = useSharedValue(-1);
+  const ownMs = useSharedValue(CHIP_SLIDE_BASE_MS);
   const slot = dragSlot ?? ownSlot;
   const lead = leadSlot ?? ownLead;
+  // How long THIS move should take, written by whoever started it. A number,
+  // not a function call: the UI thread reads it and never computes it.
+  const ms = slideMs ?? ownMs;
 
   // Read straight from the navigator: `index` is the focused tab and `routes`
   // is what's actually rendered, so a hidden tab shifts the geometry correctly.
@@ -152,6 +159,19 @@ export default function TabBarPill({ dragSlot, leadSlot }) {
   // travel one smooth move instead of a start, a hitch and a finish.
   useEffect(() => { lead.value = -1; }, [index, lead]);
 
+  // A tab change made from SOMEWHERE ELSE — a deep link, the /command console,
+  // a guard bouncing you out of a tab — has no press and no gesture behind it,
+  // so nobody has said how far the chip is about to travel. Measure it here,
+  // from the slot it is leaving, and give the move its own clock like any
+  // other. (A press has already written this by the time `index` lands, with
+  // the same arithmetic; it is written again with the same answer.)
+  const prevIndexRef = useRef(index);
+  useEffect(() => {
+    const from = prevIndexRef.current;
+    prevIndexRef.current = index;
+    if (from !== index) ms.value = chipSlideMs(index - from);
+  }, [index, ms]);
+
   const pillStyle = useAnimatedStyle(() => {
     const dragging = slot.value >= 0;
     // ONE formula for all three: a slot (whole or fractional) times the slot
@@ -161,17 +181,17 @@ export default function TabBarPill({ dragSlot, leadSlot }) {
     return {
       // Nothing to place until the bar has been measured; staying invisible
       // avoids the square flashing at x=0 on the first frame.
-      opacity: withTiming(barWidth > 0 ? 1 : 0, SLIDE),
+      opacity: withTiming(barWidth > 0 ? 1 : 0, FADE),
       transform: [{
         // Two states, and only one of them is an animation. Under the thumb
         // the indicator IS the finger — the position is written straight out,
         // so there is nothing between the two. Off the thumb it TRAVELS to the
-        // slot that was chosen, on the same curve and duration as the page
-        // behind it, which is what makes the release read as one movement
-        // rather than a snap followed by a page.
+        // slot that was chosen, on the shared curve and on a clock set by how
+        // far it has to go — so a hop to the next tab and a run across the
+        // whole dock read as the same object moving, not as two speeds.
         translateX: dragging
           ? TAB_SLOT * aim + offset
-          : withTiming(TAB_SLOT * aim + offset, SLIDE),
+          : withTiming(TAB_SLOT * aim + offset, { duration: ms.value, easing: EASE }),
       }],
     };
   }, [barWidth, index, offset]);
