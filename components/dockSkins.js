@@ -57,8 +57,12 @@ export const DEFAULT_DOCK_STYLE = 'smoked';
  */
 export const DEFAULT_DOCK_COLOR = '#2E2E36';
 
-/** How opaque a custom backdrop is. Short of solid, so the frost still reads. */
-const CUSTOM_ALPHA = 0.88;
+/**
+ * How opaque a custom backdrop is — sheer, so the page moves under it rather
+ * than stopping at it. 0.76 rather than the 0.88 it shipped at: a user colour
+ * can be any value, so it keeps a little more body than smoked does.
+ */
+const CUSTOM_ALPHA = 0.76;
 
 /**
  * THE ACTIVE GLYPH'S INK — the icon ON the chip, and the one colour in the
@@ -117,7 +121,10 @@ const SKINS = {
     key: 'paper',
     name: 'Paper',
     blurb: 'A white bar with a hairline edge. No shading, no gloss.',
-    wash: { colors: ['rgba(255,255,255,0.86)', 'rgba(255,255,255,0.86)'], locations: [0, 1] },
+    // Sheerer than it was (0.86), but NOT by as much as smoked: a white bar
+    // over a white page is carried by its hairline edge alone, so there is
+    // less here to give away before the capsule stops being a shape.
+    wash: { colors: ['rgba(255,255,255,0.78)', 'rgba(255,255,255,0.78)'], locations: [0, 1] },
     blurTint: 'light',
     edge: 'rgba(0,0,0,0.14)',
     lip: null,

@@ -1,12 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
-import { InteractionManager, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { InteractionManager, StyleSheet, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS, useSharedValue } from 'react-native-reanimated';
+import Reanimated, {
+  runOnJS, useAnimatedStyle, useSharedValue, withTiming,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomTabBar } from '@react-navigation/bottom-tabs';
 import { CommonActions } from '@react-navigation/native';
 
 import { dockOccupied, slotAtX } from './tabBarLayout';
+import { PRESS_SCALE, pressSpec } from './dockMotion';
 import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 
 /**
@@ -64,6 +67,24 @@ import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
  * live until one of them wins. RNGH cancels the button's press the moment the
  * pan activates, so a scrub never also fires the tab you started on.
  *
+ * ── The press ──────────────────────────────────────────────────────────────
+ *
+ * The whole dock swells a point and a half the instant a finger lands on it,
+ * and HOLDS while the finger is down — so a press-and-scrub keeps the bar
+ * lifted for the length of the drag rather than blinking at the start of it.
+ * The numbers and the reasoning are in dockMotion.
+ *
+ * It hangs off onBegin/onFinalize rather than onStart/onEnd, and that is the
+ * point: onStart fires only once the pan ACTIVATES, which a tap never does.
+ * onBegin is the touch landing, whatever the gesture turns out to be, and
+ * onFinalize is it leaving — including when the system cancels, which is the
+ * one path that must never leave the dock stuck at its pressed size.
+ *
+ * Applied to THIS wrapper, the common ancestor of the capsule and the
+ * buttons, so the bar and its contents scale as one object. Scaling the chip
+ * separately would multiply its 1:1 drag tracking and slide it off the glyph
+ * under the thumb.
+ *
  * ── No haptic ──────────────────────────────────────────────────────────────
  *
  * Deliberate, twice over: tab switching is silent by request (see App.js), and
@@ -78,7 +99,7 @@ import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 // drag has not become harder to start — only harder to start by accident.
 const DRAG_SLOP = 12;
 
-export default function DockTabBar({ dragSlot, leadSlot, ...props }) {
+export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) {
   const { state, navigation } = props;
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -99,6 +120,16 @@ export default function DockTabBar({ dragSlot, leadSlot, ...props }) {
   // the new one. See TabBarPill, which spends it as soon as `index` catches up.
   const ownLead = useSharedValue(-1);
   const lead = leadSlot ?? ownLead;
+
+  // 0 at rest, 1 while a finger is down. Nothing outside the dock needs it —
+  // the scale is applied to the dock's own wrapper — so this one is local,
+  // with the same injectable fallback the two above use: a shared value the
+  // UI thread writes is otherwise unreadable from a test.
+  const ownPress = useSharedValue(0);
+  const press = pressLift ?? ownPress;
+  const pressStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: 1 + press.value * (PRESS_SCALE - 1) }],
+  }));
 
   // The navigator's state through a ref, NOT captured in the callback below.
   // `state` is a new object on every navigation — including the ones this
@@ -155,6 +186,12 @@ export default function DockTabBar({ dragSlot, leadSlot, ...props }) {
   const pan = useMemo(() => Gesture.Pan()
     .maxPointers(1)
     .activeOffsetX([-DRAG_SLOP, DRAG_SLOP])
+    // THE TOUCH LANDING — before the pan has decided whether it is a drag, and
+    // therefore for a tap too. A worklet, so the swell is on screen on the
+    // next frame rather than after a hop to JS.
+    .onBegin(() => {
+      press.value = withTiming(1, pressSpec(true));
+    })
     // Every callback below is a WORKLET — it runs on the UI thread, which is
     // the reason the chip keeps up with the thumb. Changing tabs is React work
     // and so is heavy by definition; if the chip's position were set from the
@@ -192,21 +229,23 @@ export default function DockTabBar({ dragSlot, leadSlot, ...props }) {
     // that is no longer there.
     .onFinalize(() => {
       slot.value = -1;
+      press.value = withTiming(0, pressSpec(false));
       runOnJS(release)();
     }),
-  [count, goToIndex, hold, lead, release, slot, width]);
+  [count, goToIndex, hold, lead, press, release, slot, width]);
 
   return (
     <GestureDetector gesture={pan}>
-      <View
+      <Reanimated.View
         // Fabric flattens a view with no props of its own, which would leave
         // the gesture attached to nothing.
         collapsable={false}
         pointerEvents="box-none"
-        style={[styles.dock, { height: dockOccupied(insets.bottom) }]}
+        testID="dock-press-layer"
+        style={[styles.dock, { height: dockOccupied(insets.bottom) }, pressStyle]}
       >
         <BottomTabBar {...props} />
-      </View>
+      </Reanimated.View>
     </GestureDetector>
   );
 }

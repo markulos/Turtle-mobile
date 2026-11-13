@@ -11,6 +11,7 @@ jest.mock('react-native-gesture-handler', () => {
   const api = {
     maxPointers: () => api,
     activeOffsetX: () => api,
+    onBegin: (fn) => { mockPan.onBegin = fn; return api; },
     onStart: (fn) => { mockPan.onStart = fn; return api; },
     onUpdate: (fn) => { mockPan.onUpdate = fn; return api; },
     onEnd: (fn) => { mockPan.onEnd = fn; return api; },
@@ -42,6 +43,9 @@ jest.mock('react-native-reanimated', () => {
   const mock = require('react-native-reanimated/mock');
   return {
     ...mock,
+    // The press lift is written through withTiming on the UI thread; in here
+    // it lands immediately, which is what lets a test read the end state.
+    withTiming: (to) => to,
     // The gesture's callbacks are worklets on device; here they run inline, so
     // runOnJS has to be the identity rather than a queue.
     runOnJS: (fn) => fn,
@@ -183,4 +187,64 @@ test('a gesture the system cancels chooses nothing', async () => {
   // Cancelled, not lifted — and the guard still has to come back, or a call
   // arriving mid-scrub permanently disables the back-swipe.
   expect(releaseSwipe).toHaveBeenCalledTimes(1);
+});
+
+describe('the dock answers the touch', () => {
+  // READ AS SOURCE, not driven as a gesture. The press lift is a shared value
+  // written from a worklet, and this file's harness registers the gesture
+  // chain once for the whole file — so a second test that mounts the bar gets
+  // the FIRST test's callbacks and writes to a shared value it cannot see.
+  // Driving it here would assert on the wrong object and pass or fail for
+  // reasons that have nothing to do with the dock.
+  //
+  // What matters is wiring, and wiring is visible: WHICH callbacks touch the
+  // lift. The numbers it animates between are dockMotion's, and they are
+  // tested there as values.
+  const SRC = require('fs').readFileSync(
+    require('path').resolve(__dirname, '..', 'DockTabBar.jsx'), 'utf8',
+  );
+  const bodyOf = (name) => {
+    const at = SRC.indexOf(`.${name}((`);
+    if (at < 0) return '';
+    // Up to the next chained callback — `\n    .` is the chain's own indent.
+    return SRC.slice(at, SRC.indexOf('\n    .', at + 1));
+  };
+
+  test('the scan can see the callbacks at all', () => {
+    // Every check below is a `not.toMatch` away from passing on an empty
+    // string. If the chain is ever reformatted, this is the one that says so
+    // rather than the suite quietly asserting nothing.
+    for (const cb of ['onBegin', 'onStart', 'onUpdate', 'onEnd', 'onFinalize']) {
+      expect(bodyOf(cb).length).toBeGreaterThan(20);
+    }
+  });
+
+  test('the TOUCH LANDING raises it — onBegin, not onStart', () => {
+    // onStart fires only once the pan ACTIVATES, which a tap never does.
+    // Wired there, tapping a tab would get no acknowledgement at all and
+    // only a drag would feel alive.
+    expect(bodyOf('onBegin')).toMatch(/press\.value\s*=\s*withTiming\(1/);
+    expect(bodyOf('onStart')).not.toMatch(/press\.value/);
+  });
+
+  test('it HOLDS for the length of a scrub rather than blinking at the start', () => {
+    // The lift belongs to the finger being down, so the per-frame callback
+    // must not touch it: nothing to re-trigger, nothing to decay.
+    expect(bodyOf('onUpdate')).not.toMatch(/press\.value/);
+    expect(bodyOf('onEnd')).not.toMatch(/press\.value/);
+  });
+
+  test('and it comes back down on FINALIZE, so a cancelled gesture is not stuck', () => {
+    // onEnd is a real lift; onFinalize is that plus every way a gesture can
+    // die — a call arriving, a modal taking the touch. The dock must not be
+    // left parked at its pressed size for the rest of the session.
+    expect(bodyOf('onFinalize')).toMatch(/press\.value\s*=\s*withTiming\(0/);
+  });
+
+  test('the scale is applied to the one view that holds the bar AND its buttons', () => {
+    // Scaling the chip separately would multiply its 1:1 drag tracking and
+    // slide it off the glyph under the thumb.
+    expect(SRC).toMatch(/testID="dock-press-layer"[\s\S]{0,200}pressStyle/);
+    expect(SRC).toMatch(/pressStyle[\s\S]{0,200}BottomTabBar/);
+  });
 });

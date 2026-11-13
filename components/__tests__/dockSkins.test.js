@@ -63,6 +63,54 @@ describe('the dock’s skins', () => {
     expect(ink.a).toBeGreaterThan(0.3);
   });
 
+  describe('…and legible once the PAGE shows through it', () => {
+    // The check above compares the ink to the wash's own colour, which is the
+    // right question for an opaque bar and the wrong one for a sheer bar. The
+    // dock went sheer on 2026-11-13 (0.80 → 0.64 at the top), so the surface
+    // the glyphs actually sit on is the wash COMPOSITED over whatever page is
+    // under the dock — and the page can be anything.
+    //
+    // Both extremes, because they fail in opposite directions: a dark skin has
+    // least to work with over WHITE (the wash is diluted toward the page and
+    // the white glyphs lose their ground), a light skin over BLACK.
+    const over = (layer, base) => ({
+      r: layer.r * layer.a + base.r * (1 - layer.a),
+      g: layer.g * layer.a + base.g * (1 - layer.a),
+      b: layer.b * layer.a + base.b * (1 - layer.a),
+    });
+    const PAGES = { 'a white page': { r: 255, g: 255, b: 255 }, 'a black page': { r: 0, g: 0, b: 0 } };
+
+    for (const key of DOCK_STYLES) {
+      for (const [name, page] of Object.entries(PAGES)) {
+        test(`${key} over ${name}`, () => {
+          const skin = dockSkin(key);
+          const ink = parse(skin.inactiveTint);
+          const stops = skin.wash.colors.map(parse);
+          const reads = (stop) => {
+            const seat = over(stop, page);
+            return Math.abs(grey(over(ink, seat)) - grey(seat));
+          };
+
+          // WHERE THE GLYPHS ACTUALLY SIT: the middle of the capsule. A ramp's
+          // sheerest end is its extreme edge, and nothing is drawn on that.
+          const middle = stops[Math.floor(stops.length / 2)];
+          // 65, not the 120 above: that one compares ink to the wash's own
+          // colour, which is the right question for an opaque bar and the
+          // wrong one for a sheer one. Measured at the shipped strength the
+          // dark skins sit at ~73 here; one step sheerer (0.56 → 0.40, which
+          // was rendered and rejected) gives ~63, which is where the glyphs
+          // started going over a photo. So this bound is drawn BETWEEN the
+          // version that works and the version that does not.
+          expect(reads(middle)).toBeGreaterThan(65);
+
+          // …and the extreme edge still has to be a surface, not a window.
+          const sheerest = stops.reduce((a, b) => (a.a <= b.a ? a : b));
+          expect(reads(sheerest)).toBeGreaterThan(50);
+        });
+      }
+    }
+  });
+
   test.each(DOCK_STYLES)('%s frosts the way its surface needs', (key) => {
     // A light-tinted blur under a near-black wash milks it out; a dark one
     // under a white wash greys it. The tint is therefore not a free choice —

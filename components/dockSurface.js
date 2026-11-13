@@ -15,8 +15,9 @@
  *
  * ── What changes down the capsule ──────────────────────────────────────────
  *
- *   alpha  0.80 → 0.66  — shut tight at the top, letting a little more of the
- *                         blurred page through at the bottom.
+ *   alpha  0.64 → 0.48  — denser at the top, letting more of the blurred page
+ *                         through at the bottom. Both ends came down on
+ *                         2026-11-13; see the note on the constants.
  *   colour  #060609 → #1A1A1E — near-black at the top edge, lifting to a dark
  *                         charcoal rather than to a grey. Inverting the ramp
  *                         put the LIGHT end at the bottom, where the old design
@@ -28,7 +29,7 @@
  *
  * The spread was 0.32 of alpha across 28 points of value, and at 69pt tall that
  * was a visible light-to-dark sweep — the gradient had become a feature of the
- * dock rather than a property of its surface. It is now 0.14 across 20 points:
+ * dock rather than a property of its surface. It is now 0.16 across 20 points:
  * enough to tell you which way the light is coming from, not enough to look at.
  * Depth should be something you notice only when it is wrong.
  *
@@ -46,9 +47,27 @@
  * below a quantisation step on an 8-bit channel.
  */
 
-/** The shadowed top edge of the channel, and its lit floor. */
-export const DOCK_SURFACE_TOP = { r: 6, g: 6, b: 9, a: 0.8 };
-export const DOCK_SURFACE_BOTTOM = { r: 26, g: 26, b: 30, a: 0.66 };
+/**
+ * The shadowed top edge of the channel, and its lit floor.
+ *
+ * ── Sheer, as of 2026-11-13 ────────────────────────────────────────────────
+ *
+ * These ran 0.80 → 0.66, which is a dark bar with a blur behind it doing
+ * nothing you could see. The ask was a backdrop you can see THROUGH: the page
+ * moving under the dock rather than stopping at it. Down to 0.64 → 0.48, the
+ * same shape at about three quarters of the ink.
+ *
+ * The floor is legibility, and it is not the dark page — it is a WHITE one,
+ * where the wash has least to work with and the glyphs sit on whatever the
+ * page happens to be. Rendered against a white page, a dark page and a busy
+ * photo at four strengths before picking: one step further (0.56 → 0.40)
+ * still looked fine on black and lost the unselected glyphs over a photo.
+ * dockSkins' own suite now composites each skin over both extremes and fails
+ * if the ink stops clearing its surface, so the next person tuning this gets
+ * told rather than shipping it.
+ */
+export const DOCK_SURFACE_TOP = { r: 6, g: 6, b: 9, a: 0.64 };
+export const DOCK_SURFACE_BOTTOM = { r: 26, g: 26, b: 30, a: 0.48 };
 
 /** How many stops the ramp is sampled into. */
 export const DOCK_SURFACE_STEPS = 7;

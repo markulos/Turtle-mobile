@@ -138,3 +138,49 @@ export function forTabTurn({ current }) {
  * that happens after the release, when the dock is choosing a tab rather than
  * being held.
  */
+
+/**
+ * THE PRESS — the dock answering the touch before anything else happens.
+ *
+ * A tab change is the dock's slowest promise: a navigate, a React commit, a
+ * screen mounting. The touch itself should be acknowledged long before any of
+ * that, and by the BAR rather than by the chip — the chip is already busy
+ * being the selection, and a control that only responds where you happened to
+ * land tells you less than one that responds as a whole.
+ *
+ * So the capsule and everything on it swell, a point and a half, and HOLD
+ * while the finger is down. That last part is the half that matters on a
+ * drag: a scrub along the dock keeps the bar lifted for its whole length, so
+ * the state reads as "I have this" rather than as a blink at the start.
+ *
+ * ── Why 1.5% ───────────────────────────────────────────────────────────────
+ *
+ * The capsule is ~370pt wide, so this is under three points of total width
+ * and well under one of height. Big enough that the edge visibly moves
+ * against the screen edge it is parallel to; small enough that nothing
+ * re-reads as a different size. Scale rather than a tint, because the dock
+ * now has four skins and a user-chosen colour, and geometry is the one
+ * language all of them speak.
+ *
+ * ── Why it starts from rest in BOTH directions ─────────────────────────────
+ *
+ * The app's rule is that what reads as abrupt is frame-one VELOCITY, not
+ * duration (see the note at the top of this file). An ease-out press would be
+ * at full speed on its first frame — the bar would not grow, it would jump to
+ * grown. So the press takes the same soft-ended bezier the tab switch does,
+ * just much shorter: fast enough to feel like a response, with the jump taken
+ * out of its first frame.
+ *
+ * Out is slower than in. Pressing is a thing you did; releasing is a thing
+ * that stops, and a release that snaps back draws attention to the end of an
+ * interaction rather than to its result.
+ */
+export const PRESS_SCALE = 1.015;
+export const PRESS_IN_MS = 110;
+export const PRESS_OUT_MS = 200;
+
+/** The two specs, ready for withTiming. */
+export const pressSpec = (held) => ({
+  duration: held ? PRESS_IN_MS : PRESS_OUT_MS,
+  easing: Easing.bezier(...TAB_SWITCH_BEZIER),
+});

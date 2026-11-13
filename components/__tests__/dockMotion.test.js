@@ -1,6 +1,11 @@
 import { Animated } from 'react-native';
 
 import {
+  TAB_SWITCH_BEZIER,
+  PRESS_SCALE,
+  PRESS_IN_MS,
+  PRESS_OUT_MS,
+  pressSpec,
   TAB_SWITCH_MS,
   TAB_SWITCH_SPEC,
   TAB_TRAVEL_PT,
@@ -165,5 +170,44 @@ describe('how a page moves through a switch', () => {
     expect(half).toBeLessThan(0.8);
     expect(SCENE_SOLID_TO).toBeLessThan(SCENE_CLEAR_BY);
     expect(SCENE_CLEAR_BY).toBeLessThan(1);
+  });
+});
+
+describe('the press', () => {
+  it('is a swell, not a pop — under two points on a 370pt bar', () => {
+    const bar = 370;
+    expect(PRESS_SCALE).toBeGreaterThan(1);
+    // Mark asked for "ever so slightly" and "very subtle". Past ~3% of a bar
+    // this wide the capsule stops looking lifted and starts looking resized.
+    expect(PRESS_SCALE).toBeLessThan(1.03);
+    expect((PRESS_SCALE - 1) * bar).toBeLessThan(6);
+    // …and enough that the edge visibly moves against the screen edge it is
+    // parallel to. Below about a point it is indistinguishable from nothing.
+    expect((PRESS_SCALE - 1) * bar).toBeGreaterThan(1.5);
+  });
+
+  it('answers faster than it lets go', () => {
+    // Pressing is a thing you did; releasing is a thing that stops. A release
+    // that snaps back draws the eye to the end of an interaction instead of
+    // to its result.
+    expect(PRESS_IN_MS).toBeLessThan(PRESS_OUT_MS);
+    // Both inside the band where motion still reads as a response rather than
+    // as a wait.
+    expect(PRESS_IN_MS).toBeGreaterThan(60);
+    expect(PRESS_OUT_MS).toBeLessThan(300);
+  });
+
+  it('starts from REST in both directions, like everything else here', () => {
+    // The app's rule: what reads as abrupt is frame-one velocity, not
+    // duration. An ease-out press would be at full speed on its first frame —
+    // the bar would not grow, it would jump to grown.
+    for (const held of [true, false]) {
+      const spec = pressSpec(held);
+      expect(spec.duration).toBe(held ? PRESS_IN_MS : PRESS_OUT_MS);
+      expect(spec.easing).toBeTruthy();
+    }
+    // The same control points the tab switch uses, which are the ones with
+    // zero slope at t=0 (see the suite above).
+    expect(TAB_SWITCH_BEZIER[1]).toBe(0);
   });
 });

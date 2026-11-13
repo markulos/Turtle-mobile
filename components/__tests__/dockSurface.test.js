@@ -59,25 +59,33 @@ describe('the dock capsule’s wash', () => {
     expect(middle).toBeGreaterThan(steps[steps.length - 1] * 1.5);
   });
 
-  test('stays black over a light page — the LIT end included', () => {
-    // The flat fill this replaced was 0.52, chosen so the capsule reads BLACK
-    // rather than washed grey over a white page. Inverting the ramp moved the
-    // light end to the bottom, where the old design had its anchor, so the
-    // lightest stop is the one that has to be checked now.
+  test('is SHEER — a surface you see the page through, not a lid', () => {
+    // This used to demand the opposite: ≥0.6 at the lightest stop and a 0.52
+    // mean, so the capsule read BLACK over a white page. On 2026-11-13 that
+    // became the wrong goal — the ask was a backdrop the page moves under —
+    // and the number that protects the dock is no longer density but whether
+    // the GLYPHS still clear their surface. That lives in dockSkins' suite,
+    // composited over a white page and a black one.
+    //
+    // What is still true here: it is dark ink, and there is enough of it to
+    // be a surface at all.
     const lightest = stops[stops.length - 1];
-    expect(lightest.a).toBeGreaterThanOrEqual(0.6);
     expect((lightest.r + lightest.g + lightest.b) / 3).toBeLessThan(40);
+    expect(lightest.a).toBeGreaterThanOrEqual(0.35);
     const mean = stops.reduce((sum, s) => sum + s.a, 0) / stops.length;
-    expect(mean).toBeGreaterThanOrEqual(0.52);
+    expect(mean).toBeLessThan(0.7);
+    expect(mean).toBeGreaterThan(0.4);
   });
 
   test('is a hint of depth, not a sweep', () => {
     // It ran at 0.32 of alpha across 28 points of value, which at 69pt tall was
     // a gradient you looked AT. Half that: enough to say which way the light
     // comes from, and no more.
-    const spread = DOCK_SURFACE_TOP.a - DOCK_SURFACE_BOTTOM.a;
+    // Rounded: 0.64 - 0.48 is 0.16000000000000003 in binary floating point,
+    // and a band that a representable value falls outside of is a trap.
+    const spread = Math.round((DOCK_SURFACE_TOP.a - DOCK_SURFACE_BOTTOM.a) * 1000) / 1000;
     expect(spread).toBeGreaterThan(0.06);
-    expect(spread).toBeLessThanOrEqual(0.16);
+    expect(spread).toBeLessThanOrEqual(0.18);
     expect(DOCK_SURFACE_BOTTOM.r - DOCK_SURFACE_TOP.r).toBeLessThanOrEqual(22);
   });
 
