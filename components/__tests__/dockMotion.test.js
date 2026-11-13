@@ -2,6 +2,7 @@ import { Animated } from 'react-native';
 
 import {
   TAB_SWITCH_BEZIER,
+  PRESS_BEZIER,
   PRESS_SCALE,
   PRESS_IN_MS,
   PRESS_OUT_MS,
@@ -18,9 +19,15 @@ import {
  *
  * These are claims about the SHAPE of the tab transition, not about the exact
  * constants — the numbers are meant to be tuned on the phone, so every test
- * here is a band or a relationship. The one thing they do pin down is the pair
- * of properties that made the old transition read as a cut: motion that starts
- * at full speed, and a frame where neither page is really on screen.
+ * here is a band or a relationship.
+ *
+ * The frame-one property has been pinned BOTH WAYS over this file's life, and
+ * the current answer is the one Mark gave looking at the phone: the chip must
+ * LEAVE on the first frame, because a selection that eases in reads as the
+ * navbar hesitating. The earlier suite asserted the exact opposite for the
+ * same curve — see dockMotion's own header for why that was right about pages
+ * and wrong about the chip. The press is the one mover that still must not
+ * jump, and it has its own control points now.
  */
 
 // The navigator hands the interpolator one Animated value per screen: 0 when
@@ -79,30 +86,39 @@ describe('what the turn shows THROUGH itself', () => {
 
 describe('the tab switch curve', () => {
   it('is long enough to be followed and short enough not to be waited on', () => {
-    expect(TAB_SWITCH_MS).toBeGreaterThanOrEqual(200);
-    expect(TAB_SWITCH_MS).toBeLessThanOrEqual(320);
+    // A decelerating move wants to be shorter than a soft-started one: the
+    // tail is the part you watch, so the same 260ms here read as drifting.
+    expect(TAB_SWITCH_MS).toBeGreaterThanOrEqual(160);
+    expect(TAB_SWITCH_MS).toBeLessThanOrEqual(260);
     expect(TAB_SWITCH_SPEC.config.duration).toBe(TAB_SWITCH_MS);
   });
 
-  it('starts from rest — the first frames accelerate instead of jumping', () => {
+  it('leaves on the first frame — there is no ease-in to sit through', () => {
     const { easing } = TAB_SWITCH_SPEC.config;
     expect(easing(0)).toBe(0);
-    // One frame in (~6% of the duration) the page has barely left: that is the
-    // difference from ease-out, whose velocity is at its maximum on frame one
-    // and so covered ~17% of the travel in the same frame.
-    expect(easing(1 / 16)).toBeLessThan(0.05);
+    // One frame in (~8% of the duration) the chip is visibly on its way. The
+    // curve this replaced had covered 1.7% by here, which is what Mark read
+    // as the navbar hesitating after the tap.
+    expect(easing(1 / 12)).toBeGreaterThan(0.15);
+    // No ease-in at all: x1 and y1 are both zero, so there is no first stretch
+    // spent getting up to speed.
+    expect(TAB_SWITCH_BEZIER[0]).toBe(0);
+    expect(TAB_SWITCH_BEZIER[1]).toBe(0);
   });
 
   it('lands soft — the last frames settle instead of stopping', () => {
     const { easing } = TAB_SWITCH_SPEC.config;
     expect(easing(1)).toBe(1);
     // Most of the move is done early and the tail is a settle, which is what
-    // keeps a longer duration from reading as a slower app.
+    // keeps the arrival from reading as a stop.
     expect(easing(0.5)).toBeGreaterThan(0.6);
     expect(easing(0.7)).toBeGreaterThan(0.9);
     // …and it never arrives before the end, so there is no dead stretch where
     // the duration is being spent on nothing.
     expect(easing(0.9)).toBeLessThan(1);
+    // The landing is soft because the SECOND control point says so, which is
+    // the half of the old curve that survived.
+    expect(TAB_SWITCH_BEZIER[3]).toBe(1);
   });
 
   it('rises all the way, without overshooting', () => {
@@ -196,13 +212,15 @@ describe('the press', () => {
     expect(PRESS_OUT_MS).toBeLessThan(300);
   });
 
-  it('starts from REST in both directions, like everything else here', () => {
-    // The app's rule: what reads as abrupt is frame-one velocity, not
-    // duration. An ease-out press would be at full speed on its first frame —
-    // the bar would not grow, it would jump to grown. DockTabBar builds the
-    // press from TAB_SWITCH_BEZIER — the control points with zero slope at
-    // t=0 (see the suite above) — so that is the property to hold here.
-    expect(TAB_SWITCH_BEZIER[1]).toBe(0);
+  it('starts from REST in both directions — unlike the chip', () => {
+    // A press is a SIZE changing under a finger that is already resting on
+    // it. An ease-out press would be at full speed on its first frame: the
+    // bar would not grow, it would jump to grown, which reads as a twitch.
+    // The chip moves the other way round on purpose (see the suite above), so
+    // the press has its own control points and this is where that is held.
+    expect(PRESS_BEZIER[1]).toBe(0);     // zero slope at t=0: it starts still
+    expect(PRESS_BEZIER[0]).toBeGreaterThan(0);
+    expect(PRESS_BEZIER).not.toEqual(TAB_SWITCH_BEZIER);
     expect(PRESS_IN_MS).toBeGreaterThan(0);
     expect(PRESS_OUT_MS).toBeGreaterThan(0);
   });

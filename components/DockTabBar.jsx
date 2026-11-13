@@ -9,7 +9,7 @@ import { BottomTabBar } from '@react-navigation/bottom-tabs';
 import { CommonActions } from '@react-navigation/native';
 
 import { dockOccupied, slotAtX } from './tabBarLayout';
-import { PRESS_IN_MS, PRESS_OUT_MS, PRESS_SCALE, TAB_SWITCH_BEZIER } from './dockMotion';
+import { PRESS_BEZIER, PRESS_IN_MS, PRESS_OUT_MS, PRESS_SCALE } from './dockMotion';
 import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 
 /**
@@ -106,8 +106,10 @@ const DRAG_SLOP = 12;
 // function on the UI thread" — which a release build turns into a crash on
 // the first touch of the dock. Plain objects holding a Reanimated easing are
 // what a worklet can capture.
-const PRESS_IN = { duration: PRESS_IN_MS, easing: Easing.bezier(...TAB_SWITCH_BEZIER) };
-const PRESS_OUT = { duration: PRESS_OUT_MS, easing: Easing.bezier(...TAB_SWITCH_BEZIER) };
+// PRESS_BEZIER, not the chip's curve: the chip leaves at full speed on
+// purpose, and a SWELL that does the same does not grow, it jumps to grown.
+const PRESS_IN = { duration: PRESS_IN_MS, easing: Easing.bezier(...PRESS_BEZIER) };
+const PRESS_OUT = { duration: PRESS_OUT_MS, easing: Easing.bezier(...PRESS_BEZIER) };
 
 export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) {
   const { state, navigation } = props;

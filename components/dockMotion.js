@@ -13,33 +13,43 @@ import { Easing } from 'react-native';
  * A timed curve does the thing a tab switch actually is — a short, deliberate
  * move with a settle at the end and no overshoot to notice.
  *
- * ── Why it is no longer 170ms of ease-out ───────────────────────────────────
+ * ── Why it leaves at full speed (and why it once did not) ───────────────────
  *
- * It still read as abrupt, and the two reasons were the same reason: the
- * motion was over before the eye could follow it, and it began at full speed.
+ * This file argued the opposite case for a while. The argument is kept because
+ * the reasoning was sound and the conclusion was still wrong on the phone. It
+ * ran: ease-out's velocity is at its MAXIMUM on the first frame, so the chip
+ * does not start moving, it is already moving — which is how a cut looks. The
+ * answer then was a curve starting from REST, cubic-bezier(0.3, 0, 0.2, 1)
+ * over 260ms, soft at both ends.
  *
- *   • ease-out's velocity is at its MAXIMUM on the first frame. The page does
- *     not start moving, it is already moving — which is exactly how a cut
- *     looks. 94% of the old travel was done 104ms in.
- *   • 50pt in 170ms is ~300pt/s average and nearer 900pt/s at the start. That
- *     is a flick, not a turn.
+ * Mark watched that on the phone (2026-11-13) and read the soft start as the
+ * chip HESITATING — the more expensive mistake of the two. The arithmetic says
+ * why: on that curve the chip had covered 1.7% of its travel one frame after
+ * the tap. Nothing had visibly happened yet, and the one thing a navbar owes a
+ * touch is evidence that the touch landed.
  *
- * So: a curve that starts from REST and lands soft at both ends (the bezier
- * below has zero slope at t=0 and t=1), a duration long enough to be followed,
- * and a shorter travel so the longer duration does not read as slow. The move
- * is still effectively finished early — 94% of it by ~180ms — but the first
- * 30ms are an acceleration rather than a jump, and the last stretch is a
- * settle. That difference is the whole of "abrupt" versus "natural".
+ * What the old note missed is WHAT IS MOVING. For a page — a big surface that
+ * was not under your finger — a jump into motion reads as a cut. For the chip,
+ * which IS the selection you just made, leaving at speed reads as the control
+ * answering you. So the chip no longer eases in at all: cubic-bezier(0, 0,
+ * 0.2, 1), 21% of the travel done on frame one, visually arrived by ~110ms,
+ * and the rest of the duration spent settling rather than stopping.
+ *
+ * The press keeps the old soft-ended curve — see PRESS_BEZIER, and the note
+ * above it for why a swell is the one thing here that must NOT jump.
  *
  * ── Where the numbers come from ─────────────────────────────────────────────
  *
- * Meta publishes no motion spec, so none of this is a copied constant. 260ms
- * on a soft-ended curve is the band the platforms' own navigation motion sits
- * in (Material's standard transition is 300ms on cubic-bezier(0.2, 0, 0, 1);
- * iOS's default ease-in-out is 250ms) and it is comfortably inside the ~400ms
- * past which motion starts being read as waiting. They are three constants in
- * one file, so if it still feels slow or snappy on the phone it is a one-line
- * change here and the indicator and the pages move together regardless.
+ * Meta publishes no motion spec, so none of this is a copied constant. 200ms
+ * on a decelerating curve is the band the platforms' own navigation motion
+ * sits in — Material's decelerate standard is 200-250ms on
+ * cubic-bezier(0, 0, 0.2, 1), the same control points — and it is comfortably
+ * inside the ~400ms past which motion starts being read as waiting. A
+ * decelerating move wants to be SHORTER than a soft-started one, because the
+ * tail is the part you watch: the same 260ms on this curve reads as drifting.
+ * They are three constants in one file, so if it still feels slow or snappy on
+ * the phone it is a one-line change here and the indicator and the pages move
+ * together regardless.
  *
  * ── Stated twice, on purpose ────────────────────────────────────────────────
  *
@@ -49,14 +59,23 @@ import { Easing } from 'react-native';
  * but the control points are shared data, and both sides build the same cubic
  * bezier from them. That is what keeps the chip and the page arriving together.
  */
-export const TAB_SWITCH_MS = 260;
+export const TAB_SWITCH_MS = 200;
 
 /**
  * The curve, as control points, because two Easing implementations have to
- * build it. Starts from rest (y1 = 0 with x1 > 0), front-weighted through the
- * middle, and arrives with zero velocity (y2 = 1): a glide with a landing.
+ * build it. Leaves at full speed (x1 = y1 = 0, so there is no ease-in to sit
+ * through) and arrives with zero velocity (y2 = 1): a departure and a landing,
+ * which is the shape of "instant, then smooth".
  */
-export const TAB_SWITCH_BEZIER = [0.3, 0, 0.2, 1];
+export const TAB_SWITCH_BEZIER = [0, 0, 0.2, 1];
+
+/**
+ * The press's curve — the OLD tab-switch points, kept for the one mover here
+ * that still wants a soft start. See the press note further down: a swell that
+ * begins at full speed does not grow, it jumps to grown, and a bar that jumps
+ * under a resting fingertip reads as a twitch rather than as an answer.
+ */
+export const PRESS_BEZIER = [0.3, 0, 0.2, 1];
 
 /**
  * How far a page travels, in points. Down from the 'shift' preset's 50: a
@@ -153,7 +172,7 @@ export function forTabTurn({ current }) {
  * drag: a scrub along the dock keeps the bar lifted for its whole length, so
  * the state reads as "I have this" rather than as a blink at the start.
  *
- * ── Why 1.5% ───────────────────────────────────────────────────────────────
+ * ── Why 1.5% ────────────────────────────────────────────────────────────────
  *
  * The capsule is ~370pt wide, so this is under three points of total width
  * and well under one of height. Big enough that the edge visibly moves
@@ -162,14 +181,15 @@ export function forTabTurn({ current }) {
  * now has four skins and a user-chosen colour, and geometry is the one
  * language all of them speak.
  *
- * ── Why it starts from rest in BOTH directions ─────────────────────────────
+ * ── Why the press still starts from rest ────────────────────────────────────
  *
- * The app's rule is that what reads as abrupt is frame-one VELOCITY, not
- * duration (see the note at the top of this file). An ease-out press would be
- * at full speed on its first frame — the bar would not grow, it would jump to
- * grown. So the press takes the same soft-ended bezier the tab switch does,
- * just much shorter: fast enough to feel like a response, with the jump taken
- * out of its first frame.
+ * Here — and only here — frame-one velocity is the thing to avoid. An ease-out
+ * press would be at full speed on its first frame: the bar would not grow, it
+ * would jump to grown. A SIZE that jumps under a resting finger reads as a
+ * twitch, where a POSITION that jumps reads as obedience, which is why the
+ * chip's curve changed and this one did not. The press keeps the soft-ended
+ * bezier the tab switch used to use (PRESS_BEZIER), just much shorter: fast
+ * enough to feel like a response, with the jump taken out of its first frame.
  *
  * Out is slower than in. Pressing is a thing you did; releasing is a thing
  * that stops, and a release that snaps back draws attention to the end of an
@@ -186,4 +206,4 @@ export const PRESS_OUT_MS = 200;
 // crashed the app on the first touch of the dock (release builds turn
 // Reanimated's "non-worklet function on the UI thread" into a fatal error).
 // DockTabBar builds the spec once, with REANIMATED's Easing, from these
-// numbers and TAB_SWITCH_BEZIER.
+// numbers and PRESS_BEZIER.

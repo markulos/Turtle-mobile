@@ -54,7 +54,8 @@ import { resolveDockSkin } from './dockThemes';
 // A timed curve, NOT a spring — and the same curve, from the same control
 // points, that the pages travel on, so the chip and the screen it selects move
 // as one thing and arrive together. See dockMotion for every number in here,
-// including why it starts from rest rather than at full speed.
+// including why it leaves at full speed and only decelerates: the chip IS the
+// selection you just made, and a selection that eases IN reads as hesitation.
 const SLIDE = {
   duration: TAB_SWITCH_MS,
   easing: Easing.bezier(...TAB_SWITCH_BEZIER).factory(),
