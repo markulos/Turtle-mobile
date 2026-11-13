@@ -74,11 +74,20 @@ const MUSIC_TINT = (c) => c.accent || c.accentInfo || c.primary;
 // Outbox key for a track rename — one pending rename per track, newest wins.
 const renameKey = (id) => `media:${id}:originalName`;
 
-// The two halves of the search field. "My library" leads because it is both
-// the default and the common errand; the web is the thing you reach for when
-// the library has already failed you.
+// The two halves of the search field. Mine leads because it is both the
+// default and the common errand; the web is the thing you reach for when
+// what you have has already failed you.
+//
+// "My music" rather than "My library": this scope stopped being just the
+// library when search started covering the tracks other people shared with
+// me, and a label that says library over a result reading "From Michelle"
+// is the control contradicting its own output.
 const SEARCH_SCOPES = [
-  { value: LIBRARY_SCOPE, label: 'My library', accessibilityLabel: 'Search my music library' },
+  {
+    value: LIBRARY_SCOPE,
+    label: 'My music',
+    accessibilityLabel: 'Search my music and anything shared with me',
+  },
   { value: WEB_SCOPE, label: 'Web', accessibilityLabel: 'Search the web for music' },
 ];
 
@@ -1004,12 +1013,39 @@ export default function MusicVault({
   // because only this file knows about the local rename overrides and that a
   // tag IS a playlist.
   const describeTrack = useCallback(
-    (row) => ({ title: titleOf(row), source: sourceOf(row), tags: tagsOf(row) }),
+    // A shared track's "source" is WHO gave it to you. That is the thing you
+    // remember about someone else's music — "the one Michelle sent" — so the
+    // owner's name is matchable text, not just a caption on the row.
+    (row) => ({
+      title: titleOf(row),
+      source: row?.shareId != null ? `From ${row.ownerName || 'your pond'}` : sourceOf(row),
+      tags: tagsOf(row),
+    }),
     [],
   );
+
+  /**
+   * WHAT SEARCH LOOKS THROUGH: my library AND the tracks other people shared.
+   *
+   * They are separate lists everywhere else on this screen — separate fetches,
+   * separate pages, different actions — and for browsing that is right. For
+   * SEARCH it was just a hole: a track someone shared with you was reachable
+   * only by remembering it was shared, opening that page, and reading down it.
+   * Typing its name found nothing, which reads as "you do not have it".
+   *
+   * Deduped by media id, mine winning, for the case where the same file is
+   * both in my library and shared to me — one row, and the one with the full
+   * set of actions.
+   */
+  const searchPool = useMemo(() => {
+    if (!pondTracks.length) return visibleTracks;
+    const mine = new Set(visibleTracks.map((t) => String(t.id)));
+    return [...visibleTracks, ...pondTracks.filter((t) => !mine.has(String(t.id)))];
+  }, [visibleTracks, pondTracks]);
+
   const matchedTracks = useMemo(
-    () => rankTracks(visibleTracks, query, describeTrack),
-    [visibleTracks, query, describeTrack],
+    () => rankTracks(searchPool, query, describeTrack),
+    [searchPool, query, describeTrack],
   );
   const lift = Math.max(0, topInset - (searchTopInset ?? topInset));
   const search = useVaultSearch({
@@ -1338,10 +1374,15 @@ export default function MusicVault({
   const renderSearchRow = useCallback(({ item }) => {
     const active = String(item.id) === String(activeTrack?.mediaId);
     const playlists = tagsOf(item);
+    // Someone else's track, reached through search rather than through the
+    // Shared-with-you page. It has to SAY so and it has to behave the way it
+    // does over there, or search becomes a back door into a row that looks
+    // like mine and is not.
+    const shared = item.shareId != null;
     const meta = [
-      sourceOf(item) || 'Audio',
+      shared ? `From ${item.ownerName || 'your pond'}` : (sourceOf(item) || 'Audio'),
       item.duration ? fmtTime(item.duration) : null,
-      playlists.length ? playlists.slice(0, 2).join(' · ') : null,
+      shared ? null : (playlists.length ? playlists.slice(0, 2).join(' · ') : null),
     ].filter(Boolean).join(' · ');
     return (
       // ── Why the inset is HERE, and not in the shared row ──────────────
@@ -1363,7 +1404,11 @@ export default function MusicVault({
         name={titleOf(item)}
         meta={meta}
         accessibilityLabel={`Play ${titleOf(item)}`}
-        onPress={() => { Keyboard.dismiss(); playTrack(item); }}
+        // The shared LIST is the queue for a shared track, exactly as on its
+        // own page: Next walks the other things that were shared with me
+        // rather than jumping into my library, which the player does not even
+        // hold this track in.
+        onPress={() => { Keyboard.dismiss(); playTrack(item, shared ? pondTracks : undefined); }}
         leading={(
           <Icon
             name={active && isPlaying ? 'pause' : 'music-note'}
@@ -1372,20 +1417,37 @@ export default function MusicVault({
           />
         )}
         trailing={(
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel={`Options for ${titleOf(item)}`}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
-            onPress={() => setSheetId(String(item.id))}
-            style={styles.moreBtn}
-          >
-            <Icon name="dots-horizontal" size={22} color={c.textTertiary} />
-          </TouchableOpacity>
+          // The ⋯ sheet is built from MY library — rename, delete, share with
+          // the pond — and none of that is mine to do on someone else's
+          // track. A shared row gets the one action it has on its own page
+          // instead: hand it back.
+          shared ? (
+            <TouchableOpacity
+              testID={`search-shared-leave-${item.shareId}`}
+              accessibilityRole="button"
+              accessibilityLabel={`Leave ${titleOf(item)}`}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
+              onPress={() => leaveSharedTrack(item)}
+              style={styles.moreBtn}
+            >
+              <Icon name="exit-to-app" size={20} color={c.textTertiary} />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={`Options for ${titleOf(item)}`}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
+              onPress={() => setSheetId(String(item.id))}
+              style={styles.moreBtn}
+            >
+              <Icon name="dots-horizontal" size={22} color={c.textTertiary} />
+            </TouchableOpacity>
+          )
         )}
         />
       </View>
     );
-  }, [theme, c, activeTrack, isPlaying, playTrack]);
+  }, [theme, c, activeTrack, isPlaying, playTrack, pondTracks, leaveSharedTrack]);
 
   /** One web result. Tap previews, the key downloads — see MusicWebResultRow. */
   const renderWebRow = useCallback(({ item }) => {

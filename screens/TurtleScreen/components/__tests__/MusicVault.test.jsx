@@ -604,3 +604,76 @@ describe('a playlist is its own queue', () => {
     expect(SRC).toMatch(/queue: voiceRecordings/);
   });
 });
+
+/**
+ * Searching finds the tracks OTHER PEOPLE shared with me, not just my own.
+ *
+ * They are separate lists everywhere else on this screen — separate fetches,
+ * separate pages, different actions — and for browsing that is right. For
+ * search it was a hole: a shared track was reachable only by remembering it
+ * was shared and reading down that page, and typing its name found nothing,
+ * which reads as "you do not have it".
+ */
+describe('search reaches the pond', () => {
+  const SHARED = {
+    id: 'shared-1',
+    shareId: 'sh-1',
+    filename: 'Moonlight Mix.mp3',
+    ownerName: 'Michelle',
+    duration: 200,
+    rawUrl: '/media/shared-1.mp3',
+  };
+
+  beforeEach(() => {
+    mockApi.get = jest.fn((path) => (
+      path === '/shared-tracks'
+        ? Promise.resolve({ tracks: [SHARED] })
+        : Promise.resolve({})
+    ));
+  });
+
+  const search = (query) => render(
+    <MusicVault onClose={jest.fn()} query={query} onQueryChange={jest.fn()} />,
+  );
+
+  test('a shared track turns up by its title', async () => {
+    const view = await search('moonlight');
+    await waitFor(() => expect(view.getByText('Moonlight Mix')).toBeTruthy());
+  });
+
+  test('…and by WHO shared it, which is how you remember someone else’s music', async () => {
+    const view = await search('michelle');
+    await waitFor(() => expect(view.getByText('Moonlight Mix')).toBeTruthy());
+  });
+
+  test('the row says whose it is', async () => {
+    // Otherwise search is a back door into a row that looks like mine.
+    const view = await search('moonlight');
+    await waitFor(() => expect(view.getByText(/From Michelle/)).toBeTruthy());
+  });
+
+  test('its ⋯ is LEAVE, not the owner’s sheet', async () => {
+    // Rename, delete and share-with-the-pond are not mine to do on someone
+    // else's track; the one action it has on its own page is handing it back.
+    const view = await search('moonlight');
+    await waitFor(() => expect(view.getByTestId('search-shared-leave-sh-1')).toBeTruthy());
+    expect(view.queryByLabelText('Options for Moonlight Mix')).toBeNull();
+  });
+
+  test('playing one hands the player the SHARED list as the queue', async () => {
+    // The player's own library does not hold this track, so Next has to walk
+    // the other shared ones rather than jumping into mine.
+    const view = await search('moonlight');
+    await waitFor(() => expect(view.getByText('Moonlight Mix')).toBeTruthy());
+    await fireEvent.press(view.getByText('Moonlight Mix'));
+    expect(mockPlayRows).toHaveBeenCalledWith([SHARED], 'shared-1');
+    expect(mockPlayMedia).not.toHaveBeenCalled();
+  });
+
+  test('my own library still searches, and keeps its own ⋯', async () => {
+    const view = await search('first');
+    await waitFor(() => expect(view.getByText('First')).toBeTruthy());
+    expect(view.getByLabelText('Options for First')).toBeTruthy();
+    expect(view.queryByText('Moonlight Mix')).toBeNull();
+  });
+});
