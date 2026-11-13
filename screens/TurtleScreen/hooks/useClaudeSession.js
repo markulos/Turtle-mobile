@@ -49,13 +49,18 @@ const summarizeToolInput = (input) => {
  * event appends a typed line:
  *   { id, kind: 'user'|'assistant'|'tool'|'meta'|'log'|'login'|'result'|'error', text }
  *
- * Exposes: { active, busy, mode, transcript, start, send, stop, login,
+ * Exposes: { active, busy, startedAt, mode, transcript, start, send, stop, login,
  *            loginInput, loginStop, close, reset }
  *   mode = null | 'session' | 'login'  (drives panel visibility/behaviour)
  */
 export function useClaudeSession(serverIP, token) {
   const [active, setActive] = useState(false); // CLI process running
   const [busy, setBusy] = useState(false);     // a turn is in flight
+  // When the live session started, for the stop question — an hour of
+  // context is worth naming before it is thrown away. The pond's own clock
+  // when we attach to a session that was already up; ours when we start it,
+  // because claude:status does not carry a start time and "now" is right.
+  const [startedAt, setStartedAt] = useState(null);
   // Live view ON/OFF. When OFF the session keeps running + buffering on the
   // server, but we stop receiving + rendering the per-chunk event firehose
   // (the thing that pegs the phone CPU at 100%). Resuming replays the buffer
@@ -219,6 +224,7 @@ export function useClaudeSession(serverIP, token) {
       setCompletedQueue(Array.isArray(b.completedQueue) ? b.completedQueue : []);
       if (!b.running) return;
       setActive(true);
+      setStartedAt(b.startedAt || Date.now());
       setAdmin(!!b.admin);
       setPermissions(Array.isArray(b.permissions) ? b.permissions : []);
       setQuestions(Array.isArray(b.questions) ? b.questions : []);
@@ -252,8 +258,8 @@ export function useClaudeSession(serverIP, token) {
     });
 
     socket.on('claude:status', (s) => {
-      if (s?.running === true) { setActive(true); setAdmin(!!s.admin); }
-      else if (s?.running === false) { setActive(false); setBusy(false); setAdmin(false); setPermissions([]); setQuestions([]); bannerShownRef.current = false; attachedRef.current = false; }
+      if (s?.running === true) { setActive(true); setStartedAt((prev) => prev || s.startedAt || Date.now()); setAdmin(!!s.admin); }
+      else if (s?.running === false) { setActive(false); setBusy(false); setStartedAt(null); setAdmin(false); setPermissions([]); setQuestions([]); bannerShownRef.current = false; attachedRef.current = false; }
       if (s?.notLoggedIn) push({ kind: 'error', text: 'Not signed in. Type /claude login to use your subscription.' });
       else if (s?.error) push({ kind: 'error', text: s.error });
       else if (s?.running === true) push({ kind: 'meta', text: `session started · ${s.admin ? '⚡ ADMIN — full access' : (s.permissionMode || 'default') + ' mode'}` });
@@ -496,5 +502,5 @@ export function useClaudeSession(serverIP, token) {
     socketRef.current?.emit('claude:pause', { token: tokenRef.current });
   }, []);
 
-  return { active, busy, live, toggleLive, suspend, mode, admin, model, setModel, transcript, permissions, respondPermission, questions, respondQuestion, queue, completedQueue, removeQueueItem, clearQueue, start, startAdmin, send, stop, login, loginInput, loginStop, close, reset };
+  return { active, busy, startedAt, live, toggleLive, suspend, mode, admin, model, setModel, transcript, permissions, respondPermission, questions, respondQuestion, queue, completedQueue, removeQueueItem, clearQueue, start, startAdmin, send, stop, login, loginInput, loginStop, close, reset };
 }

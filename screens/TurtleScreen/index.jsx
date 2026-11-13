@@ -82,6 +82,7 @@ import ErrorBoundary from '../../components/ErrorBoundary';
 import ApiProposalCard from '../../components/ApiProposalCard';
 import { readProposal, requestPath, summarise } from '../../utils/apiProposal';
 import { CHAT_TIMEOUT_MS } from '../../utils/chatTimeout';
+import { stopPrompt } from '../../utils/claudeStopPrompt';
 import ChatBlocks from '../../components/ChatBlocks';
 import { blocksCoverProposal, drawableBlocks } from '../../utils/chatBlocks';
 // SettingsScreen used to be its own tab. We surface it from inside
@@ -433,6 +434,7 @@ export default function TurtleScreen() {
     mode: claudeUiMode,        // null | 'session' | 'login'
     active: claudeActive,
     busy: claudeBusy,          // a turn is in flight
+    startedAt: claudeStartedAt, // when it started, for the stop question
     model: claudeModel,        // selected model alias (null = CLI default)
     setModel: setClaudeModel,  // set by the long-press model picker
     send: claudeSend,
@@ -447,6 +449,20 @@ export default function TurtleScreen() {
     completedQueue: claudeCompletedQueue, // finished queued tasks (+ finish time)
     clearQueue: clearClaudeQueue,
   } = claude;
+
+  // Stopping is not pausing: the pond kills the CLI process and the next
+  // session starts from nothing. The Stop key sits a finger's width from
+  // Pause in the console header, so it asks first and says what it costs —
+  // a different sentence mid-turn, where work in flight dies too. Typed
+  // `/claude stop` is NOT routed through here: words are intent.
+  const requestClaudeStop = useCallback(() => {
+    const q = stopPrompt({ active: claudeActive, busy: claudeBusy, startedAt: claudeStartedAt, now: Date.now() });
+    if (!q) { claudeStop(); return; }
+    Alert.alert(q.title, q.body, [
+      { text: 'Keep running', style: 'cancel' },
+      { text: 'Stop session', style: 'destructive', onPress: claudeStop },
+    ]);
+  }, [claudeActive, claudeBusy, claudeStartedAt, claudeStop]);
 
   // Most-recently finished queued task, shown as a dismissable "✓ finished at …"
   // banner. Cleared when the user dismisses it or a new task starts working
@@ -2352,7 +2368,7 @@ export default function TurtleScreen() {
             busy={claudeBusy}
             live={claude.live}
             onToggleLive={claude.toggleLive}
-            onStop={() => { if (claudeUiMode === 'login') claudeLoginStop(); else claudeStop(); }}
+            onStop={() => { if (claudeUiMode === 'login') claudeLoginStop(); else requestClaudeStop(); }}
             expanded={claudeExpanded}
             onToggleExpanded={() => setClaudeExpanded((e) => !e)}
             onClose={claudeClose}
