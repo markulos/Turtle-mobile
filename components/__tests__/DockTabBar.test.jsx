@@ -3,6 +3,7 @@ import { Dimensions } from 'react-native';
 import { act, render } from '@testing-library/react-native';
 
 import { CARD_MARGIN_H, TAB_SLOT, clusterStart } from '../tabBarLayout';
+import { CHIP_SLIDE_MS } from '../dockMotion';
 
 // The pan the dock built, so a test can actually drag it. A chain() stub would
 // let the whole gesture be wired to nothing and still pass.
@@ -76,13 +77,32 @@ const buildProps = (index = 0) => {
 const navigatedTo = (dispatch) =>
   dispatch.mock.calls.map(([action]) => action.payload?.key ?? action.payload?.name);
 
+/** Put the thumb down: onBegin fires for EVERY touch, drag or tap, and is
+ *  where the dock takes its holds. A test that skips it is testing a gesture
+ *  the device never produces. */
+const touchDown = (x) => {
+  act(() => { mockPan.onBegin({ absoluteX: x }); });
+};
+
 /** Lift the thumb: the real gesture runs both, in this order. */
 const lift = () => {
   act(() => { mockPan.onEnd(); });
   act(() => { mockPan.onFinalize(); });
 };
 
-beforeEach(() => { holdSwipe.mockClear(); releaseSwipe.mockClear(); });
+/** The dock keeps its holds for the length of the chip's travel after the
+ *  lift, so the screen waking up does not land on the frames the slide is
+ *  made of. Run the clock past that to see them handed back. */
+const afterSlide = () => {
+  act(() => { jest.advanceTimersByTime(CHIP_SLIDE_MS + 1); });
+};
+
+beforeEach(() => {
+  holdSwipe.mockClear();
+  releaseSwipe.mockClear();
+  jest.useFakeTimers();
+});
+afterEach(() => { jest.runOnlyPendingTimers(); jest.useRealTimers(); });
 
 test('the chip tracks the thumb 1:1, and NOTHING changes tabs until it lifts', async () => {
   const props = buildProps(0);
@@ -92,6 +112,7 @@ test('the chip tracks the thumb 1:1, and NOTHING changes tabs until it lifts', a
 
   // Finger down on the first icon and the drag begins: the chip takes over
   // from the navigator, at the slot it is already on.
+  touchDown(onIcon(0));
   act(() => { mockPan.onStart({ absoluteX: onIcon(0) }); });
   expect(dragSlot.value).toBe(0);
   expect(props.navigation.dispatch).not.toHaveBeenCalled();
@@ -146,8 +167,11 @@ test('the chip tracks the thumb 1:1, and NOTHING changes tabs until it lifts', a
   // without a target is handled by whichever navigator feels like it.
   expect(props.navigation.dispatch.mock.calls[0][0].target).toBe('tabs-1');
 
-  // …and the guard goes back. A leaked hold kills back-navigation app-wide
-  // for the rest of the session, with nothing on screen to explain it.
+  // …and the guard goes back once the chip has finished travelling. A leaked
+  // hold kills back-navigation app-wide for the rest of the session, with
+  // nothing on screen to explain it.
+  expect(releaseSwipe).not.toHaveBeenCalled();
+  afterSlide();
   expect(releaseSwipe).toHaveBeenCalledTimes(1);
 });
 
@@ -174,6 +198,7 @@ test('a gesture the system cancels chooses nothing', async () => {
   const leadSlot = { value: -1 };
   await render(<DockTabBar {...props} dragSlot={dragSlot} leadSlot={leadSlot} />);
 
+  touchDown(onIcon(0));
   act(() => { mockPan.onStart({ absoluteX: onIcon(0) }); });
   act(() => { mockPan.onUpdate({ absoluteX: onIcon(3) }); });
   // A call arriving, a modal taking the touch: onFinalize fires WITHOUT onEnd.
@@ -185,7 +210,9 @@ test('a gesture the system cancels chooses nothing', async () => {
   expect(leadSlot.value).toBe(-1);
   expect(dragSlot.value).toBe(-1);
   // Cancelled, not lifted — and the guard still has to come back, or a call
-  // arriving mid-scrub permanently disables the back-swipe.
+  // arriving mid-scrub permanently disables the back-swipe. It comes back on
+  // the same delay a real lift uses: the chip is travelling either way.
+  afterSlide();
   expect(releaseSwipe).toHaveBeenCalledTimes(1);
 });
 

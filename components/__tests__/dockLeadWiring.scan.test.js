@@ -37,4 +37,15 @@ describe('the dock’s shared values reach both halves', () => {
     expect(tag[0]).toContain('dragSlot={dragSlot}');
     expect(tag[0]).toContain('leadSlot={leadSlot}');
   });
+
+  test('a TAP writes the lead too, from tabPress', () => {
+    // The drag writes the lead from its own worklet; a tap has no gesture to
+    // write it, so without this listener the chip waits for the navigate to
+    // come back through React — which is the lateness this whole value exists
+    // to remove, present on the commonest way to change tabs. Scanned for the
+    // same reason as the props above: it fails silently and invisibly.
+    expect(APP).toMatch(/screenListeners=/);
+    expect(APP).toMatch(/tabPress:/);
+    expect(APP).toMatch(/leadSlot\.value = i/);
+  });
 });

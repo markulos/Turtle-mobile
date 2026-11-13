@@ -171,6 +171,25 @@ function TabNavigator() {
       // Everything about how the bar looks still comes from screenOptions
       // below — see DockTabBar for why it wraps rather than replaces.
       tabBar={(props) => <DockTabBar {...props} dragSlot={dragSlot} leadSlot={leadSlot} />}
+      // A TAP gets the same head start a DRAG already had.
+      //
+      // The drag writes `leadSlot` on the lift, from the gesture worklet, so
+      // the chip is moving before React has heard anything. A tap had no such
+      // path: it went press → navigate → re-render → and only then did the
+      // chip learn where to go, which on a tab whose screen is waking up is
+      // several frames of the navbar sitting still after a touch. That is the
+      // lateness; `tabPress` is the earliest thing on the JS thread that knows
+      // which tab was chosen, and writing the shared value here costs nothing
+      // and does not wait for the commit.
+      //
+      // The lead is spent the moment the navigator agrees (see TabBarPill), so
+      // a press on the tab you are already on just re-states where the chip is.
+      screenListeners={({ navigation, route }) => ({
+        tabPress: () => {
+          const i = navigation.getState()?.routes?.findIndex((r) => r.key === route.key);
+          if (i >= 0) leadSlot.value = i;
+        },
+      })}
       // No tabPress haptic: tab switching is silent by request. (There used to
       // be a selection tick here for every tab.)
       screenOptions={({ route }) => ({

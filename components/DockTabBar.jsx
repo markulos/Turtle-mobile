@@ -9,7 +9,7 @@ import { BottomTabBar } from '@react-navigation/bottom-tabs';
 import { CommonActions } from '@react-navigation/native';
 
 import { dockOccupied, slotAtX } from './tabBarLayout';
-import { PRESS_BEZIER, PRESS_IN_MS, PRESS_OUT_MS, PRESS_SCALE } from './dockMotion';
+import { CHIP_SLIDE_MS, PRESS_BEZIER, PRESS_IN_MS, PRESS_OUT_MS, PRESS_SCALE } from './dockMotion';
 import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 
 /**
@@ -178,7 +178,24 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
     if (holdRef.current == null) holdRef.current = InteractionManager.createInteractionHandle();
     if (swipeRef.current == null) swipeRef.current = holdEdgeSwipe();
   }, []);
+  // Held PAST the lift, for as long as the chip is travelling.
+  //
+  // This is what the slide was being interrupted by. A tab change ends in a
+  // screen waking up, and a screen waking up builds native views on the main
+  // thread — the same thread the chip's animation is composited on. Released
+  // at the lift, the mount landed one or two frames into a ten-frame slide and
+  // ate most of the rest of them, which is the chop.
+  //
+  // withTabSkeleton already waits on the interaction queue, so holding the
+  // handle for the length of the travel costs nothing visible: the tab paints
+  // its template immediately either way, and the real screen arrives a tenth
+  // of a second later against a clear main thread.
+  const releaseTimerRef = useRef(null);
   const release = useCallback(() => {
+    if (releaseTimerRef.current != null) {
+      clearTimeout(releaseTimerRef.current);
+      releaseTimerRef.current = null;
+    }
     if (holdRef.current != null) {
       InteractionManager.clearInteractionHandle(holdRef.current);
       holdRef.current = null;
@@ -191,8 +208,16 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
       swipeRef.current = null;
     }
   }, []);
+  const releaseAfterSlide = useCallback(() => {
+    if (releaseTimerRef.current != null) clearTimeout(releaseTimerRef.current);
+    releaseTimerRef.current = setTimeout(() => {
+      releaseTimerRef.current = null;
+      release();
+    }, CHIP_SLIDE_MS);
+  }, [release]);
   // A handle leaked by an unmount mid-drag would stall every deferred mount in
-  // the app for the rest of the session.
+  // the app for the rest of the session. `release` clears the pending timer
+  // too, so an unmount cannot leave one running against a dead component.
   useEffect(() => release, [release]);
 
   const pan = useMemo(() => Gesture.Pan()
@@ -203,6 +228,10 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
     // next frame rather than after a hop to JS.
     .onBegin(() => {
       press.value = withTiming(1, PRESS_IN);
+      // From the TOUCH, not from the drag: a tap never reaches onStart, and a
+      // tap is the case where the mount lands on top of the slide. Holding
+      // here covers both, and onFinalize always gives it back.
+      runOnJS(hold)();
     })
     // Every callback below is a WORKLET — it runs on the UI thread, which is
     // the reason the chip keeps up with the thumb. Changing tabs is React work
@@ -211,7 +240,6 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
     // three things that genuinely need JS (navigate, and the interaction hold)
     // are hopped over with runOnJS and do not block the tracking.
     .onStart((e) => {
-      runOnJS(hold)();
       slot.value = slotAtX(e.absoluteX, width, count);
     })
     // 1:1 with the finger, and NOTHING else. The chip is the only thing that
@@ -242,9 +270,9 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
     .onFinalize(() => {
       slot.value = -1;
       press.value = withTiming(0, PRESS_OUT);
-      runOnJS(release)();
+      runOnJS(releaseAfterSlide)();
     }),
-  [count, goToIndex, hold, lead, press, release, slot, width]);
+  [count, goToIndex, hold, lead, press, releaseAfterSlide, slot, width]);
 
   return (
     <GestureDetector gesture={pan}>
