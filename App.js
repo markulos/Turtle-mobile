@@ -66,6 +66,7 @@ import CommandConsole from './components/CommandConsole';
 import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
 import { activeInk, dockSkin } from './components/dockSkins';
+import { resolveDockSkin } from './components/dockThemes';
 import DockTabBar from './components/DockTabBar';
 import { TAB_SWITCH_SPEC, forTabTurn } from './components/dockMotion';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
@@ -124,8 +125,10 @@ function TabNavigator() {
   // No isDark here: the dock's material is a SKIN chosen in Settings, not a
   // function of light/dark mode, so nothing in this navigator's chrome
   // branches on the theme.
-  const { theme, hideVaultButton, dockStyle, dockColor, dockInk } = useTheme();
-  const skin = dockSkin(dockStyle, dockColor);
+  const {
+    theme, hideVaultButton, dockStyle, dockColor, dockInk, dockTheme,
+  } = useTheme();
+  const skin = resolveDockSkin({ dockTheme, dockStyle, dockColor }, dockSkin);
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   // The avatar tab needs to know WHOSE avatar to draw…

@@ -17,6 +17,7 @@ import {
 } from './tabBarLayout';
 import { TAB_SWITCH_BEZIER, TAB_SWITCH_MS } from './dockMotion';
 import { dockSkin } from './dockSkins';
+import { resolveDockSkin } from './dockThemes';
 
 /**
  * TabBarPill — ONE pill that slides from tab to tab behind the icons.
@@ -96,11 +97,11 @@ const DOCK_LIP_H = 1.5;
 // icons can never disagree about where a slot is.
 
 export default function TabBarPill({ dragSlot, leadSlot }) {
-  const { theme, dockIndicator, dockStyle, dockColor } = useTheme();
-  // Every colour the capsule draws, from the skin chosen in Settings. The
-  // colour is only consulted by the 'custom' skin, and is passed always rather
-  // than conditionally so there is one call shape here and in App.js.
-  const skin = dockSkin(dockStyle, dockColor);
+  const { theme, dockIndicator, dockStyle, dockColor, dockTheme } = useTheme();
+  // Every colour the capsule draws, from the skin chosen in Settings — a
+  // named theme if one is on, otherwise the chosen material. One resolver,
+  // shared with App.js, so the glyph tints cannot disagree with the capsule.
+  const skin = resolveDockSkin({ dockTheme, dockStyle, dockColor }, dockSkin);
   const [barWidth, setBarWidth] = useState(0);
   // Not dragging, and no dock to drag on (a test, a screenshot harness): -1 is
   // the resting contract, so an absent value behaves exactly like a lifted

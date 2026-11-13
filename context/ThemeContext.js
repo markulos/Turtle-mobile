@@ -4,6 +4,7 @@ import { normalizeHex } from '../utils/accentColor';
 import {
   DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR, DOCK_INKS, DEFAULT_DOCK_INK,
 } from '../components/dockSkins';
+import { isDockTheme } from '../components/dockThemes';
 
 const THEME_STORAGE_KEY = '@connected_pass_theme';
 const TIME_FORMAT_STORAGE_KEY = '@connected_pass_time_format';
@@ -16,6 +17,7 @@ const DOCK_INDICATOR_KEY = '@connected_pass_dock_indicator';
 const DOCK_STYLE_KEY = '@connected_pass_dock_style';
 const DOCK_COLOR_KEY = '@connected_pass_dock_color';
 const DOCK_INK_KEY = '@connected_pass_dock_ink';
+const DOCK_THEME_KEY = '@connected_pass_dock_theme';
 
 /**
  * How the dock marks the tab you are on: the filled accent CHIP behind the
@@ -342,6 +344,11 @@ const ThemeContext = createContext({
   // 'dark' are the manual override. See DOCK_INKS.
   dockInk: DEFAULT_DOCK_INK,
   setDockInk: () => {},
+  // A named theme's key ('godzilla'), or '' for none. Stored because a
+  // theme's skin overrides are not recoverable from the settings above —
+  // see components/dockThemes.
+  dockTheme: '',
+  setDockTheme: () => {},
   // The highlight colour: one of ACCENTS' keys, or CUSTOM_ACCENT for a colour
   // the user mixed themselves (`customAccent`, a '#RRGGBB').
   accent: DEFAULT_ACCENT,
@@ -366,6 +373,7 @@ export const ThemeProvider = ({ children }) => {
   const [dockStyle, setDockStyleState] = useState(DEFAULT_DOCK_STYLE);
   const [dockColor, setDockColorState] = useState(DEFAULT_DOCK_COLOR);
   const [dockInk, setDockInkState] = useState(DEFAULT_DOCK_INK);
+  const [dockTheme, setDockThemeState] = useState('');
   const [accent, setAccentState] = useState(DEFAULT_ACCENT);
   // The user's own colour, '#RRGGBB', or null if they have never mixed one.
   // Remembered even while a preset is selected, so the custom swatch still
@@ -437,6 +445,13 @@ export const ThemeProvider = ({ children }) => {
       if (DOCK_INKS.includes(savedInk)) {
         setDockInkState(savedInk);
       }
+      // Checked against what we still ship: a theme dropped in a later build
+      // must fall back to the ordinary settings rather than leave the dock
+      // asking for a skin nobody can paint.
+      const savedDockTheme = await AsyncStorage.getItem(DOCK_THEME_KEY);
+      if (isDockTheme(savedDockTheme)) {
+        setDockThemeState(savedDockTheme);
+      }
     } catch (error) {
       console.error('Error loading theme:', error);
     } finally {
@@ -501,6 +516,16 @@ export const ThemeProvider = ({ children }) => {
       await AsyncStorage.setItem(DOCK_INK_KEY, next);
     } catch (error) {
       console.error('Error saving dock-ink setting:', error);
+    }
+  };
+
+  const setDockTheme = async (key) => {
+    const next = isDockTheme(key) ? key : '';
+    setDockThemeState(next);
+    try {
+      await AsyncStorage.setItem(DOCK_THEME_KEY, next);
+    } catch (error) {
+      console.error('Error saving dock-theme setting:', error);
     }
   };
 
@@ -620,8 +645,9 @@ export const ThemeProvider = ({ children }) => {
       calendarFreeScroll, setCalendarFreeScroll,
       dockIndicator, setDockIndicator,
       dockStyle, setDockStyle, dockColor, setDockColor, dockInk, setDockInk,
+      dockTheme, setDockTheme,
     }),
-    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, accent, accentColor, customAccent],
+    [theme, isDark, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent],
   );
 
   if (isLoading) {

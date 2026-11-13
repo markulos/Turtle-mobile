@@ -4,12 +4,14 @@ import { act, fireEvent, render, within } from '@testing-library/react-native';
 
 import { dockSkin, activeInk } from '../dockSkins';
 import { DOCK_PALETTES } from '../dockPalettes';
+import { DOCK_THEMES, themeSkin } from '../dockThemes';
 
 const setDockStyle = jest.fn();
 const setDockIndicator = jest.fn();
 const setDockColor = jest.fn();
 const setDockInk = jest.fn();
 const setCustomAccent = jest.fn();
+const setDockTheme = jest.fn();
 
 jest.mock('../../context/ThemeContext', () => ({
   DOCK_INDICATORS: ['chip', 'underline'],
@@ -36,12 +38,18 @@ jest.mock('../../context/ThemeContext', () => ({
     setDockInk: mockState().setDockInk,
     accentColor: mockState().accentColor,
     setCustomAccent: mockState().setCustomAccent,
+    dockTheme: mockState().theme,
+    setDockTheme: mockState().setDockTheme,
   }),
 }));
 
-let state = { style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'auto', accentColor: '#1F8A9B' };
+let state = {
+  style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'auto',
+  accentColor: '#1F8A9B', theme: '',
+};
 global.mockState = () => ({
-  ...state, setDockStyle, setDockIndicator, setDockColor, setDockInk, setCustomAccent,
+  ...state,
+  setDockStyle, setDockIndicator, setDockColor, setDockInk, setCustomAccent, setDockTheme,
 });
 
 jest.mock('expo-linear-gradient', () => {
@@ -68,10 +76,14 @@ import DockStylePicker from '../DockStylePicker';
 const styleOf = (node) => StyleSheet.flatten(node.props.style) || {};
 
 beforeEach(() => {
-  state = { style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'auto', accentColor: '#1F8A9B' };
+  state = {
+    style: 'smoked', indicator: 'chip', colour: '#C8413B', ink: 'auto',
+    accentColor: '#1F8A9B', theme: '',
+  };
   setDockStyle.mockClear();
   setDockInk.mockClear();
   setCustomAccent.mockClear();
+  setDockTheme.mockClear();
   setDockIndicator.mockClear();
   setDockColor.mockClear();
   impactHaptic.mockClear();
@@ -83,7 +95,8 @@ describe('Settings → Navigation → Navbar style', () => {
     for (const id of ['dock-skin-smoked', 'dock-skin-paper', 'dock-skin-custom',
       'dock-indicator-chip', 'dock-indicator-underline',
       'dock-ink-auto', 'dock-ink-light', 'dock-ink-dark',
-      ...DOCK_PALETTES.map((p) => `dock-palette-${p.key}`)]) {
+      ...DOCK_PALETTES.map((p) => `dock-palette-${p.key}`),
+      ...DOCK_THEMES.map((t) => `dock-theme-${t.key}`)]) {
       expect(getByTestId(id)).toBeTruthy();
     }
   });
@@ -230,6 +243,83 @@ describe('Settings → Navigation → Navbar style', () => {
       expect(styleOf(tile.getByTestId('dock-preview-glyph')).backgroundColor)
         .toBe(activeInk(p.ink, p.accent));
     }
+  });
+
+  describe('named themes', () => {
+    const g = DOCK_THEMES[0];
+    const worn = () => ({
+      style: 'custom', indicator: 'chip', colour: g.backdrop, ink: g.ink,
+      accentColor: g.accent, theme: g.key,
+    });
+
+    test('applying one writes the four settings AND remembers the theme', async () => {
+      const { getByTestId } = await render(<DockStylePicker />);
+      fireEvent.press(getByTestId(`dock-theme-${g.key}`));
+      // The key is the only thing that can bring the skin overrides back;
+      // without it this would be a palette with extra words.
+      expect(setDockTheme).toHaveBeenCalledWith(g.key);
+      expect(setDockStyle).toHaveBeenCalledWith('custom');
+      expect(setDockColor).toHaveBeenCalledWith(g.backdrop);
+      expect(setDockInk).toHaveBeenCalledWith(g.ink);
+      expect(setCustomAccent).toHaveBeenCalledWith(g.accent);
+    });
+
+    test('its tile previews the OVERRIDES, not the plain custom skin', async () => {
+      const { getByTestId } = await render(<DockStylePicker />);
+      const capsule = within(getByTestId(`dock-theme-${g.key}`))
+        .getByTestId('dock-preview-capsule');
+      expect(styleOf(capsule).borderColor).toBe(themeSkin(g).edge);
+      expect(styleOf(capsule).borderColor).not.toBe(dockSkin('custom', g.backdrop).edge);
+    });
+
+    test('it is ticked only while the settings under it still agree', async () => {
+      state = worn();
+      const on = await render(<DockStylePicker />);
+      expect(on.getByTestId(`dock-theme-${g.key}`).props.accessibilityState)
+        .toMatchObject({ selected: true });
+
+      state = { ...worn(), ink: 'auto' };
+      const off = await render(<DockStylePicker />);
+      expect(off.getByTestId(`dock-theme-${g.key}`).props.accessibilityState)
+        .toMatchObject({ selected: false });
+    });
+
+    test('ANY hand-made change afterwards drops the theme', async () => {
+      // Its overrides are not settings, so leaving the key on while the
+      // colours under it are edited paints a dock that matches nothing in
+      // this card.
+      state = worn();
+      const { getByTestId } = await render(<DockStylePicker />);
+      fireEvent.press(getByTestId('dock-skin-paper'));
+      expect(setDockTheme).toHaveBeenCalledWith('');
+      expect(setDockStyle).toHaveBeenCalledWith('paper');
+    });
+
+    test('and so does picking a palette', async () => {
+      state = worn();
+      const { getByTestId } = await render(<DockStylePicker />);
+      fireEvent.press(getByTestId(`dock-palette-${DOCK_PALETTES[1].key}`));
+      expect(setDockTheme).toHaveBeenCalledWith('');
+    });
+
+    test('a palette tile does not also claim you while a theme is on', async () => {
+      // Wearing the theme, with its colours — which no palette matches, but
+      // the rule has to hold whatever colours a future theme picks.
+      state = worn();
+      const { getByTestId } = await render(<DockStylePicker />);
+      for (const p of DOCK_PALETTES) {
+        expect(getByTestId(`dock-palette-${p.key}`).props.accessibilityState)
+          .toMatchObject({ selected: false });
+      }
+    });
+
+    test('re-tapping the theme you are wearing writes nothing', async () => {
+      state = worn();
+      const { getByTestId } = await render(<DockStylePicker />);
+      fireEvent.press(getByTestId(`dock-theme-${g.key}`));
+      expect(setDockTheme).not.toHaveBeenCalled();
+      expect(impactHaptic).not.toHaveBeenCalled();
+    });
   });
 
   test('the selected tile is the one marked, and it follows the setting', async () => {

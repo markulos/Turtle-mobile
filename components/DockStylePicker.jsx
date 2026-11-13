@@ -34,6 +34,7 @@ import {
 } from './dockSkins';
 import AccentColorPicker from './AccentColorPicker';
 import { DOCK_PALETTES, matchingPalette, paletteSkin } from './dockPalettes';
+import { DOCK_THEMES, dockTheme as findTheme, themeIsIntact, themeSkin } from './dockThemes';
 import { impactHaptic } from '../utils/haptics';
 
 // The miniature. Not a scaled copy of the real geometry — at a third the size
@@ -157,15 +158,36 @@ export default function DockStylePicker() {
   const {
     theme, dockStyle, setDockStyle, dockIndicator, setDockIndicator,
     dockColor, setDockColor, dockInk, setDockInk,
-    accentColor, setCustomAccent,
+    accentColor, setCustomAccent, dockTheme, setDockTheme,
   } = useTheme();
   const [colourOpen, setColourOpen] = useState(false);
   const accent = theme.colors.accent;
-  const current = dockSkin(dockStyle, dockColor);
   const ink = activeInk(dockInk, accent);
-  // Recomputed, never stored — see matchingPalette. Nudge any one of the four
-  // settings a palette wrote and the tick leaves it, which is the truth.
-  const palette = matchingPalette({ dockStyle, dockColor, accentColor, dockInk });
+
+  // WHICH named theme is on, if any — and only while the settings under it
+  // still agree with it, because a theme you have edited is not that theme.
+  const named = findTheme(dockTheme);
+  const wearing = themeIsIntact(named, { dockStyle, dockColor, accentColor, dockInk })
+    ? named.key : null;
+  // A palette is recomputed rather than stored (see matchingPalette), and a
+  // theme outranks one: its overrides are what you are looking at, so a
+  // palette tile must not also claim you when the three colours line up.
+  const palette = wearing ? null : matchingPalette({ dockStyle, dockColor, accentColor, dockInk });
+  // The dock as it actually is, for every preview that is meant to show you
+  // the bar you have rather than the one a tile is offering.
+  const current = wearing ? themeSkin(named) : dockSkin(dockStyle, dockColor);
+
+  // A theme writes the same four settings a palette does, PLUS its key — the
+  // key is the only thing that can bring its skin overrides back.
+  const applyTheme = (t) => () => {
+    if (t.key === wearing) return;
+    impactHaptic('light');
+    setDockTheme(t.key);
+    setDockStyle('custom');
+    setDockColor(t.backdrop);
+    setDockInk(t.ink);
+    setCustomAccent(t.accent);
+  };
 
   // One tap, four settings. The accent goes through setCustomAccent, which is
   // also what switches the app onto a custom highlight — a palette that set
@@ -173,6 +195,7 @@ export default function DockStylePicker() {
   const applyPalette = (p) => () => {
     if (p.key === palette) return;
     impactHaptic('light');
+    if (dockTheme) setDockTheme('');
     setDockStyle('custom');
     setDockColor(p.backdrop);
     setDockInk(p.ink);
@@ -184,16 +207,52 @@ export default function DockStylePicker() {
     // it makes the control feel like it did something when it did not.
     if (isCurrent) return;
     impactHaptic('light');
+    // ANY hand-made change drops the theme. A theme's overrides are not
+    // settings, so leaving the key on while you edit the colours under it
+    // would paint a dock that matches nothing you can see in this card.
+    if (dockTheme) setDockTheme('');
     set(value);
   };
 
   return (
     <View>
-      {/* The quick way in, so it comes first: the three rows under it are the
-          same decisions taken one at a time. Wrapped rather than scrolled —
-          a horizontal scroller hides options, and five is few enough to show
-          all of at once. */}
+      {/* THEMES first, and wide. These are whole composed looks rather than a
+          colour pairing — the tile is the width of the card because that is
+          the only way to show one as a dock rather than as a swatch, and
+          because there will not be many of them. */}
       <Text style={[styles.rowTitle, { color: theme.colors.textSecondary }]}>
+        Themes
+      </Text>
+      {DOCK_THEMES.map((t) => {
+        const selected = t.key === wearing;
+        return (
+          <Tile
+            key={t.key}
+            testID={`dock-theme-${t.key}`}
+            label={t.name}
+            selected={selected}
+            theme={theme}
+            style={styles.wideTile}
+            onPress={applyTheme(t)}
+          >
+            <DockPreview
+              skin={themeSkin(t)}
+              indicator={dockIndicator}
+              accent={t.accent}
+              ink={activeInk(t.ink, t.accent)}
+              theme={theme}
+            />
+          </Tile>
+        );
+      })}
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
+        {wearing ? named.tagline : DOCK_THEMES[0].tagline}
+      </Text>
+
+      {/* The quick way in: the three rows under these are the same decisions
+          taken one at a time. Wrapped rather than scrolled — a horizontal
+          scroller hides options, and five is few enough to show at once. */}
+      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
         Palettes
       </Text>
       <View style={[styles.row, styles.rowWrap]}>
@@ -357,6 +416,9 @@ const styles = StyleSheet.create({
   // flexBasis is what makes the second line's two tiles stay the width of the
   // first line's three instead of stretching to half the row each.
   thirdTile: { flexGrow: 0, flexBasis: '31.5%' },
+  // A theme gets the full width: it is a look, not a swatch, and a dock drawn
+  // at a third of the card is a stripe.
+  wideTile: { alignSelf: 'stretch' },
   tile: {
     flex: 1,
     borderRadius: 14,
