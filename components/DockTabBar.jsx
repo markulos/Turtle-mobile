@@ -2,14 +2,14 @@ import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { InteractionManager, StyleSheet, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
-  runOnJS, useAnimatedStyle, useSharedValue, withTiming,
+  Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomTabBar } from '@react-navigation/bottom-tabs';
 import { CommonActions } from '@react-navigation/native';
 
 import { dockOccupied, slotAtX } from './tabBarLayout';
-import { PRESS_SCALE, pressSpec } from './dockMotion';
+import { PRESS_IN_MS, PRESS_OUT_MS, PRESS_SCALE, TAB_SWITCH_BEZIER } from './dockMotion';
 import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 
 /**
@@ -98,6 +98,16 @@ import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 // inside the distance a deliberate slide covers in its first frames, so the
 // drag has not become harder to start — only harder to start by accident.
 const DRAG_SLOP = 12;
+
+// The press timings, built ONCE here on the JS thread, with REANIMATED's
+// Easing. The gesture callbacks that use them are worklets on the UI thread,
+// and the UI thread can only call worklets: a helper function, or React
+// Native's Easing (a plain JS closure), called from there throws "non-worklet
+// function on the UI thread" — which a release build turns into a crash on
+// the first touch of the dock. Plain objects holding a Reanimated easing are
+// what a worklet can capture.
+const PRESS_IN = { duration: PRESS_IN_MS, easing: Easing.bezier(...TAB_SWITCH_BEZIER) };
+const PRESS_OUT = { duration: PRESS_OUT_MS, easing: Easing.bezier(...TAB_SWITCH_BEZIER) };
 
 export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) {
   const { state, navigation } = props;
@@ -190,7 +200,7 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
     // therefore for a tap too. A worklet, so the swell is on screen on the
     // next frame rather than after a hop to JS.
     .onBegin(() => {
-      press.value = withTiming(1, pressSpec(true));
+      press.value = withTiming(1, PRESS_IN);
     })
     // Every callback below is a WORKLET — it runs on the UI thread, which is
     // the reason the chip keeps up with the thumb. Changing tabs is React work
@@ -229,7 +239,7 @@ export default function DockTabBar({ dragSlot, leadSlot, pressLift, ...props }) 
     // that is no longer there.
     .onFinalize(() => {
       slot.value = -1;
-      press.value = withTiming(0, pressSpec(false));
+      press.value = withTiming(0, PRESS_OUT);
       runOnJS(release)();
     }),
   [count, goToIndex, hold, lead, press, release, slot, width]);

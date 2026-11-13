@@ -5,7 +5,6 @@ import {
   PRESS_SCALE,
   PRESS_IN_MS,
   PRESS_OUT_MS,
-  pressSpec,
   TAB_SWITCH_MS,
   TAB_SWITCH_SPEC,
   TAB_TRAVEL_PT,
@@ -200,14 +199,11 @@ describe('the press', () => {
   it('starts from REST in both directions, like everything else here', () => {
     // The app's rule: what reads as abrupt is frame-one velocity, not
     // duration. An ease-out press would be at full speed on its first frame —
-    // the bar would not grow, it would jump to grown.
-    for (const held of [true, false]) {
-      const spec = pressSpec(held);
-      expect(spec.duration).toBe(held ? PRESS_IN_MS : PRESS_OUT_MS);
-      expect(spec.easing).toBeTruthy();
-    }
-    // The same control points the tab switch uses, which are the ones with
-    // zero slope at t=0 (see the suite above).
+    // the bar would not grow, it would jump to grown. DockTabBar builds the
+    // press from TAB_SWITCH_BEZIER — the control points with zero slope at
+    // t=0 (see the suite above) — so that is the property to hold here.
     expect(TAB_SWITCH_BEZIER[1]).toBe(0);
+    expect(PRESS_IN_MS).toBeGreaterThan(0);
+    expect(PRESS_OUT_MS).toBeGreaterThan(0);
   });
 });

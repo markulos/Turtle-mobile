@@ -179,8 +179,11 @@ export const PRESS_SCALE = 1.015;
 export const PRESS_IN_MS = 110;
 export const PRESS_OUT_MS = 200;
 
-/** The two specs, ready for withTiming. */
-export const pressSpec = (held) => ({
-  duration: held ? PRESS_IN_MS : PRESS_OUT_MS,
-  easing: Easing.bezier(...TAB_SWITCH_BEZIER),
-});
+// There is deliberately no ready-made timing spec for the press here. The
+// press runs inside the dock's gesture worklets, on the UI thread, and this
+// file's Easing is React Native's — a plain JS closure the UI thread cannot
+// call. A helper that built the spec was called from those worklets and
+// crashed the app on the first touch of the dock (release builds turn
+// Reanimated's "non-worklet function on the UI thread" into a fatal error).
+// DockTabBar builds the spec once, with REANIMATED's Easing, from these
+// numbers and TAB_SWITCH_BEZIER.

@@ -247,4 +247,20 @@ describe('the dock answers the touch', () => {
     expect(SRC).toMatch(/testID="dock-press-layer"[\s\S]{0,200}pressStyle/);
     expect(SRC).toMatch(/pressStyle[\s\S]{0,200}BottomTabBar/);
   });
+
+  test('the press timing is something the UI thread can run', () => {
+    // These callbacks are worklets on device. A worklet can only CALL other
+    // worklets: a helper function, or React Native's Easing (a plain JS
+    // closure), called from one throws "non-worklet function on the UI
+    // thread", which a release build turns into a crash on the first touch
+    // of the dock — and jest, which mocks Reanimated, never notices. So the
+    // timings must be prebuilt objects whose easing is Reanimated's.
+    for (const cb of ['onBegin', 'onFinalize']) {
+      expect(bodyOf(cb)).toMatch(/withTiming\([01], PRESS_(IN|OUT)\)/);
+    }
+    expect(SRC).toMatch(/import Reanimated, \{[^}]*\bEasing\b[^}]*\} from 'react-native-reanimated'/);
+    expect(SRC).not.toMatch(/import \{[^}]*\bEasing\b[^}]*\} from 'react-native'/);
+    expect(SRC).toMatch(/const PRESS_IN = \{[^}]*easing: Easing\.bezier/);
+    expect(SRC).toMatch(/const PRESS_OUT = \{[^}]*easing: Easing\.bezier/);
+  });
 });
