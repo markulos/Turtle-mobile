@@ -1,8 +1,28 @@
 const AUDIO_EXTENSION = /\.[a-z0-9]{2,5}$/i;
 
+/**
+ * THE POND'S STORAGE NAME — `media_<epoch_ms>_<random>`, e.g.
+ * media_1794518356672_9l5iakewv. It is what every uploaded and downloaded
+ * file is called ON DISK; the name a person typed lives in `originalName`.
+ *
+ * It must never be shown. A row that has lost its originalName used to fall
+ * through to this and put "media_1794518356672_9l5iakewv" on the lock screen
+ * — reported as "the display becomes a bunch of numbers", which is exactly
+ * what it looks like at a glance. "Unknown track" is a worse name and a far
+ * better answer: it says the name is missing instead of pretending an
+ * internal id is the name.
+ *
+ * Narrow on purpose. A voice memo really is called "Voice memo.m4a" on disk
+ * and that IS its name, so only this one unambiguous shape is suppressed.
+ */
+const STORAGE_NAME = /^media_\d+_[a-z0-9]+$/i;
+
 export function titleOf(row) {
-  const raw = row?.originalName || row?.filename || 'Unknown track';
-  return String(raw).replace(AUDIO_EXTENSION, '').trim() || 'Unknown track';
+  const named = String(row?.originalName || '').replace(AUDIO_EXTENSION, '').trim();
+  if (named) return named;
+  const stored = String(row?.filename || '').replace(AUDIO_EXTENSION, '').trim();
+  if (stored && !STORAGE_NAME.test(stored)) return stored;
+  return 'Unknown track';
 }
 
 export function sourceOf(row) {

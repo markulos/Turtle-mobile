@@ -175,6 +175,7 @@ export default function MusicVault({
     duration,
     playMedia,
     playRows,
+    renameInQueue,
     togglePlayback,
     previous,
     next,
@@ -750,6 +751,10 @@ export default function MusicVault({
 
       closeSheet();
       setRenamedNames((prev) => new Map(prev).set(id, nextName));
+      // …and the LOCK SCREEN, which the lists cannot reach. Optimistic with
+      // them: if the PATCH fails the revert below puts the list back, and the
+      // next play rebuilds the queue from the server's name anyway.
+      renameInQueue(id, titleOf({ originalName: nextName }));
       sendOrQueue(api, {
         method: 'patch',
         path: `/media/${id}`,
@@ -769,7 +774,7 @@ export default function MusicVault({
           Alert.alert('Rename', 'Could not rename that track.');
         });
     },
-    [sheetTrack, api, refreshLibrary, closeSheet]
+    [sheetTrack, api, refreshLibrary, closeSheet, renameInQueue]
   );
 
   // Playlists are tags, and the tags endpoint REPLACES the list — so send the

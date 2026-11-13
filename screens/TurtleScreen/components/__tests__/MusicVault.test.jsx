@@ -18,6 +18,7 @@ const mockPrevious = jest.fn();
 const mockNext = jest.fn();
 const mockSeekTo = jest.fn();
 const mockPlayRows = jest.fn();
+const mockRenameInQueue = jest.fn();
 const mockRefreshLibrary = jest.fn();
 const mockRetrySetup = jest.fn();
 const mockApi = {
@@ -53,6 +54,7 @@ const mockMusicPlayer = {
   ],
   playMedia: mockPlayMedia,
   playRows: mockPlayRows,
+  renameInQueue: mockRenameInQueue,
   togglePlayback: mockTogglePlayback,
   previous: mockPrevious,
   next: mockNext,

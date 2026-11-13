@@ -363,6 +363,22 @@ export function MusicPlayerProvider({ children }) {
    * The queue becomes that list, which is what makes skip walk the shared
    * tracks rather than jumping back into mine.
    */
+  /**
+   * A track was renamed — tell the LOCK SCREEN.
+   *
+   * The queue is handed to the player once, when playback starts, so a
+   * rename updated every list in the app and left the lock screen, Control
+   * Centre and the car showing the old name. Deliberately fire-and-forget:
+   * the rename itself has already happened and must not fail because the
+   * player is between states, and a track that is not in the queue is the
+   * normal case rather than an error.
+   */
+  const renameInQueue = useCallback((mediaId, title) => {
+    if (!mediaId || !title) return;
+    Promise.resolve(musicPlayerService.renameInQueue(String(mediaId), String(title)))
+      .catch(() => {});
+  }, []);
+
   const playRows = useCallback(
     async (rows, mediaId) => {
       return runCommand(async () => {
@@ -426,6 +442,7 @@ export function MusicPlayerProvider({ children }) {
       retrySetup,
       playMedia,
       playRows,
+      renameInQueue,
       togglePlayback,
       pause,
       previous,
@@ -451,6 +468,7 @@ export function MusicPlayerProvider({ children }) {
       retrySetup,
       playMedia,
       playRows,
+      renameInQueue,
       togglePlayback,
       pause,
       previous,

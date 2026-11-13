@@ -3,6 +3,15 @@ export function createMusicPlayerController(adapter) {
   let setupPromise = null;
   let queueLength = 0;
   let activeIndex = -1;
+  /**
+   * The media ids in the queue, in order — the only thing that can answer
+   * "where in the queue is this track?" after the fact.
+   *
+   * Kept because the lock screen outlives the list: renaming a track that is
+   * PLAYING has to move the name on the lock screen too, and the player
+   * addresses its items by index, not by id.
+   */
+  let queueIds = [];
 
   const ensureReady = async () => {
     if (ready) return;
@@ -49,9 +58,30 @@ export function createMusicPlayerController(adapter) {
       await ensureReady();
       await adapter.setQueue(items, startIndex);
       queueLength = items.length;
+      queueIds = items.map((item) => String(item?.mediaId));
       activeIndex = startIndex;
       await syncNextCapability();
       await adapter.play();
+    },
+    /**
+     * A track got a new name — carry it to the lock screen.
+     *
+     * The queue is handed to the player ONCE, when playback starts, and
+     * nothing rebuilds it afterwards: renaming a track updated every list in
+     * the app and left the lock screen, Control Centre and the car showing
+     * the name the track had when you pressed play. This is the only path
+     * that fixes that without interrupting playback (the player's own
+     * updateMetadata is built for exactly this).
+     *
+     * A no-op when the track is not in the current queue, which is the common
+     * case — you usually rename something you are not listening to.
+     */
+    async renameInQueue(mediaId, title) {
+      if (!adapter.updateMetadata || !mediaId || !title) return false;
+      const index = queueIds.indexOf(String(mediaId));
+      if (index < 0) return false;
+      await runReady(() => adapter.updateMetadata(index, { title }));
+      return true;
     },
     togglePlayback: (isPlaying) =>
       runReady(() => (isPlaying ? adapter.pause() : adapter.play())),

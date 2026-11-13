@@ -107,3 +107,14 @@ describe('musicPlayerService native controls', () => {
     expect(TrackPlayer.skipToNext).not.toHaveBeenCalled();
   });
 });
+
+test('the pond owns the name — the stream may not overwrite it', async () => {
+  // The lock screen is the one surface the user cannot correct from. A file's
+  // embedded tag replacing the name they just typed is the bug this closes;
+  // radio is the only case the default is built for, and the vault plays
+  // files.
+  const { TrackPlayer, musicPlayerService } = loadService();
+  await musicPlayerService.ensureReady();
+  const [config] = TrackPlayer.setupPlayer.mock.calls[0];
+  expect(config.autoUpdateMetadataFromStream).toBe(false);
+});

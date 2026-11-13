@@ -126,3 +126,38 @@ describe('musicTrackMapper', () => {
     });
   });
 });
+
+describe('a storage filename is never a title', () => {
+  // THE BUG, as reported: "on changing the name of a music track, the display
+  // on screen lock becomes a bunch of numbers". The numbers are the pond's own
+  // storage name — every uploaded and downloaded file is media_<epoch_ms>_<rand>
+  // on disk — reaching the lock screen because titleOf fell through to
+  // `filename` when `originalName` was missing.
+  test('falls back to Unknown track rather than media_1794518356672_9l5iakewv', () => {
+    expect(titleOf({ filename: 'media_1794518356672_9l5iakewv.m4a' })).toBe('Unknown track');
+    expect(titleOf({ id: 'x', filename: 'media_1700000000000_abc123.mp3' })).toBe('Unknown track');
+  });
+
+  test('…and the player never carries one either', () => {
+    const item = mapMediaRowToTrack(
+      { id: 'media_1794518356672_9l5iakewv', filename: 'media_1794518356672_9l5iakewv.m4a', rawUrl: '/a.m4a' },
+      'https://pond',
+    );
+    expect(item.title).toBe('Unknown track');
+    expect(item.title).not.toMatch(/\d{10}/);
+  });
+
+  test('a REAL name on disk is still a name — the guard is narrow on purpose', () => {
+    // A voice memo genuinely is called this on disk, and that IS its name.
+    expect(titleOf({ filename: 'Voice memo.m4a' })).toBe('Voice memo');
+    expect(titleOf({ filename: 'media_notes_from_monday.m4a' })).toBe('media_notes_from_monday');
+    expect(titleOf({ filename: '2024 rehearsal.mp3' })).toBe('2024 rehearsal');
+  });
+
+  test('originalName always wins, storage-shaped or not', () => {
+    expect(titleOf({
+      originalName: 'Machinarium_OST.m4a',
+      filename: 'media_1794498417429_yv9h0l9j8.m4a',
+    })).toBe('Machinarium_OST');
+  });
+});
