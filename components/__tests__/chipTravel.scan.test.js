@@ -80,7 +80,13 @@ describe('the chip travels on ONE animation per move', () => {
   });
 
   test('the underline\'s spot is on dark docks only, and travels with the line', () => {
-    expect(SRC).toMatch(/if \(!underline \|\| skin\.blurTint !== 'dark'\) return null;/);
+    // On every dock, light or dark — only Off in Settings removes it.
+    expect(SRC).toMatch(/const spot = underline && glow > 0;/);
+    // A picked colour wins; otherwise the spot is the highlight colour.
+    expect(SRC).toMatch(/const spotColor = pickedGlow \|\| theme\.colors\.accent;/);
+    // One radial gradient, not a staircase of bands.
+    expect(SRC).toMatch(/<DockGlow\s+id="dock-spot-glow"/);
+    expect(SRC).not.toMatch(/spot\.map\(/);
     // The same transform as the indicator — one position, two views.
     expect(SRC).toMatch(/testID="dock-spot"[\s\S]{0,160}style=\{\[styles\.spot, pillStyle\]\}/);
     // DRAWN, not cast: the shadow version could not be seen.

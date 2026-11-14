@@ -3,7 +3,7 @@ import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { normalizeHex } from '../utils/accentColor';
 import {
-  DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR, DOCK_INKS, DEFAULT_DOCK_INK, DEFAULT_DOCK_INK_COLOR,
+  DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR, DOCK_INKS, DEFAULT_DOCK_INK, DEFAULT_DOCK_INK_COLOR, DEFAULT_DOCK_GLOW,
 } from '../components/dockSkins';
 import { isDockTheme } from '../components/dockThemes';
 
@@ -46,6 +46,8 @@ const DOCK_STYLE_KEY = '@connected_pass_dock_style';
 const DOCK_COLOR_KEY = '@connected_pass_dock_color';
 const DOCK_INK_KEY = '@connected_pass_dock_ink';
 const DOCK_INK_COLOR_KEY = '@connected_pass_dock_ink_color';
+const DOCK_GLOW_KEY = '@connected_pass_dock_glow';
+const DOCK_GLOW_COLOR_KEY = '@connected_pass_dock_glow_color';
 const DOCK_THEME_KEY = '@connected_pass_dock_theme';
 
 /**
@@ -55,7 +57,9 @@ const DOCK_THEME_KEY = '@connected_pass_dock_theme';
  * is the obvious next request.
  */
 export const DOCK_INDICATORS = ['chip', 'underline'];
-export const DEFAULT_DOCK_INDICATOR = 'chip';
+// The underline (with its glow) since 2026-11-14; anyone who chose the chip
+// keeps it — this is only what a fresh install wears.
+export const DEFAULT_DOCK_INDICATOR = 'underline';
 
 /**
  * The app-wide highlight colour, chosen in Settings.
@@ -395,6 +399,14 @@ const ThemeContext = createContext({
   // so switching back to Custom brings back the colour you chose.
   dockInkColor: DEFAULT_DOCK_INK_COLOR,
   setDockInkColor: () => {},
+  // How strong the indicator's glow is: 0 is off, 1 as designed. See DOCK_GLOWS.
+  dockGlow: DEFAULT_DOCK_GLOW,
+  setDockGlow: () => {},
+  // What colour that glow is. null = follow the highlight colour (the chip's
+  // bloom stays white: accent on accent is no light at all); a hex = that
+  // colour, for both.
+  dockGlowColor: null,
+  setDockGlowColor: () => {},
   // A named theme's key ('godzilla'), or '' for none. Stored because a
   // theme's skin overrides are not recoverable from the settings above —
   // see components/dockThemes.
@@ -435,6 +447,8 @@ export const ThemeProvider = ({ children }) => {
   const [dockColor, setDockColorState] = useState(DEFAULT_DOCK_COLOR);
   const [dockInk, setDockInkState] = useState(DEFAULT_DOCK_INK);
   const [dockInkColor, setDockInkColorState] = useState(DEFAULT_DOCK_INK_COLOR);
+  const [dockGlow, setDockGlowState] = useState(DEFAULT_DOCK_GLOW);
+  const [dockGlowColor, setDockGlowColorState] = useState(null);
   const [dockTheme, setDockThemeState] = useState('');
   const [accent, setAccentState] = useState(DEFAULT_ACCENT);
   // The user's own colour, '#RRGGBB', or null if they have never mixed one.
@@ -507,6 +521,14 @@ export const ThemeProvider = ({ children }) => {
       if (DOCK_INKS.includes(savedInk)) {
         setDockInkState(savedInk);
       }
+      const savedGlow = parseFloat(await AsyncStorage.getItem(DOCK_GLOW_KEY));
+      if (Number.isFinite(savedGlow) && savedGlow >= 0 && savedGlow <= 2) {
+        setDockGlowState(savedGlow);
+      }
+      const savedGlowColor = await AsyncStorage.getItem(DOCK_GLOW_COLOR_KEY);
+      if (/^#[0-9a-fA-F]{6}$/.test(savedGlowColor || '')) {
+        setDockGlowColorState(savedGlowColor);
+      }
       const savedInkColor = await AsyncStorage.getItem(DOCK_INK_COLOR_KEY);
       if (/^#[0-9a-fA-F]{6}$/.test(savedInkColor || '')) {
         setDockInkColorState(savedInkColor);
@@ -572,6 +594,30 @@ export const ThemeProvider = ({ children }) => {
       await AsyncStorage.setItem(DOCK_COLOR_KEY, next);
     } catch (error) {
       console.error('Error saving dock-colour setting:', error);
+    }
+  };
+
+  const setDockGlow = async (level) => {
+    const n = Number(level);
+    const next = Number.isFinite(n) ? Math.max(0, Math.min(2, n)) : DEFAULT_DOCK_GLOW;
+    setDockGlowState(next);
+    try {
+      await AsyncStorage.setItem(DOCK_GLOW_KEY, String(next));
+    } catch (error) {
+      console.error('Error saving dock-glow setting:', error);
+    }
+  };
+
+  // A hex pins the glow to that colour; anything else puts it back to
+  // following the highlight colour.
+  const setDockGlowColor = async (hex) => {
+    const next = /^#[0-9a-fA-F]{6}$/.test(hex || '') ? hex : null;
+    setDockGlowColorState(next);
+    try {
+      if (next) await AsyncStorage.setItem(DOCK_GLOW_COLOR_KEY, next);
+      else await AsyncStorage.removeItem(DOCK_GLOW_COLOR_KEY);
+    } catch (error) {
+      console.error('Error saving dock-glow colour:', error);
     }
   };
 
@@ -732,10 +778,10 @@ export const ThemeProvider = ({ children }) => {
       showCalendarDayTasks, setShowCalendarDayTasks,
       calendarFreeScroll, setCalendarFreeScroll,
       dockIndicator, setDockIndicator,
-      dockStyle, setDockStyle, dockColor, setDockColor, dockInk, setDockInk, dockInkColor, setDockInkColor,
+      dockStyle, setDockStyle, dockColor, setDockColor, dockInk, setDockInk, dockInkColor, setDockInkColor, dockGlow, setDockGlow, dockGlowColor, setDockGlowColor,
       dockTheme, setDockTheme,
     }),
-    [dockInkColor, theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent, isLoading],
+    [dockGlow, dockGlowColor, dockInkColor, theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent, isLoading],
   );
 
   if (isLoading) {

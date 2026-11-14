@@ -30,7 +30,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { useTheme, DOCK_INDICATORS } from '../context/ThemeContext';
 import {
-  DOCK_STYLES, DOCK_INKS, DOCK_INK_LABELS, activeInk, dockSkin,
+  DOCK_STYLES, DOCK_INKS, DOCK_INK_LABELS, DOCK_GLOWS, activeInk, dockSkin,
 } from './dockSkins';
 import AccentColorPicker from './AccentColorPicker';
 import { DOCK_PALETTES, matchingPalette, paletteSkin } from './dockPalettes';
@@ -120,6 +120,16 @@ export function DockPreview({ skin, indicator, accent, ink, theme }) {
 }
 
 /** One tappable tile: a preview, a name, and whether it is the one you're on. */
+// The glow tiles' swatch: a dark plate, a line, and the light above it.
+const GLOW_SWATCH = {
+  width: 56, height: 30, borderRadius: 8, backgroundColor: '#17171A',
+  alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 6, overflow: 'hidden',
+};
+const GLOW_SWATCH_LIGHT = {
+  position: 'absolute', bottom: 2, width: 40, height: 22, borderRadius: 20,
+};
+const GLOW_SWATCH_LINE = { width: 22, height: 3, borderRadius: 2 };
+
 function Tile({ label, selected, onPress, theme, children, testID, style }) {
   return (
     <TouchableOpacity
@@ -198,12 +208,13 @@ function DockMotionReadout({ theme }) {
 export default function DockStylePicker() {
   const {
     theme, dockStyle, setDockStyle, dockIndicator, setDockIndicator,
-    dockColor, setDockColor, dockInk, setDockInk, dockInkColor, setDockInkColor,
+    dockColor, setDockColor, dockInk, setDockInk, dockInkColor, setDockInkColor, dockGlow, setDockGlow, dockGlowColor, setDockGlowColor,
     accentColor, setCustomAccent, dockTheme, setDockTheme,
   } = useTheme();
   const [colourOpen, setColourOpen] = useState(false);
   // …and the same sheet again, for the custom ICON colour.
   const [inkColourOpen, setInkColourOpen] = useState(false);
+  const [glowColourOpen, setGlowColourOpen] = useState(false);
   const accent = theme.colors.accent;
   const ink = activeInk(dockInk, accent, { custom: dockInkColor });
 
@@ -436,6 +447,90 @@ export default function DockStylePicker() {
           : 'Set by hand. Change the highlight colour and this stays as you left it.'}
       </Text>
 
+      {/* THE GLOW. The light the indicator gives off: a pool rising from the
+          underline (on a dark bar), a soft bloom in the middle of the chip.
+          Four steps, because the gap between two neighbouring strengths of a
+          subtle effect is not something a slider can be set to by eye. */}
+      <Text style={[styles.blurb, { color: theme.colors.textSecondary }]}>
+        Glow
+      </Text>
+      <View style={styles.row}>
+        {DOCK_GLOWS.map((g) => {
+          const selected = Math.abs((Number.isFinite(dockGlow) ? dockGlow : 1) - g.value) < 0.05;
+          return (
+            <Tile
+              key={g.key}
+              testID={`dock-glow-${g.key}`}
+              label={g.label}
+              selected={selected}
+              theme={theme}
+              onPress={choose(setDockGlow, g.value, selected)}
+            >
+              {/* A line and the light above it, at this step's strength. */}
+              <View style={GLOW_SWATCH}>
+                <View
+                  style={[GLOW_SWATCH_LIGHT, { backgroundColor: accent, opacity: 0.38 * g.value }]}
+                />
+                <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
+              </View>
+            </Tile>
+          );
+        })}
+      </View>
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
+        How much light the guide gives off. Off leaves just the line or the chip.
+      </Text>
+
+      {/* THE GLOW'S COLOUR. It follows the highlight colour unless one is
+          picked — on light bars and dark ones alike. Custom is a mode AND a
+          colour, exactly like the icon ink above: tapping it switches to it
+          and opens the sheet, tapping it again reopens the sheet. */}
+      <Text style={[styles.blurb, { color: theme.colors.textSecondary }]}>
+        Glow colour
+      </Text>
+      <View style={styles.row}>
+        <Tile
+          testID="dock-glow-colour-accent"
+          label="Highlight"
+          selected={!dockGlowColor}
+          theme={theme}
+          onPress={choose(setDockGlowColor, null, !dockGlowColor)}
+        >
+          <View style={GLOW_SWATCH}>
+            <View style={[GLOW_SWATCH_LIGHT, { backgroundColor: accent, opacity: 0.38 }]} />
+            <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
+          </View>
+        </Tile>
+        <Tile
+          testID="dock-glow-colour-custom"
+          label="Custom"
+          selected={!!dockGlowColor}
+          theme={theme}
+          onPress={() => {
+            if (!dockGlowColor) {
+              impactHaptic('light');
+              if (dockTheme) setDockTheme('');
+              // Starts from the colour it is already wearing, so opening the
+              // sheet changes nothing until a slider moves.
+              setDockGlowColor(accent);
+            }
+            setGlowColourOpen(true);
+          }}
+        >
+          <View style={GLOW_SWATCH}>
+            <View
+              style={[GLOW_SWATCH_LIGHT, { backgroundColor: dockGlowColor || '#FFFFFF', opacity: 0.38 }]}
+            />
+            <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
+          </View>
+        </Tile>
+      </View>
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
+        {dockGlowColor
+          ? 'Set by hand. Change the highlight colour and the glow stays as you left it.'
+          : 'The glow takes your highlight colour, and changes with it.'}
+      </Text>
+
       {/* HOW THE LAST MOVE WENT.
           Here rather than in a developer panel because this is the card you
           are on while you are tapping the dock to see whether the chip is
@@ -460,6 +555,13 @@ export default function DockStylePicker() {
         onClose={() => setColourOpen(false)}
       />
       {/* The custom icon colour. Opens on the colour it is wearing. */}
+      <AccentColorPicker
+        testID="glow-sheet"
+        visible={glowColourOpen}
+        initialColor={dockGlowColor || accent}
+        onSelect={setDockGlowColor}
+        onClose={() => setGlowColourOpen(false)}
+      />
       <AccentColorPicker
         testID="ink-sheet"
         visible={inkColourOpen}

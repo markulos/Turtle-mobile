@@ -87,6 +87,20 @@ export const DOCK_INK_LABELS = {
   auto: 'Auto', light: 'White', dark: 'Black', custom: 'Custom',
 };
 
+/**
+ * HOW STRONG THE INDICATOR'S GLOW IS — a multiplier on the designed strength,
+ * offered as four steps rather than a slider: the difference between 0.9 and
+ * 1.0 of a subtle effect is not a choice anyone can make by eye, and "off" has
+ * to be a thing you can land on exactly.
+ */
+export const DOCK_GLOWS = [
+  { key: 'off', value: 0, label: 'Off' },
+  { key: 'soft', value: 0.6, label: 'Soft' },
+  { key: 'medium', value: 1, label: 'Medium' },
+  { key: 'strong', value: 1.6, label: 'Strong' },
+];
+export const DEFAULT_DOCK_GLOW = 1;
+
 /** What 'custom' draws until a colour has been picked. */
 export const DEFAULT_DOCK_INK_COLOR = '#FFFFFF';
 

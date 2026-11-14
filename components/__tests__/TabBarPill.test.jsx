@@ -12,6 +12,8 @@ jest.mock('../../context/ThemeContext', () => ({
     theme: { mode: 'dark', colors: { accent: '#1F8A9B' } },
     dockIndicator: mockSettings().indicator,
     dockStyle: mockSettings().style,
+    dockGlow: mockSettings().glow,
+    dockGlowColor: mockSettings().glowColour,
   }),
 }));
 
@@ -19,9 +21,23 @@ jest.mock('../../context/ThemeContext', () => ({
 // because the mock factory is hoisted above everything else in the file.
 let indicator = 'chip';
 let style = 'smoked';
-global.mockSettings = () => ({ indicator, style });
+global.mockSettings = () => ({ indicator, style, glow: glowLevel, glowColour });
 
 jest.mock('expo-blur', () => ({ BlurView: () => null }));
+
+// The glow is a vector. Virtual, because the desktop mirror this also runs on
+// has no react-native-svg installed; the box, and the phone, have the real one.
+jest.mock('react-native-svg', () => {
+  const ReactLib = require('react');
+  const { View } = require('react-native');
+  const Part = (props) => ReactLib.createElement(View, props);
+  return {
+    __esModule: true, default: Part, Defs: Part, Ellipse: Part, RadialGradient: Part, Stop: Part,
+  };
+}, { virtual: true });
+
+let glowLevel;
+let glowColour;
 
 // The real gradient is a native view; what this file cares about is the stops
 // it was handed and the box it was given to paint them in.
@@ -60,7 +76,7 @@ const parse = (css) => {
   return { r: +m[1], g: +m[2], b: +m[3], a: +m[4] };
 };
 
-beforeEach(() => { indicator = 'chip'; style = 'smoked'; });
+beforeEach(() => { indicator = 'chip'; style = 'smoked'; glowLevel = undefined; glowColour = undefined; });
 
 describe('the dock capsule reads as a channel CUT INTO the page', () => {
   test('the wash is painted top-to-bottom, darkest at the top edge', async () => {
@@ -144,30 +160,83 @@ describe('the dock capsule reads as a channel CUT INTO the page', () => {
   });
 });
 
-describe('the underline\'s spot', () => {
-  test('a dark dock with the underline has one; the chip, and a light dock, never do', async () => {
+describe('the indicator\'s glow', () => {
+  // Every colour the glow's gradient stops are drawn in, under one test id.
+  const glowColours = (view, id) => {
+    const found = [];
+    const walk = (node, inside) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach((n) => walk(n, inside)); return; }
+      const here = inside || node.props?.testID === id;
+      if (here && node.props?.stopColor) found.push(node.props.stopColor);
+      walk(node.children, here);
+    };
+    walk(view.toJSON(), false);
+    return [...new Set(found)];
+  };
+
+  test('the spot is the highlight colour by default — on a LIGHT dock too', async () => {
     indicator = 'underline';
-    style = 'smoked';
-    const dark = await render(<TabBarPill />);
-    const spot = dark.queryByTestId('dock-spot');
-    expect(spot).not.toBeNull();
-    // Bands, each fading to nothing at both sides.
-    const bands = spot.children.filter((ch) => ch && ch.props && Array.isArray(ch.props.colors));
-    expect(bands.length).toBeGreaterThan(6);
-    for (const band of bands) {
-      expect(band.props.colors[0]).toMatch(/,0\.000\)$/);
-      expect(band.props.colors[band.props.colors.length - 1]).toMatch(/,0\.000\)$/);
-    }
-    await dark.unmount();
+    style = 'paper';
+    const view = await render(<TabBarPill />);
+    expect(view.queryByTestId('dock-spot')).not.toBeNull();
+    const colours = glowColours(view, 'dock-spot');
+    expect(colours).toHaveLength(1);
+    expect(colours[0]).not.toBe('#12AB34');
+  });
+
+  test('a colour picked in Settings recolours the spot and the chip\'s bloom', async () => {
+    glowColour = '#12AB34';
+    indicator = 'underline';
+    const line = await render(<TabBarPill />);
+    expect(glowColours(line, 'dock-spot')).toEqual(['#12AB34']);
+    await line.unmount();
 
     indicator = 'chip';
     const chip = await render(<TabBarPill />);
-    expect(chip.queryByTestId('dock-spot')).toBeNull();
+    expect(glowColours(chip, 'dock-chip-bloom')).toEqual(['#12AB34']);
+  });
+
+  test('left alone, the chip\'s bloom is white — accent on accent is no light', async () => {
+    const chip = await render(<TabBarPill />);
+    expect(glowColours(chip, 'dock-chip-bloom')).toEqual(['#FFFFFF']);
+  });
+
+  test('the underline has a spot and no bloom', async () => {
+    indicator = 'underline';
+    const dark = await render(<TabBarPill />);
+    expect(dark.queryByTestId('dock-spot')).not.toBeNull();
+    // One radial gradient, as a vector — not a staircase of bands.
+    expect(dark.queryByTestId('dock-spot-glow')).not.toBeNull();
+    expect(dark.queryByTestId('dock-chip-bloom')).toBeNull();
+  });
+
+  test('the chip has a bloom in its middle and a translucent ridge round its edge', async () => {
+    const view = await render(<TabBarPill />);
+    expect(view.queryByTestId('dock-chip-bloom')).not.toBeNull();
+    expect(view.queryByTestId('dock-spot')).toBeNull();
+    const chip = StyleSheet.flatten(view.getByTestId('dock-chip').props.style);
+    expect(chip.borderWidth).toBe(1);
+    expect(chip.borderColor).toMatch(/^rgba\(255,255,255,0\.\d+\)$/);
+  });
+
+  test('the underline has no ridge — a line with a border is just a thicker line', async () => {
+    indicator = 'underline';
+    const view = await render(<TabBarPill />);
+    const line = StyleSheet.flatten(view.getByTestId('dock-underline').props.style);
+    expect(line.borderWidth).toBeUndefined();
+  });
+
+  test('Off in Settings removes the glow from both, and leaves the indicator', async () => {
+    glowLevel = 0;
+    const chip = await render(<TabBarPill />);
+    expect(chip.queryByTestId('dock-chip-bloom')).toBeNull();
+    expect(chip.queryByTestId('dock-chip')).not.toBeNull();
     await chip.unmount();
 
     indicator = 'underline';
-    style = 'paper';
-    const light = await render(<TabBarPill />);
-    expect(light.queryByTestId('dock-spot')).toBeNull();
+    const line = await render(<TabBarPill />);
+    expect(line.queryByTestId('dock-spot')).toBeNull();
+    expect(line.queryByTestId('dock-underline')).not.toBeNull();
   });
 });
