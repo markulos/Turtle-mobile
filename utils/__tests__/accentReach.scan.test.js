@@ -112,6 +112,7 @@ describe('an accent fill carries derived ink', () => {
     'screens/TurtleScreen/components/SearchScopeToggle.jsx',  // the music scope underline, same as those two
     'screens/TurtleScreen/components/PhotoVaultBoardsPage.jsx', // the "live board" dot
     'screens/ProfileScreen/components/MessagesPage.jsx',       // the unread dot on a thread row
+    'screens/ProfileScreen/components/NotificationsPage.jsx',  // the unread dot on a notification row
     'components/TabBarPill.jsx',                              // chip; glyph inked in App.js
     'screens/TurtleScreen/components/FilesVault/DocumentRow.jsx', // a progress bar's fill
   ]);

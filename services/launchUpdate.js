@@ -72,6 +72,17 @@ export function checkAndDownload({
   return inFlight;
 }
 
+/**
+ * Resolves once no background check is running. Never rejects.
+ *
+ * For the updates panel: expo-updates does not take two fetches at once, so
+ * "Download & restart" pressed while this is still downloading waits for it
+ * rather than failing — and then finds the update already on the phone.
+ */
+export function launchCheckSettled() {
+  return inFlight ? inFlight.then(() => {}, () => {}) : Promise.resolve();
+}
+
 export function lastLaunchCheckAt() {
   return lastCheckAt;
 }

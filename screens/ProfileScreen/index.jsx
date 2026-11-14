@@ -34,8 +34,12 @@ import FriendChatPage from './components/FriendChatPage';
 // Every conversation you have, in one list — the door that was missing. The
 // pond has answered `GET /messages` the whole time; nothing called it.
 import MessagesPage from './components/MessagesPage';
+import NotificationsPage from './components/NotificationsPage';
 import DirectMessageIcon from '../../components/DirectMessageIcon';
 import { badgeText, threadRows, unreadCount, unreadLabel } from '../../utils/messageThreads';
+import { notificationsLabel } from '../../utils/notificationRows';
+import { requestAttentionRefresh, setAttention, useAttention } from '../../utils/attention';
+import { useOpenTarget } from '../../context/OpenTargetContext';
 
 /**
  * The CARDS list is data, and one of its rows is drawn with a component
@@ -117,6 +121,12 @@ export default function ProfileScreen() {
    * exactly the moment the count has changed.
    */
   const [unreadDms, setUnreadDms] = useState(0);
+  // What the dot on the Profile tab is lit for (utils/attention): the same
+  // three things this page has a card for. Messages keeps its own count above
+  // — it is the list's count — and reports it; the other two are read here.
+  const attention = useAttention();
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const { open: openTarget } = useOpenTarget();
   // A tapped message notification names the sender by ID and nothing else, so
   // the thread opens on the id alone and the name and face arrive with
   // /friends. The thread itself only ever needed the id — everything the header
@@ -145,7 +155,11 @@ export default function ProfileScreen() {
   const refreshUnreadDms = useCallback(async () => {
     try {
       const res = await api.get('/messages');
-      setUnreadDms(unreadCount(threadRows(res, null)));
+      const waiting = unreadCount(threadRows(res, null));
+      setUnreadDms(waiting);
+      // …and the tab's dot hears the same number, so reading a thread clears
+      // it at the moment the card's badge clears.
+      setAttention({ messages: waiting });
     } catch {
       // A badge is decoration: a failed count must never be an error on the
       // page, and the last good number is a better guess than zero.
@@ -247,7 +261,19 @@ export default function ProfileScreen() {
 
   // Mount + every return to this tab. The throttle inside `load` means the
   // common case (tab away, tab back) costs nothing.
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => {
+    load();
+    // Arriving on Profile is the moment its counts are looked at.
+    requestAttentionRefresh();
+  }, [load]));
+  // A notification row opens the task it is about, where tasks open: the
+  // Tasks tab, through the same typed channel a search hit uses.
+  const openNotifiedTask = useCallback((task) => {
+    if (!task?.id) return;
+    setNotificationsOpen(false);
+    openTarget({ kind: 'task', id: task.id, item: task });
+    navigation.navigate('Tasks');
+  }, [navigation, openTarget]);
 
   // Coming back from the background is the other moment the numbers are stale —
   // the tab never lost focus, so useFocusEffect alone would not re-ask.
@@ -398,6 +424,11 @@ export default function ProfileScreen() {
     { key: 'messages', icon: DM_ICON, label: 'Messages',
       sub: unreadLabel(unreadDms), badge: unreadDms,
       onPress: () => { tapHaptic(); setMessagesOpen(true); } },
+    // Comments on your tasks. The pond has always kept these; the phone had
+    // nowhere to read them. Opening the page is what marks them read.
+    { key: 'notifications', icon: 'bell-outline', label: 'Notifications',
+      sub: notificationsLabel(attention.notifications), badge: attention.notifications,
+      onPress: () => { tapHaptic(); setNotificationsOpen(true); } },
     { key: 'vault', icon: 'shield-lock', label: 'Password Vault',
       sub: 'Your saved logins', onPress: () => { tapHaptic(); setVaultOpen(true); } },
     { key: 'chats', icon: 'forum', label: 'Board conversations',
@@ -418,6 +449,8 @@ export default function ProfileScreen() {
     // anything. Two lines, since a publish message is a sentence.
     { key: 'updates', icon: 'update', label: 'Check for updates',
       sub: updateSummary.line, subLines: 2,
+      // A dot, not a number: there is one update or there is not.
+      dot: attention.update !== 'none',
       onPress: () => { tapHaptic(); setUpdatesOpen(true); } },
     { key: 'settings', icon: 'cog', label: 'Settings',
       sub: 'Appearance, server, account', onPress: () => { tapHaptic(); setSettingsOpen(true); } },
@@ -624,7 +657,7 @@ export default function ProfileScreen() {
               activeOpacity={0.7}
               onPress={card.onPress}
               accessibilityRole="button"
-              accessibilityLabel={card.badge > 0 ? `${card.label}, ${card.sub}` : card.label}
+              accessibilityLabel={card.badge > 0 || card.dot ? `${card.label}, ${card.sub}` : card.label}
               testID={`profile-card-${card.key}`}
             >
               <View style={styles.cardIcon}>
@@ -632,9 +665,12 @@ export default function ProfileScreen() {
                   ? <DirectMessageIcon size={20} color={c.accent || c.accentInfo} />
                   : <Icon name={card.icon} size={20} color={c.accent || c.accentInfo} />}
                 {badgeText(card.badge) ? (
-                  <View style={styles.cardBadge} testID="profile-messages-badge">
+                  <View style={styles.cardBadge} testID={`profile-${card.key}-badge`}>
                     <Text style={styles.cardBadgeText}>{badgeText(card.badge)}</Text>
                   </View>
+                ) : null}
+                {card.dot ? (
+                  <View style={styles.cardDot} testID={`profile-${card.key}-dot`} />
                 ) : null}
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
@@ -673,6 +709,16 @@ export default function ProfileScreen() {
         visible={messagesOpen}
         onClose={() => setMessagesOpen(false)}
         onOpenThread={setChatFriend}
+        theme={theme}
+        insets={insets}
+      />
+
+      {/* Task notifications. Before the chat page for the same reason the
+          Messages list is: a later sibling draws over an earlier one. */}
+      <NotificationsPage
+        visible={notificationsOpen}
+        onClose={() => setNotificationsOpen(false)}
+        onOpenTask={openNotifiedTask}
         theme={theme}
         insets={insets}
       />
@@ -1964,6 +2010,13 @@ const makeStyles = (theme) => {
       borderWidth: 2, borderColor: c.surfaceElevated,
     },
     cardBadgeText: { fontSize: 10.5, fontWeight: '800', color: '#fff' },
+    // The badge without a number — same corner, same colour, same ring.
+    cardDot: {
+      position: 'absolute', top: -3, right: -4,
+      width: 12, height: 12, borderRadius: 6,
+      backgroundColor: c.accentError || '#F87171',
+      borderWidth: 2, borderColor: c.surfaceElevated,
+    },
     cardLabel: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
     cardSub: { fontSize: 12, color: c.textTertiary, marginTop: 1 },
     pushHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingBottom: 10 },

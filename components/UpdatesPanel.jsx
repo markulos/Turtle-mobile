@@ -36,6 +36,8 @@ import { depth } from '../utils/surfaceDepth';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
+import { launchCheckSettled } from '../services/launchUpdate';
+import { setAttention } from '../utils/attention';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
 import { tapHaptic } from '../utils/haptics';
@@ -82,6 +84,8 @@ export default function UpdatesPanel() {
         setAvailable(null);
         setPhase('current');
       }
+      // The Profile tab's dot says the same thing this panel just found out.
+      setAttention({ update: r.isAvailable ? 'available' : 'none' });
     } catch (e) {
       setError(describeUpdateError(e));
       setPhase('error');
@@ -92,6 +96,9 @@ export default function UpdatesPanel() {
     setPhase('downloading');
     setError(null);
     try {
+      // The launch-time check may still be downloading this very update;
+      // two fetches at once is an error, one after the other is instant.
+      await launchCheckSettled();
       await Updates.fetchUpdateAsync();
       setPhase('restarting');
       // The app relaunches here with the new bundle. Nothing after this runs.

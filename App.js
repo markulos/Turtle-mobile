@@ -87,6 +87,9 @@ import gestureProbe from './utils/gestureProbe';
 import DevProfiler from './components/DevProfiler';
 import PomodoroNotifications from './components/PomodoroNotifications';
 import MessageNotifications from './components/MessageNotifications';
+import AttentionSync from './components/AttentionSync';
+import LaunchUpdateCheck from './components/LaunchUpdateCheck';
+import { attentionSummary, hasAttention, useAttention } from './utils/attention';
 import { navigationRef, flushPendingNavigation } from './services/navigationRef';
 import PomodoroLiveEffects from './components/PomodoroLiveEffects';
 import { runCacheMaintenanceOnBackground } from './utils/cacheManager';
@@ -129,6 +132,20 @@ installGlobalTouchFeedback();
 
 const Tab = createBottomTabNavigator();
 
+// The "something is waiting on Profile" dot. The same red as the count badge
+// on the Profile cards, with a white ring so it reads on every dock skin and
+// on the accent chip under an active tab, whatever colour that is.
+const PROFILE_DOT = {
+  position: 'absolute',
+  top: -3,
+  right: -5,
+  width: 10,
+  height: 10,
+  borderRadius: 5,
+  borderWidth: 1.5,
+  borderColor: '#FFFFFF',
+};
+
 function TabNavigator() {
   // No isDark here: the dock's material is a SKIN chosen in Settings, not a
   // function of light/dark mode, so nothing in this navigator's chrome
@@ -149,6 +166,14 @@ function TabNavigator() {
   // before this tab existed, which is why clusterPadding and the sliding pill
   // need no adjustment.
   const tabCount = hideVaultButton ? 5 : 6;
+  // Is anything waiting on Profile — an unread message, a new notification,
+  // an app update? One small dot on the Profile tab says so from wherever you
+  // are (utils/attention; AttentionSync and the launch update check feed it).
+  // Read here rather than inside the icon so the tab's accessibility label
+  // can say WHAT is waiting; it changes a few times a day, not per frame.
+  const attention = useAttention();
+  const profileAttention = hasAttention(attention);
+  const profileAttentionLabel = attentionSummary(attention);
   const [consoleOpen, setConsoleOpen] = useState(false);
   // Where the dock's chip is while a thumb is dragging along the bar, as a
   // fractional tab index (-1 = nobody is dragging). It lives HERE because the
@@ -368,13 +393,27 @@ function TabNavigator() {
           if (route.name === 'Profile') {
             return (
               <TabBarIcon focused={focused}>
-                <AnimalGlyph
-                  id={authIdentity || 'anon'}
-                  animal={myAnimal}
-                  size={24}
-                  color={color}
-                  testID="tab-profile-animal"
-                />
+                {/* The wrapper is the glyph's own 24pt box, so the dot hangs
+                    off the animal's corner and rides the icon's press scale. */}
+                <View>
+                  <AnimalGlyph
+                    id={authIdentity || 'anon'}
+                    animal={myAnimal}
+                    size={24}
+                    color={color}
+                    testID="tab-profile-animal"
+                  />
+                  {profileAttention ? (
+                    <View
+                      pointerEvents="none"
+                      testID="tab-profile-attention"
+                      style={[
+                        PROFILE_DOT,
+                        { backgroundColor: theme.colors.accentError || '#F87171' },
+                      ]}
+                    />
+                  ) : null}
+                </View>
               </TabBarIcon>
             );
           }
@@ -562,7 +601,13 @@ function TabNavigator() {
       <Tab.Screen
         name="Profile"
         component={FramedProfile}
-        options={{ title: 'Profile' }}
+        options={{
+          title: 'Profile',
+          // The dot is silent to a screen reader; the label is how it speaks.
+          tabBarAccessibilityLabel: profileAttentionLabel
+            ? `Profile, ${profileAttentionLabel}`
+            : 'Profile',
+        }}
       />
     </Tab.Navigator>
     <CommandConsole visible={consoleOpen} onClose={() => setConsoleOpen(false)} />
@@ -823,6 +868,13 @@ export default function App() {
                             lazy, and a cold start's tap arrives before it.
                             Renders nothing. */}
                         <ErrorBoundary label="message notifications" fallback={null}><MessageNotifications /></ErrorBoundary>
+                        {/* The Profile tab's dot: unread messages and task notifications,
+                            counted from here because the Profile tab is lazy and cannot
+                            know what is waiting on it until it has been opened. */}
+                        <ErrorBoundary label="attention sync" fallback={null}><AttentionSync /></ErrorBoundary>
+                        {/* A newer app update is fetched quietly after launch and applies
+                            on the next open — so a bad update heals without any menus. */}
+                        <ErrorBoundary label="launch update check" fallback={null}><LaunchUpdateCheck /></ErrorBoundary>
                         {/* The iOS Live Activity and the completion confetti,
                             driven from here rather than from inside the lazy
                             Turtle tab — so a focus block started on the desktop
