@@ -54,7 +54,7 @@ jest.mock('react-native-reanimated', () => {
   };
 });
 
-import DockTabBar, { LEAD_GUARD_MS } from '../DockTabBar';
+import DockTabBar, { LEAD_GUARD_MS, TAP_COMPLETE_MS } from '../DockTabBar';
 
 const NAMES = ['Tasks', 'Notes', 'Photos', 'Vault', 'Turtle', 'Profile'];
 const WIDTH = Dimensions.get('window').width;
@@ -305,57 +305,116 @@ test('a TAP aims the chip before the finger leaves the glass', async () => {
   expect(props.navigation.dispatch).not.toHaveBeenCalled();
 });
 
-test('a touch BELOW the capsule aims at nothing — it is not a tab', async () => {
+test('a tap BELOW the capsule still changes tabs — the dock finishes it', async () => {
+  // THE BUG MARK KEPT HITTING: "it doesn't go to the intended tab element."
+  //
   // 38% of this gesture's area has no button under it. The wrapper is
   // `dockOccupied` tall — capsule, floating gap, home-indicator inset — and
-  // react-navigation puts that inset on the bar's own container as padding,
-  // so a thumb landing low still starts this gesture while hitting nothing
-  // pressable. Aiming from there is a promise nothing keeps: the chip goes to
-  // a tab, no navigate ever comes, and `guardLead` hauls it back. That is
-  // what Mark saw as "it moves to the pressed location and then goes back".
+  // v7 puts that inset on the bar's own container as padding, so a thumb
+  // landing low still starts this gesture while hitting nothing pressable. No
+  // Pressable means no `tabPress` and no navigate, and before this the tap
+  // simply did not happen.
+  //
+  // The first attempt at this (a5c2306, rolled back) gated the AIM on the
+  // button band, which stopped the chip reacting to the miss without making
+  // the tap work. The dock performs the tab change itself instead.
   const props = buildProps(0);
   const leadSlot = { value: -1 };
-  await mount(<DockTabBar {...props} leadSlot={leadSlot} />);
+  const handled = { value: 0 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} handled={handled} />);
 
   // Horizontally over Turtle, but down in the home-indicator strip.
-  await act(() => {
-    mockPan.onBegin({ absoluteX: onIcon(4), x: onIcon(4), y: BAR_CONTENT_HEIGHT + 20 });
-  });
-
-  expect(leadSlot.value).toBe(-1);
-  expect(props.navigation.dispatch).not.toHaveBeenCalled();
-
-  // …and the same x, up on the capsule, still aims — the band is the only
-  // thing being tested here.
-  await act(() => {
-    mockPan.onBegin({ absoluteX: onIcon(4), x: onIcon(4), y: BAR_CONTENT_HEIGHT / 2 });
-  });
-  expect(leadSlot.value).toBe(4);
-});
-
-test('a touch the system takes back does not strand the chip on a tab nobody chose', async () => {
-  // The price of aiming at touch-down: the chip commits on the promise of a
-  // press, and a touch the system swallows (a call, a notification, a modal)
-  // never makes good on it. Without the guard the chip sits on a tab that was
-  // never selected until the dock is next touched.
-  const props = buildProps(0);
-  const leadSlot = { value: -1 };
-  await mount(<DockTabBar {...props} leadSlot={leadSlot} />);
-
-  await touchDown(onIcon(4));
+  await touchDown(onIcon(4), BAR_CONTENT_HEIGHT + 20);
+  // Aimed anyway — the chip answers the touch, and that answer is now kept.
   expect(leadSlot.value).toBe(4);
   await act(() => { mockPan.onFinalize(); });
 
-  // Still aimed for the moment: a navigate that is merely slow must not be
-  // mistaken for one that never happened — guessing short here is how the
-  // backward kick 3686872 removed would come back.
+  // Nothing yet: react-navigation's own button gets first refusal, because a
+  // press that landed and is merely slow must not be navigated twice.
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+
+  await act(() => { jest.advanceTimersByTime(TAP_COMPLETE_MS + 1); });
+
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Turtle-4']);
+  expect(props.navigation.dispatch.mock.calls[0][0].target).toBe('tabs-1');
+});
+
+test('…but not when the button answered — no double navigate', async () => {
+  // `handled` is stamped by the tabPress listener (App.js). It is a STAMP
+  // rather than a look at the navigator's state precisely so that a slow
+  // commit cannot be read as a missed one and dispatched a second time.
+  const props = buildProps(0);
+  const handled = { value: 0 };
+  await mount(<DockTabBar {...props} leadSlot={{ value: -1 }} handled={handled} />);
+
+  await touchDown(onIcon(4));
+  await act(() => { mockPan.onFinalize(); });
+  // The press landed — react-navigation is already on it.
+  handled.value = Date.now();
+  await act(() => { jest.advanceTimersByTime(TAP_COMPLETE_MS + 1); });
+
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+});
+
+test('…and not after a LONG-press, which is a different gesture', async () => {
+  // A long-press opens the console on Turtle. It fires `tabLongPress` and
+  // never `tabPress`, so without being stamped as handled it would look
+  // exactly like a tap that went missing — and the dock would change tabs
+  // underneath the console that is opening.
+  const props = buildProps(0);
+  const handled = { value: 0 };
+  await mount(<DockTabBar {...props} leadSlot={{ value: -1 }} handled={handled} />);
+
+  await touchDown(onIcon(4));
+  handled.value = Date.now(); // tabLongPress stamps the same value
+  await act(() => { mockPan.onFinalize(); });
+  await act(() => { jest.advanceTimersByTime(TAP_COMPLETE_MS + 1); });
+
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+});
+
+test('…and not after a DRAG, which already chose on the lift', async () => {
+  // onEnd dispatches for a scrub. A second dispatch 150ms later would be a
+  // duplicate on every single drag.
+  const props = buildProps(0);
+  const dragSlot = { value: -1 };
+  const handled = { value: 0 };
+  await mount(<DockTabBar {...props} dragSlot={dragSlot} leadSlot={{ value: -1 }} handled={handled} />);
+
+  await touchDown(onIcon(0));
+  await act(() => { mockPan.onStart({ absoluteX: onIcon(0) }); });
+  await act(() => { mockPan.onUpdate({ absoluteX: onIcon(3) }); });
+  await lift();
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Vault-3']);
+
+  await act(() => { jest.advanceTimersByTime(TAP_COMPLETE_MS + 1); });
+  // Still exactly one.
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Vault-3']);
+});
+
+test('a slot the navigator will not go to does not strand the chip', async () => {
+  // The backstop. Completing the tap covers a press that never arrived; this
+  // covers the case where the tab change cannot happen at all, which would
+  // otherwise leave the lead pointing at a tab nobody is on until the dock is
+  // next touched. Asks the navigator where it ended up rather than trusting
+  // the clock — guessing short is how the backward kick 3686872 removed would
+  // come back.
+  const props = buildProps(0);
+  props.navigation.dispatch = jest.fn(); // dispatched, but the state never moves
+  const leadSlot = { value: -1 };
+  const handled = { value: 0 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} handled={handled} />);
+
+  await touchDown(onIcon(4));
+  await act(() => { mockPan.onFinalize(); });
+  await act(() => { jest.advanceTimersByTime(TAP_COMPLETE_MS + 1); });
+  // It tried.
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Turtle-4']);
   expect(leadSlot.value).toBe(4);
 
   await act(() => { jest.advanceTimersByTime(LEAD_GUARD_MS + 1); });
-
-  // The navigator never moved, so there was no tab change and the chip goes
-  // home. Decided by ASKING it where it ended up, not by the clock alone.
-  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+  // The navigator never moved, so the chip goes home rather than sitting on a
+  // tab that was never reached.
   expect(leadSlot.value).toBe(-1);
 });
 

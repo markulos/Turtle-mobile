@@ -36,7 +36,9 @@ import AccentColorPicker from './AccentColorPicker';
 import { DOCK_PALETTES, matchingPalette, paletteSkin } from './dockPalettes';
 import { DOCK_THEMES, dockTheme as findTheme, themeIsIntact, themeSkin } from './dockThemes';
 import { impactHaptic } from '../utils/haptics';
-import { describeDockMotion, getDockMotionReport, onDockMotionReport } from './dockMotionProbe';
+import {
+  describeDockMotion, describeDockTouch, getDockMotionReport, onDockMotionReport,
+} from './dockMotionProbe';
 
 // The miniature. Not a scaled copy of the real geometry — at a third the size
 // a scaled 57pt chip in a 67pt slot leaves sub-pixel gaps — but the same
@@ -180,6 +182,15 @@ function DockMotionReadout({ theme }) {
       <Text style={[styles.blurb, { color: theme.colors.textTertiary, marginTop: report ? 4 : 0 }]}>
         {describeDockMotion(report)}
       </Text>
+      {/* The second question this card answers: a tap that did not change
+          tabs. Only shown once there is something to say — see
+          describeDockTouch for the two ways a dock touch goes missing and
+          why they cannot be told apart from the outside. */}
+      {describeDockTouch(report) ? (
+        <Text style={[styles.blurb, { color: theme.colors.textTertiary, marginTop: 4 }]}>
+          {describeDockTouch(report)}
+        </Text>
+      ) : null}
     </View>
   );
 }

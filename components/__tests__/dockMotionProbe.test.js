@@ -1,4 +1,4 @@
-import { describeDockMotion, framesMissing } from '../dockMotionProbe';
+import { describeDockMotion, describeDockTouch, framesMissing } from '../dockMotionProbe';
 
 /**
  * The probe's arithmetic and the sentence it turns into.
@@ -88,5 +88,51 @@ describe('describeDockMotion', () => {
     // A tab change from a deep link or the /command console: -1, not a delay.
     const noTouch = { ...clean, startLateMs: -1 };
     expect(describeDockMotion(noTouch)).not.toMatch(/after (your|the) touch/);
+  });
+});
+
+describe('describeDockTouch — why a tap did not change tabs', () => {
+  // The two ways a dock touch produces no `tabPress` look identical from the
+  // outside ("I pressed the tab and it did nothing") and want different
+  // fixes. This sentence is the only thing that can tell them apart, so what
+  // it says is worth pinning.
+  const base = {
+    touchSlot: 4, touchY: 30, panActivated: false, tapCompleted: false,
+  };
+
+  it('says nothing at all before anything has been measured', () => {
+    expect(describeDockTouch(null)).toBe('');
+  });
+
+  it('an ordinary tap is the button’s business, not the dock’s', () => {
+    expect(describeDockTouch(base)).toMatch(/the button handled it/);
+  });
+
+  it('names the MISSED BUTTON when the finger was off the capsule', () => {
+    const off = { ...base, touchSlot: -1, touchY: 88, tapCompleted: true };
+    const said = describeDockTouch(off);
+    expect(said).toMatch(/missed the buttons/);
+    expect(said).toMatch(/88pt down the dock/);
+    expect(said).toMatch(/the dock made the tab change itself/);
+  });
+
+  it('names the DRAG when it ate a press on a real tab', () => {
+    const eaten = { ...base, panActivated: true, tapCompleted: true };
+    expect(describeDockTouch(eaten)).toMatch(/the drag ate the press/);
+  });
+
+  it('distinguishes a press that never arrived on a real tab', () => {
+    const missing = { ...base, tapCompleted: true };
+    const said = describeDockTouch(missing);
+    expect(said).toMatch(/on a tab/);
+    expect(said).toMatch(/the press never arrived/);
+    expect(said).not.toMatch(/drag ate/);
+  });
+
+  it('a drag that chose on its own lift is not a rescue', () => {
+    const drag = { ...base, panActivated: true, tapCompleted: false };
+    const said = describeDockTouch(drag);
+    expect(said).toMatch(/the drag took it/);
+    expect(said).not.toMatch(/made the tab change itself/);
   });
 });

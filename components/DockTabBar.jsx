@@ -109,6 +109,14 @@ const DRAG_SLOP = 12;
 // commit takes a frame or two; this is most of a second.
 export const LEAD_GUARD_MS = 600;
 
+// How long to let react-navigation's own button answer a touch before the
+// dock concludes it never will and completes the tab change itself (see
+// `completeTap`). The press fires on touch-up and the listener that stamps it
+// is the next thing on the JS thread, so this only has to outlast an ordinary
+// queue — and the chip is already sitting on the target, so what this delays
+// is the page turning, not the dock's answer to the touch.
+export const TAP_COMPLETE_MS = 150;
+
 // The press timings, built ONCE here on the JS thread, with REANIMATED's
 // Easing. The gesture callbacks that use them are worklets on the UI thread,
 // and the UI thread can only call worklets: a helper function, or React
@@ -121,7 +129,9 @@ export const LEAD_GUARD_MS = 600;
 const PRESS_IN = { duration: PRESS_IN_MS, easing: Easing.bezier(...PRESS_BEZIER) };
 const PRESS_OUT = { duration: PRESS_OUT_MS, easing: Easing.bezier(...PRESS_BEZIER) };
 
-export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, probe, ...props }) {
+export default function DockTabBar({
+  dragSlot, leadSlot, slideMs, pressLift, probe, handled, ...props
+}) {
   const { state, navigation } = props;
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -178,6 +188,14 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
     // event: nothing in the app listens for it, and a drag is not a press.
     navigation.dispatch({ ...CommonActions.navigate(route), target: current.key });
   }, [navigation]);
+
+  // DID THIS TOUCH BECOME A DRAG? Written by the gesture itself — 0 at the
+  // touch, 1 the moment the pan activates — so `completeTap` can stand down
+  // for a scrub. onStart rather than onEnd, which also covers a scrub the
+  // system CANCELS: that is a drag that chose nothing, not a tap that went
+  // missing, and finishing it would land the user on whatever tab they
+  // happened to start the scrub on.
+  const dragged = useSharedValue(0);
 
   // Held for the duration of a drag so that nothing deferred runs under the
   // thumb. The chip tracks the finger 1:1 now, which means every frame of the
@@ -236,24 +254,71 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
     }, CHIP_SLIDE_MAX_MS);
   }, [release]);
 
-  // THE CHIP COMMITTED AT TOUCH-DOWN. THIS IS WHAT UNCOMMITS IT.
+  // THE DOCK KEEPS ITS OWN PROMISE.
   //
   // `onBegin` aims the chip at the slot under the finger before anything has
-  // agreed to go there, which is what makes it leave on the touch. Almost
-  // always the press then lands, the navigator follows, and TabBarPill spends
-  // the lead the moment `index` matches it — by the time this runs there is
-  // nothing left to do.
+  // agreed to go there, which is what makes it leave on the touch. Usually the
+  // press then lands, react-navigation dispatches, and TabBarPill spends the
+  // lead the moment `index` matches — by the time this runs there is nothing
+  // to do.
   //
-  // The exception is a touch that never becomes a press at all: the system
-  // takes it (a call, a notification, a modal), so no `tabPress`, no navigate,
-  // and the lead keeps pointing at a tab nobody chose. Left alone the chip
-  // sits on the wrong tab until the next time the dock is touched.
+  // Sometimes no press lands at all, and that is the bug Mark kept hitting:
+  // "it doesn't go to the intended tab element, the guide moves to pressed
+  // location but then goes back." Two known ways for a dock touch to produce
+  // no `tabPress`:
   //
-  // Decided by ASKING THE NAVIGATOR rather than by waiting long enough: if it
-  // went where the touch pointed, the lead is right (and already spent); if it
-  // did not, there was no tab change and the chip goes back. A pure timeout
-  // would have to guess how slow a navigate may be, and guessing short
-  // reintroduces the backward kick 3686872 removed.
+  //   • it was never on a button. The gesture's wrapper is `dockOccupied`
+  //     tall and the buttons live only in the capsule's band at the top of it,
+  //     so the floating gap and the home-indicator inset — 42 of 111 points on
+  //     a 34pt-inset phone — reach this gesture and nothing pressable. v7 puts
+  //     that inset on the bar's own container as padding, which is why the
+  //     touch gets this far at all;
+  //   • the DRAG recogniser took the touch. RNGH cancels the button's press
+  //     the instant the pan activates, which a thumb roll past DRAG_SLOP can
+  //     do on an ordinary tap.
+  //
+  // THE FIRST VERSION OF THIS REVERTED THE CHIP, and that was the wrong half
+  // of the problem — it stopped the chip reacting to a miss without making the
+  // tap work, so a low tap went from "moves and comes back" to no feedback at
+  // all. That shipped as a5c2306 and was rolled back.
+  //
+  // So it completes the navigate instead. It does not need to know WHICH of
+  // the two happened, which is the point: the question it asks is only "this
+  // touch should have changed tabs and nothing did", and both causes answer
+  // yes. The whole dock is tappable as a result, including the strip over the
+  // home indicator that the buttons never covered.
+  //
+  // What it must NOT do:
+  //   • a DRAG — `dragged`. A scrub chose on its own lift, in onEnd, and one
+  //     cancelled part-way chose nothing on purpose;
+  //   • a LONG-PRESS is a different gesture with its own meaning (it opens the
+  //     console on Turtle). It fires `tabLongPress` and never `tabPress`, so
+  //     without this it would look exactly like a missed tap — `handled`;
+  //   • a press that landed and is merely SLOW to commit. `handled` is stamped
+  //     by the listener, not inferred from the navigator's state, so a busy JS
+  //     thread cannot turn a slow navigate into a duplicate one.
+  const completeTimerRef = useRef(null);
+  const completeTap = useCallback(() => {
+    if (completeTimerRef.current != null) clearTimeout(completeTimerRef.current);
+    completeTimerRef.current = setTimeout(() => {
+      completeTimerRef.current = null;
+      const aimed = lead.value;
+      const missed = !dragged.value
+        && !(handled && handled.value > 0)
+        && aimed >= 0
+        && aimed !== stateRef.current.index;
+      if (probe) probe.tapCompleted.value = missed ? 1 : 0;
+      if (missed) goToIndex(aimed);
+    }, TAP_COMPLETE_MS);
+  }, [dragged, goToIndex, handled, lead, probe]);
+
+  // …and the backstop, for the one case completing cannot help: the aimed slot
+  // is not a route the navigator will go to. Without this the lead would keep
+  // pointing at it and the chip would sit on a tab nobody is on until the dock
+  // is next touched. Asks the navigator rather than trusting the clock, and
+  // waits long enough that a merely slow commit is never mistaken for a
+  // refused one — guessing short here reintroduces the backward kick 3686872
+  // removed.
   const guardTimerRef = useRef(null);
   const guardLead = useCallback(() => {
     if (guardTimerRef.current != null) clearTimeout(guardTimerRef.current);
@@ -272,6 +337,10 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
     if (guardTimerRef.current != null) {
       clearTimeout(guardTimerRef.current);
       guardTimerRef.current = null;
+    }
+    if (completeTimerRef.current != null) {
+      clearTimeout(completeTimerRef.current);
+      completeTimerRef.current = null;
     }
   }, [release]);
 
@@ -318,19 +387,28 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
       // would race react-navigation's own button for the navigate. onBegin
       // never activates anything, so the button is untouched.
       //
-      // slotUnderTouch, NOT slotAtX: most of this gesture's area is not a tab.
-      // The wrapper is `dockOccupied` tall and the buttons only live in the
-      // capsule's band at the top of it, so a thumb landing low — on the gap
-      // or the home-indicator inset, 38% of the dock on a 34pt-inset phone —
-      // starts this gesture with no button under it. Aiming from that is a
-      // promise nothing keeps: no press, no navigate, and the chip parks on a
-      // tab nobody chose until `guardLead` takes it back. -1 means "not on a
-      // tab", and then the chip is left exactly where it is.
-      // absoluteX because the slot maths is in window coords (the capsule is
-      // inset from both edges); `y` because the band test is against THIS
-      // view, which is the wrapper the gesture is attached to.
-      const touched = slotUnderTouch(e.absoluteX, e.y, width, count);
-      if (touched >= 0) lead.value = touched;
+      // slotAtX — CLAMPED, so a touch anywhere on the dock aims at a real tab.
+      // That is right again now that `completeTap` makes good on the aim: the
+      // strip below the capsule has no button under it, but the dock performs
+      // the tab change for it, so pointing the chip there is a promise that
+      // gets kept. Gating the aim on the button band INSTEAD of completing the
+      // tap is what shipped as a5c2306 and was rolled back — it only took away
+      // the chip's answer without making the tap work.
+      lead.value = Math.round(slotAtX(e.absoluteX, width, count));
+      // A fresh touch owes nothing to the last one's outcome.
+      if (handled) handled.value = 0;
+      dragged.value = 0;
+      // For the READOUT only. `slotUnderTouch` is -1 when there was no button
+      // under the finger, which is the one thing that cannot be told from the
+      // outside: "I pressed the tab and it did nothing" looks identical
+      // whether the press missed the button or the drag recogniser ate it,
+      // and the two want different fixes. See dockMotionProbe.
+      if (probe) {
+        probe.touchSlot.value = slotUnderTouch(e.absoluteX, e.y, width, count);
+        probe.touchY.value = e.y;
+        probe.panActivated.value = 0;
+        probe.tapCompleted.value = 0;
+      }
       // From the TOUCH, not from the drag: a tap never reaches onStart, and a
       // tap is the case where the mount lands on top of the slide. Holding
       // here covers both, and onFinalize always gives it back.
@@ -344,6 +422,12 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
     // are hopped over with runOnJS and do not block the tracking.
     .onStart((e) => {
       slot.value = slotAtX(e.absoluteX, width, count);
+      dragged.value = 1;
+      // The pan has taken the touch, which means RNGH has just cancelled the
+      // button's press underneath it. Recorded because that is the OTHER way
+      // a tap produces no `tabPress`, and the readout is how we find out
+      // which one Mark is actually hitting.
+      if (probe) probe.panActivated.value = 1;
     })
     // 1:1 with the finger, and NOTHING else. The chip is the only thing that
     // moves during a scrub: no navigate, so no page swap and no icon changing
@@ -375,11 +459,15 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
       slot.value = -1;
       press.value = withTiming(0, PRESS_OUT);
       runOnJS(releaseAfterSlide)();
-      // The chip was aimed at touch-down on the promise of a press. This is
-      // what collects on that promise, or takes it back.
+      // The chip was aimed at touch-down on the promise of a press. These two
+      // are what make good on it: `completeTap` performs the tab change if
+      // nothing else did, and `guardLead` is the backstop for the slot the
+      // navigator will not go to at all.
+      runOnJS(completeTap)();
       runOnJS(guardLead)();
     }),
-  [count, goToIndex, guardLead, hold, lead, ms, press, probe, releaseAfterSlide, slot, width]);
+  [completeTap, count, dragged, goToIndex, guardLead, handled, hold, lead, ms, press, probe,
+    releaseAfterSlide, slot, width]);
 
   return (
     <GestureDetector gesture={pan}>

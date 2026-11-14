@@ -177,6 +177,15 @@ function TabNavigator() {
   // components. Reported into Settings → Navigation, in plain words, so this
   // stops being judged by eye. See components/dockMotionProbe.
   const dockProbe = useDockMotionProbe(slideMs, dockPressLift);
+  // DID REACT-NAVIGATION ANSWER THIS TOUCH? Stamped by the listeners below,
+  // cleared by the dock at touch-down. The dock completes a tab change itself
+  // when a touch produced none (the strip below the capsule has no button
+  // under it, and the drag recogniser can eat a press), and this is what
+  // stops it doing that when the button DID answer — including a long-press,
+  // which fires `tabLongPress` and never `tabPress` and would otherwise look
+  // exactly like a missed tap. A stamp rather than a look at the navigator's
+  // state, so a slow commit cannot be read as a missed one.
+  const tabHandledAt = useSharedValue(0);
   // An immersive page (the PDF reader) asks for the dock to go. `display:none`
   // is the only thing that actually removes it — the bar is the navigator's
   // own child and paints above every screen, so a page cannot cover it.
@@ -197,6 +206,7 @@ function TabNavigator() {
           slideMs={slideMs}
           pressLift={dockPressLift}
           probe={dockProbe}
+          handled={tabHandledAt}
         />
       )}
       // A TAP gets the same head start a DRAG already had.
@@ -213,7 +223,15 @@ function TabNavigator() {
       // The lead is spent the moment the navigator agrees (see TabBarPill), so
       // a press on the tab you are already on just re-states where the chip is.
       screenListeners={({ navigation, route }) => ({
+        // A long-press is its own gesture with its own meaning (it opens the
+        // console on Turtle) and it fires INSTEAD of `tabPress`. Stamped so
+        // the dock does not read it as a tap that went missing and change
+        // tabs under the console that is opening.
+        tabLongPress: () => { tabHandledAt.value = Date.now(); },
         tabPress: () => {
+          // The button answered, whatever it decides to do about it — this is
+          // not a touch the dock has to finish (see DockTabBar's completeTap).
+          tabHandledAt.value = Date.now();
           const st = navigation.getState();
           const i = st?.routes?.findIndex((r) => r.key === route.key);
           if (i == null || i < 0) return;

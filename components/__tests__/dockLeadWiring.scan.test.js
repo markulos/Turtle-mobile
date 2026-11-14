@@ -67,6 +67,22 @@ describe('the dock’s shared values reach both halves', () => {
     expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('pressLift={dockPressLift}');
   });
 
+  test('the dock is told when react-navigation answered a touch', () => {
+    // The dock completes a tab change itself when a touch produced none — the
+    // strip below the capsule has no button under it, and the drag recogniser
+    // can eat a press. `handled` is what stops it doing that when the button
+    // DID answer. Miss this prop and the dock falls back to its own private
+    // value, which nothing ever stamps: every tap then gets a second,
+    // duplicate navigate 150ms after the real one, and every LONG-press
+    // changes tabs underneath the console it was opening. No crash, no
+    // warning — the same silent failure as `leadSlot`'s, which is why it is
+    // scanned.
+    expect(APP).toMatch(/const tabHandledAt = useSharedValue\(0\)/);
+    expect(APP).toMatch(/tabLongPress: \(\) => \{ tabHandledAt\.value = Date\.now\(\); \}/);
+    expect(APP).toMatch(/tabPress: \(\) => \{[\s\S]{0,400}?tabHandledAt\.value = Date\.now\(\)/);
+    expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('handled={tabHandledAt}');
+  });
+
   test('the move carries its own duration, and both halves get it', () => {
     // How long the chip takes depends on how far it is going, so the number
     // travels with the move rather than living in the component. Same failure

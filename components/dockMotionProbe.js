@@ -144,6 +144,42 @@ export const describeDockMotion = (r) => {
 };
 
 /**
+ * WHY A TAP DID NOT CHANGE TABS — in plain words, for the same readout.
+ *
+ * A dock touch that produces no `tabPress` can fail in two ways, and from the
+ * outside they are the same event: "I pressed the tab and it did nothing".
+ * They want opposite fixes, so this says which:
+ *
+ *   OFF THE BUTTONS  the finger was in the dock but not on a tab. The gesture
+ *                    wrapper is `dockOccupied` tall and the buttons only exist
+ *                    in the capsule's band at the top, so the floating gap and
+ *                    the home-indicator inset reach the gesture and nothing
+ *                    pressable. `touchSlot` is -1.
+ *   THE DRAG TOOK IT the pan activated and RNGH cancelled the button's press
+ *                    underneath it — a thumb roll past DRAG_SLOP on an
+ *                    ordinary tap. `panActivated`.
+ *
+ * `tapCompleted` is the dock having noticed and performed the tab change
+ * itself. When it is true the tap WORKED; this sentence is then reporting
+ * which hole it covered, not a failure.
+ */
+export const describeDockTouch = (r) => {
+  if (!r) return '';
+  const where = r.touchY >= 0 ? ` (${Math.round(r.touchY)}pt down the dock)` : '';
+  if (!r.tapCompleted) {
+    return r.panActivated
+      ? 'Last touch: the drag took it, and the tab change came from the lift.'
+      : 'Last touch: the button handled it.';
+  }
+  if (r.touchSlot < 0) {
+    return `Last touch missed the buttons${where} — the dock made the tab change itself.`;
+  }
+  return r.panActivated
+    ? `Last touch: on a tab${where}, but the drag ate the press — the dock made the tab change itself.`
+    : `Last touch: on a tab${where}, and the press never arrived — the dock made the tab change itself.`;
+};
+
+/**
  * HOW A MISSING FRAME IS COUNTED, without keeping the samples.
  *
  * The obvious way is to collect every frame's duration and compare each to the
@@ -209,6 +245,17 @@ export function useDockMotionProbe(slideMs, pressLift) {
   const worst = useSharedValue(0);
   const best = useSharedValue(0);
   const pressBusy = useSharedValue(0);
+  // ── WHAT HAPPENED TO THE LAST DOCK TOUCH ───────────────────────────────
+  //
+  // Separate from the travel numbers above, and for a separate question: a
+  // tap that does not change tabs. There are two ways for a dock touch to
+  // produce no `tabPress`, they look identical from the outside, and they
+  // want different fixes — so the dock records which one it was instead of
+  // anybody inferring it from the code a third time.
+  const touchSlot = useSharedValue(-1);
+  const touchY = useSharedValue(-1);
+  const panActivated = useSharedValue(0);
+  const tapCompleted = useSharedValue(0);
 
   useFrameCallback((info) => {
     'worklet';
@@ -240,6 +287,10 @@ export function useDockMotionProbe(slideMs, pressLift) {
       drops: framesMissing(elapsed, best.value, frames.value),
       pressBusy: pressBusy.value === 1,
       travelMs: slideMs.value,
+      touchSlot: touchSlot.value,
+      touchY: touchY.value,
+      panActivated: panActivated.value === 1,
+      tapCompleted: tapCompleted.value === 1,
     });
   }, true);
 
@@ -255,7 +306,9 @@ export function useDockMotionProbe(slideMs, pressLift) {
   // literal in this hook's body had quietly reintroduced it.
   return useMemo(() => ({
     touchAt, startedAt, startLate, sampling, frames, worst, best, pressBusy,
-  }), [touchAt, startedAt, startLate, sampling, frames, worst, best, pressBusy]);
+    touchSlot, touchY, panActivated, tapCompleted,
+  }), [touchAt, startedAt, startLate, sampling, frames, worst, best, pressBusy,
+    touchSlot, touchY, panActivated, tapCompleted]);
 }
 
 export default useDockMotionProbe;
