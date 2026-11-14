@@ -68,6 +68,10 @@ const MINI_SPOT_W = 34;
 const MINI_SPOT_H = 20;
 const MINI_ACTIVE = 1;
 
+// The height every control in the naming row shares — the same 40 the search
+// field at the top of Settings uses, so the two read as one family.
+const FIELD_H = 40;
+
 /** One miniature dock, drawn from a skin and an indicator treatment. */
 export function DockPreview({
   skin, indicator, accent, ink, theme, glow, glowColor,
@@ -307,31 +311,43 @@ function SavedLooksRow({
 
       {naming ? (
         <View style={styles.nameRow}>
-          <AppTextInput
-            testID="saved-look-name"
-            value={draft}
-            onChangeText={setDraft}
-            placeholder="Name this look"
-            placeholderTextColor={c.textTertiary}
-            maxLength={NAME_MAX}
-            autoFocus
-            returnKeyType="done"
-            onSubmitEditing={commit}
-            style={[
-              INPUT_FIELD,
-              styles.nameInput,
-              { color: c.textPrimary, backgroundColor: c.surfaceElevated, borderColor: c.border },
-            ]}
-          />
+          {/* The field is a FILL with a radius, not a bordered box — the same
+              chrome as the search pill at the top of this screen. A hairline
+              rectangle reads as a form; these two now read as one family. */}
+          <View style={[styles.nameField, { backgroundColor: c.inputBackground }]}>
+            <AppTextInput
+              testID="saved-look-name"
+              value={draft}
+              onChangeText={setDraft}
+              placeholder="Name this look"
+              placeholderTextColor={c.textTertiary}
+              maxLength={NAME_MAX}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={commit}
+              style={[styles.nameInput, { color: c.inputText }]}
+            />
+          </View>
           <TouchableOpacity
             testID="saved-look-confirm"
             accessibilityRole="button"
             accessibilityLabel={replacing ? `Replace the look ${name}` : 'Save this look'}
             disabled={!name}
             onPress={commit}
-            style={[styles.nameBtn, { backgroundColor: c.accent }, !name && styles.nameBtnOff]}
+            style={[
+              styles.nameBtn,
+              // Disabled takes a flat neutral rather than a faded accent: a
+              // washed-out highlight colour looks like a rendering fault,
+              // where a grey key plainly reads as "not yet".
+              { backgroundColor: name ? c.accent : c.surfaceHighlight },
+            ]}
           >
-            <Text style={[styles.nameBtnText, { color: inkOn(c.accent) }]}>
+            <Text
+              style={[
+                styles.nameBtnText,
+                { color: name ? inkOn(c.accent) : c.textTertiary },
+              ]}
+            >
               {replacing ? 'Replace' : 'Save'}
             </Text>
           </TouchableOpacity>
@@ -340,9 +356,9 @@ function SavedLooksRow({
             accessibilityRole="button"
             accessibilityLabel="Cancel"
             onPress={() => { setNaming(false); setDraft(''); }}
-            style={styles.nameBtn}
+            style={styles.nameGhost}
           >
-            <Text style={[styles.nameBtnText, { color: c.textSecondary }]}>Cancel</Text>
+            <Text style={[styles.nameGhostText, { color: c.textSecondary }]}>Cancel</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -1039,16 +1055,41 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.35)',
   },
+  // One height for all three, and the ROW centres them — a field that
+  // declares its own height alongside a row that centres it is how a caret
+  // and its placeholder stop landing on the same line (see INPUT_FIELD).
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  nameInput: { flex: 1, borderWidth: StyleSheet.hairlineWidth },
-  nameBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10 },
-  nameBtnOff: { opacity: 0.4 },
-  nameBtnText: { fontSize: 13, fontWeight: '700' },
+  nameField: {
+    flex: 1,
+    height: FIELD_H,
+    // Fully rounded: height/2, exactly as the search pill above. At this
+    // height anything less reads as an accidental radius rather than a shape.
+    borderRadius: FIELD_H / 2,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+  },
+  nameInput: { ...INPUT_FIELD, flex: 1, height: FIELD_H, fontSize: 15 },
+  nameBtn: {
+    height: FIELD_H,
+    paddingHorizontal: 18,
+    borderRadius: FIELD_H / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nameBtnText: { fontSize: 14, fontWeight: '700' },
+  // Cancel is a word, not a key — but it still needs the row's height under
+  // it so it is a target rather than a line of text to pinch at.
+  nameGhost: { height: FIELD_H, paddingHorizontal: 6, justifyContent: 'center' },
+  nameGhostText: { fontSize: 14, fontWeight: '600' },
   // An outline rather than a filled key: this is the quiet option on a card
   // where the tiles are the loud ones.
+  // Dashed, which is this app's add-affordance (BoardManagerSheet,
+  // PeoplePicker, CalendarPartners all use it) — and the SAME height and
+  // radius as the naming row it swaps with, so tapping it does not make the
+  // section jump a few points as one replaces the other.
   saveBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 11, borderRadius: 12,
+    height: FIELD_H, borderRadius: FIELD_H / 2,
     borderWidth: StyleSheet.hairlineWidth, borderStyle: 'dashed',
   },
   saveBtnOff: { opacity: 0.4 },
