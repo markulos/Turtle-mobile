@@ -3,7 +3,7 @@ import {
   View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, ActivityIndicator,
   RefreshControl, AppState,
 } from 'react-native';
-import { depth } from '../../utils/surfaceDepth';
+import { depth, insetRule } from '../../utils/surfaceDepth';
 import AppTextInput from '../../components/AppTextInput';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useKeyboardHeight from '../../utils/useKeyboardHeight';
@@ -28,7 +28,6 @@ import useUpdateHeadline from '../../utils/useUpdateHeadline';
 import UpdatesPanel from '../../components/UpdatesPanel';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import EdgeSwipePage from '../TurtleScreen/components/EdgeSwipePage';
 import FriendChatPage from './components/FriendChatPage';
 // Every conversation you have, in one list — the door that was missing. The
@@ -487,15 +486,6 @@ export default function ProfileScreen() {
             number stacked to its right, then the stats as a divided strip
             across the card's full width. */}
         <View style={styles.identityCard}>
-          {/* Accent wash. Sits behind everything (absolute, non-interactive) and
-              fades to nothing by mid-card, so the top of the card carries the
-              user's chosen tint without colouring the text below it. */}
-          <LinearGradient
-            pointerEvents="none"
-            colors={[(c.accent || c.accentInfo) + '2E', (c.accent || c.accentInfo) + '00']}
-            style={styles.cardWash}
-          />
-
           {/* Settings, pinned to the card's top-right. The Settings CARD lower
               down still works — this is the conventional place to reach for it
               on a profile, so it's a second door to the same page, not a move. */}
@@ -651,11 +641,22 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Cards */}
+        {/* The rule that says where the header stops. With the identity
+            block's own backdrop gone this is the only thing separating it
+            from the list, so it is a full-bleed one rather than the inset
+            the rows use between themselves. */}
+        <View pointerEvents="none" style={insetRule(theme)} />
+
+        {/* The options, as a LIST — the Files tab's treatment. The separator
+            is an element between rows rather than a border on them, because
+            insetRule is two hairlines a point apart and on the row itself it
+            would draw across its top edge too (STYLE-RULES §1). Not before
+            the first: the header's own rule is already above it. */}
         <View style={styles.cards}>
-          {CARDS.map((card) => (
+          {CARDS.map((card, index) => (
+            <React.Fragment key={card.key}>
+              {index > 0 && <View pointerEvents="none" style={[insetRule(theme), styles.cardSep]} />}
             <TouchableOpacity
-              key={card.key}
               style={styles.card}
               activeOpacity={0.7}
               onPress={card.onPress}
@@ -665,8 +666,8 @@ export default function ProfileScreen() {
             >
               <View style={styles.cardIcon}>
                 {card.icon === DM_ICON
-                  ? <DirectMessageIcon size={20} color={c.accent || c.accentInfo} />
-                  : <Icon name={card.icon} size={20} color={c.accent || c.accentInfo} />}
+                  ? <DirectMessageIcon size={20} color={styles.cardGlyph.color} />
+                  : <Icon name={card.icon} size={20} color={styles.cardGlyph.color} />}
                 {badgeText(card.badge) ? (
                   <View style={styles.cardBadge} testID={`profile-${card.key}-badge`}>
                     <Text style={styles.cardBadgeText}>{badgeText(card.badge)}</Text>
@@ -682,6 +683,7 @@ export default function ProfileScreen() {
               </View>
               <Icon name="chevron-right" size={20} color={c.textMuted} />
             </TouchableOpacity>
+            </React.Fragment>
           ))}
         </View>
       </ScrollView>
@@ -1863,28 +1865,27 @@ const makeStyles = (theme) => {
   const c = theme.colors;
   return StyleSheet.create({
     page: { flex: 1, backgroundColor: c.background },
+    // VERY DARK GREY for the row glyphs, as asked — a near-black that is not
+    // quite black, so it reads as ink rather than as a hole. Flipped in dark
+    // mode for the obvious reason: "very dark grey" on a black page is the
+    // same invisibility the highlight colour had on a pale one.
+    cardGlyph: { color: theme.mode === 'dark' ? c.textPrimary : '#2A2A2A' },
     // Hero card: centred column, taller radius than the list cards below so it
     // reads as the page's header rather than the first row of the list.
+    // NOT a card. It used to be a tinted, rounded, bordered, shadowed panel,
+    // and with the list below it turned into plain rows that was the only
+    // boxed thing on the page — which made the page look like a card had been
+    // left behind rather than like a header. It is now the page itself, with
+    // one rule under it to say where it stops.
     identityCard: {
       // Stretch, not centre: the top block is a ROW (picture left, details
       // right) and the stat strip spans the full width beneath it.
       alignItems: 'stretch',
-      backgroundColor: c.surface,
-      borderRadius: 22,
       paddingHorizontal: 16,
       paddingTop: 22,
-      paddingBottom: 6,
-      marginHorizontal: 16,
-      borderWidth: 0.5,
-      borderColor: c.border,
-      // Clips the accent wash to the rounded corners.
-      overflow: 'hidden',
-      ...depth(theme, 'card'),
+      paddingBottom: 18,
     },
     // Accent wash behind the card's top half.
-    cardWash: {
-      position: 'absolute', top: 0, left: 0, right: 0, height: 150,
-    },
     // Top-right gear. Absolute so it hangs off the card's own corner and takes
     // no space in the centred column below it.
     cardGear: {
@@ -1988,13 +1989,16 @@ const makeStyles = (theme) => {
       fontSize: 9, fontWeight: '700', color: c.accent || c.accentInfo,
       textAlign: 'center',
     },
-    cards: { marginTop: 26, paddingHorizontal: 16, gap: 10 },
+    // A LIST, not a stack of cards — the Files tab's treatment, which Mark
+    // asked for by name. No gap: the rows meet, and the rule between them is
+    // what separates them.
+    cards: { paddingHorizontal: 16 },
+    // Inset past the glyph tile (38) and its gap (14), so the rule separates
+    // the TEXT columns and the tiles read as a column of their own.
+    cardSep: { marginLeft: 52 },
     card: {
       flexDirection: 'row', alignItems: 'center', gap: 14,
-      padding: 14, borderRadius: 16,
-      backgroundColor: c.surfaceElevated,
-      borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
-      ...depth(theme, 'card'),
+      paddingVertical: 14,
     },
     cardIcon: {
       width: 38, height: 38, borderRadius: 12,
@@ -2010,7 +2014,9 @@ const makeStyles = (theme) => {
       minWidth: 19, height: 19, borderRadius: 10, paddingHorizontal: 5,
       alignItems: 'center', justifyContent: 'center',
       backgroundColor: c.accentError || '#F87171',
-      borderWidth: 2, borderColor: c.surfaceElevated,
+      // The ring reads as the badge sitting ON the icon. It has to be the
+      // colour BEHIND the icon, which with the cards gone is the page.
+      borderWidth: 2, borderColor: c.background,
     },
     cardBadgeText: { fontSize: 10.5, fontWeight: '800', color: '#fff' },
     // The badge without a number — same corner, same colour, same ring.
@@ -2018,7 +2024,7 @@ const makeStyles = (theme) => {
       position: 'absolute', top: -3, right: -4,
       width: 12, height: 12, borderRadius: 6,
       backgroundColor: c.accentError || '#F87171',
-      borderWidth: 2, borderColor: c.surfaceElevated,
+      borderWidth: 2, borderColor: c.background,
     },
     cardLabel: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
     cardSub: { fontSize: 12, color: c.textTertiary, marginTop: 1 },
