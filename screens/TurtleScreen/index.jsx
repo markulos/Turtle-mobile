@@ -51,7 +51,7 @@ import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
-import ClaudeTurtleMark, { ledgeOffset } from '../../components/ClaudeTurtleMark';
+import ClaudeTurtleMark, { ledgeOffset, markHeight } from '../../components/ClaudeTurtleMark';
 import TypingIndicator from '../../components/TypingIndicator';
 import MarkdownText from '../../components/MarkdownText';
 import CopyKey from '../../components/CopyKey';
@@ -2381,6 +2381,27 @@ export default function TurtleScreen() {
             <Icon name="magnify" size={24} color={theme.colors.textPrimary} />
           </TouchableOpacity>
         )}
+
+        {/* Claude's mark, LEVEL WITH THE TITLE rather than hung off the row
+            below it. The row centres them, so the drawing and the name read
+            as one line instead of the name floating above a squiggle.
+
+            The ridge is drawn at the mark's own ledge — the line the sketch
+            was drawn to hang over — so it passes through the middle of the
+            hands. It is behind the mark in the tree, and the hands are
+            filled with the header's own colour, so they sit ON the line
+            rather than having it run through them. Takes no touches. */}
+        {claudeMarkShown && (
+          <>
+            <View pointerEvents="none" style={styles.claudeLedge} />
+            <View pointerEvents="none" style={styles.claudePeek} testID="claude-mark-peek">
+              <ClaudeTurtleMark
+                size={CLAUDE_PEEK_WIDTH}
+                handFill={theme.colors.background}
+              />
+            </View>
+          </>
+        )}
         </View>
 
         {/* Row 2 — the live session's controls, on the top bar rather than on a
@@ -2400,16 +2421,6 @@ export default function TurtleScreen() {
             onToggleExpanded={() => setClaudeExpanded((e) => !e)}
             onClose={claudeClose}
           />
-          {/* Claude's mark, HANGING OVER THE RIDGE between the two rows, on the
-              right: the face above the line, the fingers draped over it. No
-              circle and no plate behind it — it is a drawing on the header,
-              not a badge. After the controls in the tree so the hands are in
-              front of the line they hold; it takes no touches. */}
-          {claudeMarkShown && (
-            <View pointerEvents="none" style={styles.claudePeek} testID="claude-mark-peek">
-              <ClaudeTurtleMark size={CLAUDE_PEEK_WIDTH} />
-            </View>
-          )}
           </View>
         )}
       </Reanimated.View>
@@ -3660,21 +3671,46 @@ const createStyles = (theme, insets) =>
     // a second bar.
     // The row's gap from the identity row lives on the wrapper, so the
     // wrapper's top edge IS the ridge — the line the mark hangs over.
-    headerClaudeWrap: { marginTop: 8 },
-    // Lifted by exactly the mark's ledge line, so that line lands on the
-    // ridge: face above it, fingers below. Right-hand side, inset to sit
-    // under the trailing brand mark's column rather than against the edge.
-    claudePeek: {
-      position: 'absolute',
-      // Aligned with the header's own right gutter rather than tucked inside
-      // the column the brand mark used to occupy.
-      right: theme.spacing.lg,
-      top: -ledgeOffset(CLAUDE_PEEK_WIDTH),
+    // Clears the fingers hanging below the ledge, plus the row's own breath.
+    headerClaudeWrap: {
+      marginTop: 8 + (markHeight(CLAUDE_PEEK_WIDTH) - ledgeOffset(CLAUDE_PEEK_WIDTH)),
     },
+    // ONE GROUND LINE. The mark sits in the identity row with its LEDGE —
+    // the line the sketch was drawn to hang over — on the row's bottom edge,
+    // which is where the rule is. So the title stands on that line and the
+    // fingers drape over it, and the two read as one row rather than as a
+    // name floating above a squiggle.
+    //
+    // Not centre-aligned, though that is the obvious reading of "centred
+    // with the icon": the title block is ~35pt and the face above the ledge
+    // is 24, so centring the two puts the rule straight through "Admin
+    // session". Sharing the ground line is what actually looks level.
+    claudePeek: {
+      alignSelf: 'flex-end',
+      // Hang the part BELOW the ledge past the row's edge, so the ledge
+      // itself lands exactly on the rule.
+      marginBottom: ledgeOffset(CLAUDE_PEEK_WIDTH) - markHeight(CLAUDE_PEEK_WIDTH),
+      // Half the gutter it had: the mark is the last thing on the row, and a
+      // full one left it looking parked rather than placed.
+      marginRight: theme.spacing.lg / 2,
+    },
+    // The rule itself, EDGE TO EDGE — `left`/`right` undo the header's 12pt
+    // gutter. One that stopped at the text would read as an underline for
+    // the title instead of as the ground the mark stands on. Behind the mark
+    // in the tree, and the hands are filled, so it passes under them.
+    claudeLedge: {
+      position: 'absolute',
+      left: -12,
+      right: -12,
+      bottom: 0,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: theme.colors.border,
+    },
+    // No border of its own any more: the ledge rule above IS the line
+    // between the identity row and this one, and two hairlines eight points
+    // apart read as a mistake.
     headerClaudeRow: {
       paddingTop: 8,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: theme.colors.border,
     },
     identityBar: {
       flex: 1,

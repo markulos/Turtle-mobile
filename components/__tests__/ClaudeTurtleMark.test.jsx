@@ -77,6 +77,20 @@ describe('ClaudeTurtleMark', () => {
     }
   });
 
+  test('handFill fills the HANDS and never the head', async () => {
+    // A rule runs along the ledge, through the middle of the hands. Unfilled,
+    // the line shows straight through them and the fingers read as drawn ON
+    // it rather than resting over it; filled with what is behind, they
+    // occlude it and sit on top.
+    await render(<ClaudeTurtleMark handFill="#FFFFFF" />);
+    const fills = parts('Path').map((n) => n.props.fill);
+    expect(fills).toHaveLength(3);
+    expect(fills.filter((f) => f === '#FFFFFF')).toHaveLength(2);
+    // The head is never filled whatever is passed: its outline deliberately
+    // does not close on the right, so a fill would leak across the gap.
+    expect(fills.filter((f) => f === 'none')).toHaveLength(1);
+  });
+
   test('the ledge runs under the chin and through the hands', () => {
     // Above the line: the whole face. Below it: only fingers. That is what
     // makes it hang OVER an edge instead of sitting on one.
@@ -95,11 +109,24 @@ describe('ClaudeTurtleMark', () => {
     expect(ring).toMatch(/login-variant/);
     // The ring itself stands down for a live session.
     expect(src).toMatch(/\{!claudeMarkShown && \(\s*<View style=\{styles\.identityAvatarWrap\}>/);
-    // It hangs from the ridge: lifted by its own ledge line, touch-transparent.
+    // Touch-transparent, and level with the title rather than hung off the
+    // row below — the row centres the two so they read as one line.
     expect(src).toMatch(/<View pointerEvents="none" style=\{styles\.claudePeek\} testID="claude-mark-peek">/);
-    expect(src).toMatch(/top: -ledgeOffset\(CLAUDE_PEEK_WIDTH\)/);
+    // The RULE goes to the mark, not the mark to the rule: it is drawn at the
+    // ledge so it passes through the middle of the hands, and both numbers
+    // come from the art rather than from a measurement of it.
+    expect(src).toMatch(/marginBottom: ledgeOffset\(CLAUDE_PEEK_WIDTH\) - markHeight\(CLAUDE_PEEK_WIDTH\)/);
+    // Full width: the header's own gutter undone, so the rule is the ground
+    // the mark stands on rather than an underline for the title.
+    const ledge = src.slice(src.indexOf('    claudeLedge: {'));
+    expect(ledge.slice(0, 400)).toMatch(/left: -12/);
+    expect(ledge.slice(0, 400)).toMatch(/right: -12/);
+    expect(ledge.slice(0, 400)).toMatch(/bottom: 0/);
+    // …and the controls row must not draw a SECOND one eight points under it.
+    const controls = src.slice(src.indexOf('    headerClaudeRow: {'), src.indexOf('    identityBar: {'));
+    expect(controls).not.toMatch(/borderTopWidth/);
     // No circle and no plate: the peek's style positions it and nothing else.
-    const peek = src.slice(src.indexOf('    claudePeek: {'), src.indexOf('    headerClaudeRow: {'));
+    const peek = src.slice(src.indexOf('    claudePeek: {'), src.indexOf('    claudeLedge: {'));
     expect(peek).not.toMatch(/border|backgroundColor/);
   });
 
@@ -111,6 +138,15 @@ describe('ClaudeTurtleMark', () => {
     // ring — if those two ever disagree the corner is crowded again.
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
     expect(src).toMatch(/\{!claudeMarkShown && \(\s*<Image\s+source=\{turtleLogo\}/);
+  });
+
+  test('the hands are filled with what is BEHIND them, so they sit on the rule', () => {
+    // An unfilled hand lets the ledge rule straight through, and the fingers
+    // read as drawn ON the line instead of resting over it. The head is
+    // never filled whatever is passed: its outline deliberately does not
+    // close on the right, so a fill would leak across the gap.
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    expect(src).toMatch(/handFill=\{theme\.colors\.background\}/);
   });
 
   test('…and takes the corner it is now alone in', () => {

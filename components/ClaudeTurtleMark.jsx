@@ -40,6 +40,9 @@ export const CLAUDE_MARK_LEDGE = (LEDGE_Y - BOX.y) / BOX.h;
 /** How far below its own top edge the ledge is, for a mark `size` wide. */
 export const ledgeOffset = (size) => (size / CLAUDE_MARK_ASPECT) * CLAUDE_MARK_LEDGE;
 
+/** How tall the mark is for a given width — the art drives it, not a guess. */
+export const markHeight = (size) => size / CLAUDE_MARK_ASPECT;
+
 const HEAD = 'M264 126 C263 101 246 72 214 68 C184 64 149 85 133 112 '
   + 'C124 127 124 141 138 147 C156 154 186 150 198 130';
 const LEFT_HAND = 'M44 160 C46 142 62 128 84 126 C97 124 110 128 111 138 '
@@ -63,6 +66,21 @@ export default function ClaudeTurtleMark({
   size = 24,
   color = CLAUDE_MARK_COLOR,
   weight = 1.3,
+  /**
+   * What the HANDS are filled with. 'none' by default — the mark is a line
+   * drawing and that is how it was drawn.
+   *
+   * Pass the colour BEHIND the mark when something crosses it: in the session
+   * header a rule runs along the ledge, through the middle of the hands, and
+   * an unfilled hand lets that line straight through so the fingers look
+   * drawn ON the rule rather than resting over it. Filled with the header's
+   * own colour, the hands occlude it and sit on top.
+   *
+   * The HEAD is never filled, whatever this says: its outline deliberately
+   * does not close on the right (see the note at the top), so a fill would
+   * leak across the gap — and nothing passes behind the head anyway.
+   */
+  handFill = 'none',
   testID = 'claude-turtle-mark',
 }) {
   const pen = penFor(size, weight);
@@ -80,7 +98,7 @@ export default function ClaudeTurtleMark({
         <Path
           key={d}
           d={d}
-          fill="none"
+          fill={d === HEAD ? 'none' : handFill}
           stroke={color}
           strokeWidth={pen}
           strokeLinecap="round"
