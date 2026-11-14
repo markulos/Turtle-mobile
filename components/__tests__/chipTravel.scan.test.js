@@ -41,6 +41,9 @@ describe('the chip travels on ONE animation per move', () => {
     const body = styleBody();
     expect(body).not.toMatch(/withTiming|withSpring|withDecay/);
     expect(body).toMatch(/translateX: x\.value \+ catchUp\.value/);
+    // …and the icons are told where that is, in slots, by a reaction — not
+    // by anything React renders.
+    expect(SRC).toMatch(/\(x\.value \+ catchUp\.value - offsetSV\.value\) \/ TAB_SLOT/);
   });
 
   test('the travel is started from a reaction, not from a render', () => {
@@ -125,7 +128,12 @@ describe('the lead is spent by the answer to its own request', () => {
 
   test('no timer decides anything about the chip', () => {
     const DOCK = fs.readFileSync(path.join(__dirname, '..', 'DockTabBar.jsx'), 'utf8');
-    expect(NAV).not.toMatch(/setTimeout|setInterval/);
+    // dockNav has exactly one, and it only DELAYS a request until the chip
+    // has landed (requestTabWhenClear) — the request it then makes is the
+    // same one, to the same tab, answered the same way.
+    expect(NAV.match(/setTimeout\(/g)).toHaveLength(1);
+    expect(NAV).toMatch(/setTimeout\(\(\) => \{\s*try \{\s*requestTab\(navigation, i, settle, fallbackState\);/);
+    expect(NAV).not.toMatch(/setInterval/);
     expect(SRC).not.toMatch(/setTimeout|setInterval/);
     // The dock keeps exactly one: the interaction hold's release, which
     // defers a screen's mount and has nothing to do with where the chip goes.

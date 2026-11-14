@@ -3,7 +3,8 @@ import { StyleSheet, View } from 'react-native';
 import { TAB_ICON_SLOT } from './tabBarLayout';
 import Reanimated, {
   useAnimatedStyle,
-  withSpring,
+  useDerivedValue,
+  useSharedValue,
 } from 'react-native-reanimated';
 
 /**
@@ -14,46 +15,87 @@ import Reanimated, {
  * layout, selection state and accessibility, and getting any part of it wrong
  * silently empties the bar — the button's `style` carries the flex that sizes
  * the tab, and v7 reports selection as `aria-selected` rather than through
- * accessibilityState. `tabBarIcon` is the stable surface: it is handed
- * `focused` and its return value is placed inside navigation's own button, so
- * sizing, hit area, ripple, a11y and press behaviour all stay untouched.
+ * accessibilityState. `tabBarIcon` is the stable surface: its return value is
+ * placed inside navigation's own button, so sizing, hit area, ripple, a11y and
+ * press behaviour all stay untouched.
  *
- * What it adds: the icon lifts slightly and swells 4% as it becomes active,
- * so selection reads as the tab rising to meet you. The swell is deliberately
- * small - past ~10% the glyph starts to look like a different icon. The
- * HIGHLIGHT itself is not here: it is one pill that slides between tabs
- * (TabBarPill), painted behind these icons through tabBarBackground.
+ * What it adds: the icon takes its active ink, lifts slightly and swells 4%
+ * as it becomes active. The HIGHLIGHT itself is not here: it is one pill that
+ * slides between tabs (TabBarPill), painted behind these icons.
  *
- * Both springs run on the UI thread and are driven from the `focused` prop
- * inside the style worklets — no shared value is written during render, which
- * Reanimated warns about.
+ * ── THE ICON FOLLOWS THE CHIP, NOT THE NAVIGATOR ───────────────────────────
+ *
+ * It used to follow `focused`: the colour was whatever tint react-navigation
+ * handed over, and the swell was a spring started when that prop flipped.
+ * `focused` only changes when React COMMITS the tab change — and by then the
+ * chip, which leaves on the touch, has usually arrived. So the chip slid
+ * under a glyph that was still in its resting ink, and a moment later the
+ * glyph changed colour in a single frame and popped. Two clocks, and the
+ * second one was a step.
+ *
+ * Now there is one. `chipPos` is where the chip actually IS, as a fractional
+ * slot, on the UI thread (TabBarPill writes it every frame it moves). Each
+ * icon works out how much of the chip is under it —
+ *
+ *   on = 1 when the chip is centred on this slot, 0 a whole slot away
+ *
+ * — and both the ink and the swell are that one number. The icon is drawn
+ * TWICE, resting ink under active ink, and cross-fades between them, because
+ * a glyph's colour cannot be animated on the UI thread but an opacity can.
+ * So the ink arrives exactly as the chip does, at the chip's own speed, and
+ * a busy JS thread cannot make it late or abrupt.
+ *
+ * It also means a glyph the chip passes OVER on a long move takes the active
+ * ink while the chip is under it. That is not decoration: the active ink is
+ * chosen against the chip's fill (App.js), so it is the colour that glyph
+ * needs for exactly those frames.
+ *
+ * Before the chip's position is known (`chipPos` < 0: first frame, a test, a
+ * harness without the pill) it falls back to `focused`, as a step.
  */
 
-// Low bounce: this is a control, so it should settle rather than wobble.
-const SELECT_SPRING = { damping: 18, stiffness: 260, mass: 0.6 };
+// How much bigger an active glyph is, and how far it lifts.
+const SWELL = 0.04;
+const LIFT = 1;
 
-// The glyph is centred GEOMETRICALLY rather than by a tuned offset: the wrapper
-// fills the tab button's box absolutely and pins the icon at 50%/50% with a
-// -50%/-50% transform. That is dead centre of whatever box navigation gives us,
-// so it no longer depends on the button's internal padding or on whether it
-// reserves a row for the (hidden) label — the two things that made every
-// fixed nudge wrong by a different amount.
+export default function TabBarIcon({
+  focused, brand = false, slot, chipPos, active, inactive, badge, children,
+}) {
+  const ownPos = useSharedValue(-1);
+  const pos = chipPos ?? ownPos;
+  const fallback = focused ? 1 : 0;
+  const index = Number.isInteger(slot) ? slot : -1;
 
-export default function TabBarIcon({ focused, brand = false, children }) {
+  // 0..1 — how much of the chip is under this icon. Smoothstepped, so the ink
+  // starts and finishes gently instead of ramping in a straight line.
+  const on = useDerivedValue(() => {
+    const p = pos.value;
+    if (p < -0.5 || index < 0) return fallback;
+    const t = Math.max(0, 1 - Math.abs(p - index));
+    return t * t * (3 - 2 * t);
+  }, [fallback, index]);
+
   // The centring transform lives HERE rather than in a static style: when two
-  // styles are merged, a later `transform` REPLACES an earlier one wholesale
-  // instead of concatenating — so keeping them apart would have silently
-  // dropped the -50%/-50% the moment this animated style applied.
+  // styles are merged, a later `transform` REPLACES an earlier one wholesale.
   const iconStyle = useAnimatedStyle(() => ({
-    transform: [
-      { scale: withSpring(focused ? 1.04 : 1, SELECT_SPRING) },
-      { translateY: withSpring(focused ? -1 : 0, SELECT_SPRING) },
-    ],
-  }), [focused]);
+    transform: [{ scale: 1 + SWELL * on.value }, { translateY: -LIFT * on.value }],
+  }));
+  const activeStyle = useAnimatedStyle(() => ({ opacity: on.value }));
+  const inactiveStyle = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
+
+  const layered = active != null && inactive != null;
 
   return (
-    <View style={styles.slot} pointerEvents="none">
-      <Reanimated.View style={iconStyle}>{children}</Reanimated.View>
+    <View style={styles.slot} pointerEvents="none" testID={brand ? 'tab-icon-brand' : undefined}>
+      <Reanimated.View style={iconStyle}>
+        {layered ? (
+          <>
+            <Reanimated.View style={inactiveStyle}>{inactive}</Reanimated.View>
+            <Reanimated.View style={[styles.over, activeStyle]}>{active}</Reanimated.View>
+            {badge}
+          </>
+        ) : children}
+      </Reanimated.View>
     </View>
   );
 }
@@ -73,6 +115,13 @@ const styles = StyleSheet.create({
   slot: {
     width: TAB_ICON_SLOT,
     height: TAB_ICON_SLOT,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // The active ink, laid exactly over the resting one. The resting layer is
+  // in flow and gives the pair its size; this one only paints.
+  over: {
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
   },

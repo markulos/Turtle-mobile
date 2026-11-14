@@ -102,6 +102,46 @@ export function requestTab(navigation, i, settle, fallbackState) {
 }
 
 /**
+ * THE PAGE WAITS FOR THE CHIP (see PAGE_FOLLOWS_AT in dockMotion).
+ *
+ * The dock says, at touch-down, when its chip will have visually landed; a
+ * tab request that arrives before then is held until that moment and then
+ * made exactly as it would have been. This delays a request — it never
+ * decides one: nothing is dropped, reordered or guessed, and `requestTab`
+ * is idempotent, so the gesture's request and the button's can both wait
+ * out the same gate and the tab still changes once.
+ *
+ * Module state, because there is one dock and two callers (the gesture in
+ * DockTabBar, the button's listener in App.js) that must see the same gate.
+ * Bounded: a gate further away than the longest travel is ignored rather
+ * than trusted, so a bad clock can never hold a tab change hostage.
+ */
+const PAGE_WAIT_MIN_MS = 4;
+const PAGE_WAIT_MAX_MS = 400;
+let pageClearAt = 0;
+
+export function holdPageUntil(timestamp) {
+  pageClearAt = Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+export function requestTabWhenClear(navigation, i, settle, fallbackState) {
+  const wait = pageClearAt - Date.now();
+  if (wait > PAGE_WAIT_MIN_MS && wait <= PAGE_WAIT_MAX_MS) {
+    setTimeout(() => {
+      try {
+        requestTab(navigation, i, settle, fallbackState);
+      } catch {
+        // A navigator that went away while the chip was landing. requestTab
+        // has already answered the chip (its finally), which is all that is
+        // owed.
+      }
+    }, wait);
+    return -1;
+  }
+  return requestTab(navigation, i, settle, fallbackState);
+}
+
+/**
  * `settle(requested, current)` for a pair of shared values: the chip's lead,
  * and its copy of the navigator's index. One UI-thread job, index first — the
  * chip's driver must never see a spent lead beside a stale index, which is a

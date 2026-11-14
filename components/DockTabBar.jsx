@@ -9,9 +9,12 @@ import { BottomTabBar } from '@react-navigation/bottom-tabs';
 
 import { dockOccupied, slotAtX, slotUnderTouch } from './tabBarLayout';
 import {
-  CHIP_SLIDE_BASE_MS, CHIP_SLIDE_MAX_MS, PRESS_BEZIER, PRESS_IN_MS, PRESS_OUT_MS,
+  CHIP_SLIDE_BASE_MS, CHIP_SLIDE_MAX_MS, PAGE_FOLLOWS_AT, PRESS_BEZIER, PRESS_IN_MS, PRESS_OUT_MS,
+  chipSlideMs,
 } from './dockMotion';
-import { currentTabIndex, requestTab, useDockSettle } from './dockNav';
+import {
+  currentTabIndex, holdPageUntil, requestTabWhenClear, useDockSettle,
+} from './dockNav';
 import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 
 /**
@@ -232,28 +235,31 @@ export default function DockTabBar({
 
   // THE TAB THIS TOUCH CHOSE — a tap's, or a scrub's lift. One call, and the
   // chip is answered inside it (requestTab always settles, whatever happened).
+  // The answer to a request, and the end of its claim on the lead — in that
+  // order, so the lead is spent before the claim is dropped. Handed to
+  // requestTab as its `settle`, because a request may now be HELD for a few
+  // frames (the page follows the chip — see dockNav) and the claim has to
+  // last until it has actually been made.
+  const answerAndRelease = useCallback((requested, current) => {
+    answer(requested, current);
+    runOnUI(() => {
+      'worklet';
+      if (asked.value === requested) asked.value = -1;
+    })();
+  }, [answer, asked]);
+
   const chooseTab = useCallback((i) => {
-    try {
-      // A LONG-PRESS is a different gesture with its own meaning: on Turtle it
-      // opens the console. The finger that did it still has to come off the
-      // glass, and that lift is not a tap. App.js raises this flag from
-      // `tabLongPress`; both run on the JS thread, in the order they happened.
-      if (suppressTap && suppressTap.current) {
-        suppressTap.current = false;
-        answer(i, currentTabIndex(navigation, stateRef.current));
-      } else {
-        requestTab(navigation, i, answer, stateRef.current);
-      }
-    } finally {
-      // Answered, one way or another — AFTER the answer itself, so the lead
-      // is spent before the claim on it is dropped. Only if it is still THIS
-      // request's slot: a later one may already have claimed the value.
-      runOnUI(() => {
-        'worklet';
-        if (asked.value === i) asked.value = -1;
-      })();
+    // A LONG-PRESS is a different gesture with its own meaning: on Turtle it
+    // opens the console. The finger that did it still has to come off the
+    // glass, and that lift is not a tap. App.js raises this flag from
+    // `tabLongPress`; both run on the JS thread, in the order they happened.
+    if (suppressTap && suppressTap.current) {
+      suppressTap.current = false;
+      answerAndRelease(i, currentTabIndex(navigation, stateRef.current));
+      return;
     }
-  }, [asked, answer, navigation, suppressTap]);
+    requestTabWhenClear(navigation, i, answerAndRelease, stateRef.current);
+  }, [answerAndRelease, navigation, suppressTap]);
 
   // Held for the duration of a touch so that nothing deferred runs under the
   // thumb. The chip tracks the finger 1:1, which means every frame of the
@@ -268,7 +274,10 @@ export default function DockTabBar({
   // dock can close the page the dock is sitting on.
   const swipeRef = useRef(null);
   const releaseTimerRef = useRef(null);
-  const hold = useCallback(() => {
+  const hold = useCallback((pageClearAt) => {
+    // When this touch's chip will have visually landed — the earliest the
+    // tab change it asks for should be made (see dockNav).
+    holdPageUntil(pageClearAt);
     // A fresh touch owes nothing to the last one's long press.
     if (suppressTap) suppressTap.current = false;
     // …and it takes over the last one's hold. The previous lift armed a timer
@@ -387,7 +396,12 @@ export default function DockTabBar({
       // From the TOUCH, not from the drag: a tap never reaches onStart, and a
       // tap is the case where the mount lands on top of the slide. Holding
       // here covers both, and onFinalize always gives it back.
-      runOnJS(hold)();
+      // …and with it, WHEN the chip this touch just launched will have
+      // visually landed, so the page waits for it (PAGE_FOLLOWS_AT). Worked
+      // out here because here is where the travel starts: from the slot the
+      // navigator is on to the slot under the finger.
+      const from = nav.value >= 0 ? nav.value : s;
+      runOnJS(hold)(Date.now() + PAGE_FOLLOWS_AT * chipSlideMs(s - from));
     })
     // The three touch callbacks exist for ONE fact: did the finger LIFT, and
     // where. A pan that never activates ends in the same state whether the
@@ -480,7 +494,7 @@ export default function DockTabBar({
       dragged.value = 0;
       lifted.value = 0;
     }),
-  [aimed, asked, chooseTab, count, dragged, hold, lead, lifted, ms, press, probe,
+  [aimed, asked, chooseTab, count, dragged, hold, lead, lifted, ms, nav, press, probe,
     releaseAfterSlide, slot, touchEvents, width]);
 
   return (

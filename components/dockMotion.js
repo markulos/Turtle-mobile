@@ -197,6 +197,30 @@ export const leadAfterSettle = (lead, requested, current) => {
 export const CHIP_CATCH_MS = 120;
 
 /**
+ * THE PAGE FOLLOWS THE CHIP — how far through its travel the chip must be
+ * before the tab change is dispatched.
+ *
+ * A tab change is the heaviest thing the dock causes: React re-renders the
+ * navigator, focus effects fire in the screens, and two full-screen pages
+ * start cross-fading. All of it lands on the frames straight after the lift.
+ * On a short hop that does not matter — the chip left on the touch and has
+ * arrived by the time the finger comes up. On a long move it is still
+ * crossing the dock, and it shares the main thread and the compositor with
+ * everything the tab change just started: that is the hitch that was left.
+ *
+ * So the two are put in sequence instead of on top of each other. The chip's
+ * curve leaves at full speed and only decelerates, so at 65% of its TIME it
+ * has covered about 97% of its distance; a tab change dispatched then lands
+ * on the last few points of a crawl, where a dropped frame cannot be seen.
+ *
+ * What it costs is measured from the touch, not from the lift, so it is
+ * small: a move across the whole dock asks for ~150ms after touch-down, and
+ * an ordinary tap has already spent 70–120 of those with the finger still on
+ * the glass. Moves of one or two slots never wait at all.
+ */
+export const PAGE_FOLLOWS_AT = 0.65;
+
+/**
  * The curve, as control points, because two Easing implementations have to
  * build it. Leaves at full speed (x1 = y1 = 0, so there is no ease-in to sit
  * through) and arrives with zero velocity (y2 = 1): a departure and a landing,

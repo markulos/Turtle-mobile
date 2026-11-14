@@ -75,7 +75,7 @@ import { buildNavTheme } from './utils/navTheme';
 import { resolveDockSkin } from './components/dockThemes';
 import DockTabBar from './components/DockTabBar';
 import { CHIP_SLIDE_BASE_MS, TAB_SWITCH_SPEC, forTabTurn } from './components/dockMotion';
-import { requestTab, useDockSettle } from './components/dockNav';
+import { requestTabWhenClear, useDockSettle } from './components/dockNav';
 import { useDockMotionProbe } from './components/dockMotionProbe';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
 import { AnimalGlyph } from './components/AnimalAvatar';
@@ -186,6 +186,11 @@ function TabNavigator() {
   // release and the navigator agreeing. Same two-places problem, same answer:
   // the drag writes it, the chip reads it, neither waits for a render.
   const leadSlot = useSharedValue(-1);
+  // …and where the chip actually IS, as a fractional slot, every frame it
+  // moves. The pill writes it; each tab's icon reads it and inks itself by
+  // how much of the chip is under it — so the glyphs change with the chip,
+  // on the UI thread, instead of in one step when React commits the change.
+  const chipPos = useSharedValue(-1);
   // ...and how long that move should take, which depends on how far it goes.
   // Written by whoever starts the move, read by the chip's worklet.
   const slideMs = useSharedValue(CHIP_SLIDE_BASE_MS);
@@ -313,12 +318,14 @@ function TabNavigator() {
           const st = navigation.getState();
           const i = st?.routes?.findIndex((r) => r.key === route.key);
           if (i == null || i < 0) return;
-          requestTab(navigation, i, settleDock, st);
+          // …when the chip has landed: the same gate the dock's own
+          // request waits out (dockNav), so neither turns the page early.
+          requestTabWhenClear(navigation, i, settleDock, st);
         },
       })}
       // No tabPress haptic: tab switching is silent by request. (There used to
       // be a selection tick here for every tab.)
-      screenOptions={({ route }) => ({
+      screenOptions={({ route, navigation }) => ({
         // The page TURNS instead of being swapped: the leaving page dissolves
         // and slides the way the selection is going, the arriving one comes in
         // from the other side — on the same curve, the same duration and the
@@ -342,7 +349,13 @@ function TabNavigator() {
         // masked the re-measure. Components that need instant readiness must
         // derive their geometry from DATA, not layout (see MediaGallery's
         // analytic scrubber extent).
-        tabBarIcon: ({ focused, color, size }) => {
+        tabBarIcon: ({ focused: isFocused }) => {
+          // ONE ICON, DRAWN IN BOTH INKS. `draw` is the glyph for one state —
+          // the filled form in the active ink, or the outline in the resting
+          // one — and TabBarIcon lays the two over each other and cross-fades
+          // them by how much of the chip is under this slot. See TabBarIcon:
+          // the ink follows the chip, not the navigator.
+          const draw = ({ focused, color }) => {
           // Turtle tab uses the web app's custom PNG mark so the
           // brand visual matches across platforms. We recolor the
           // dark turtle pixels to whatever `color` is (active/inactive
@@ -356,7 +369,7 @@ function TabNavigator() {
           // utility surfaces leading up to it.
           if (route.name === 'Turtle') {
             return (
-              <TabBarIcon focused={focused} brand>
+              <>
                 <Image
                   source={TURTLE_TAB_ICON}
                   style={{
@@ -366,7 +379,7 @@ function TabNavigator() {
                     resizeMode: 'contain',
                   }}
                 />
-              </TabBarIcon>
+              </>
             );
           }
           // Profile's tab icon is the user's ANIMAL — but drawn as a bare glyph
@@ -392,7 +405,7 @@ function TabNavigator() {
           // still reads correctly on both the plain and the accent-chip states.
           if (route.name === 'Profile') {
             return (
-              <TabBarIcon focused={focused}>
+              <>
                 {/* The wrapper is the glyph's own 24pt box, so the dot hangs
                     off the animal's corner and rides the icon's press scale. */}
                 <View>
@@ -414,7 +427,7 @@ function TabNavigator() {
                     />
                   ) : null}
                 </View>
-              </TabBarIcon>
+              </>
             );
           }
           let iconName;
@@ -428,9 +441,26 @@ function TabNavigator() {
           else if (route.name === 'Photos') iconName = focused ? 'image' : 'image-outline';
           else if (route.name === 'Vault') iconName = focused ? 'shield-lock' : 'shield-lock-outline';
           return (
-            <TabBarIcon focused={focused}>
+            <>
               <Icon name={iconName} size={24} color={color} />
-            </TabBarIcon>
+            </>
+          );
+          };
+          let slot = -1;
+          try {
+            slot = navigation.getState().routes.findIndex((r) => r.key === route.key);
+          } catch {
+            // No state yet: the icon falls back to `focused`.
+          }
+          return (
+            <TabBarIcon
+              focused={isFocused}
+              brand={route.name === 'Turtle'}
+              slot={slot}
+              chipPos={chipPos}
+              active={draw({ focused: true, color: activeInk(dockInk, theme.colors.accent) })}
+              inactive={draw({ focused: false, color: skin.inactiveTint })}
+            />
           );
         },
         // Active sits ON the accent chip, so its ink is derived from the chosen
@@ -523,6 +553,7 @@ function TabNavigator() {
             dragSlot={dragSlot}
             leadSlot={leadSlot}
             navSlot={navSlot}
+            chipPos={chipPos}
             slideMs={slideMs}
             probe={dockProbe}
             pressLift={dockPressLift}

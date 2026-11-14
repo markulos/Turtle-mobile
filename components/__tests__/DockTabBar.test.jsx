@@ -98,6 +98,8 @@ const navigatedTo = (dispatch) =>
 // `y` is measured from the top of the gesture's wrapper. A real touch always
 // has one, and the default is the middle of the capsule — on a button.
 const MID = BAR_CONTENT_HEIGHT / 2;
+/** Longer than any chip travel: by now the page may follow. */
+const CHIP_LANDS_MS = 200;
 
 const touchDown = async (x, y = MID) => {
   await act(() => {
@@ -107,12 +109,17 @@ const touchDown = async (x, y = MID) => {
 };
 
 /** The finger comes off the glass without ever having dragged: a tap. */
-const liftTap = async (y = MID) => {
+const liftTapNow = async (y = MID) => {
   await act(() => {
     mockPan.onTouchesUp({ changedTouches: [{ y }] });
     // A pan that never activated FAILS on the lift — it does not end.
     mockPan.onFinalize({}, false);
   });
+};
+/** …and the chip is given time to land, which is when the page follows. */
+const liftTap = async (y = MID) => {
+  await liftTapNow(y);
+  await act(() => { jest.advanceTimersByTime(CHIP_LANDS_MS); });
 };
 
 /** iOS takes the touch away (a swipe home, a call): cancelled, never lifted. */
@@ -125,8 +132,11 @@ const systemCancel = async ({ dragging = false } = {}) => {
   });
 };
 
-/** A scrub's real lift. */
+/** A scrub's real lift — after the time a scrub actually takes. */
 const liftDrag = async () => {
+  // A drag outlasts the page-wait that its own touch-down set (dockNav), so
+  // its choice is made on the lift. With no time passing it would be held.
+  await act(() => { jest.advanceTimersByTime(CHIP_LANDS_MS); });
   await act(() => {
     mockPan.onTouchesUp({ changedTouches: [{ y: MID }] });
     mockPan.onEnd({}, true);
@@ -310,6 +320,42 @@ test('a TAP aims the chip before the finger leaves the glass', async () => {
   expect(leadSlot.value).toBe(3);
   // Aimed, NOT navigated: a touch is not yet a choice.
   expect(props.navigation.dispatch).not.toHaveBeenCalled();
+});
+
+test('THE PAGE FOLLOWS THE CHIP: a move across the dock is dispatched once the chip has landed', async () => {
+  // The chip left on the touch. A tab change dispatched while it is still
+  // crossing the dock puts the navigator's re-render and the page cross-fade
+  // on the same frames as the travel — the hitch on a long move. So the
+  // request is HELD until the chip has visually arrived, and then made.
+  const props = buildProps(0);
+  const leadSlot = { value: -1 };
+  const navSlot = { value: 0 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} navSlot={navSlot} />);
+
+  await touchDown(onIcon(5));
+  await act(() => { jest.advanceTimersByTime(60); }); // a quick tap
+  await liftTapNow();
+  // Decided — the chip is on its way — but not yet dispatched.
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+  expect(leadSlot.value).toBe(5);
+
+  await act(() => { jest.advanceTimersByTime(CHIP_LANDS_MS); });
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Profile-5']);
+  expect(navSlot.value).toBe(5);
+  expect(leadSlot.value).toBe(-1);
+});
+
+test('…and a hop to the next tab does not wait at all', async () => {
+  // One slot is a 135ms travel; an ordinary tap has outlasted 65% of it by
+  // the time the finger comes up.
+  const props = buildProps(0);
+  await mount(<DockTabBar {...props} leadSlot={{ value: -1 }} navSlot={{ value: 0 }} />);
+
+  await touchDown(onIcon(1));
+  await act(() => { jest.advanceTimersByTime(100); });
+  await liftTapNow();
+
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Notes-1']);
 });
 
 test('the lift IS the tab change — no waiting to see whether the button will', async () => {
@@ -587,6 +633,7 @@ test('without touch events the dock falls back to the old rule rather than ignor
 
   await act(() => { mockPan.onBegin({ absoluteX: onIcon(5), x: onIcon(5), y: MID }); });
   await act(() => { mockPan.onFinalize({}, false); });
+  await act(() => { jest.advanceTimersByTime(CHIP_LANDS_MS); });
 
   expect(navigatedTo(props.navigation.dispatch)).toEqual(['Profile-5']);
 });

@@ -4,7 +4,9 @@ import { act, fireEvent, render } from '@testing-library/react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
-import { currentTabIndex, requestTab } from '../dockNav';
+import {
+  currentTabIndex, holdPageUntil, requestTab, requestTabWhenClear,
+} from '../dockNav';
 import { TAB_SWITCH_SPEC, chipAim, forTabTurn, leadAfterSettle } from '../dockMotion';
 
 /**
@@ -363,5 +365,84 @@ describe('the chip never goes back on itself', () => {
     // Slot 0 is a real slot, not "nothing".
     expect(leadAfterSettle(0, 0, 4)).toBe(-1);
     expect(leadAfterSettle(0, 4, 4)).toBe(0);
+  });
+});
+
+/**
+ * THE PAGE FOLLOWS THE CHIP. A request that arrives before the chip has
+ * visually landed is HELD until then, and then made exactly as it would have
+ * been. It delays; it never decides.
+ */
+describe('a tab request waits for the chip to land', () => {
+  const routes = NAMES.map((name, i) => ({ key: name + '-' + i, name }));
+  const harness = () => {
+    let state = { key: 'tabs-1', index: 0, routes };
+    const dispatch = jest.fn((action) => {
+      const to = routes.findIndex((r) => r.key === action.payload.key || r.name === action.payload.name);
+      if (to >= 0) state = { ...state, index: to };
+    });
+    return { navigation: { dispatch, getState: () => state }, dispatch };
+  };
+
+  beforeEach(() => { jest.useFakeTimers(); holdPageUntil(0); });
+  afterEach(() => { jest.useRealTimers(); holdPageUntil(0); });
+
+  test('held until the gate, then made once and answered', () => {
+    const { navigation, dispatch } = harness();
+    const settle = jest.fn();
+    holdPageUntil(Date.now() + 120);
+
+    requestTabWhenClear(navigation, 5, settle);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(settle).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(119);
+    expect(dispatch).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(2);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(settle.mock.calls).toEqual([[5, 5]]);
+  });
+
+  test('the gesture and the button both waiting out the gate is still ONE tab change', () => {
+    const { navigation, dispatch } = harness();
+    const settle = jest.fn();
+    holdPageUntil(Date.now() + 80);
+    requestTabWhenClear(navigation, 3, settle);
+    requestTabWhenClear(navigation, 3, settle);
+    jest.advanceTimersByTime(100);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(settle.mock.calls).toEqual([[3, 3], [3, 3]]);
+  });
+
+  test('a gate that has passed, or was never set, does not delay anything', () => {
+    const { navigation, dispatch } = harness();
+    requestTabWhenClear(navigation, 2, jest.fn());
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    holdPageUntil(Date.now() - 500);
+    requestTabWhenClear(navigation, 4, jest.fn());
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  test('a gate absurdly far away is ignored — a bad clock cannot hold a tab change hostage', () => {
+    const { navigation, dispatch } = harness();
+    holdPageUntil(Date.now() + 60000);
+    requestTabWhenClear(navigation, 1, jest.fn());
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    holdPageUntil(NaN);
+    requestTabWhenClear(navigation, 2, jest.fn());
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  test('a navigator that went away while the chip was landing does not throw from the timer', () => {
+    const settle = jest.fn();
+    const navigation = {
+      dispatch: () => { throw new Error('gone'); },
+      getState: () => ({ key: 'tabs-1', index: 0, routes }),
+    };
+    holdPageUntil(Date.now() + 50);
+    requestTabWhenClear(navigation, 2, settle);
+    expect(() => jest.advanceTimersByTime(60)).not.toThrow();
+    // …and the chip was still answered.
+    expect(settle).toHaveBeenCalledTimes(1);
   });
 });

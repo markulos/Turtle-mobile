@@ -47,6 +47,20 @@ describe('the dock’s shared values reach both halves', () => {
     expect(APP.match(/<TabBarPill[^>]*\/>/)[0]).toContain('navSlot={navSlot}');
   });
 
+  test('the icons are told where the chip is — the pill writes it, every icon reads it', () => {
+    // Without it each icon silently falls back to `focused`, which is the
+    // step change after the commit that this exists to replace.
+    expect(APP).toMatch(/const chipPos = useSharedValue\(-1\)/);
+    expect(APP.match(/<TabBarPill[^>]*\/>/)[0]).toContain('chipPos={chipPos}');
+    const icon = APP.match(/<TabBarIcon\s[\s\S]*?\/>/);
+    expect(icon).not.toBeNull();
+    expect(icon[0]).toContain('chipPos={chipPos}');
+    expect(icon[0]).toContain('slot={slot}');
+    // Both inks, or there is nothing to cross-fade between.
+    expect(icon[0]).toMatch(/active=\{draw\(\{ focused: true/);
+    expect(icon[0]).toMatch(/inactive=\{draw\(\{ focused: false/);
+  });
+
   test('the button\'s press goes through the same door as the dock\'s', () => {
     expect(APP).toMatch(/const settleDock = useDockSettle\(leadSlot, navSlot\)/);
     expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('settle={settleDock}');
@@ -54,7 +68,7 @@ describe('the dock’s shared values reach both halves', () => {
     expect(press).not.toBeNull();
     // Its default would re-dispatch from a render's stale `focused`.
     expect(press[0]).toMatch(/e\.preventDefault\(\)/);
-    expect(press[0]).toMatch(/requestTab\(navigation, i, settleDock, st\)/);
+    expect(press[0]).toMatch(/requestTabWhenClear\(navigation, i, settleDock, st\)/);
     // …and it no longer aims the chip or times it: the dock's touch-down does
     // the first, and the chip works out the second from the move itself.
     expect(press[0]).not.toMatch(/leadSlot\.value|slideMs\.value/);

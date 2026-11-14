@@ -111,7 +111,7 @@ const DOCK_LIP_H = 1.5;
 // icons can never disagree about where a slot is.
 
 export default function TabBarPill({
-  dragSlot, leadSlot, navSlot, slideMs, probe, pressLift,
+  dragSlot, leadSlot, navSlot, chipPos, slideMs, probe, pressLift,
 }) {
   const { theme, dockIndicator, dockStyle, dockColor, dockTheme } = useTheme();
   // Every colour the capsule draws, from the skin chosen in Settings — a
@@ -341,6 +341,26 @@ export default function TabBarPill({
         ms.value = duration;
         x.value = withTiming(px, { duration, easing: EASE });
       }
+    },
+    [],
+  );
+
+  // WHERE THE CHIP IS, for the icons. A fractional slot — 2.4 is "four tenths
+  // of the way from the third icon to the fourth" — written every frame the
+  // chip moves, on the UI thread. Each TabBarIcon turns it into how much of
+  // the chip is under it, and inks and swells itself by that amount, so the
+  // glyphs change WITH the chip rather than when React gets round to saying
+  // which tab is focused. Slots rather than pixels, so the icons need to know
+  // nothing about the bar's geometry; -1 while the navigator's index is not
+  // known yet, which the icons read as "fall back to `focused`".
+  const ownChipPos = useSharedValue(-1);
+  const pos = chipPos ?? ownChipPos;
+  useAnimatedReaction(
+    () => (indexSV.value < 0 && lead.value < 0 && slot.value < 0
+      ? -1
+      : (x.value + catchUp.value - offsetSV.value) / TAB_SLOT),
+    (now, before) => {
+      if (now !== before) pos.value = now;
     },
     [],
   );
