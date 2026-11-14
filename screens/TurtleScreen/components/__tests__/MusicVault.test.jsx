@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert } from 'react-native';
+import { Alert, StyleSheet } from 'react-native';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import MusicVault from '../MusicVault';
 import { __resetForTests, getPending } from '../../../../services/offlineQueue';
@@ -677,5 +677,50 @@ describe('search reaches the pond', () => {
     await waitFor(() => expect(view.getByText('First')).toBeTruthy());
     expect(view.getByLabelText('Options for First')).toBeTruthy();
     expect(view.queryByText('Moonlight Mix')).toBeNull();
+  });
+});
+
+describe('the row that is playing', () => {
+  // Mark asked for the playing track to carry a dark backdrop and to fade on
+  // selection. The fade is a native-driven opacity and jest cannot watch it
+  // run; what IS worth pinning is the part a later change could quietly
+  // break — the backdrop existing only under the playing row, and the row's
+  // small text staying legible once it is dark.
+  // includeHiddenElements: the backdrop is decorative and correctly hidden
+  // from assistive tech, which also hides it from RNTL's default queries.
+  const backdrops = (view) => view.queryAllByTestId('music-row-backdrop', { includeHiddenElements: true });
+
+  test('every row carries a backdrop, and only the playing one is opaque', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    // One per row rather than one that appears: a backdrop that MOUNTED on
+    // selection could only cut, which is the thing the fade exists to avoid.
+    expect(backdrops(view).length).toBeGreaterThan(1);
+    const opacities = backdrops(view)
+      .map((n) => StyleSheet.flatten(n.props.style).opacity)
+      .map((o) => (o && typeof o === 'object' ? o.__getValue?.() ?? o._value : o));
+    expect(opacities.filter((o) => o === 1)).toHaveLength(1);
+  });
+
+  test('it is DARK, and its small text is legible on it', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    const lit = backdrops(view)
+      .map((n) => StyleSheet.flatten(n.props.style))
+      .find((s) => {
+        const o = s.opacity;
+        return (o && typeof o === 'object' ? o.__getValue?.() ?? o._value : o) === 1;
+      });
+    expect(lit).toBeTruthy();
+    // A dark panel: every channel low. The theme here is light, so this is the
+    // one dark surface on the page.
+    const [, r, g, b] = /^#(\w\w)(\w\w)(\w\w)$/.exec(lit.backgroundColor) || [];
+    for (const ch of [r, g, b]) expect(parseInt(ch, 16)).toBeLessThan(0x40);
+
+    // …and the subtitle on that row must not be the page's grey, which is
+    // chosen to sit on cream and would all but vanish on this. Exactly one
+    // row's is light: the one that is playing.
+    const subs = view.getAllByText('Audio')
+      .map((n) => StyleSheet.flatten(n.props.style).color);
+    expect(subs.length).toBeGreaterThan(1);
+    expect(subs.filter((col) => /^rgba\(255,255,255,/.test(col))).toHaveLength(1);
   });
 });

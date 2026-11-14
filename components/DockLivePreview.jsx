@@ -88,20 +88,8 @@ export default function DockLivePreview({
               {on && !underline ? (
                 <View
                   testID="dock-live-chip"
-                  style={[styles.chip, { backgroundColor: accent, borderColor: light.rimColor }]}
-                >
-                  {light.strength > 0 && light.shadeColor ? (
-                    <View pointerEvents="none" style={styles.shade}>
-                      <DockGlow
-                        id="dock-live-shade"
-                        width={PILL_SIZE}
-                        height={PILL_SIZE}
-                        color={light.shadeColor}
-                        peak={light.shadePeak}
-                      />
-                    </View>
-                  ) : null}
-                </View>
+                  style={[styles.chip, { backgroundColor: light.chipFill }]}
+                />
               ) : null}
               {on && underline && light.strength > 0 ? (
                 <View pointerEvents="none" style={styles.spot}>
@@ -167,7 +155,6 @@ const styles = StyleSheet.create({
     height: PILL_SIZE,
     borderRadius: PILL_RADIUS,
     borderCurve: 'continuous',
-    borderWidth: 1,
     overflow: 'hidden',
   },
   shade: { position: 'absolute', top: -1, left: -1 },

@@ -112,26 +112,15 @@ export function DockPreview({
               </View>
             );
           }
-          // THE CHIP: its fill, its lit rim, and the deeper tone in its
-          // middle — a small piece of glass, as on the bar.
+          // THE CHIP: the highlight colour, let through a little, exactly as
+          // on the bar — see dockLight's chipFill.
           if (!underline) {
             return (
               <View key={i} style={styles.cell}>
                 <View
                   testID="dock-preview-chip"
-                  style={[styles.miniChip, { backgroundColor: accent, borderColor: light.rimColor }]}
+                  style={[styles.miniChip, { backgroundColor: light.chipFill }]}
                 >
-                  {light.strength > 0 && light.shadeColor ? (
-                    <View pointerEvents="none" style={styles.miniShade}>
-                      <DockGlow
-                        id="dock-mini-shade"
-                        width={MINI_CHIP}
-                        height={MINI_CHIP}
-                        color={light.shadeColor}
-                        peak={light.shadePeak}
-                      />
-                    </View>
-                  ) : null}
                   <View testID="dock-preview-glyph" style={[styles.miniDot, { backgroundColor: ink }]} />
                 </View>
               </View>
@@ -472,8 +461,9 @@ export default function DockStylePicker() {
           : 'Set by hand. Change the highlight colour and this stays as you left it.'}
       </Text>
 
-      {/* THE GLOW. The light the indicator gives off: a pool rising from the
-          underline; a darker middle and a lit rim on the chip.
+      {/* THE GLOW. The pool of light rising off the UNDERLINE. The chip has
+          none: it is the highlight colour let through a little, over the real
+          glass of the bar, which is depth rather than a drawing of it.
           Four steps, because the gap between two neighbouring strengths of a
           subtle effect is not something a slider can be set to by eye. */}
       <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
@@ -863,12 +853,10 @@ const styles = StyleSheet.create({
     height: MINI_CHIP,
     borderRadius: 8,
     borderCurve: 'continuous',
-    borderWidth: 1,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  miniShade: { position: 'absolute', top: -1, left: -1 },
   // Wider than its cell on purpose (the real spot is wider than its glyph);
   // centred, and clipped by the capsule like the real one.
   miniSpot: {

@@ -6,7 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { blurProps } from '../utils/frostedChat';
 import DockGlow from './DockGlow';
 import {
-  SHADE_PEAK, SPOT_H, SPOT_PEAK, SPOT_W, glowStrength, pickedGlowColor, rimColor, shadeColor,
+  SPOT_H, SPOT_PEAK, SPOT_W, chipFill, glowStrength, pickedGlowColor,
 } from './dockLight';
 import Reanimated, {
   Easing,
@@ -185,8 +185,6 @@ export default function TabBarPill({
   // light. The chip's SHADE follows the chip, not this; see dockLight.
   const pickedGlow = pickedGlowColor(dockGlowColor);
   const spotColor = pickedGlow || theme.colors.accent;
-  // The chip's shade: its own colour, deeper. Null for a white chip.
-  const chipShade = shadeColor(theme.colors.accent);
 
   // THE NAVIGATOR IS THE SLOWEST OF THE THREE THINGS THAT KNOW.
   //
@@ -558,31 +556,15 @@ export default function TabBarPill({
             // reason, and in that mode the active glyph takes the accent too
             // (tabBarActiveTintColor in App.js) — there is no chip under it to
             // be inked against.
-            backgroundColor: theme.colors.accent,
+            // Slightly transparent, which IS the chip's depth: there is real
+            // glass behind it, so letting the capsule through reads as a
+            // piece of it rather than as a sticker on top. This replaced a
+            // painted shade and a lit rim — see dockLight.
+            backgroundColor: underline ? theme.colors.accent : chipFill(theme.colors.accent),
           },
-          // The chip's translucent ridge. Not the line's: a 3pt line with
-          // a border is just a thicker line.
-          underline ? null : [styles.rim, { borderColor: rimColor(pickedGlow) }],
           pillStyle,
         ]}
-      >
-        {/* THE CHIP'S SHADE — a deeper tone of its own colour in its middle,
-            so with the lit rim it reads as a piece of glass set INTO the bar
-            rather than a flat fill. Never black, and none on a white chip.
-            Inside the chip, so it is part of the same cached bitmap and
-            travels with it for nothing. */}
-        {!underline && glow > 0 && chipShade ? (
-          <View pointerEvents="none" style={styles.shade} testID="dock-chip-shade">
-            <DockGlow
-              id="dock-chip-glow"
-              width={PILL_SIZE}
-              height={PILL_SIZE}
-              color={chipShade}
-              peak={SHADE_PEAK * glow}
-            />
-          </View>
-        ) : null}
-      </Reanimated.View>
+      />
     </View>
   );
 }
@@ -662,16 +644,6 @@ const styles = StyleSheet.create({
     width: SPOT_W,
     height: SPOT_H,
   },
-  // THE CHIP'S EDGE: a translucent ridge of light round it, so the chip reads
-  // as a raised piece of glass rather than a flat fill. A full point rather
-  // than a hairline — at a third of a point it disappears into the accent.
-  rim: {
-    borderWidth: 1,
-    // The colour is set where it is drawn: dockLight's rimColor.
-    borderColor: 'transparent',
-  },
-  // …and its shade sits exactly over it.
-  shade: { position: 'absolute', top: -1, left: -1 },
   // One ridge. A hairline, full height of the icon block less a breath at each
   // end, so it reads as a groove between two cells rather than as a divider
   // cutting the capsule in half.

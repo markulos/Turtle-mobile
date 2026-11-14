@@ -71,6 +71,65 @@ const tagsOf = audioTags;
 // fallback for any theme that predates `accent`.
 const MUSIC_TINT = (c) => c.accent || c.accentInfo || c.primary;
 
+/**
+ * How long the playing row takes to light up, and to let go.
+ *
+ * Out is slower than in, the same way the dock's press is: arriving somewhere
+ * is a thing you did, leaving is a thing that stops, and a backdrop that
+ * snapped away would pull the eye to the row you just left rather than the one
+ * you chose. Both well inside the band where motion still reads as a response.
+ */
+/**
+ * Secondary text and glyphs ON the playing row's dark panel.
+ *
+ * Fixed rather than taken from the theme, because the panel is fixed: in
+ * LIGHT mode the row is the only dark surface on the page, so the theme's
+ * tertiary tone (a grey chosen to sit on cream) would be all but invisible
+ * on it. This is the same relationship to its own background that
+ * `textTertiary` has to the page.
+ */
+const ON_DARK_DIM = 'rgba(255,255,255,0.62)';
+
+const ROW_FADE_IN_MS = 160;
+const ROW_FADE_OUT_MS = 260;
+
+/**
+ * THE PLAYING ROW'S BACKDROP — a dark panel that fades in under the track that
+ * is actually playing.
+ *
+ * Its own component for one reason: it needs an animated value PER ROW, and
+ * the rows are built inside a `renderItem` callback where a hook cannot go.
+ * Without that, changing track could only cut — and a cut between two rows a
+ * list apart reads as the list flickering rather than as the selection moving.
+ *
+ * `useNativeDriver`, so the fade runs on the UI thread and survives the JS
+ * work a track change actually involves (the player starting, the artwork
+ * resolving, the list re-rendering). An opacity is the one thing that can be
+ * driven natively here; animating the COLOUR could not be.
+ *
+ * Drawn as the row's bottom-most layer — before the download's progress fill
+ * and before the title — so everything else still paints over it.
+ */
+function PlayingRowBackdrop({ active, color }) {
+  const fade = useRef(new Animated.Value(active ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(fade, {
+      toValue: active ? 1 : 0,
+      duration: active ? ROW_FADE_IN_MS : ROW_FADE_OUT_MS,
+      useNativeDriver: true,
+    }).start();
+  }, [active, fade]);
+  return (
+    <Animated.View
+      testID="music-row-backdrop"
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={[StyleSheet.absoluteFill, { backgroundColor: color, opacity: fade }]}
+    />
+  );
+}
+
 // Outbox key for a track rename — one pending rename per track, newest wins.
 const renameKey = (id) => `media:${id}:originalName`;
 
@@ -977,6 +1036,7 @@ export default function MusicVault({
       titleActive: { fontSize: 15, fontWeight: '600', color: accent },
       titleIdle: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
       source: { fontSize: 12, color: c.textTertiary, marginTop: 1 },
+      sourceActive: { fontSize: 12, color: ON_DARK_DIM, marginTop: 1 },
       // Durations line up as a column. Two things are needed and neither is
       // optional: a fixed width (so the left edges agree, not just the right
       // ones) and tabular figures (so "1:40" and "154:33" use the same digit
@@ -984,6 +1044,10 @@ export default function MusicVault({
       // ten-hour recording reads "600:00".
       duration: {
         fontSize: 12, color: c.textTertiary,
+        width: 48, textAlign: 'right', fontVariant: ['tabular-nums'],
+      },
+      durationActive: {
+        fontSize: 12, color: ON_DARK_DIM,
         width: 48, textAlign: 'right', fontVariant: ['tabular-nums'],
       },
       // A fixed slot, held open on EVERY row once anything in the library is
@@ -1010,6 +1074,19 @@ export default function MusicVault({
       // rather than hidden — the library is still the library, and a track
       // that silently vanished would read as lost rather than out of reach.
       unreachableRow: { opacity: 0.38 },
+
+      // ── The row that is PLAYING ───────────────────────────────────────
+      // A dark panel, so the one track that is playing is a block you can
+      // find scrolling past rather than a line of coloured text. The accent
+      // title and the accent glyph already sit on it and both read well on
+      // something this dark.
+      //
+      // The dark theme's own warm near-black in light mode, rather than a new
+      // colour: the app has a ladder of these already and the dock is made of
+      // one. In dark mode the page IS near-black, so the row has to go the
+      // other way to be found at all — surfaceHighlight is the token for
+      // exactly that, "this is the selected one".
+      playingRow: { backgroundColor: isDark ? c.surfaceHighlight : '#1C1817' },
     });
   }, [c, isDark]);
 
@@ -1259,6 +1336,14 @@ export default function MusicVault({
           unreachable && trackStyles.unreachableRow,
         ]}
       >
+        {/* The playing row's dark panel, fading in and out as the track
+            changes. First, so it is the layer everything else sits on —
+            including the download fill below, which has to stay legible over
+            it. */}
+        <PlayingRowBackdrop
+          active={active}
+          color={trackStyles.playingRow.backgroundColor}
+        />
         {/* The download, filling the row from the left. Drawn before anything
             else so the title, duration and buttons all paint over it. */}
         {look.fillPercent > 0 ? (
@@ -1281,7 +1366,10 @@ export default function MusicVault({
           <Text style={active ? trackStyles.titleActive : trackStyles.titleIdle} numberOfLines={1}>
             {titleOf(item)}
           </Text>
-          <Text style={trackStyles.source} numberOfLines={1}>
+          <Text
+            style={active ? trackStyles.sourceActive : trackStyles.source}
+            numberOfLines={1}
+          >
             {sourceOf(item) || 'Audio'}
           </Text>
         </View>
@@ -1289,7 +1377,7 @@ export default function MusicVault({
           <Icon
             name="text-box-check-outline"
             size={16}
-            color={c.textTertiary}
+            color={active ? ON_DARK_DIM : c.textTertiary}
             accessibilityLabel="Has a transcript"
           />
         ) : null}
@@ -1345,7 +1433,9 @@ export default function MusicVault({
         {/* Always rendered, even with no duration to show: an empty slot keeps
             the column straight where a missing one would pull the rows below
             it out of line. */}
-        <Text style={trackStyles.duration}>{item.duration ? fmtTime(item.duration) : ''}</Text>
+        <Text style={active ? trackStyles.durationActive : trackStyles.duration}>
+          {item.duration ? fmtTime(item.duration) : ''}
+        </Text>
         {/* Per-track options. Its own touchable so it doesn't start playback —
             hitSlop widens the 24pt glyph to a comfortable target without
             stealing the row's tap area. */}
@@ -1361,7 +1451,7 @@ export default function MusicVault({
           onPress={() => (onOptions ? onOptions(String(item.id)) : setSheetId(String(item.id)))}
           style={styles.moreBtn}
         >
-          <Icon name="dots-horizontal" size={22} color={c.textTertiary} />
+          <Icon name="dots-horizontal" size={22} color={active ? ON_DARK_DIM : c.textTertiary} />
         </TouchableOpacity>
       </TouchableOpacity>
     );
@@ -1445,7 +1535,7 @@ export default function MusicVault({
               onPress={() => setSheetId(String(item.id))}
               style={styles.moreBtn}
             >
-              <Icon name="dots-horizontal" size={22} color={c.textTertiary} />
+              <Icon name="dots-horizontal" size={22} color={active ? ON_DARK_DIM : c.textTertiary} />
             </TouchableOpacity>
           )
         )}

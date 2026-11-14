@@ -5,6 +5,7 @@ import { act, fireEvent, render, within } from '@testing-library/react-native';
 import { dockSkin, activeInk } from '../dockSkins';
 import { DOCK_PALETTES } from '../dockPalettes';
 import { DOCK_THEMES, themeSkin } from '../dockThemes';
+import { chipFill } from '../dockLight';
 
 const setDockStyle = jest.fn();
 const setDockIndicator = jest.fn();
@@ -498,11 +499,15 @@ describe('the tiles are small docks, not swatches', () => {
     expect(strong).toBeGreaterThan(medium);
   });
 
-  test('the chip in a tile has the real chip\'s rim', async () => {
+  test('the chip in a tile is translucent, exactly like the real one', async () => {
+    // The tile is a preview and a preview that disagrees with the bar is worse
+    // than none, because it is believed. The chip lost its painted shade and
+    // its lit rim; it is the highlight colour let through a little, and the
+    // tile has to say the same thing.
     const view = await render(<DockStylePicker />);
     const chip = within(view.getByTestId('dock-indicator-chip')).getByTestId('dock-preview-chip');
-    expect(styleOf(chip).borderWidth).toBe(1);
-    expect(styleOf(chip).borderColor).toMatch(/^rgba\(/);
+    expect(styleOf(chip).backgroundColor).toBe(chipFill('#1F8A9B'));
+    expect(styleOf(chip).borderWidth).toBeUndefined();
   });
 
   test('under the underline the glyph takes its own ink, not the highlight colour', async () => {

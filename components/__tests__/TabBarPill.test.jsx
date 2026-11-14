@@ -4,7 +4,7 @@ import { render } from '@testing-library/react-native';
 
 import { BAR_CONTENT_HEIGHT } from '../tabBarLayout';
 import { dockSkin } from '../dockSkins';
-import { shadeColor } from '../dockLight';
+import { CHIP_ALPHA, chipFill } from '../dockLight';
 
 const ACCENT = '#1F8A9B';
 
@@ -134,7 +134,7 @@ describe('the dock capsule reads as a channel CUT INTO the page', () => {
 
     // The recess belongs to the backdrop. The chip is the one thing in the
     // dock that IS raised, and its shadow is what says so.
-    expect(chip.backgroundColor).toBe(ACCENT);
+    expect(chip.backgroundColor).toBe(chipFill(ACCENT));
     expect(chip.shadowOpacity).toBeGreaterThan(0);
     expect(chip.shadowOffset).toEqual({ width: 0, height: 2 });
   });
@@ -187,42 +187,57 @@ describe('the indicator\'s glow', () => {
     expect(colours[0]).not.toBe('#12AB34');
   });
 
-  test('a colour picked in Settings recolours the spot and the chip\'s rim — never its shade', async () => {
+  test('a picked colour recolours the spot — the chip has nothing to recolour', async () => {
     glowColour = '#12AB34';
     indicator = 'underline';
     const line = await render(<TabBarPill />);
     expect(glowColours(line, 'dock-spot')).toEqual(['#12AB34']);
     await line.unmount();
 
+    // The glow is the UNDERLINE's light. The chip has no shade to tint and no
+    // rim to tint, so a picked glow colour must not reach it at all.
     indicator = 'chip';
     const chip = await render(<TabBarPill />);
-    expect(glowColours(chip, 'dock-chip-shade')).toEqual([shadeColor('#1F8A9B')]);
-    expect(StyleSheet.flatten(chip.getByTestId('dock-chip').props.style).borderColor)
-      .toBe('rgba(18,171,52,0.4)');
+    expect(chip.queryByTestId('dock-chip-shade')).toBeNull();
+    const style = StyleSheet.flatten(chip.getByTestId('dock-chip').props.style);
+    expect(style.borderWidth).toBeUndefined();
+    expect(style.backgroundColor).toBe(chipFill('#1F8A9B'));
   });
 
-  test('the chip\'s middle is a DEEPER TONE OF ITS OWN COLOUR — not white, not black', async () => {
-    const chip = await render(<TabBarPill />);
-    const [shade] = glowColours(chip, 'dock-chip-shade');
-    expect(shade).toBe(shadeColor('#1F8A9B'));
-    const part = (hex, i) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
-    // Darker in every channel, and in the same proportions: the same hue.
-    const ratios = [0, 1, 2].map((i) => part(shade, i) / part('#1F8A9B', i));
-    for (const r of ratios) {
-      expect(r).toBeGreaterThan(0.3);
-      expect(r).toBeLessThan(0.6);
-      expect(Math.abs(r - ratios[1])).toBeLessThan(0.03);
-    }
+  test('the chip is the highlight colour, LET THROUGH A LITTLE', async () => {
+    // Mark, 2026-11-14: "remove the inner glow of the chip and just make it a
+    // little transparent." The depth is real now rather than drawn — there is
+    // glass behind the chip, so letting the capsule through IS the effect.
+    // Two painted attempts at that middle (a white bloom, a black shade) had
+    // already been reverted before the deeper-tone one this replaces.
+    const view = await render(<TabBarPill />);
+    const chip = StyleSheet.flatten(view.getByTestId('dock-chip').props.style);
+    expect(chip.backgroundColor).toBe(chipFill('#1F8A9B'));
+    expect(chip.backgroundColor).toMatch(/^rgba\(31,138,155,0\./);
+    // Translucent, and still overwhelmingly the colour: the chip is the one
+    // saturated thing on the bar and what the eye follows as it slides.
+    expect(CHIP_ALPHA).toBeGreaterThan(0.75);
+    expect(CHIP_ALPHA).toBeLessThan(1);
   });
 
-  test('a fully white chip gets no shade — darker white is a grey smudge', async () => {
+  test('nothing is painted inside the chip or around its edge', async () => {
+    const view = await render(<TabBarPill />);
+    expect(view.queryByTestId('dock-chip-shade')).toBeNull();
+    expect(view.queryByTestId('dock-chip-glow')).toBeNull();
+    expect(StyleSheet.flatten(view.getByTestId('dock-chip').props.style).borderWidth)
+      .toBeUndefined();
+  });
+
+  test('a white chip needs no special case now', async () => {
+    // It used to: "the same colour but darker" is grey, and a grey pool in a
+    // white chip is a smudge, so white was the one chip that got no shade. A
+    // translucent fill has no such problem — white over the capsule is simply
+    // less white — so the exception is gone rather than carried forward.
     chipColour = '#FFFFFF';
     const chip = await render(<TabBarPill />);
     expect(chip.queryByTestId('dock-chip-shade')).toBeNull();
-    expect(chip.queryByTestId('dock-chip')).not.toBeNull();
-    expect(shadeColor('#FFFFFF')).toBeNull();
-    // Only FULLY white: a pale colour still has a hue to deepen.
-    expect(shadeColor('#F4F1EA')).not.toBeNull();
+    expect(StyleSheet.flatten(chip.getByTestId('dock-chip').props.style).backgroundColor)
+      .toBe(chipFill('#FFFFFF'));
   });
 
   test('the underline has a spot and no bloom', async () => {
@@ -234,13 +249,9 @@ describe('the indicator\'s glow', () => {
     expect(dark.queryByTestId('dock-chip-shade')).toBeNull();
   });
 
-  test('the chip has a shade in its middle and a translucent ridge round its edge', async () => {
+  test('the chip carries no spot either — the glow is the line\'s light', async () => {
     const view = await render(<TabBarPill />);
-    expect(view.queryByTestId('dock-chip-shade')).not.toBeNull();
     expect(view.queryByTestId('dock-spot')).toBeNull();
-    const chip = StyleSheet.flatten(view.getByTestId('dock-chip').props.style);
-    expect(chip.borderWidth).toBe(1);
-    expect(chip.borderColor).toMatch(/^rgba\(255,255,255,0\.\d+\)$/);
   });
 
   test('the underline has no ridge — a line with a border is just a thicker line', async () => {
