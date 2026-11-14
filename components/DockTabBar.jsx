@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomTabBar } from '@react-navigation/bottom-tabs';
 import { CommonActions } from '@react-navigation/native';
 
-import { dockOccupied, slotAtX } from './tabBarLayout';
+import { dockOccupied, slotAtX, slotUnderTouch } from './tabBarLayout';
 import {
   CHIP_SLIDE_BASE_MS, CHIP_SLIDE_MAX_MS, PRESS_BEZIER, PRESS_IN_MS, PRESS_OUT_MS, PRESS_SCALE,
 } from './dockMotion';
@@ -317,7 +317,20 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
       // activating recogniser cancels the touch of the view beneath it, which
       // would race react-navigation's own button for the navigate. onBegin
       // never activates anything, so the button is untouched.
-      lead.value = Math.round(slotAtX(e.absoluteX, width, count));
+      //
+      // slotUnderTouch, NOT slotAtX: most of this gesture's area is not a tab.
+      // The wrapper is `dockOccupied` tall and the buttons only live in the
+      // capsule's band at the top of it, so a thumb landing low — on the gap
+      // or the home-indicator inset, 38% of the dock on a 34pt-inset phone —
+      // starts this gesture with no button under it. Aiming from that is a
+      // promise nothing keeps: no press, no navigate, and the chip parks on a
+      // tab nobody chose until `guardLead` takes it back. -1 means "not on a
+      // tab", and then the chip is left exactly where it is.
+      // absoluteX because the slot maths is in window coords (the capsule is
+      // inset from both edges); `y` because the band test is against THIS
+      // view, which is the wrapper the gesture is attached to.
+      const touched = slotUnderTouch(e.absoluteX, e.y, width, count);
+      if (touched >= 0) lead.value = touched;
       // From the TOUCH, not from the drag: a tap never reaches onStart, and a
       // tap is the case where the mount lands on top of the slide. Holding
       // here covers both, and onFinalize always gives it back.

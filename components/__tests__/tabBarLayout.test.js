@@ -10,7 +10,7 @@ import {
   BAR_CONTENT_HEIGHT, CARD_GAP_BOTTOM, PANEL_BOTTOM_GAP, PANEL_TOP_GAP,
   dockOccupied, panelBottomInset, panelTopInset,
   PILL_SIZE, BAR_VERTICAL_PAD, TAB_ITEM_PADDING, TAB_ICON_SLOT, clusterStart,
-  CARD_MARGIN_H, TAB_SLOT, slotAtX,
+  CARD_MARGIN_H, TAB_SLOT, slotAtX, slotUnderTouch,
 } from '../tabBarLayout';
 
 describe('how much room the dock really takes', () => {
@@ -158,5 +158,63 @@ describe('slotAtX — which tab the dragging thumb is over', () => {
       expect(p).toBeGreaterThanOrEqual(last);
       last = p;
     }
+  });
+});
+
+describe('slotUnderTouch — which tab a LANDING touch is on, if any', () => {
+  const W = 390;
+  const COUNT = 6;
+  const centre = (i, count = COUNT, width = W) =>
+    CARD_MARGIN_H + clusterStart(width - CARD_MARGIN_H * 2, count) + TAB_SLOT * i + TAB_SLOT / 2;
+  // Mid-capsule: comfortably inside the band the buttons live in.
+  const ON_BAR = BAR_CONTENT_HEIGHT / 2;
+
+  // The whole reason this exists next to slotAtX: a touch landing is not a
+  // drag, and most of the dock's touch area has no button under it. Aiming
+  // the chip from one of those points is a promise nothing keeps — no
+  // Pressable, no tabPress, no navigate — and the chip parks on a tab nobody
+  // chose until the lead guard drags it back. That is what Mark saw as "it
+  // moves to the pressed location and then goes back".
+  test('on an icon, it is that icon', () => {
+    for (let i = 0; i < COUNT; i += 1) {
+      expect(slotUnderTouch(centre(i), ON_BAR, W, COUNT)).toBe(i);
+    }
+  });
+
+  test('a whole tab, not a fraction — a landing has already chosen', () => {
+    // Rounding, so the boundary is the midpoint BETWEEN two icons — the gap,
+    // where the eye expects it — rather than an icon's left edge.
+    expect(slotUnderTouch(centre(2) + TAB_SLOT * 0.25, ON_BAR, W, COUNT)).toBe(2);
+    expect(slotUnderTouch(centre(2) + TAB_SLOT * 0.49, ON_BAR, W, COUNT)).toBe(2);
+    expect(slotUnderTouch(centre(2) + TAB_SLOT * 0.6, ON_BAR, W, COUNT)).toBe(3);
+  });
+
+  // THE BUG THIS WAS WRITTEN FOR. The gesture is attached to a wrapper
+  // `dockOccupied` tall; the buttons only exist in the capsule's own band at
+  // the top. v7 puts the safe-area inset on the bar's container as
+  // paddingBottom, so a touch down there still reaches our gesture.
+  test('BELOW the capsule it is nothing — the gap and the home indicator', () => {
+    expect(slotUnderTouch(centre(3), BAR_CONTENT_HEIGHT + 1, W, COUNT)).toBe(-1);
+    expect(slotUnderTouch(centre(3), dockOccupied(34) - 1, W, COUNT)).toBe(-1);
+    // …and the last row of the capsule is still a tab.
+    expect(slotUnderTouch(centre(3), BAR_CONTENT_HEIGHT, W, COUNT)).toBe(3);
+  });
+
+  test('PAST either end it is nothing — where the cluster leaves a margin', () => {
+    // THREE tabs, because at six the cluster is 402pt inside a 370pt bar: it
+    // overflows, there are no side margins, and the screen edge really is
+    // still the end tab. The margin only exists when the tabs do not fill the
+    // capsule, which is what `clusterStart` is for.
+    expect(slotUnderTouch(0, ON_BAR, W, 3)).toBe(-1);
+    expect(slotUnderTouch(W, ON_BAR, W, 3)).toBe(-1);
+    expect(slotUnderTouch(centre(0, 3), ON_BAR, W, 3)).toBe(0);
+    // Unlike slotAtX, which clamps to the end tab because a DRAG should hold
+    // there rather than scrub into nothing.
+    expect(slotAtX(0, W, 3)).toBe(0);
+    expect(slotAtX(W, W, 3)).toBe(2);
+  });
+
+  test('it follows the cluster when a tab is hidden', () => {
+    expect(slotUnderTouch(centre(4, 5), ON_BAR, W, 5)).toBe(4);
   });
 });

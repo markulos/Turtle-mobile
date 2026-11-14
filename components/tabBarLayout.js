@@ -63,7 +63,33 @@ export const clusterPadding = (screenWidth, count) =>
   clusterStart(screenWidth, count);
 
 /**
- * WHICH TAB A FINGER IS OVER, as a CONTINUOUS slot position.
+ * WHERE ALONG THE CLUSTER a window-x falls, BEFORE clamping.
+ *
+ * The shared half of the two answers below, so the day they disagree never
+ * comes — that is the day the chip and the navigation part company. Raw
+ * because the two callers need opposite things at the ends: a DRAG past the
+ * last icon should hold that icon, a TOUCH past it is not on a tab at all,
+ * and only an unclamped number can tell those apart.
+ *
+ * `x` is in WINDOW coordinates (a gesture's absoluteX), which is why this
+ * takes the screen width rather than the bar's: the bar is inset by
+ * CARD_MARGIN_H either side, and the cluster is centred inside that.
+ *
+ * Declared above both callers deliberately: a worklet captures what it
+ * references at the moment it is DEFINED, so a helper declared underneath
+ * them reaches the UI thread undefined.
+ */
+const rawSlotAtX = (x, screenWidth, count) => {
+  'worklet';
+  const left = CARD_MARGIN_H + clusterStart(screenWidth - CARD_MARGIN_H * 2, count);
+  // -0.5 puts the CENTRE of slot 0 at exactly 0: the pill's resting formula is
+  // measured from a slot's left edge, so a finger on an icon must read as that
+  // icon's whole number.
+  return (x - left) / TAB_SLOT - 0.5;
+};
+
+/**
+ * WHICH TAB A DRAGGING FINGER IS OVER, as a CONTINUOUS slot position.
  *
  * This is the dock's drag (DockTabBar): a thumb sliding along the capsule
  * carries the chip with it and switches tabs as it crosses them. Both halves of
@@ -76,26 +102,19 @@ export const clusterPadding = (screenWidth, count) =>
  *     two icons rather than on an icon's left edge — so the tab flips when the
  *     thumb passes the gap, which is where the eye expects it.
  *
- * `x` is in WINDOW coordinates (a gesture's absoluteX), which is why this takes
- * the screen width rather than the bar's: the bar is inset by CARD_MARGIN_H
- * either side, and the cluster is centred inside that. Returning a slot index —
- * not a pixel offset — is also what keeps it honest with TabBarPill: the chip
- * converts the slot with its OWN measured geometry, through the same
- * `TAB_SLOT * i + offset` it uses at rest, so a drag cannot land the chip
- * anywhere a tap could not.
+ * Returning a slot index — not a pixel offset — is what keeps it honest with
+ * TabBarPill: the chip converts the slot with its OWN measured geometry,
+ * through the same `TAB_SLOT * i + offset` it uses at rest, so a drag cannot
+ * land the chip anywhere a tap could not.
  *
  * Clamped to a real slot: a thumb that slides past the last icon, or off the
  * left end of the capsule, holds at the end tab rather than scrubbing into
- * nothing.
+ * nothing. For a touch LANDING, where that clamp would be a lie, see
+ * `slotUnderTouch`.
  */
 export const slotAtX = (x, screenWidth, count) => {
   'worklet';
-  const left = CARD_MARGIN_H + clusterStart(screenWidth - CARD_MARGIN_H * 2, count);
-  // -0.5 puts the CENTRE of slot 0 at exactly 0: the pill's resting formula is
-  // measured from a slot's left edge, so a finger on an icon must read as that
-  // icon's whole number.
-  const raw = (x - left) / TAB_SLOT - 0.5;
-  return Math.min(count - 1, Math.max(0, raw));
+  return Math.min(count - 1, Math.max(0, rawSlotAtX(x, screenWidth, count)));
 };
 
 
@@ -177,6 +196,50 @@ export const BAR_CONTENT_HEIGHT = PILL_SIZE + BAR_VERTICAL_PAD * 2;
 // without fighting the library.
 export const TAB_ITEM_PADDING = 5;
 export const TAB_ICON_SLOT = PILL_SIZE - TAB_ITEM_PADDING * 2;
+
+/**
+ * WHICH TAB A TOUCH IS ON — or -1, because most of the dock is not a tab.
+ *
+ * `slotAtX` answers "where along the bar", clamped, which is right for a drag:
+ * a thumb that runs past the last icon should hold the last icon. It is wrong
+ * for a TOUCH LANDING, because it has an opinion about every point on the
+ * screen, including the ones with no button under them.
+ *
+ * That distinction became load-bearing when the chip started aiming on
+ * touch-down (DockTabBar's onBegin). The gesture is attached to a wrapper
+ * `dockOccupied` tall — the capsule, the gap it floats above the edge, AND the
+ * home-indicator inset — while the buttons only exist in the capsule's own
+ * BAR_CONTENT_HEIGHT band at the top of it. On a phone with a 34pt inset that
+ * is 42 of 111 points, 38% of the dock, where a touch reaches the gesture and
+ * no button is under it:
+ *
+ *   • the inset is real estate the BAR owns, not us — v7 puts it on the bar's
+ *     container as `paddingBottom` (BottomTabBar.js), so a touch there still
+ *     lands on a descendant of our wrapper and still starts the pan;
+ *   • the capsule is inset CARD_MARGIN_H either side, so the margins are the
+ *     same story horizontally.
+ *
+ * Aiming the chip from a touch in any of that is a promise nothing will keep:
+ * no Pressable is hit, no `tabPress`, no navigate — and the chip sits on a tab
+ * nobody chose until the lead guard takes it back. Mark saw exactly that, as
+ * "it moves to the pressed location and then goes back".
+ *
+ * `y` is measured from the TOP of the gesture wrapper, which is what a
+ * gesture's own `y` already is.
+ */
+export const slotUnderTouch = (x, y, screenWidth, count) => {
+  'worklet';
+  // Below the capsule: the floating gap and the home indicator. Written as
+  // `!(y >= 0)` so a missing or NaN y fails CLOSED — no aim, which is simply
+  // the behaviour before the chip left on the touch, rather than an aim at a
+  // tab the finger may be nowhere near.
+  if (!(y >= 0) || y > BAR_CONTENT_HEIGHT) return -1;
+  const raw = rawSlotAtX(x, screenWidth, count);
+  // Past either end of the cluster — the capsule's side margins, and whatever
+  // the centring leaves over when the tabs do not fill the bar.
+  if (raw < -0.5 || raw > count - 1 + 0.5) return -1;
+  return Math.round(raw);
+};
 
 /**
  * How much space the dock ACTUALLY occupies, measured up from the window's

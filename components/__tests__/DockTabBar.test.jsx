@@ -2,7 +2,7 @@ import React from 'react';
 import { Dimensions } from 'react-native';
 import { act, render } from '@testing-library/react-native';
 
-import { CARD_MARGIN_H, TAB_SLOT, clusterStart } from '../tabBarLayout';
+import { BAR_CONTENT_HEIGHT, CARD_MARGIN_H, TAB_SLOT, clusterStart } from '../tabBarLayout';
 import { CHIP_SLIDE_MAX_MS } from '../dockMotion';
 
 // The pan the dock built, so a test can actually drag it. A chain() stub would
@@ -101,8 +101,11 @@ const navigatedTo = (dispatch) =>
 /** Put the thumb down: onBegin fires for EVERY touch, drag or tap, and is
  *  where the dock takes its holds. A test that skips it is testing a gesture
  *  the device never produces. */
-const touchDown = async (x) => {
-  await act(() => { mockPan.onBegin({ absoluteX: x }); });
+const touchDown = async (x, y = BAR_CONTENT_HEIGHT / 2) => {
+  // `y` defaults to mid-capsule: the band where the buttons actually are. The
+  // gesture's wrapper is taller than that (see slotUnderTouch), so a touch
+  // without a y is not a touch the device can produce.
+  await act(() => { mockPan.onBegin({ absoluteX: x, x, y }); });
 };
 
 /** Lift the thumb: the real gesture runs both, in this order. */
@@ -300,6 +303,34 @@ test('a TAP aims the chip before the finger leaves the glass', async () => {
   // Aimed, NOT navigated. The press is still react-navigation's to handle and
   // a touch is not yet a choice — nothing here dispatches.
   expect(props.navigation.dispatch).not.toHaveBeenCalled();
+});
+
+test('a touch BELOW the capsule aims at nothing — it is not a tab', async () => {
+  // 38% of this gesture's area has no button under it. The wrapper is
+  // `dockOccupied` tall — capsule, floating gap, home-indicator inset — and
+  // react-navigation puts that inset on the bar's own container as padding,
+  // so a thumb landing low still starts this gesture while hitting nothing
+  // pressable. Aiming from there is a promise nothing keeps: the chip goes to
+  // a tab, no navigate ever comes, and `guardLead` hauls it back. That is
+  // what Mark saw as "it moves to the pressed location and then goes back".
+  const props = buildProps(0);
+  const leadSlot = { value: -1 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} />);
+
+  // Horizontally over Turtle, but down in the home-indicator strip.
+  await act(() => {
+    mockPan.onBegin({ absoluteX: onIcon(4), x: onIcon(4), y: BAR_CONTENT_HEIGHT + 20 });
+  });
+
+  expect(leadSlot.value).toBe(-1);
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+
+  // …and the same x, up on the capsule, still aims — the band is the only
+  // thing being tested here.
+  await act(() => {
+    mockPan.onBegin({ absoluteX: onIcon(4), x: onIcon(4), y: BAR_CONTENT_HEIGHT / 2 });
+  });
+  expect(leadSlot.value).toBe(4);
 });
 
 test('a touch the system takes back does not strand the chip on a tab nobody chose', async () => {
