@@ -48,6 +48,9 @@ const LISTENERS_NOT_YET = [
 /** Still on Reanimated's deprecated keyboard hook. */
 const REANIMATED_HOOK_NOT_YET = [
   'screens/NotesScreen/index.jsx',
+  // Put back on purpose (owner, 2026-11-14): same source as the main chat.
+  // It leaves this list WITH the main chat, not before it.
+  'screens/ProfileScreen/components/FriendChatPage.jsx',
   'screens/TurtleScreen/components/AlbumActionsSheet.jsx',
   'screens/TurtleScreen/components/AlbumPickerSheet.jsx',
   'screens/TurtleScreen/components/BoardTimeline.jsx',
@@ -109,12 +112,37 @@ describe('one keyboard', () => {
   });
 });
 
+describe('one keyboard for every chat composer', () => {
+  const read = (rel) => FILES.find((f) => f.rel === rel).src;
+
+  test('the composer sets everything that changes the keyboard size', () => {
+    // Autocorrect, spell-check and autofill each bring the suggestion bar,
+    // which makes the keyboard taller. iOS opens the keyboard at its LAST
+    // size and then corrects it, so two composers that disagree hand each
+    // other a two-step rise.
+    const src = read('components/ChatComposer.jsx');
+    const defaults = src.slice(src.indexOf('<AppTextInput'), src.indexOf('{...(inputProps || {})}'));
+    expect(defaults).toMatch(/autoCorrect=\{false\}/);
+    expect(defaults).toMatch(/spellCheck=\{false\}/);
+    expect(defaults).toMatch(/autoComplete="off"/);
+    expect(defaults).toMatch(/textContentType="none"/);
+  });
+
+  test('no composer switches any of them back on', () => {
+    const users = FILES.filter((f) => /<ChatComposer\b/.test(f.src));
+    expect(users.length).toBeGreaterThan(1);
+    for (const f of users) {
+      expect([f.rel, /spellCheck:\s*true|autoCorrect:\s*true/.test(f.src)]).toEqual([f.rel, false]);
+    }
+  });
+});
+
 describe('the surfaces that ride the keyboard', () => {
   const read = (rel) => FILES.find((f) => f.rel === rel).src;
 
   test('the friend chat: composer and conversation take ONE transform', () => {
     const src = read('screens/ProfileScreen/components/FriendChatPage.jsx');
-    expect(src).toMatch(/useKeyboardLiftStyle\(\{ rest: dockRest, gap: KEYBOARD_GAP \}\)/);
+    expect(src).toMatch(/keyboardLift\(keyboard\.height\.value, 1, dockRest, KEYBOARD_GAP\)/);
     // Rigid, the way the main chat is: ONE lifted column holding both the
     // conversation and the composer. Two views given the same style are two
     // things that can settle at different times.

@@ -91,7 +91,20 @@ export default function ChatComposer({
         multiline={multiline}
         maxLength={maxLength}
         editable={!disabled}
+        // ONE KEYBOARD FOR EVERY COMPOSER. iOS draws the suggestion bar over
+        // the keys when a field has autocorrect, spell-check or autofill on,
+        // and that bar makes the keyboard taller. It also opens the keyboard
+        // at the size it LAST had and only then corrects it for the field in
+        // hand. So two composers that disagree about any of these give each
+        // other a two-step: the keyboard rises to the previous chat's height,
+        // pauses, and moves again — and everything riding it moves twice
+        // with it. The main chat set all four; the friend chat set one, and
+        // each made the other stutter the next time it opened. They live
+        // here now, so a new composer cannot disagree by leaving one out.
         autoCorrect={false}
+        spellCheck={false}
+        autoComplete="off"
+        textContentType="none"
         {...(inputProps || {})}
       />
 

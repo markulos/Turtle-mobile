@@ -67,7 +67,7 @@ import {
   ActivityIndicator, Alert, BackHandler, Linking, Pressable, StyleSheet, Text, View,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import Reanimated from 'react-native-reanimated';
+import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
@@ -96,7 +96,7 @@ import { panelTopInset, panelBottomInset } from '../../../components/tabBarLayou
 import { depth } from '../../../utils/surfaceDepth';
 import { inkOn } from '../../../utils/accentColor';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
-import { KEYBOARD_GAP, useKeyboardLiftStyle } from '../../../utils/keyboardMotion';
+import { KEYBOARD_GAP, keyboardLift } from '../../../utils/keyboardMotion';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { copyText } from '../../../utils/copyText';
 import { FROST_OVERLAP } from '../../../utils/frostedChat';
@@ -201,7 +201,14 @@ function FriendChatPage({
   // not against the header), so what rises is always the newest messages and
   // what slides under the header is always the oldest.
   const dockRest = panelBottomInset(insets.bottom);
-  const keyboardRide = useKeyboardLiftStyle({ rest: dockRest, gap: KEYBOARD_GAP });
+  // The keyboard is read the way the main chat reads it (Reanimated's live
+  // keyboard height) and lifted by the main chat's formula — by the owner's
+  // request, so the two chats are the same mechanism end to end rather than
+  // two that are meant to agree.
+  const keyboard = useAnimatedKeyboard();
+  const keyboardRide = useAnimatedStyle(() => ({
+    transform: [{ translateY: -keyboardLift(keyboard.height.value, 1, dockRest, KEYBOARD_GAP) }],
+  }), [dockRest]);
 
   // The list's content style keeps its identity from one render to the next. A
   // fresh object literal each time is, to the list, a changed layout — and anything
