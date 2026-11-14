@@ -158,6 +158,45 @@ export const chipAim = (dragging, slot, lead, index) => {
 };
 
 /**
+ * WHAT IS LEFT OF A LEAD once a request has been answered.
+ *
+ * A lead is one touch's optimistic aim. It is spent when the navigator says
+ * where it now is — and ONLY if it is still that request's own lead:
+ *
+ *   • it equals `requested` — this is the touch whose request was just
+ *     answered, whatever the answer was (the tab changed, or it was refused
+ *     and the chip must come back);
+ *   • it equals `current` — the navigator is already where the lead points,
+ *     so there is nothing left for it to say.
+ *
+ * Anything else is a NEWER touch that has already re-aimed the chip, and it
+ * is left alone. That condition is the fix for the chip going back on itself:
+ * the lead used to be cleared unconditionally whenever the navigator's index
+ * changed, from an effect that runs late on a busy JS thread — so a commit for
+ * the PREVIOUS tab change landed on top of the next touch, wiped its aim, and
+ * sent the chip back to a tab the user had already left. See dockNav.
+ */
+export const leadAfterSettle = (lead, requested, current) => {
+  'worklet';
+  return lead === requested || lead === current ? -1 : lead;
+};
+
+/**
+ * How long a chip that a thumb has just picked up takes to arrive under it.
+ *
+ * Under a thumb the chip is written raw, one frame per touch sample — but the
+ * frame the drag BEGINS on, the chip is somewhere else: half a slot from the
+ * finger if it was resting, or most of the dock away if it was still
+ * travelling to the touch (a tap whose thumb rolled past the drag slop, which
+ * is most common on exactly the long reaches). Written raw on that frame it
+ * teleports. So the gap it had is carried as an offset and run down to zero
+ * over this long; after that the chip IS the finger again, with nothing in
+ * between. Short enough that it is over before a deliberate scrub has gone
+ * anywhere.
+ */
+export const CHIP_CATCH_MS = 120;
+
+/**
  * The curve, as control points, because two Easing implementations have to
  * build it. Leaves at full speed (x1 = y1 = 0, so there is no ease-in to sit
  * through) and arrives with zero velocity (y2 = 1): a departure and a landing,

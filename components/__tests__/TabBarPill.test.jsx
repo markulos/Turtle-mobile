@@ -32,6 +32,10 @@ jest.mock('expo-linear-gradient', () => {
 
 jest.mock('@react-navigation/native', () => ({
   useNavigationState: (selector) => selector({ index: 2, routes: new Array(5).fill({}) }),
+  // The pill reads the navigator's live state when the index commits.
+  NavigationHelpersContext: require('react').createContext({
+    getState: () => ({ index: 2, routes: new Array(5).fill({}) }),
+  }),
 }));
 
 jest.mock('react-native-reanimated', () => {

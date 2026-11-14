@@ -40,7 +40,7 @@ describe('the chip travels on ONE animation per move', () => {
   test('the style declares no animation — it reads a position', () => {
     const body = styleBody();
     expect(body).not.toMatch(/withTiming|withSpring|withDecay/);
-    expect(body).toMatch(/translateX: x\.value/);
+    expect(body).toMatch(/translateX: x\.value \+ catchUp\.value/);
   });
 
   test('the travel is started from a reaction, not from a render', () => {
@@ -50,11 +50,22 @@ describe('the chip travels on ONE animation per move', () => {
     expect(SRC).toMatch(/if \(cur\.aim !== prev\.aim\)/);
   });
 
-  test('a dragged chip is still written raw, with no animation at all', () => {
-    // A filter is a lag, and under a fingertip there is something to measure
-    // the lag against. This is the one path that must never go through
-    // withTiming — see TabBarPill's header.
-    expect(SRC).toMatch(/if \(cur\.dragging\) \{ x\.value = px; return; \}/);
+  test('a dragged chip is still written raw — the position itself is never animated', () => {
+    // The drag branch, up to its return.
+    const at = SRC.indexOf('if (cur.dragging) {');
+    expect(at).toBeGreaterThan(-1);
+    const branch = SRC.slice(at, SRC.indexOf('return;', at));
+    expect(branch).toMatch(/x\.value = px;/);
+    // `x` is assigned, never timed, under a thumb.
+    expect(branch).not.toMatch(/x\.value = with(Timing|Spring|Decay)/);
+  });
+
+  test('the frame a thumb TAKES the chip, the gap is carried — not jumped', () => {
+    // A chip still crossing the dock when the pan activates (a tap whose thumb
+    // rolled, most common on a long reach) used to teleport to the finger.
+    // The gap becomes an offset that runs down to zero; the style adds it.
+    expect(SRC).toMatch(/if \(prev && !prev\.dragging\) \{\s*catchUp\.value = x\.value - px;\s*catchUp\.value = withTiming\(0, CATCH\);/);
+    expect(styleBody()).toMatch(/translateX: x\.value \+ catchUp\.value/);
   });
 
   test('a layout change places the chip rather than sending it travelling', () => {
@@ -65,42 +76,60 @@ describe('the chip travels on ONE animation per move', () => {
 });
 
 /**
- * THE HANDOVER'S ORDER, scanned — because splitting it back up is the bug.
+ * THE HANDOVER, scanned — because both of its old shapes were bugs.
  *
- * Mirroring `index` and spending the `lead` are two writes, and a shared value
- * assigned from JS is a separate UI-thread job per assignment, each one running
- * the reaction before the next lands. Spend first and the aim falls through to
- * an `indexSV` that is still the slot the chip LEFT: a full travel backwards,
- * then a third travel forwards from wherever that reached. That is what shipped
- * as "the chip snaps about as it crosses the bar", and it got worse with
- * distance.
+ * When the navigator's index changes the chip is told where the navigator is
+ * and that the lead pointing there has done its job. It has been wrong twice:
  *
- * chipAim.test.js walks the sequences and proves the rule; this pins the thing
- * that cannot be proved from the rule alone — that the two writes are in one
- * effect, in the order that never lets them disagree.
+ *   • spent BEFORE the index was mirrored, in an effect of its own — the aim
+ *     fell through to the slot the chip had left: a travel backwards;
+ *   • spent UNCONDITIONALLY, with the index its own render saw — so a commit
+ *     that landed late (a tab whose screen was waking up) wiped the aim of the
+ *     NEXT touch and sent the chip back to the tab being left. That is the
+ *     chip "sometimes not moving to the tab I pressed".
+ *
+ * dockNav.test.js walks the sequences and proves the rule. This pins the
+ * wiring that cannot be proved from the rule alone.
  */
-describe('the lead is spent AFTER the navigator is mirrored', () => {
-  test('both writes live in one effect, index first', () => {
-    const iAt = SRC.indexOf('indexSV.value = index;');
-    const spendAt = SRC.indexOf('lead.value = -1;');
-    expect(iAt).toBeGreaterThan(-1);
-    expect(spendAt).toBeGreaterThan(-1);
-    expect(spendAt).toBeGreaterThan(iAt);
-    // …and with no `useEffect(` between them, which is what would make them
-    // two effects again and put the spend back in the earlier one.
-    expect(SRC.slice(iAt, spendAt)).not.toMatch(/useEffect\(/);
+describe('the lead is spent by the answer to its own request', () => {
+  const NAV = fs.readFileSync(path.join(__dirname, '..', 'dockNav.js'), 'utf8');
+
+  test('the pill never clears the lead itself — not from an effect, not from the driver', () => {
+    expect(SRC).not.toMatch(/lead\.value\s*=/);
   });
 
-  test('the lead is spent in exactly one place', () => {
-    // Two spends would reintroduce the early one without failing the order
-    // check above.
-    expect(SRC.match(/lead\.value = -1;/g)).toHaveLength(1);
+  test('the commit reads the navigator\'s STORE, not the index its render saw', () => {
+    const at = SRC.indexOf('const live = currentTabIndex(navigation, null);');
+    expect(at).toBeGreaterThan(-1);
+    const effect = SRC.slice(SRC.lastIndexOf('useEffect(', at), SRC.indexOf('}, [', at));
+    expect(effect).toMatch(/const now = live >= 0 \? live : index;/);
+    expect(effect).toMatch(/settle\(now, now\);/);
   });
 
-  test('the clock for the move is written before the aim that will use it', () => {
-    // A travel timed against a stale duration is the other way these writes
-    // can be got wrong: the aim changes, the reaction reads ms.value, and the
-    // new one has not arrived yet.
-    expect(SRC.indexOf('ms.value = chipSlideMs(')).toBeLessThan(SRC.indexOf('indexSV.value = index;'));
+  test('settle is one UI-thread job: the index first, then what is left of the lead', () => {
+    const at = NAV.indexOf('export function useDockSettle(');
+    expect(at).toBeGreaterThan(-1);
+    const body = NAV.slice(at);
+    expect(body).toMatch(/runOnUI\(\(\) => \{/);
+    const navAt = body.indexOf('navSlot.value = current');
+    const leadAt = body.indexOf('lead.value = leadAfterSettle(lead.value, requested, current)');
+    expect(navAt).toBeGreaterThan(-1);
+    expect(leadAt).toBeGreaterThan(navAt);
+  });
+
+  test('an index that is not known yet is a placement, not a travel', () => {
+    // App.js starts the chip's copy of the index at -1; the first real value
+    // must not send the chip sliding in from off the bar.
+    expect(SRC).toMatch(/cur\.offset !== prev\.offset \|\| prev\.aim < 0/);
+  });
+
+  test('no timer decides anything about the chip', () => {
+    const DOCK = fs.readFileSync(path.join(__dirname, '..', 'DockTabBar.jsx'), 'utf8');
+    expect(NAV).not.toMatch(/setTimeout|setInterval/);
+    expect(SRC).not.toMatch(/setTimeout|setInterval/);
+    // The dock keeps exactly one: the interaction hold's release, which
+    // defers a screen's mount and has nothing to do with where the chip goes.
+    expect(DOCK.match(/setTimeout\(/g)).toHaveLength(1);
+    expect(DOCK).toMatch(/releaseTimerRef\.current = setTimeout\(/);
   });
 });

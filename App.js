@@ -9,7 +9,7 @@ import './utils/installFont';
 // Defines the background upload-drain task at module scope on EVERY launch —
 // including the background launches iOS makes for it. Must run before the app.
 import './services/backgroundUploadTask';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 // One shared value, owned by the navigator and read by both halves of the
@@ -74,7 +74,8 @@ import { activeInk, dockSkin } from './components/dockSkins';
 import { buildNavTheme } from './utils/navTheme';
 import { resolveDockSkin } from './components/dockThemes';
 import DockTabBar from './components/DockTabBar';
-import { CHIP_SLIDE_BASE_MS, TAB_SWITCH_SPEC, chipSlideMs, forTabTurn } from './components/dockMotion';
+import { CHIP_SLIDE_BASE_MS, TAB_SWITCH_SPEC, forTabTurn } from './components/dockMotion';
+import { requestTab, useDockSettle } from './components/dockNav';
 import { useDockMotionProbe } from './components/dockMotionProbe';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
 import { AnimalGlyph } from './components/AnimalAvatar';
@@ -177,15 +178,25 @@ function TabNavigator() {
   // components. Reported into Settings → Navigation, in plain words, so this
   // stops being judged by eye. See components/dockMotionProbe.
   const dockProbe = useDockMotionProbe(slideMs, dockPressLift);
-  // DID REACT-NAVIGATION ANSWER THIS TOUCH? Stamped by the listeners below,
-  // cleared by the dock at touch-down. The dock completes a tab change itself
-  // when a touch produced none (the strip below the capsule has no button
-  // under it, and the drag recogniser can eat a press), and this is what
-  // stops it doing that when the button DID answer — including a long-press,
-  // which fires `tabLongPress` and never `tabPress` and would otherwise look
-  // exactly like a missed tap. A stamp rather than a look at the navigator's
-  // state, so a slow commit cannot be read as a missed one.
-  const tabHandledAt = useSharedValue(0);
+  // WHERE THE NAVIGATOR IS, as the chip knows it — the third thing that can
+  // aim it, after a thumb and a lead. It lives here, with the other two,
+  // because it has more than one writer now: the dock writes it the moment it
+  // asks for a tab (the navigator's store is synchronous, so the answer is
+  // known on the next line — components/dockNav), and TabBarPill writes it
+  // again when React commits. -1 until the pill has mounted and read it.
+  const navSlot = useSharedValue(-1);
+  // …and the one way anybody tells the chip what became of a request: where
+  // the navigator is now, and that the lead for that request is answered.
+  // Shared by the gesture's path and the button's, so a tap that both of them
+  // report is still one answer.
+  const settleDock = useDockSettle(leadSlot, navSlot);
+  // A LONG-PRESS is a different gesture from a tap — on Turtle it opens the
+  // console — and the finger that made it still has to come off the dock.
+  // Raised by `tabLongPress` below, read (and lowered) by the dock when that
+  // finger lifts, so the lift is not taken for a tap on the tab underneath.
+  // A ref, not a shared value: both ends are on the JS thread, and they run
+  // in the order the events happened.
+  const suppressDockTap = useRef(false);
   // An immersive page (the PDF reader) asks for the dock to go. `display:none`
   // is the only thing that actually removes it — the bar is the navigator's
   // own child and paints above every screen, so a page cannot cover it.
@@ -205,52 +216,79 @@ function TabNavigator() {
           leadSlot={leadSlot}
           slideMs={slideMs}
           pressLift={dockPressLift}
+          navSlot={navSlot}
           probe={dockProbe}
-          handled={tabHandledAt}
+          settle={settleDock}
+          suppressTap={suppressDockTap}
         />
       )}
-      // A TAP gets the same head start a DRAG already had.
+      // EVERY TAB STAYS ATTACHED. This is the fix for the dock lagging on a
+      // long move, and the reason is in how the navigator hides a tab.
       //
-      // The drag writes `leadSlot` on the lift, from the gesture worklet, so
-      // the chip is moving before React has heard anything. A tap had no such
-      // path: it went press → navigate → re-render → and only then did the
-      // chip learn where to go, which on a tab whose screen is waking up is
-      // several frames of the navbar sitting still after a touch. That is the
-      // lateness; `tabPress` is the earliest thing on the JS thread that knows
-      // which tab was chosen, and writing the shared value here costs nothing
-      // and does not wait for the commit.
+      // With detaching on (the default), react-native-screens takes an
+      // inactive tab's native views OUT of the hierarchy — and v7 decides
+      // "inactive" from each tab's transition value: 0 for the focused tab, +1
+      // to its right, -1 to its left. Its interpolation only reaches
+      // "detached" at exactly +1; every tab to the LEFT of the focused one
+      // (-1) is left attached, invisible. So:
       //
-      // The lead is spent the moment the navigator agrees (see TabBarPill), so
-      // a press on the tab you are already on just re-states where the chip is.
+      //   one tab to the right    1 screen re-attached
+      //   Tasks → Profile         FIVE re-attached, in a single frame — the
+      //                           four tabs in between flip from +1 to -1
+      //                           without animating, and each of them is a
+      //                           whole screen's views going back into the
+      //                           window (layout, layers, every image)
+      //
+      // That is main-thread work proportional to how FAR the selection moved,
+      // landing a few frames after the lift — while the chip, which left on
+      // the touch and takes longest on exactly these moves, is still short of
+      // its target. It froze there and then finished: the "lag when it moves a
+      // long distance". Going left was cheap (detaching is), which is why it
+      // did not happen every time.
+      //
+      // Off, the navigator never attaches or detaches anything on a tab
+      // change: every opened tab stays in the window and a switch is two
+      // opacities and two transforms on the native driver. Nothing new is
+      // being kept alive by this — half the tabs were ALREADY permanently
+      // attached (everything left of the focused one), the screens never
+      // froze (v7 computes `shouldFreeze` from a value that is an animated
+      // node whenever a transition is configured, so `freezeOnBlur` has been
+      // a no-op here), and an unfocused page sits at opacity 0 behind the
+      // focused one (forTabTurn), where the compositor skips it.
+      //
+      // NOT the `lazy: false` that was tried and reverted (see below): a tab
+      // still mounts on first visit, visible and measured. This only stops it
+      // being pulled out of the window afterwards.
+      detachInactiveScreens={false}
+      // THE BUTTON'S PRESS GOES THROUGH THE SAME DOOR AS THE DOCK'S.
+      //
+      // A touch on the dock is decided by the dock's own gesture now (see
+      // DockTabBar: a tap is a finger that lifted on the dock without
+      // dragging), because react-navigation's button drops ordinary taps in
+      // several ways — a rest longer than 500ms, a thumb roll the drag
+      // recogniser takes, a touch on the strip below the capsule. But the
+      // button still fires whenever it can, and for anything that is not a
+      // touch at all (VoiceOver's activate, a keyboard) it is the ONLY thing
+      // that fires.
+      //
+      // So its default — "dispatch a navigate unless I was already focused,
+      // as of my last render" — is replaced by `requestTab`, which asks the
+      // navigator's live state instead of a render's memory. That makes it
+      // idempotent: the gesture and the button can both report the same tap,
+      // in either order, and the tab changes once, with one re-render. Left
+      // as the default, the second of the two would dispatch a second
+      // navigate to the tab it is already on, and re-render the navigator in
+      // the middle of its own transition.
+      //
+      // `tabLongPress` is deliberately NOT handled here: only the one tab
+      // that does something with a long press listens for it (Turtle, below).
       screenListeners={({ navigation, route }) => ({
-        // NOTE: `tabLongPress` is deliberately NOT stamped here. Only the one
-        // tab that DOES something with a long press stamps it (Turtle, below,
-        // which opens the console).
-        //
-        // RN discards the tap outright once a press passes 500ms:
-        // Pressability's `isPressCanceledByLongPress` suppresses `onPress`
-        // when an `onLongPress` exists, and BottomTabItem gives every tab one.
-        // So resting a thumb a beat too long on any other tab fired nothing
-        // at all — no tabPress, no navigate, no feedback. That is a large
-        // part of "every once in a while it doesn't go to the intended tab",
-        // and it depends only on how long you happen to hold, which is why it
-        // felt random. The delay is RN's and cannot be reached without taking
-        // over `tabBarButton`, so the dock completes those taps instead
-        // (DockTabBar's completeTap) — and stamping every long press here
-        // would be exactly what stops it.
-        tabPress: () => {
-          // The button answered, whatever it decides to do about it — this is
-          // not a touch the dock has to finish (see DockTabBar's completeTap).
-          tabHandledAt.value = Date.now();
+        tabPress: (e) => {
+          if (e && typeof e.preventDefault === 'function') e.preventDefault();
           const st = navigation.getState();
           const i = st?.routes?.findIndex((r) => r.key === route.key);
           if (i == null || i < 0) return;
-          // How far this move goes decides how long it takes — the chip is
-          // one object whether it hops one slot or crosses the dock, and it
-          // should not change speed depending on which. Worked out here, on
-          // the JS thread, and handed to the chip as a number.
-          slideMs.value = chipSlideMs(i - (st.index ?? i));
-          leadSlot.value = i;
+          requestTab(navigation, i, settleDock, st);
         },
       })}
       // No tabPress haptic: tab switching is silent by request. (There used to
@@ -445,6 +483,7 @@ function TabNavigator() {
           <TabBarPill
             dragSlot={dragSlot}
             leadSlot={leadSlot}
+            navSlot={navSlot}
             slideMs={slideMs}
             probe={dockProbe}
             pressLift={dockPressLift}
@@ -508,10 +547,10 @@ function TabNavigator() {
         options={{ title: 'Turtle' }}
         listeners={{
           tabLongPress: () => {
-            // The one long press in the app that means something. Stamped as
-            // handled so the dock does not treat it as a tap that went
-            // missing and change tabs underneath the console it just opened.
-            tabHandledAt.value = Date.now();
+            // The one long press in the app that means something. Flagged so
+            // the dock does not take the finger coming off the glass for a
+            // tap, and change tabs underneath the console it just opened.
+            suppressDockTap.current = true;
             setConsoleOpen(true);
           },
         }}

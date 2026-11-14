@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useNavigationState } from '@react-navigation/native';
+import { NavigationHelpersContext, useNavigationState } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { blurProps } from '../utils/frostedChat';
@@ -17,8 +17,9 @@ import {
   UNDERLINE_W, UNDERLINE_H, indicatorOffset, ridgeOffsets,
 } from './tabBarLayout';
 import {
-  CHIP_SLIDE_BASE_MS, PRESS_DIM, TAB_SWITCH_BEZIER, chipAim, chipSlideMs,
+  CHIP_CATCH_MS, CHIP_SLIDE_BASE_MS, PRESS_DIM, TAB_SWITCH_BEZIER, chipAim, chipSlideMs,
 } from './dockMotion';
+import { currentTabIndex, useDockSettle } from './dockNav';
 import { dockSkin } from './dockSkins';
 import { resolveDockSkin } from './dockThemes';
 
@@ -70,6 +71,8 @@ const FADE = { duration: CHIP_SLIDE_BASE_MS, easing: EASE };
 // The settle after a lifted thumb: always the shortest clock, because what is
 // left of the move is a fraction of a slot.
 const SETTLE = { duration: CHIP_SLIDE_BASE_MS, easing: EASE };
+// A chip a thumb has just picked up, closing the gap it had (see CHIP_CATCH_MS).
+const CATCH = { duration: CHIP_CATCH_MS, easing: EASE };
 
 // The dock's palette lives in dockSkins — one entry per SKIN, because what the
 // capsule is made of is a setting now (Settings → Navigation) rather than a
@@ -107,7 +110,9 @@ const DOCK_LIP_H = 1.5;
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
 
-export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe, pressLift }) {
+export default function TabBarPill({
+  dragSlot, leadSlot, navSlot, slideMs, probe, pressLift,
+}) {
   const { theme, dockIndicator, dockStyle, dockColor, dockTheme } = useTheme();
   // Every colour the capsule draws, from the skin chosen in Settings — a
   // named theme if one is on, otherwise the chosen material. One resolver,
@@ -193,54 +198,67 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe, pressLi
   const x = useSharedValue(0);
   const fade = useSharedValue(0);
 
+  // The thumb's catch-up: how far the chip was from the finger on the frame a
+  // drag began, run down to zero (CHIP_CATCH_MS). Added to `x` in the style, so
+  // `x` itself stays the raw position under the thumb.
+  const catchUp = useSharedValue(0);
+
   // `index` and the geometry live in React state; the driver runs on the UI
-  // thread, so they are mirrored into shared values it can read.
-  const indexSV = useSharedValue(index);
+  // thread, so they are mirrored into shared values it can read. App.js owns
+  // the index's mirror and hands it in, because the dock writes it too (the
+  // moment it asks for a tab — see dockNav); the fallback keeps this component
+  // renderable on its own. App's starts at -1, "not known yet", which the
+  // driver below treats as a placement rather than a travel.
+  const ownNav = useSharedValue(index);
+  const indexSV = navSlot ?? ownNav;
   const offsetSV = useSharedValue(offset);
-  // ── THE HANDOVER, AND WHY IT IS ONE EFFECT IN THIS ORDER ────────────────
+  // ── THE HANDOVER ────────────────────────────────────────────────────────
   //
-  // Two writes, and both of them are a SEPARATE job on the UI thread: a
-  // shared value assigned from JS compiles to `runOnUI(() => { sv.value = v })`
-  // (see mutables.ts), and each assignment runs the reaction below before the
-  // next one lands. So the chip sees every intermediate state these three
-  // writes pass through, and one wrong order is a visible move.
+  // When the navigator's index changes, the chip is told two things: where
+  // the navigator is, and that the lead pointing there has done its job. This
+  // is the oldest source of trouble in the dock, and it has been wrong in two
+  // different ways.
   //
-  // This is the bug Mark described as the chip "trying to snap to each tab as
-  // it travels", worst across the full width of the bar. The spend used to be
-  // an effect of its own, declared ABOVE this one, so on the commit where the
-  // navigator agreed the order was:
+  // FIRST, the order. The lead used to be spent in an effect of its own,
+  // ABOVE the one that mirrored the index, so for one UI-thread job the aim
+  // fell through to an index that was still the slot the chip had LEFT — a
+  // full travel backwards, then a third one forwards. Fixed by doing both in
+  // one place, index first.
   //
-  //   lead = -1        → aim falls through to `indexSV`, which is STILL THE
-  //                      SLOT THE CHIP LEFT. The aim has changed, so a full
-  //                      travel starts — BACKWARDS, to where it came from.
-  //   indexSV = 5      → the aim changes again, so a THIRD travel starts, from
-  //                      wherever the backward kick had got to, on a fresh
-  //                      full duration.
+  // SECOND, and this is what was still making the chip refuse a press: the
+  // lead was spent UNCONDITIONALLY, and the index written was the one this
+  // RENDER saw. Both are late by however long React took to commit, and on a
+  // tab whose screen is waking up that is long enough to put a finger down on
+  // the next tab. That next touch aims the chip at touch-down, on the UI
+  // thread — and then this effect arrived from the PREVIOUS change, cleared
+  // the new aim and pointed the chip back at the tab being left. The chip sat
+  // there until the second press was finally processed: "the guide sometimes
+  // doesn't move to the tab I pressed".
   //
-  // Three travels per tab change, the middle one reversed, and the further the
-  // move the bigger the kick — which is exactly why it read as worst crossing
-  // the whole dock. Nothing about the curve could have fixed it.
+  // So both halves are now exact rather than assumed:
   //
-  // In one effect, in this order, no intermediate state changes the aim:
-  // `indexSV` arrives while the lead still holds the same slot (aim unchanged),
-  // and only then is the lead spent (aim unchanged again). It is also correct
-  // if Reanimated ever coalesces these into one job, because the END state is
-  // the same — the order is no longer load-bearing for correctness, only for
-  // the frames in between.
+  //   • the index is read from the navigator's STORE at the moment the effect
+  //     runs (it is synchronous — see dockNav), not taken from the render that
+  //     scheduled the effect. A late effect therefore reports the present,
+  //     never the past;
+  //   • the lead is spent only if it points at that index (leadAfterSettle).
+  //     A lead that points anywhere else belongs to a touch this commit knows
+  //     nothing about, and is left exactly as it is.
+  //
+  // One UI-thread job, index first (useDockSettle), so the first rule still
+  // holds for every intermediate frame.
+  // The TAB navigator's own helpers — the same object DockTabBar is handed as
+  // `navigation`. Taken from the navigator's context rather than from
+  // useNavigation(), which out here (the bar is not inside any screen) would
+  // be the root container, and only happens to be the same thing while the
+  // tabs are the app's root navigator.
+  const navigation = useContext(NavigationHelpersContext);
+  const settle = useDockSettle(lead, indexSV);
   useEffect(() => {
-    // The duration used to be written here too, for a tab change made from
-    // SOMEWHERE ELSE — a deep link, the /command console, a guard bouncing you
-    // out of a tab — which has no press behind it to have said how far the
-    // chip is about to go. The reaction works that out for itself now, from
-    // the distance it is actually covering, so every move is timed the same
-    // way whoever started it and there is nothing to write ahead.
-    //
-    // The truth first, which the lead is already pointing at.
-    indexSV.value = index;
-    // ONLY THEN the spend. Last, so the fall-through from `lead` to `indexSV`
-    // happens between two values that agree.
-    lead.value = -1;
-  }, [index, indexSV, lead]);
+    const live = currentTabIndex(navigation, null);
+    const now = live >= 0 ? live : index;
+    settle(now, now);
+  }, [index, navigation, settle]);
   useEffect(() => { offsetSV.value = offset; }, [offset, offsetSV]);
 
   // Nothing to place until the bar has been measured; staying invisible avoids
@@ -265,11 +283,24 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe, pressLi
       const px = TAB_SLOT * cur.aim + cur.offset;
       // Under the thumb the chip IS the finger: written straight out, every
       // frame, with nothing in between.
-      if (cur.dragging) { x.value = px; return; }
-      // First run, and any time the bar's geometry changes underneath it (a
-      // rotation, a tab being hidden in Settings): a layout is not a move, so
-      // the chip is PLACED rather than sent travelling.
-      if (!prev || cur.offset !== prev.offset) { x.value = px; return; }
+      if (cur.dragging) {
+        // …except on the frame the thumb TAKES it. The chip is wherever it
+        // was — resting half a slot from the finger, or still crossing the
+        // dock on its way to the touch — and written raw from there it
+        // teleports. The gap is carried as an offset and run down to zero;
+        // `x` is still the raw position, so nothing about the tracking lags.
+        if (prev && !prev.dragging) {
+          catchUp.value = x.value - px;
+          catchUp.value = withTiming(0, CATCH);
+        }
+        x.value = px;
+        return;
+      }
+      // First run, any time the bar's geometry changes underneath it (a
+      // rotation, a tab being hidden in Settings), and the moment the
+      // navigator's index is first KNOWN (it starts as -1): none of those is a
+      // move, so the chip is PLACED rather than sent travelling.
+      if (!prev || cur.offset !== prev.offset || prev.aim < 0) { x.value = px; return; }
       // The thumb let go. What is left is a fraction of a slot, so it settles
       // on the shortest clock the dock has rather than a full crossing's.
       if (prev.dragging) { x.value = withTiming(px, SETTLE); return; }
@@ -327,7 +358,7 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe, pressLi
   // restart one.
   const pillStyle = useAnimatedStyle(() => ({
     opacity: fade.value,
-    transform: [{ translateX: x.value }],
+    transform: [{ translateX: x.value + catchUp.value }],
   }));
 
   return (

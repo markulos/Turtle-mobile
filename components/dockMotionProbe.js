@@ -144,39 +144,35 @@ export const describeDockMotion = (r) => {
 };
 
 /**
- * WHY A TAP DID NOT CHANGE TABS — in plain words, for the same readout.
+ * WHAT THE LAST DOCK TOUCH TURNED OUT TO BE — in plain words, for the readout.
  *
- * A dock touch that produces no `tabPress` can fail in two ways, and from the
- * outside they are the same event: "I pressed the tab and it did nothing".
- * They want opposite fixes, so this says which:
+ * The dock decides every touch itself now (DockTabBar): a finger that lifts
+ * on the dock without dragging is a tap, a drag chooses on its lift, and a
+ * touch that is taken away or let go off the dock changes nothing. This says
+ * which of those the last one was, because "I pressed the tab and it did
+ * nothing" and "I swiped up to go home" are the same touch until it ends:
  *
- *   OFF THE BUTTONS  the finger was in the dock but not on a tab. The gesture
- *                    wrapper is `dockOccupied` tall and the buttons only exist
- *                    in the capsule's band at the top, so the floating gap and
- *                    the home-indicator inset reach the gesture and nothing
- *                    pressable. `touchSlot` is -1.
- *   THE DRAG TOOK IT the pan activated and RNGH cancelled the button's press
- *                    underneath it — a thumb roll past DRAG_SLOP on an
- *                    ordinary tap. `panActivated`.
- *
- * `tapCompleted` is the dock having noticed and performed the tab change
- * itself. When it is true the tap WORKED; this sentence is then reporting
- * which hole it covered, not a failure.
+ *   A TAP            `tapCompleted`. The dock changed tabs. If `touchSlot` is
+ *                    -1 the finger was on the dock but not on a button — the
+ *                    floating gap or the home-indicator inset, where
+ *                    react-navigation has nothing pressable — and the tab
+ *                    change is the dock's alone.
+ *   A DRAG           `panActivated`, no tap. The lift chose the tab.
+ *   NEITHER          the touch was abandoned: the finger left the dock before
+ *                    lifting, or the system took it (a swipe home starts
+ *                    here). No tab change, by design.
  */
 export const describeDockTouch = (r) => {
   if (!r) return '';
   const where = r.touchY >= 0 ? ` (${Math.round(r.touchY)}pt down the dock)` : '';
-  if (!r.tapCompleted) {
-    return r.panActivated
-      ? 'Last touch: the drag took it, and the tab change came from the lift.'
-      : 'Last touch: the button handled it.';
-  }
-  if (r.touchSlot < 0) {
-    return `Last touch missed the buttons${where} — the dock made the tab change itself.`;
+  if (r.tapCompleted) {
+    return r.touchSlot < 0
+      ? `Last touch missed the buttons${where} — the dock made the tab change itself.`
+      : `Last touch: a tap on a tab${where} — the dock changed tabs on the lift.`;
   }
   return r.panActivated
-    ? `Last touch: on a tab${where}, but the drag ate the press — the dock made the tab change itself.`
-    : `Last touch: on a tab${where}, and the press never arrived — the dock made the tab change itself.`;
+    ? 'Last touch: a drag, and the tab change came from the lift.'
+    : 'Last touch was let go off the dock, or taken by the system — no tab change.';
 };
 
 /**

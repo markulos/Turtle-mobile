@@ -8,29 +8,30 @@ import { CHIP_SLIDE_MAX_MS } from '../dockMotion';
 // The pan the dock built, so a test can actually drag it. A chain() stub would
 // let the whole gesture be wired to nothing and still pass.
 const mockPan = {};
+const CALLBACKS = [
+  'onBegin', 'onTouchesDown', 'onTouchesUp', 'onTouchesCancelled',
+  'onStart', 'onUpdate', 'onEnd', 'onFinalize',
+];
 jest.mock('react-native-gesture-handler', () => {
   const api = {
     maxPointers: () => api,
     activeOffsetX: () => api,
-    onBegin: (fn) => { mockPan.onBegin = fn; return api; },
-    onStart: (fn) => { mockPan.onStart = fn; return api; },
-    onUpdate: (fn) => { mockPan.onUpdate = fn; return api; },
-    onEnd: (fn) => { mockPan.onEnd = fn; return api; },
-    onFinalize: (fn) => { mockPan.onFinalize = fn; return api; },
   };
+  for (const cb of [
+    'onBegin', 'onTouchesDown', 'onTouchesUp', 'onTouchesCancelled',
+    'onStart', 'onUpdate', 'onEnd', 'onFinalize',
+  ]) {
+    api[cb] = (fn) => { mockPan[cb] = fn; return api; };
+  }
   return {
     Gesture: { Pan: () => api },
     GestureDetector: ({ children }) => children,
   };
 });
 
-// The real bar is react-navigation's, and this file is about the gesture over
-// it — not about re-testing the library's rendering.
 jest.mock('@react-navigation/bottom-tabs', () => ({ BottomTabBar: () => null }));
 
-// The app-wide back-swipe guard. Mocked rather than exercised: what this file
-// is responsible for is that the dock TAKES it for the length of a drag and
-// gives it back — the guard's own counting has its own test.
+// The back-swipe guard the dock takes for the length of a touch.
 const releaseSwipe = jest.fn();
 const holdSwipe = jest.fn(() => releaseSwipe);
 jest.mock('../../utils/edgeSwipeGuard', () => ({ holdEdgeSwipe: () => mockHoldSwipe() }));
@@ -48,13 +49,14 @@ jest.mock('react-native-reanimated', () => {
     // it lands immediately, which is what lets a test read the end state.
     withTiming: (to) => to,
     // The gesture's callbacks are worklets on device; here they run inline, so
-    // runOnJS has to be the identity rather than a queue.
+    // the hops between the threads have to be the identity rather than a queue.
     runOnJS: (fn) => fn,
-    useSharedValue: (init) => ({ value: init }),
+    runOnUI: (fn) => fn,
+    useSharedValue: (init) => require('react').useRef({ value: init }).current,
   };
 });
 
-import DockTabBar, { LEAD_GUARD_MS, TAP_COMPLETE_MS } from '../DockTabBar';
+import DockTabBar, { LIFT_SLACK } from '../DockTabBar';
 
 const NAMES = ['Tasks', 'Notes', 'Photos', 'Vault', 'Turtle', 'Profile'];
 const WIDTH = Dimensions.get('window').width;
@@ -63,79 +65,81 @@ const WIDTH = Dimensions.get('window').width;
 const onIcon = (i) =>
   CARD_MARGIN_H + clusterStart(WIDTH - CARD_MARGIN_H * 2, NAMES.length) + TAB_SLOT * i + TAB_SLOT / 2;
 
-const buildProps = (index = 0) => {
+/**
+ * A navigator that behaves like the real one where it matters to the dock:
+ * its state is a STORE, current on the line after a dispatch, before anything
+ * has re-rendered. (dockNav.test proves the real one does this.)
+ */
+const buildProps = (index = 0, { refuses = false } = {}) => {
   const routes = NAMES.map((name, i) => ({ key: `${name}-${i}`, name }));
+  let state = { key: 'tabs-1', index, routes, routeNames: NAMES, preloadedRouteKeys: [] };
+  const dispatch = jest.fn((action) => {
+    if (refuses) return;
+    const to = routes.findIndex((r) => r.key === action.payload?.key || r.name === action.payload?.name);
+    if (to >= 0) state = { ...state, index: to };
+  });
   return {
-    state: { key: 'tabs-1', index, routes, routeNames: NAMES, preloadedRouteKeys: [] },
-    navigation: { dispatch: jest.fn(), emit: jest.fn() },
+    state,
+    navigation: { dispatch, emit: jest.fn(), getState: () => state },
     descriptors: Object.fromEntries(routes.map((r) => [r.key, { options: {}, route: r }])),
     insets: { top: 59, right: 0, bottom: 34, left: 0 },
   };
 };
 
-/** Which route a recorded dispatch is asking for. */
 const navigatedTo = (dispatch) =>
   dispatch.mock.calls.map(([action]) => action.payload?.key ?? action.payload?.name);
 
-/**
- * EVERY `act` IN THIS FILE IS AWAITED, AND THAT IS LOAD-BEARING.
- *
- * RNTL's `act` is async here (the same reason `render` is awaited throughout
- * this repo). Calling it without awaiting leaves React's act scope OPEN, and
- * from that point on every `render()` in the file returns a null tree — the
- * component never mounts and never runs.
- *
- * It fails silently, which is why it survived: tests 2-5 of this file were
- * driving the callbacks test 1 had registered, against shared values those
- * callbacks had never heard of, and every assertion of the form "this stayed
- * at -1" passed because nothing had touched the object. Four tests were
- * asserting nothing at all. React says so — "You called act(async () => ...)
- * without await" — but it says it as a console.error, which a passing suite
- * does not stop for.
- *
- * So: `await act(...)`, `await touchDown(...)`, `await lift()`. The helpers
- * below are async for that reason alone, and `mount()` fails loudly if a
- * mount did not take.
- */
+// ── The touch, as RNGH delivers it ─────────────────────────────────────────
+//
+// `y` is measured from the top of the gesture's wrapper. A real touch always
+// has one, and the default is the middle of the capsule — on a button.
+const MID = BAR_CONTENT_HEIGHT / 2;
 
-/** Put the thumb down: onBegin fires for EVERY touch, drag or tap, and is
- *  where the dock takes its holds. A test that skips it is testing a gesture
- *  the device never produces. */
-const touchDown = async (x, y = BAR_CONTENT_HEIGHT / 2) => {
-  // `y` defaults to mid-capsule: the band where the buttons actually are. The
-  // gesture's wrapper is taller than that (see slotUnderTouch), so a touch
-  // without a y is not a touch the device can produce.
-  await act(() => { mockPan.onBegin({ absoluteX: x, x, y }); });
+const touchDown = async (x, y = MID) => {
+  await act(() => {
+    mockPan.onTouchesDown({ changedTouches: [{ x, y }] });
+    mockPan.onBegin({ absoluteX: x, x, y });
+  });
 };
 
-/** Lift the thumb: the real gesture runs both, in this order. */
-const lift = async () => {
-  await act(() => { mockPan.onEnd(); });
-  await act(() => { mockPan.onFinalize(); });
+/** The finger comes off the glass without ever having dragged: a tap. */
+const liftTap = async (y = MID) => {
+  await act(() => {
+    mockPan.onTouchesUp({ changedTouches: [{ y }] });
+    // A pan that never activated FAILS on the lift — it does not end.
+    mockPan.onFinalize({}, false);
+  });
 };
 
-/** The dock keeps its holds for the length of the chip's travel after the
- *  lift, so the screen waking up does not land on the frames the slide is
- *  made of. Run the clock past that to see them handed back. */
+/** iOS takes the touch away (a swipe home, a call): cancelled, never lifted. */
+const systemCancel = async ({ dragging = false } = {}) => {
+  await act(() => {
+    mockPan.onTouchesCancelled({});
+    // RNGH calls onEnd for a cancelled ACTIVE gesture too, with `false`.
+    if (dragging) mockPan.onEnd({}, false);
+    mockPan.onFinalize({}, false);
+  });
+};
+
+/** A scrub's real lift. */
+const liftDrag = async () => {
+  await act(() => {
+    mockPan.onTouchesUp({ changedTouches: [{ y: MID }] });
+    mockPan.onEnd({}, true);
+    mockPan.onFinalize({}, true);
+  });
+};
+
 const afterSlide = async () => {
   await act(() => { jest.advanceTimersByTime(CHIP_SLIDE_MAX_MS + 1); });
 };
 
-/**
- * Mount the dock and take THIS mount's gesture callbacks.
- *
- * `Gesture.Pan()` hands back one shared `api` object, so every mount
- * overwrites the callbacks the last one registered — and a test that drives
- * `mockPan` without checking gets the callbacks of whichever component
- * registered most recently, closed over ANOTHER test's shared values. The
- * assertions then read an object the gesture never touched, which is a silent
- * pass for anything expecting a value to stay where it started. Clearing the
- * callbacks in `beforeEach` and insisting they came back turns that into a
- * failure at the mount instead of a wrong answer three assertions later.
- */
+// `render` is ASYNC in RNTL 14 and must be awaited: un-awaited, the dock's
+// gesture is never registered (or is registered late, by a previous test's
+// tree), and a test then drives somebody else's callbacks.
 const mount = async (element) => {
   const result = await render(element);
-  for (const cb of ['onBegin', 'onStart', 'onUpdate', 'onEnd', 'onFinalize']) {
+  for (const cb of CALLBACKS) {
     if (typeof mockPan[cb] !== 'function') {
       throw new Error(`the dock did not register ${cb} on this mount — the gesture under test belongs to another test`);
     }
@@ -143,22 +147,22 @@ const mount = async (element) => {
   return result;
 };
 
-// One fake clock for the whole file rather than a fresh one per test. Not the
-// thing that was breaking the mounts — that was the un-awaited `act` above —
-// but React's scheduler captures `setTimeout` once, when it first loads, and
-// tearing the clock down and building another one underneath it is a second
-// way to stop its work ever running. One clock has no such seam, and the
-// per-test state these tests actually need is the pending timers, which
-// `afterEach` drains.
+// One fake clock for the whole file rather than a fresh one per test: React's
+// scheduler captures `setTimeout` once, when it first loads, and tearing the
+// clock down and building another one underneath it stops its work running.
 beforeAll(() => { jest.useFakeTimers(); });
 afterAll(() => { jest.useRealTimers(); });
 
 beforeEach(() => {
   holdSwipe.mockClear();
   releaseSwipe.mockClear();
-  for (const cb of ['onBegin', 'onStart', 'onUpdate', 'onEnd', 'onFinalize']) delete mockPan[cb];
+  for (const cb of CALLBACKS) delete mockPan[cb];
 });
 afterEach(() => { jest.runOnlyPendingTimers(); });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE DRAG
+// ═══════════════════════════════════════════════════════════════════════════
 
 test('the chip tracks the thumb 1:1, and NOTHING changes tabs until it lifts', async () => {
   const props = buildProps(0);
@@ -192,20 +196,15 @@ test('the chip tracks the thumb 1:1, and NOTHING changes tabs until it lifts', a
   }
   expect(dragSlot.value).toBeCloseTo(4);
 
-  // …and not one of those crossings changed a tab. This is the thing the page
-  // and the icon colours both hang off: a scrub used to be five navigates, so
-  // five page transitions and five sets of icons lighting and unlighting under
-  // a thumb that had not decided anything yet.
+  // …and not one of those crossings changed a tab: a scrub used to be five
+  // navigates, so five page transitions under a thumb that had not decided.
   expect(props.navigation.dispatch).not.toHaveBeenCalled();
-  // The lead holds the slot the finger LANDED on — written at touch-down, so
-  // a tap's chip leaves on the touch instead of waiting for the press. It is
-  // irrelevant for the whole of a drag: `dragSlot` outranks it in chipAim, so
-  // what the chip follows here is the thumb. Nothing about it is a tab change.
+  // The lead holds the slot the finger LANDED on. It is irrelevant for the
+  // whole of a drag — `dragSlot` outranks it in chipAim.
   expect(leadSlot.value).toBe(0);
 
   // Right off the end of the capsule and then off the other end: the thumb
-  // holds the end tab instead of scrubbing into slots that do not exist, and
-  // the chip never leaves the dock.
+  // holds the end tab instead of scrubbing into slots that do not exist.
   await act(() => { mockPan.onUpdate({ absoluteX: WIDTH + 400 }); });
   expect(dragSlot.value).toBe(NAMES.length - 1);
   await act(() => { mockPan.onUpdate({ absoluteX: -400 }); });
@@ -215,22 +214,18 @@ test('the chip tracks the thumb 1:1, and NOTHING changes tabs until it lifts', a
 
   // Thumb up. ONE navigate, for the nearest tab to where it let go — 4.3 of a
   // slot is Turtle, not Profile — and the chip is handed back to the navigator.
-  await lift();
+  await liftDrag();
   expect(navigatedTo(props.navigation.dispatch)).toEqual(['Turtle-4']);
   expect(dragSlot.value).toBe(-1);
-
-  // The lift also wrote where it landed, BEFORE React has heard a thing. That
-  // is what the chip aims at for the few frames the navigator takes to agree;
-  // without it the chip flicks back to the old tab on its way to the new one.
-  expect(leadSlot.value).toBe(4);
-
-  // Aimed at THIS navigator, the way BottomTabBar aims its own: an action
-  // without a target is handled by whichever navigator feels like it.
+  // Aimed at THIS navigator, the way BottomTabBar aims its own.
   expect(props.navigation.dispatch.mock.calls[0][0].target).toBe('tabs-1');
 
+  // The request was ANSWERED in the same call: the navigator's store already
+  // says Turtle, so the lead for it is spent and nothing is left to time out.
+  expect(leadSlot.value).toBe(-1);
+
   // …and the guard goes back once the chip has finished travelling. A leaked
-  // hold kills back-navigation app-wide for the rest of the session, with
-  // nothing on screen to explain it.
+  // hold kills back-navigation app-wide for the rest of the session.
   expect(releaseSwipe).not.toHaveBeenCalled();
   await afterSlide();
   expect(releaseSwipe).toHaveBeenCalledTimes(1);
@@ -239,60 +234,59 @@ test('the chip tracks the thumb 1:1, and NOTHING changes tabs until it lifts', a
 test('a scrub that comes home is not a tab change', async () => {
   const props = buildProps(2);
   const dragSlot = { value: -1 };
-  await mount(<DockTabBar {...props} dragSlot={dragSlot} />);
+  const leadSlot = { value: -1 };
+  await mount(<DockTabBar {...props} dragSlot={dragSlot} leadSlot={leadSlot} />);
 
+  await touchDown(onIcon(2));
   await act(() => { mockPan.onStart({ absoluteX: onIcon(2) }); });
   for (const x of [onIcon(0), onIcon(5), onIcon(2)]) {
     await act(() => { mockPan.onUpdate({ absoluteX: x }); });
   }
-  await lift();
+  await liftDrag();
 
   // You can run the length of the dock and come back without having chosen
   // anything: the tab you are on is the tab you keep.
   expect(props.navigation.dispatch).not.toHaveBeenCalled();
   expect(dragSlot.value).toBe(-1);
+  // …and the lead is answered anyway, so it cannot sit there for ever.
+  expect(leadSlot.value).toBe(-1);
 });
 
-test('a gesture the system cancels chooses nothing', async () => {
+test('a scrub the system cancels chooses nothing — even though RNGH calls onEnd for it', async () => {
+  // THE BUG THAT WAS HIDING BEHIND A COMMENT. RNGH runs onEnd for an ACTIVE
+  // gesture that is cancelled, with `success === false`. The dock ignored the
+  // flag, so a call arriving mid-scrub landed you on whatever tab the thumb
+  // happened to be over — "the app deciding for you", which the old comment
+  // on onEnd said could not happen.
   const props = buildProps(0);
   const dragSlot = { value: -1 };
   const leadSlot = { value: -1 };
   await mount(<DockTabBar {...props} dragSlot={dragSlot} leadSlot={leadSlot} />);
 
-  await touchDown(onIcon(0));
-  await act(() => { mockPan.onStart({ absoluteX: onIcon(0) }); });
+  await touchDown(onIcon(1));
+  await act(() => { mockPan.onStart({ absoluteX: onIcon(1) }); });
   await act(() => { mockPan.onUpdate({ absoluteX: onIcon(3) }); });
-  // A call arriving, a modal taking the touch: onFinalize fires WITHOUT onEnd.
-  // Landing the user on a tab they never released on would be the app
-  // deciding for them.
-  await act(() => { mockPan.onFinalize(); });
+  await systemCancel({ dragging: true });
 
   expect(props.navigation.dispatch).not.toHaveBeenCalled();
-  // The finger landed on the tab it was already on, so the lead touch-down
-  // wrote points at the current tab: the chip is exactly where it belongs and
-  // there is nothing for the guard below to take back.
-  expect(leadSlot.value).toBe(0);
   expect(dragSlot.value).toBe(-1);
-  // Cancelled, not lifted — and the guard still has to come back, or a call
-  // arriving mid-scrub permanently disables the back-swipe. It comes back on
-  // the same delay a real lift uses: the chip is travelling either way.
+  // The touch-down had aimed the chip at Notes. Nothing will ever answer that
+  // aim, so the gesture hands the chip back itself, in the same frame.
+  expect(leadSlot.value).toBe(-1);
+  // Cancelled, not lifted — and the back-swipe guard still has to come back.
   await afterSlide();
   expect(releaseSwipe).toHaveBeenCalledTimes(1);
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// THE TAP
+// ═══════════════════════════════════════════════════════════════════════════
+
 test('a TAP aims the chip before the finger leaves the glass', async () => {
-  // THE WHOLE POINT OF onBegin OWNING THE AIM.
-  //
-  // react-navigation's tab button is a plain RN Pressable, so its `onPress` —
-  // and therefore `tabPress`, and therefore the aim it used to write — does
-  // not fire until RELEASE. The chip could not start until the finger came
-  // off, and the probe (which stamps the touch at touch-DOWN) reported the
-  // length of the tap as if the app were slow: 138ms on Mark's phone with a
-  // clean travel behind it.
-  //
-  // Now the slot under the finger is the aim the instant it lands, and the
-  // whole chain from here is on the UI thread — so a busy JS thread cannot
-  // delay the chip either.
+  // react-navigation's tab button is a plain RN Pressable, so its `onPress`
+  // does not fire until RELEASE. Aimed from there, the chip could not start
+  // until the finger came off. The slot under the finger is the aim the
+  // instant it lands, and the whole chain from here is on the UI thread.
   const props = buildProps(0);
   const leadSlot = { value: -1 };
   await mount(<DockTabBar {...props} leadSlot={leadSlot} />);
@@ -300,122 +294,231 @@ test('a TAP aims the chip before the finger leaves the glass', async () => {
   await touchDown(onIcon(3));
 
   expect(leadSlot.value).toBe(3);
-  // Aimed, NOT navigated. The press is still react-navigation's to handle and
-  // a touch is not yet a choice — nothing here dispatches.
+  // Aimed, NOT navigated: a touch is not yet a choice.
   expect(props.navigation.dispatch).not.toHaveBeenCalled();
 });
 
-test('a tap BELOW the capsule still changes tabs — the dock finishes it', async () => {
-  // THE BUG MARK KEPT HITTING: "it doesn't go to the intended tab element."
-  //
-  // 38% of this gesture's area has no button under it. The wrapper is
-  // `dockOccupied` tall — capsule, floating gap, home-indicator inset — and
-  // v7 puts that inset on the bar's own container as padding, so a thumb
-  // landing low still starts this gesture while hitting nothing pressable. No
-  // Pressable means no `tabPress` and no navigate, and before this the tap
-  // simply did not happen.
-  //
-  // The first attempt at this (a5c2306, rolled back) gated the AIM on the
-  // button band, which stopped the chip reacting to the miss without making
-  // the tap work. The dock performs the tab change itself instead.
+test('the lift IS the tab change — no waiting to see whether the button will', async () => {
+  // This used to be a 150ms timer that checked whether react-navigation's own
+  // button had answered, and a 600ms one that took the chip back if nobody
+  // had. Both were guesses about how busy the JS thread was. The gesture
+  // knows a tap when it sees one, so it says so at the lift.
   const props = buildProps(0);
   const leadSlot = { value: -1 };
-  const handled = { value: 0 };
-  await mount(<DockTabBar {...props} leadSlot={leadSlot} handled={handled} />);
+  const navSlot = { value: 0 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} navSlot={navSlot} />);
 
-  // Horizontally over Turtle, but down in the home-indicator strip.
-  await touchDown(onIcon(4), BAR_CONTENT_HEIGHT + 20);
-  // Aimed anyway — the chip answers the touch, and that answer is now kept.
-  expect(leadSlot.value).toBe(4);
-  await act(() => { mockPan.onFinalize(); });
+  await touchDown(onIcon(4));
+  await liftTap();
 
-  // Nothing yet: react-navigation's own button gets first refusal, because a
-  // press that landed and is merely slow must not be navigated twice.
-  expect(props.navigation.dispatch).not.toHaveBeenCalled();
-
-  await act(() => { jest.advanceTimersByTime(TAP_COMPLETE_MS + 1); });
-
+  // No clock has moved.
   expect(navigatedTo(props.navigation.dispatch)).toEqual(['Turtle-4']);
   expect(props.navigation.dispatch.mock.calls[0][0].target).toBe('tabs-1');
-});
-
-test('…but not when the button answered — no double navigate', async () => {
-  // `handled` is stamped by the tabPress listener (App.js). It is a STAMP
-  // rather than a look at the navigator's state precisely so that a slow
-  // commit cannot be read as a missed one and dispatched a second time.
-  const props = buildProps(0);
-  const handled = { value: 0 };
-  await mount(<DockTabBar {...props} leadSlot={{ value: -1 }} handled={handled} />);
-
-  await touchDown(onIcon(4));
-  await act(() => { mockPan.onFinalize(); });
-  // The press landed — react-navigation is already on it.
-  handled.value = Date.now();
-  await act(() => { jest.advanceTimersByTime(TAP_COMPLETE_MS + 1); });
-
-  expect(props.navigation.dispatch).not.toHaveBeenCalled();
-});
-
-test('…and not after a LONG-press, which is a different gesture', async () => {
-  // A long-press opens the console on Turtle. It fires `tabLongPress` and
-  // never `tabPress`, so without being stamped as handled it would look
-  // exactly like a tap that went missing — and the dock would change tabs
-  // underneath the console that is opening.
-  const props = buildProps(0);
-  const handled = { value: 0 };
-  await mount(<DockTabBar {...props} leadSlot={{ value: -1 }} handled={handled} />);
-
-  await touchDown(onIcon(4));
-  handled.value = Date.now(); // tabLongPress stamps the same value
-  await act(() => { mockPan.onFinalize(); });
-  await act(() => { jest.advanceTimersByTime(TAP_COMPLETE_MS + 1); });
-
-  expect(props.navigation.dispatch).not.toHaveBeenCalled();
-});
-
-test('…and not after a DRAG, which already chose on the lift', async () => {
-  // onEnd dispatches for a scrub. A second dispatch 150ms later would be a
-  // duplicate on every single drag.
-  const props = buildProps(0);
-  const dragSlot = { value: -1 };
-  const handled = { value: 0 };
-  await mount(<DockTabBar {...props} dragSlot={dragSlot} leadSlot={{ value: -1 }} handled={handled} />);
-
-  await touchDown(onIcon(0));
-  await act(() => { mockPan.onStart({ absoluteX: onIcon(0) }); });
-  await act(() => { mockPan.onUpdate({ absoluteX: onIcon(3) }); });
-  await lift();
-  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Vault-3']);
-
-  await act(() => { jest.advanceTimersByTime(TAP_COMPLETE_MS + 1); });
-  // Still exactly one.
-  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Vault-3']);
-});
-
-test('a slot the navigator will not go to does not strand the chip', async () => {
-  // The backstop. Completing the tap covers a press that never arrived; this
-  // covers the case where the tab change cannot happen at all, which would
-  // otherwise leave the lead pointing at a tab nobody is on until the dock is
-  // next touched. Asks the navigator where it ended up rather than trusting
-  // the clock — guessing short is how the backward kick 3686872 removed would
-  // come back.
-  const props = buildProps(0);
-  props.navigation.dispatch = jest.fn(); // dispatched, but the state never moves
-  const leadSlot = { value: -1 };
-  const handled = { value: 0 };
-  await mount(<DockTabBar {...props} leadSlot={leadSlot} handled={handled} />);
-
-  await touchDown(onIcon(4));
-  await act(() => { mockPan.onFinalize(); });
-  await act(() => { jest.advanceTimersByTime(TAP_COMPLETE_MS + 1); });
-  // It tried.
-  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Turtle-4']);
-  expect(leadSlot.value).toBe(4);
-
-  await act(() => { jest.advanceTimersByTime(LEAD_GUARD_MS + 1); });
-  // The navigator never moved, so the chip goes home rather than sitting on a
-  // tab that was never reached.
+  // …and the chip already knows the outcome, before React has rendered
+  // anything: where the navigator is, and that its lead is answered.
+  expect(navSlot.value).toBe(4);
   expect(leadSlot.value).toBe(-1);
+});
+
+test('a tap BELOW the capsule changes tabs — there is no button there, and it does not matter', async () => {
+  // 38% of this gesture's area has no button under it: the wrapper is
+  // `dockOccupied` tall — capsule, floating gap, home-indicator inset — and
+  // v7 puts that inset on the bar's own container, so a thumb landing low
+  // starts this gesture while hitting nothing pressable.
+  const props = buildProps(0);
+  await mount(<DockTabBar {...props} leadSlot={{ value: -1 }} />);
+
+  const low = BAR_CONTENT_HEIGHT + 20;
+  await touchDown(onIcon(4), low);
+  await liftTap(low);
+
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Turtle-4']);
+});
+
+test('a slow tap is still a tap — however long the finger rests', async () => {
+  // RN's Pressability drops `onPress` once a press passes 500ms, because
+  // BottomTabItem gives every tab an `onLongPress`. Nothing here is timed, so
+  // there is nothing for a slow finger to miss.
+  const props = buildProps(0);
+  await mount(<DockTabBar {...props} leadSlot={{ value: -1 }} />);
+
+  await touchDown(onIcon(2));
+  await act(() => { jest.advanceTimersByTime(4000); });
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+  await liftTap();
+
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Photos-2']);
+});
+
+test('the button reporting the SAME tap does not change tabs twice', async () => {
+  // react-navigation's button still fires for a touch whenever it can, and
+  // App.js sends it through the same `requestTab`. Whichever of the two
+  // arrives second finds the navigator already there.
+  const { requestTab } = require('../dockNav');
+  const props = buildProps(0);
+  const leadSlot = { value: -1 };
+  const navSlot = { value: 0 };
+  const settle = jest.fn((requested, current) => {
+    navSlot.value = current;
+    if (leadSlot.value === requested || leadSlot.value === current) leadSlot.value = -1;
+  });
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} navSlot={navSlot} settle={settle} />);
+
+  await touchDown(onIcon(3));
+  await liftTap();
+  // …and now the button's press for the same touch.
+  requestTab(props.navigation, 3, settle, props.state);
+
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Vault-3']);
+  expect(navSlot.value).toBe(3);
+  expect(leadSlot.value).toBe(-1);
+});
+
+test('a tap on the tab you are already on asks for nothing, and leaves nothing behind', async () => {
+  // The lead used to be cleared only by an effect that runs when the index
+  // CHANGES — so a tap on the current tab left it set for good.
+  const props = buildProps(2);
+  const leadSlot = { value: -1 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} />);
+
+  await touchDown(onIcon(2));
+  expect(leadSlot.value).toBe(2);
+  await liftTap();
+
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+  expect(leadSlot.value).toBe(-1);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WHAT IS NOT A TAP
+// ═══════════════════════════════════════════════════════════════════════════
+
+test('a touch the SYSTEM takes away is not a tap — the swipe home starts on the dock', async () => {
+  // The home-indicator inset is part of this wrapper, so the swipe up to
+  // leave the app begins as a touch on the dock: it lands, and then iOS takes
+  // it. "Any touch that did not become a drag is a tap" changed tabs on the
+  // way out of the app, every time the swipe started over a different tab.
+  const props = buildProps(0);
+  const leadSlot = { value: -1 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} />);
+
+  await touchDown(onIcon(4), BAR_CONTENT_HEIGHT + 30);
+  expect(leadSlot.value).toBe(4);
+  await systemCancel();
+
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+  // The chip had left for Turtle on the touch. It is given straight back —
+  // by the gesture, in the same frame, with no timer to wait out.
+  expect(leadSlot.value).toBe(-1);
+  await afterSlide();
+  expect(releaseSwipe).toHaveBeenCalledTimes(1);
+});
+
+test('a finger that wanders off the top of the dock and lets go there chose nothing', async () => {
+  // The contract every native tab bar has: touch up outside cancels.
+  const props = buildProps(0);
+  const leadSlot = { value: -1 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} />);
+
+  await touchDown(onIcon(3));
+  await liftTap(-(LIFT_SLACK + 40));
+
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+  expect(leadSlot.value).toBe(-1);
+});
+
+test('…but a thumb that only rolled a little above it still tapped', async () => {
+  const props = buildProps(0);
+  await mount(<DockTabBar {...props} leadSlot={{ value: -1 }} />);
+
+  await touchDown(onIcon(3), 4);
+  await liftTap(-(LIFT_SLACK - 5));
+
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Vault-3']);
+});
+
+test('the finger coming off after a LONG-press is not a tap', async () => {
+  // A long-press opens the console on Turtle (App.js raises `suppressTap`
+  // from `tabLongPress`). The finger still has to come off the glass, and
+  // changing tabs underneath the console it just opened is not what it meant.
+  const props = buildProps(0);
+  const leadSlot = { value: -1 };
+  const suppressTap = { current: false };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} suppressTap={suppressTap} />);
+
+  await touchDown(onIcon(4));
+  suppressTap.current = true; // tabLongPress, half a second in
+  await liftTap();
+
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+  expect(leadSlot.value).toBe(-1);
+  // One long press stands down one lift, not every tap after it.
+  expect(suppressTap.current).toBe(false);
+
+  await touchDown(onIcon(4));
+  await liftTap();
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Turtle-4']);
+});
+
+test('a stale long-press flag does not swallow the NEXT touch', async () => {
+  // If the long press's own lift never reached the dock (the console's modal
+  // took the touch), the flag is still up when the next touch lands.
+  const props = buildProps(0);
+  const suppressTap = { current: true };
+  await mount(<DockTabBar {...props} leadSlot={{ value: -1 }} suppressTap={suppressTap} />);
+
+  await touchDown(onIcon(1));
+  expect(suppressTap.current).toBe(false);
+  await liftTap();
+
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Notes-1']);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE CHIP IS NEVER STRANDED
+// ═══════════════════════════════════════════════════════════════════════════
+
+test('a tab change the navigator REFUSES gives the chip back at once', async () => {
+  // It used to take a 600ms timer to notice. The navigator's store says where
+  // it is on the line after the dispatch, so the answer is immediate.
+  const props = buildProps(0, { refuses: true });
+  const leadSlot = { value: -1 };
+  const navSlot = { value: 0 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} navSlot={navSlot} />);
+
+  await touchDown(onIcon(4));
+  await liftTap();
+
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Turtle-4']);
+  expect(navSlot.value).toBe(0);
+  expect(leadSlot.value).toBe(-1);
+});
+
+test('an abandoned touch does not take back a lead that a NEWER request owns', async () => {
+  // The gesture only hands back a lead that is still its own.
+  const props = buildProps(0);
+  const leadSlot = { value: -1 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} />);
+
+  await touchDown(onIcon(4));
+  leadSlot.value = 2; // somebody else has re-aimed the chip since
+  await systemCancel();
+
+  expect(leadSlot.value).toBe(2);
+});
+
+test('without touch events the dock falls back to the old rule rather than ignoring taps', async () => {
+  // `lifted` is only evidence if touch events arrive. On a build where they
+  // did not, every tap would read as abandoned and the dock would do nothing
+  // at all — so with no touch event ever seen, a touch that did not become a
+  // drag is a tap, as it was before.
+  const props = buildProps(0);
+  await mount(<DockTabBar {...props} leadSlot={{ value: -1 }} />);
+
+  await act(() => { mockPan.onBegin({ absoluteX: onIcon(5), x: onIcon(5), y: MID }); });
+  await act(() => { mockPan.onFinalize({}, false); });
+
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Profile-5']);
 });
 
 describe('the dock answers the touch', () => {

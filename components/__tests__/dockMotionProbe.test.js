@@ -91,11 +91,11 @@ describe('describeDockMotion', () => {
   });
 });
 
-describe('describeDockTouch — why a tap did not change tabs', () => {
-  // The two ways a dock touch produces no `tabPress` look identical from the
-  // outside ("I pressed the tab and it did nothing") and want different
-  // fixes. This sentence is the only thing that can tell them apart, so what
-  // it says is worth pinning.
+describe('describeDockTouch — what the last dock touch turned out to be', () => {
+  // The dock decides every touch itself: a tap, a drag, or neither. "I pressed
+  // the tab and it did nothing" and "I swiped up to go home" are the same
+  // touch until it ends, so the sentence that tells them apart is worth
+  // pinning.
   const base = {
     touchSlot: 4, touchY: 30, panActivated: false, tapCompleted: false,
   };
@@ -104,8 +104,11 @@ describe('describeDockTouch — why a tap did not change tabs', () => {
     expect(describeDockTouch(null)).toBe('');
   });
 
-  it('an ordinary tap is the button’s business, not the dock’s', () => {
-    expect(describeDockTouch(base)).toMatch(/the button handled it/);
+  it('an ordinary tap is the dock changing tabs on the lift', () => {
+    const said = describeDockTouch({ ...base, tapCompleted: true });
+    expect(said).toMatch(/a tap on a tab/);
+    expect(said).toMatch(/30pt down the dock/);
+    expect(said).toMatch(/changed tabs on the lift/);
   });
 
   it('names the MISSED BUTTON when the finger was off the capsule', () => {
@@ -116,23 +119,15 @@ describe('describeDockTouch — why a tap did not change tabs', () => {
     expect(said).toMatch(/the dock made the tab change itself/);
   });
 
-  it('names the DRAG when it ate a press on a real tab', () => {
-    const eaten = { ...base, panActivated: true, tapCompleted: true };
-    expect(describeDockTouch(eaten)).toMatch(/the drag ate the press/);
+  it('a drag chose on its own lift', () => {
+    const said = describeDockTouch({ ...base, panActivated: true });
+    expect(said).toMatch(/a drag/);
+    expect(said).toMatch(/came from the lift/);
   });
 
-  it('distinguishes a press that never arrived on a real tab', () => {
-    const missing = { ...base, tapCompleted: true };
-    const said = describeDockTouch(missing);
-    expect(said).toMatch(/on a tab/);
-    expect(said).toMatch(/the press never arrived/);
-    expect(said).not.toMatch(/drag ate/);
-  });
-
-  it('a drag that chose on its own lift is not a rescue', () => {
-    const drag = { ...base, panActivated: true, tapCompleted: false };
-    const said = describeDockTouch(drag);
-    expect(said).toMatch(/the drag took it/);
-    expect(said).not.toMatch(/made the tab change itself/);
+  it('a touch that was taken away or let go off the dock changed nothing — and says so', () => {
+    const said = describeDockTouch(base);
+    expect(said).toMatch(/let go off the dock, or taken by the system/);
+    expect(said).toMatch(/no tab change/);
   });
 });

@@ -38,15 +38,26 @@ describe('the dock’s shared values reach both halves', () => {
     expect(tag[0]).toContain('leadSlot={leadSlot}');
   });
 
-  test('a TAP writes the lead too, from tabPress', () => {
-    // The drag writes the lead from its own worklet; a tap has no gesture to
-    // write it, so without this listener the chip waits for the navigate to
-    // come back through React — which is the lateness this whole value exists
-    // to remove, present on the commonest way to change tabs. Scanned for the
-    // same reason as the props above: it fails silently and invisibly.
-    expect(APP).toMatch(/screenListeners=/);
-    expect(APP).toMatch(/tabPress:/);
-    expect(APP).toMatch(/leadSlot\.value = i/);
+  test('the navigator\'s index has ONE mirror, and both halves get it', () => {
+    // The dock writes it the moment it asks for a tab; the pill reads it (and
+    // writes it again on commit). Two private copies would be the dock
+    // answering a chip that is not listening.
+    expect(APP).toMatch(/const navSlot = useSharedValue\(-1\)/);
+    expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('navSlot={navSlot}');
+    expect(APP.match(/<TabBarPill[^>]*\/>/)[0]).toContain('navSlot={navSlot}');
+  });
+
+  test('the button\'s press goes through the same door as the dock\'s', () => {
+    expect(APP).toMatch(/const settleDock = useDockSettle\(leadSlot, navSlot\)/);
+    expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('settle={settleDock}');
+    const press = APP.match(/tabPress: \(e\) => \{[\s\S]*?\n {8}\},/);
+    expect(press).not.toBeNull();
+    // Its default would re-dispatch from a render's stale `focused`.
+    expect(press[0]).toMatch(/e\.preventDefault\(\)/);
+    expect(press[0]).toMatch(/requestTab\(navigation, i, settleDock, st\)/);
+    // …and it no longer aims the chip or times it: the dock's touch-down does
+    // the first, and the chip works out the second from the move itself.
+    expect(press[0]).not.toMatch(/leadSlot\.value|slideMs\.value/);
   });
 
   test('the probe reaches both halves, or it measures nothing', () => {
@@ -72,44 +83,32 @@ describe('the dock’s shared values reach both halves', () => {
     expect(APP.match(/<TabBarPill[\s\S]*?\/>/)[0]).toContain('pressLift={dockPressLift}');
   });
 
-  test('the dock is told when react-navigation answered a touch', () => {
-    // The dock completes a tab change itself when a touch produced none — the
-    // strip below the capsule has no button under it, and the drag recogniser
-    // can eat a press. `handled` is what stops it doing that when the button
-    // DID answer. Miss this prop and the dock falls back to its own private
-    // value, which nothing ever stamps: every tap then gets a second,
-    // duplicate navigate 150ms after the real one, and every LONG-press
-    // changes tabs underneath the console it was opening. No crash, no
-    // warning — the same silent failure as `leadSlot`'s, which is why it is
-    // scanned.
-    expect(APP).toMatch(/const tabHandledAt = useSharedValue\(0\)/);
-    expect(APP).toMatch(/tabPress: \(\) => \{[\s\S]{0,600}?tabHandledAt\.value = Date\.now\(\)/);
-    expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('handled={tabHandledAt}');
-  });
-
   test('a long press stands the dock down ONLY where it means something', () => {
-    // RN discards a tap outright once the press passes 500ms: Pressability
-    // suppresses `onPress` when an `onLongPress` exists, and BottomTabItem
-    // gives EVERY tab one. So resting a thumb a beat too long fired nothing
-    // at all — a large part of "every once in a while it doesn't go to the
-    // intended tab", and random-feeling because it depends only on how long
-    // you held. The dock completes those taps now.
-    //
-    // Which means a blanket `tabLongPress` stamp would switch that rescue
-    // back off for exactly the taps that need it. Only Turtle's long press
-    // does something of its own (it opens the console), so only Turtle's
-    // stamps. This is scanned because the blanket version was shipped once
-    // and nothing failed.
+    // A long press on Turtle opens the console; the finger coming off the
+    // glass afterwards is not a tap. Everywhere else a long rest IS a tap —
+    // RN drops the press after 500ms and the dock completes it — so the flag
+    // must not be raised for every tab.
+    expect(APP).toMatch(/const suppressDockTap = useRef\(false\)/);
+    expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('suppressTap={suppressDockTap}');
+
     const screenListeners = APP.match(/screenListeners=\{[\s\S]*?\n {6}\}\)\}/);
     expect(screenListeners).not.toBeNull();
-    // The KEY, not the word — the block carries a comment explaining why it
-    // is absent, and that comment is the point.
     expect(screenListeners[0]).not.toMatch(/tabLongPress\s*:/);
 
     const turtle = APP.match(/<Tab\.Screen\s+name="Turtle"[\s\S]*?\/>/);
     expect(turtle).not.toBeNull();
-    expect(turtle[0]).toMatch(/tabLongPress[\s\S]{0,400}tabHandledAt\.value = Date\.now\(\)/);
+    expect(turtle[0]).toMatch(/tabLongPress[\s\S]{0,400}suppressDockTap\.current = true/);
     expect(turtle[0]).toMatch(/setConsoleOpen\(true\)/);
+  });
+
+  test('every tab stays attached — a long move must not re-attach the screens in between', () => {
+    // With detaching on, v7 leaves every tab LEFT of the focused one attached
+    // and detaches the ones to its right, so Tasks → Profile re-attaches five
+    // screens' native views in one frame, under the chip's travel. See the
+    // note on the navigator in App.js.
+    const nav = APP.match(/<Tab\.Navigator[\s\S]*?screenOptions=/);
+    expect(nav).not.toBeNull();
+    expect(nav[0]).toMatch(/detachInactiveScreens=\{false\}/);
   });
 
   test('the move carries its own duration, and both halves get it', () => {
@@ -118,7 +117,6 @@ describe('the dock’s shared values reach both halves', () => {
     // mode as the two above if it is not passed down: the chip silently falls
     // back to its own value and every move takes the base duration.
     expect(APP).toMatch(/const slideMs = useSharedValue\(/);
-    expect(APP).toMatch(/slideMs\.value = chipSlideMs\(/);
     expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('slideMs={slideMs}');
     expect(APP.match(/<TabBarPill[^>]*\/>/)[0]).toContain('slideMs={slideMs}');
   });
