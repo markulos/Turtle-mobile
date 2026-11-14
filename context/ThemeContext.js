@@ -704,6 +704,10 @@ export const ThemeProvider = ({ children }) => {
     () => ({
       theme, isDark, toggleTheme, themeMode, setThemeMode, timeFormat, setTimeFormat,
       accent, setAccent, accentColor, customAccent, setCustomAccent,
+      // Exposed so useAccountAccent can wait for AsyncStorage before it
+      // adopts the account's colour — reconciling first would be undone a
+      // moment later by this phone's own stored answer.
+      isLoading,
       hideVaultButton, setHideVaultButton,
       showCalendarDayTasks, setShowCalendarDayTasks,
       calendarFreeScroll, setCalendarFreeScroll,
@@ -711,7 +715,7 @@ export const ThemeProvider = ({ children }) => {
       dockStyle, setDockStyle, dockColor, setDockColor, dockInk, setDockInk,
       dockTheme, setDockTheme,
     }),
-    [theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent],
+    [theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent, isLoading],
   );
 
   if (isLoading) {

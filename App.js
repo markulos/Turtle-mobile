@@ -52,6 +52,7 @@ import ShareTargetScreen from './screens/ShareTargetScreen';
 import { ServerProvider } from './context/ServerContext';
 import { ShareUploadProvider } from './context/ShareUploadContext';
 import ShareUploadToast from './components/ShareUploadToast';
+import useAccountAccent from './utils/useAccountAccent';
 import { VaultUploadProvider } from './context/VaultUploadContext';
 import VaultUploadPill from './components/VaultUploadPill';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
@@ -462,6 +463,16 @@ function TabNavigator() {
   );
 }
 
+/**
+ * Reconciles this phone's highlight colour with the account's. Renders
+ * nothing — it is a component only because ThemeProvider sits above
+ * ServerProvider and so cannot reach the api itself. See useAccountAccent.
+ */
+function AccountAccentSync() {
+  useAccountAccent();
+  return null;
+}
+
 function AppContent() {
   const { isDark, theme } = useTheme();
   const { isAuthenticated, isLoading } = useAuth();
@@ -674,6 +685,12 @@ export default function App() {
                             on, and would keep covering it. A vanished toast plus a
                             console line is the honest trade for UI whose whole
                             purpose is to be transient. */}
+                        {/* Keeps this phone's highlight colour and the
+                            account's the same one, so a colour picked here
+                            shows up on the web and the other way round.
+                            Draws nothing; guarded like its neighbours so a
+                            failed settings read can never blank the app. */}
+                        <ErrorBoundary label="accent sync" fallback={null}><AccountAccentSync /></ErrorBoundary>
                         {/* Floating share-upload progress / outcome toast. Rendered
                             here (NOT inside ShareTargetScreen) so it persists after
                             the share sheet dismisses and overlays the main app. */}
