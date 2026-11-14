@@ -42,12 +42,12 @@ export const DOCK_PALETTES = [
     // talking.
     backdrop: '#0E1116',
     accent: '#4C8DFF',
-    // Auto: the glyph sits on the chip in one mode and on the bar in the
-    // other, and only auto reads whichever it is on. `legacyInk` is what
-    // this look wrote before 2026-11-14 — kept only so a look applied
-    // back then can be recognised and moved to auto (legacyInkFor).
-    ink: 'auto',
-    legacyInk: 'light',
+    // WHITE, FIXED — the one look that is not on auto. Auto's contrast check
+    // answers near-black for this blue, and the owner wants the glyph white
+    // on the chip. It is safe to fix here, and only here, because the bar is
+    // near-black as well: white is also what auto would give the underline.
+    // A fixed ink is allowed when it suits the chip AND the bar (tested).
+    ink: 'light',
   },
   {
     key: 'ember',

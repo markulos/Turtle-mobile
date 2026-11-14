@@ -42,8 +42,16 @@ describe('the dock’s palettes', () => {
     expect(DOCK_INKS).toContain(p.ink);
     // Auto, since 2026-11-14: a fixed ink is right for the chip OR for the
     // underline, never both — the glyph sits on a different colour in each.
-    expect(p.ink).toBe('auto');
-    expect(['light', 'dark']).toContain(p.legacyInk);
+    if (p.ink === 'auto') {
+      expect(['light', 'dark']).toContain(p.legacyInk);
+    } else {
+      // …so a FIXED ink is allowed only where it suits both: the same ink
+      // auto would put on this look's bar with the underline. (Midnight:
+      // white on its blue chip by the owner's choice, on a near-black bar.)
+      const bar = paletteSkin(p).blurTint === 'dark';
+      expect(activeInk(p.ink, p.accent))
+        .toBe(activeInk('auto', p.accent, { underline: true, darkDock: bar }));
+    }
   });
 
   test.each(DOCK_PALETTES.map((p) => [p.name, p]))('%s’s chip stands ON its backdrop', (_, p) => {
@@ -114,4 +122,10 @@ describe('the dock’s palettes', () => {
     expect(dockPalette('midnight')).toBe(DOCK_PALETTES[0]);
     for (const bad of ['nope', '', null, undefined]) expect(dockPalette(bad)).toBeNull();
   });
+});
+
+test('Midnight keeps a white glyph on its chip', () => {
+  const midnight = dockPalette('midnight');
+  expect(activeInk(midnight.ink, midnight.accent)).toBe('#FFFFFF');
+  expect(activeInk(midnight.ink, midnight.accent, { underline: true, darkDock: true })).toBe('#FFFFFF');
 });

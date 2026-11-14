@@ -453,7 +453,79 @@ describe('one panel: the live preview, and Auto or Custom', () => {
     await fireEvent.press(view.getByTestId('dock-highlight'));
     const sheet = view.getByTestId('highlight-sheet');
     expect(sheet.props.initialColor).toBe('#1F8A9B');
-    act(() => sheet.props.onSelect('#AA5500'));
+    await act(async () => { sheet.props.onSelect('#AA5500'); });
     expect(setCustomAccent).toHaveBeenCalledWith('#AA5500');
+  });
+});
+
+describe('the tiles are small docks, not swatches', () => {
+  const stops = (node) => {
+    const found = [];
+    const walk = (n) => {
+      if (!n || typeof n !== 'object') return;
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (n.props?.stopColor) found.push({ colour: n.props.stopColor, alpha: n.props.stopOpacity });
+      walk(n.children);
+    };
+    walk(node);
+    return found;
+  };
+  const peak = (view, id) => {
+    const tile = view.getByTestId(id);
+    const json = view.toJSON();
+    // Find the tile's subtree in the JSON by its testID.
+    let sub = null;
+    const find = (n) => {
+      if (!n || typeof n !== 'object' || sub) return;
+      if (Array.isArray(n)) { n.forEach(find); return; }
+      if (n.props?.testID === tile.props.testID) { sub = n; return; }
+      find(n.children);
+    };
+    find(json);
+    return Math.max(0, ...stops(sub).map((s) => s.alpha));
+  };
+
+  test('each glow step draws your bar at that strength — Off draws none', async () => {
+    state = { ...state, indicator: 'underline', glow: 1.6 };
+    const view = await render(<DockStylePicker />);
+    const off = peak(view, 'dock-glow-off');
+    const soft = peak(view, 'dock-glow-soft');
+    const medium = peak(view, 'dock-glow-medium');
+    const strong = peak(view, 'dock-glow-strong');
+    expect(off).toBe(0);
+    expect(soft).toBeGreaterThan(0);
+    expect(medium).toBeGreaterThan(soft);
+    expect(strong).toBeGreaterThan(medium);
+  });
+
+  test('the chip in a tile has the real chip\'s rim', async () => {
+    const view = await render(<DockStylePicker />);
+    const chip = within(view.getByTestId('dock-indicator-chip')).getByTestId('dock-preview-chip');
+    expect(styleOf(chip).borderWidth).toBe(1);
+    expect(styleOf(chip).borderColor).toMatch(/^rgba\(/);
+  });
+
+  test('under the underline the glyph takes its own ink, not the highlight colour', async () => {
+    // Smoked is a dark bar and there is no chip: auto is white.
+    const view = await render(<DockStylePicker />);
+    const glyph = within(view.getByTestId('dock-indicator-underline')).getByTestId('dock-preview-glyph');
+    expect(styleOf(glyph).backgroundColor).toBe('#FFFFFF');
+    expect(within(view.getByTestId('dock-indicator-underline')).queryByTestId('dock-preview-spot'))
+      .not.toBeNull();
+  });
+
+  test('the custom glow-colour tile shows the colour it is offering', async () => {
+    state = { ...state, indicator: 'underline', glowColour: '#12AB34' };
+    const view = await render(<DockStylePicker />);
+    const json = view.toJSON();
+    let sub = null;
+    const find = (n) => {
+      if (!n || typeof n !== 'object' || sub) return;
+      if (Array.isArray(n)) { n.forEach(find); return; }
+      if (n.props?.testID === 'dock-glow-colour-custom') { sub = n; return; }
+      find(n.children);
+    };
+    find(json);
+    expect([...new Set(stops(sub).map((s) => s.colour))]).toEqual(['#12AB34']);
   });
 });

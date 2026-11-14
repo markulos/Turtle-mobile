@@ -38,7 +38,8 @@ import {
   DOCK_THEMES, dockTheme as findTheme, themeIsIntact, themeSkin,
 } from './dockThemes';
 import DockLivePreview from './DockLivePreview';
-import { glowStrength } from './dockLight';
+import DockGlow from './DockGlow';
+import { dockLight, glowStrength } from './dockLight';
 import { impactHaptic } from '../utils/haptics';
 import {
   describeDockMotion, describeDockTouch, getDockMotionReport, onDockMotionReport,
@@ -57,12 +58,22 @@ const MINI_H = 30;
 const MINI_SLOTS = 3;
 const MINI_CHIP = 22;
 const MINI_DOT = 8;
+// The spot, at the miniature's scale: about the real one's proportions
+// against the line under it.
+const MINI_SPOT_W = 34;
+const MINI_SPOT_H = 20;
 const MINI_ACTIVE = 1;
 
 /** One miniature dock, drawn from a skin and an indicator treatment. */
-export function DockPreview({ skin, indicator, accent, ink, theme }) {
+export function DockPreview({
+  skin, indicator, accent, ink, theme, glow, glowColor,
+}) {
   const underline = indicator === 'underline';
   const dots = Array.from({ length: MINI_SLOTS }, (_, i) => i);
+  // The same numbers the real dock lights itself with (dockLight), so a tile
+  // offering "Strong" shows strong, and a tile offering a colour shows it —
+  // the tiles used to stand in a flat blob for all of this.
+  const light = dockLight({ glow, glowColor, accent });
   return (
     <View
       testID="dock-preview-page"
@@ -94,27 +105,58 @@ export function DockPreview({ skin, indicator, accent, ink, theme }) {
           <View style={[styles.miniLip, { backgroundColor: skin.lip }]} />
         )}
         {dots.map((i) => {
-          const active = i === MINI_ACTIVE;
-          if (active && !underline) {
+          if (i !== MINI_ACTIVE) {
             return (
               <View key={i} style={styles.cell}>
-                <View style={[styles.miniChip, { backgroundColor: accent }]}>
+                <View style={[styles.miniDot, { backgroundColor: skin.inactiveTint }]} />
+              </View>
+            );
+          }
+          // THE CHIP: its fill, its lit rim, and the deeper tone in its
+          // middle — a small piece of glass, as on the bar.
+          if (!underline) {
+            return (
+              <View key={i} style={styles.cell}>
+                <View
+                  testID="dock-preview-chip"
+                  style={[styles.miniChip, { backgroundColor: accent, borderColor: light.rimColor }]}
+                >
+                  {light.strength > 0 && light.shadeColor ? (
+                    <View pointerEvents="none" style={styles.miniShade}>
+                      <DockGlow
+                        id="dock-mini-shade"
+                        width={MINI_CHIP}
+                        height={MINI_CHIP}
+                        color={light.shadeColor}
+                        peak={light.shadePeak}
+                      />
+                    </View>
+                  ) : null}
                   <View testID="dock-preview-glyph" style={[styles.miniDot, { backgroundColor: ink }]} />
                 </View>
               </View>
             );
           }
+          // THE UNDERLINE: the line, the pool of light standing on it, and
+          // the glyph in its own ink — which with no chip under it is NOT
+          // the highlight colour (it used to be drawn as if it were).
           return (
             <View key={i} style={styles.cell}>
-              <View
-                style={[
-                  styles.miniDot,
-                  { backgroundColor: active ? accent : skin.inactiveTint },
-                ]}
-              />
-              {active && underline && (
-                <View style={[styles.miniUnderline, { backgroundColor: accent }]} />
-              )}
+              {light.strength > 0 ? (
+                <View pointerEvents="none" testID="dock-preview-spot" style={styles.miniSpot}>
+                  <DockGlow
+                    id="dock-mini-spot"
+                    width={MINI_SPOT_W}
+                    height={MINI_SPOT_H}
+                    color={light.spotColor}
+                    peak={light.spotPeak}
+                    cy={1}
+                    ry={1}
+                  />
+                </View>
+              ) : null}
+              <View testID="dock-preview-glyph" style={[styles.miniDot, { backgroundColor: ink }]} />
+              <View style={[styles.miniUnderline, { backgroundColor: accent }]} />
             </View>
           );
         })}
@@ -124,16 +166,6 @@ export function DockPreview({ skin, indicator, accent, ink, theme }) {
 }
 
 /** One tappable tile: a preview, a name, and whether it is the one you're on. */
-// The glow tiles' swatch: a dark plate, a line, and the light above it.
-const GLOW_SWATCH = {
-  width: 56, height: 30, borderRadius: 8, backgroundColor: '#17171A',
-  alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 6, overflow: 'hidden',
-};
-const GLOW_SWATCH_LIGHT = {
-  position: 'absolute', bottom: 2, width: 40, height: 22, borderRadius: 20,
-};
-const GLOW_SWATCH_LINE = { width: 22, height: 3, borderRadius: 2 };
-
 function Tile({ label, selected, onPress, theme, children, testID, style }) {
   return (
     <TouchableOpacity
@@ -221,7 +253,16 @@ export default function DockStylePicker() {
   const [glowColourOpen, setGlowColourOpen] = useState(false);
   const [highlightOpen, setHighlightOpen] = useState(false);
   const accent = theme.colors.accent;
-  const ink = activeInk(dockInk, accent, { custom: dockInkColor });
+  // The ink a preview's active glyph takes. It depends on what the glyph is
+  // sitting on — the chip, or with the underline the bar itself — so every
+  // tile asks with ITS OWN skin and indicator, exactly as App.js does for the
+  // real dock. (They used to ask with neither, and drew the chip's answer
+  // under an underline.)
+  const inkFor = (mode, on, skin, ind = dockIndicator) => activeInk(mode, on, {
+    underline: ind === 'underline',
+    darkDock: skin.blurTint === 'dark',
+    custom: dockInkColor,
+  });
 
   // WHICH named theme is on, if any — and only while the settings under it
   // still agree with it, because a theme you have edited is not that theme.
@@ -241,11 +282,7 @@ export default function DockStylePicker() {
   // WHAT THE REAL DOCK IS WEARING, for the live preview — the same
   // call App.js makes, so the picture and the bar cannot disagree.
   const glowLevel = glowStrength(dockGlow);
-  const liveInk = activeInk(dockInk, accent, {
-    underline: dockIndicator === 'underline',
-    darkDock: current.blurTint === 'dark',
-    custom: dockInkColor,
-  });
+  const liveInk = inkFor(dockInk, accent, current);
 
   // AUTO OR CUSTOM.
   //
@@ -377,7 +414,9 @@ export default function DockStylePicker() {
                 skin={current}
                 indicator={key}
                 accent={accent}
-                ink={ink}
+                ink={inkFor(dockInk, accent, current, key)}
+                glow={glowLevel}
+                glowColor={dockGlowColor}
                 theme={theme}
               />
             </Tile>
@@ -416,9 +455,11 @@ export default function DockStylePicker() {
                   accent — which is why it is a preview and not a word. */}
               <DockPreview
                 skin={current}
-                indicator="chip"
+                indicator={dockIndicator}
                 accent={accent}
-                ink={activeInk(key, accent, { custom: dockInkColor })}
+                ink={inkFor(key, accent, current)}
+                glow={glowLevel}
+                glowColor={dockGlowColor}
                 theme={theme}
               />
             </Tile>
@@ -450,13 +491,16 @@ export default function DockStylePicker() {
               theme={theme}
               onPress={choose(setDockGlow, g.value, selected)}
             >
-              {/* A line and the light above it, at this step's strength. */}
-              <View style={GLOW_SWATCH}>
-                <View
-                  style={[GLOW_SWATCH_LIGHT, { backgroundColor: accent, opacity: 0.38 * g.value }]}
-                />
-                <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
-              </View>
+              {/* Your own bar, at this step's strength. */}
+              <DockPreview
+                skin={current}
+                indicator={dockIndicator}
+                accent={accent}
+                ink={inkFor(dockInk, accent, current)}
+                glow={g.value}
+                glowColor={dockGlowColor}
+                theme={theme}
+              />
             </Tile>
           );
         })}
@@ -480,10 +524,15 @@ export default function DockStylePicker() {
           theme={theme}
           onPress={choose(setDockGlowColor, null, !dockGlowColor)}
         >
-          <View style={GLOW_SWATCH}>
-            <View style={[GLOW_SWATCH_LIGHT, { backgroundColor: accent, opacity: 0.38 }]} />
-            <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
-          </View>
+          <DockPreview
+            skin={current}
+            indicator={dockIndicator}
+            accent={accent}
+            ink={inkFor(dockInk, accent, current)}
+            glow={glowLevel || 1}
+            glowColor={null}
+            theme={theme}
+          />
         </Tile>
         <Tile
           testID="dock-glow-colour-custom"
@@ -501,12 +550,17 @@ export default function DockStylePicker() {
             setGlowColourOpen(true);
           }}
         >
-          <View style={GLOW_SWATCH}>
-            <View
-              style={[GLOW_SWATCH_LIGHT, { backgroundColor: dockGlowColor || '#FFFFFF', opacity: 0.38 }]}
-            />
-            <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
-          </View>
+          {/* Until one is picked, white: it has to differ from the tile
+              beside it or the row offers the same thing twice. */}
+          <DockPreview
+            skin={current}
+            indicator={dockIndicator}
+            accent={accent}
+            ink={inkFor(dockInk, accent, current)}
+            glow={glowLevel || 1}
+            glowColor={dockGlowColor || '#FFFFFF'}
+            theme={theme}
+          />
         </Tile>
       </View>
       <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
@@ -531,7 +585,15 @@ export default function DockStylePicker() {
           theme={theme}
           onPress={() => setHighlightOpen(true)}
         >
-          <View style={[GLOW_SWATCH, { width: undefined, alignSelf: 'stretch', backgroundColor: accent }]} />
+          <DockPreview
+            skin={current}
+            indicator={dockIndicator}
+            accent={accent}
+            ink={inkFor(dockInk, accent, current)}
+            glow={glowLevel}
+            glowColor={dockGlowColor}
+            theme={theme}
+          />
         </Tile>
       </View>
       <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
@@ -563,7 +625,9 @@ export default function DockStylePicker() {
               skin={themeSkin(t)}
               indicator={dockIndicator}
               accent={t.accent}
-              ink={activeInk(t.ink, t.accent)}
+              ink={inkFor(t.ink, t.accent, themeSkin(t))}
+              glow={glowLevel}
+              glowColor={dockGlowColor}
               theme={theme}
             />
           </Tile>
@@ -596,7 +660,9 @@ export default function DockStylePicker() {
                 skin={paletteSkin(p)}
                 indicator={dockIndicator}
                 accent={p.accent}
-                ink={activeInk(p.ink, p.accent)}
+                ink={inkFor(p.ink, p.accent, paletteSkin(p))}
+                glow={glowLevel}
+                glowColor={dockGlowColor}
                 theme={theme}
               />
             </Tile>
@@ -635,7 +701,9 @@ export default function DockStylePicker() {
                 skin={skin}
                 indicator={dockIndicator}
                 accent={accent}
-                ink={ink}
+                ink={inkFor(dockInk, accent, skin)}
+                glow={glowLevel}
+                glowColor={dockGlowColor}
                 theme={theme}
               />
             </Tile>
@@ -795,8 +863,20 @@ const styles = StyleSheet.create({
     height: MINI_CHIP,
     borderRadius: 8,
     borderCurve: 'continuous',
+    borderWidth: 1,
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  miniShade: { position: 'absolute', top: -1, left: -1 },
+  // Wider than its cell on purpose (the real spot is wider than its glyph);
+  // centred, and clipped by the capsule like the real one.
+  miniSpot: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 8,
+    alignItems: 'center',
   },
   miniUnderline: {
     position: 'absolute',
