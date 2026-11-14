@@ -16,7 +16,9 @@ import {
   TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, BAR_CONTENT_HEIGHT, clusterStart,
   UNDERLINE_W, UNDERLINE_H, indicatorOffset, ridgeOffsets,
 } from './tabBarLayout';
-import { CHIP_SLIDE_BASE_MS, TAB_SWITCH_BEZIER, chipAim, chipSlideMs } from './dockMotion';
+import {
+  CHIP_SLIDE_BASE_MS, PRESS_DIM, TAB_SWITCH_BEZIER, chipAim, chipSlideMs,
+} from './dockMotion';
 import { dockSkin } from './dockSkins';
 import { resolveDockSkin } from './dockThemes';
 
@@ -105,7 +107,7 @@ const DOCK_LIP_H = 1.5;
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
 
-export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
+export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe, pressLift }) {
   const { theme, dockIndicator, dockStyle, dockColor, dockTheme } = useTheme();
   // Every colour the capsule draws, from the skin chosen in Settings — a
   // named theme if one is on, otherwise the chosen material. One resolver,
@@ -119,11 +121,15 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
   const ownSlot = useSharedValue(-1);
   const ownLead = useSharedValue(-1);
   const ownMs = useSharedValue(CHIP_SLIDE_BASE_MS);
+  const ownPress = useSharedValue(0);
   const slot = dragSlot ?? ownSlot;
   const lead = leadSlot ?? ownLead;
   // How long THIS move should take, written by whoever started it. A number,
   // not a function call: the UI thread reads it and never computes it.
   const ms = slideMs ?? ownMs;
+  // 0 at rest, 1 while a finger is on the dock. DockTabBar owns the gesture
+  // that drives it; the wash is drawn here, so the press is painted here.
+  const press = pressLift ?? ownPress;
 
   // Read straight from the navigator: `index` is the focused tab and `routes`
   // is what's actually rendered, so a hidden tab shifts the geometry correctly.
@@ -308,6 +314,15 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
     [],
   );
 
+  // THE PRESS, PAINTED. A flat gradient fading — nothing is asked of the blur
+  // underneath it, which is the whole point of the change: this used to be a
+  // scale on the dock's wrapper, and a transform above a BlurView makes iOS
+  // re-sample the glass on every frame of it. See dockMotion's note on
+  // PRESS_DIM. The timing is DockTabBar's; this only reads the value.
+  const washStyle = useAnimatedStyle(() => ({
+    opacity: 1 - press.value * (1 - PRESS_DIM),
+  }));
+
   // Pure reads. No animation is created in here, so a re-render cannot
   // restart one.
   const pillStyle = useAnimatedStyle(() => ({
@@ -341,15 +356,17 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
             than a branch per skin. Explicitly top-to-bottom rather than
             trusting the default, because for the skins that DO shade, the
             direction is the whole point of the element. */}
-        <LinearGradient
-          pointerEvents="none"
-          testID="dock-wash"
-          colors={skin.wash.colors}
-          locations={skin.wash.locations}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 0, y: 1 }}
-          style={StyleSheet.absoluteFill}
-        />
+        <Reanimated.View pointerEvents="none" style={[StyleSheet.absoluteFill, washStyle]}>
+          <LinearGradient
+            pointerEvents="none"
+            testID="dock-wash"
+            colors={skin.wash.colors}
+            locations={skin.wash.locations}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+        </Reanimated.View>
         {/* The lit floor of the channel. Inside the card, so the card's own
             overflow clips this straight strip to the capsule's shape and it
             curves up into both ends on its own. */}

@@ -223,11 +223,21 @@ function TabNavigator() {
       // The lead is spent the moment the navigator agrees (see TabBarPill), so
       // a press on the tab you are already on just re-states where the chip is.
       screenListeners={({ navigation, route }) => ({
-        // A long-press is its own gesture with its own meaning (it opens the
-        // console on Turtle) and it fires INSTEAD of `tabPress`. Stamped so
-        // the dock does not read it as a tap that went missing and change
-        // tabs under the console that is opening.
-        tabLongPress: () => { tabHandledAt.value = Date.now(); },
+        // NOTE: `tabLongPress` is deliberately NOT stamped here. Only the one
+        // tab that DOES something with a long press stamps it (Turtle, below,
+        // which opens the console).
+        //
+        // RN discards the tap outright once a press passes 500ms:
+        // Pressability's `isPressCanceledByLongPress` suppresses `onPress`
+        // when an `onLongPress` exists, and BottomTabItem gives every tab one.
+        // So resting a thumb a beat too long on any other tab fired nothing
+        // at all — no tabPress, no navigate, no feedback. That is a large
+        // part of "every once in a while it doesn't go to the intended tab",
+        // and it depends only on how long you happen to hold, which is why it
+        // felt random. The delay is RN's and cannot be reached without taking
+        // over `tabBarButton`, so the dock completes those taps instead
+        // (DockTabBar's completeTap) — and stamping every long press here
+        // would be exactly what stops it.
         tabPress: () => {
           // The button answered, whatever it decides to do about it — this is
           // not a touch the dock has to finish (see DockTabBar's completeTap).
@@ -432,7 +442,13 @@ function TabNavigator() {
         // tabBarBackground is composited under navigation's own tab buttons, so
         // this adds the indicator without touching their layout or a11y.
         tabBarBackground: () => (
-          <TabBarPill dragSlot={dragSlot} leadSlot={leadSlot} slideMs={slideMs} probe={dockProbe} />
+          <TabBarPill
+            dragSlot={dragSlot}
+            leadSlot={leadSlot}
+            slideMs={slideMs}
+            probe={dockProbe}
+            pressLift={dockPressLift}
+          />
         ),
         headerShown: false, // Hide default header
       })}
@@ -490,7 +506,15 @@ function TabNavigator() {
         name="Turtle"
         component={GuardedTurtle}
         options={{ title: 'Turtle' }}
-        listeners={{ tabLongPress: () => setConsoleOpen(true) }}
+        listeners={{
+          tabLongPress: () => {
+            // The one long press in the app that means something. Stamped as
+            // handled so the dock does not treat it as a tap that went
+            // missing and change tabs underneath the console it just opened.
+            tabHandledAt.value = Date.now();
+            setConsoleOpen(true);
+          },
+        }}
       />
       {/* Profile takes the trailing slot — the Instagram/X convention of "you"
           on the right. NOTE: this displaces the turtle mark from the trailing

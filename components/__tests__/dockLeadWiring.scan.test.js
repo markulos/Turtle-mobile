@@ -65,6 +65,11 @@ describe('the dock’s shared values reach both halves', () => {
     // without costing anything visible.
     expect(APP).toMatch(/const dockPressLift = useSharedValue\(0\)/);
     expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('pressLift={dockPressLift}');
+    // …and the CHIP needs it too, because the chip's component is the one
+    // that paints the press now: the wash it fades is TabBarPill's layer.
+    // Miss this prop and the pill falls back to a private value nothing ever
+    // writes — the dock simply never responds to a touch, with no error.
+    expect(APP.match(/<TabBarPill[\s\S]*?\/>/)[0]).toContain('pressLift={dockPressLift}');
   });
 
   test('the dock is told when react-navigation answered a touch', () => {
@@ -78,9 +83,33 @@ describe('the dock’s shared values reach both halves', () => {
     // warning — the same silent failure as `leadSlot`'s, which is why it is
     // scanned.
     expect(APP).toMatch(/const tabHandledAt = useSharedValue\(0\)/);
-    expect(APP).toMatch(/tabLongPress: \(\) => \{ tabHandledAt\.value = Date\.now\(\); \}/);
-    expect(APP).toMatch(/tabPress: \(\) => \{[\s\S]{0,400}?tabHandledAt\.value = Date\.now\(\)/);
+    expect(APP).toMatch(/tabPress: \(\) => \{[\s\S]{0,600}?tabHandledAt\.value = Date\.now\(\)/);
     expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('handled={tabHandledAt}');
+  });
+
+  test('a long press stands the dock down ONLY where it means something', () => {
+    // RN discards a tap outright once the press passes 500ms: Pressability
+    // suppresses `onPress` when an `onLongPress` exists, and BottomTabItem
+    // gives EVERY tab one. So resting a thumb a beat too long fired nothing
+    // at all — a large part of "every once in a while it doesn't go to the
+    // intended tab", and random-feeling because it depends only on how long
+    // you held. The dock completes those taps now.
+    //
+    // Which means a blanket `tabLongPress` stamp would switch that rescue
+    // back off for exactly the taps that need it. Only Turtle's long press
+    // does something of its own (it opens the console), so only Turtle's
+    // stamps. This is scanned because the blanket version was shipped once
+    // and nothing failed.
+    const screenListeners = APP.match(/screenListeners=\{[\s\S]*?\n {6}\}\)\}/);
+    expect(screenListeners).not.toBeNull();
+    // The KEY, not the word — the block carries a comment explaining why it
+    // is absent, and that comment is the point.
+    expect(screenListeners[0]).not.toMatch(/tabLongPress\s*:/);
+
+    const turtle = APP.match(/<Tab\.Screen\s+name="Turtle"[\s\S]*?\/>/);
+    expect(turtle).not.toBeNull();
+    expect(turtle[0]).toMatch(/tabLongPress[\s\S]{0,400}tabHandledAt\.value = Date\.now\(\)/);
+    expect(turtle[0]).toMatch(/setConsoleOpen\(true\)/);
   });
 
   test('the move carries its own duration, and both halves get it', () => {

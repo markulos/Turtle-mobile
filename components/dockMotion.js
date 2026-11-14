@@ -291,7 +291,30 @@ export function forTabTurn({ current }) {
  * that stops, and a release that snaps back draws attention to the end of an
  * interaction rather than to its result.
  */
-export const PRESS_SCALE = 1.015;
+/**
+ * ── WHY THIS IS AN OPACITY AND NOT A SCALE ─────────────────────────────────
+ *
+ * It was a scale — the whole dock swelling 1.5% — and that was a transform on
+ * an ANCESTOR OF THE BLUR. iOS derives a UIVisualEffectView's content from
+ * whatever is behind it, so changing the geometry of anything above it makes
+ * the blur re-sample every frame, on the main thread, which is the same
+ * thread compositing the chip's travel. The press and the travel overlap on
+ * every single tap — the lift releases the swell at the moment the chip is
+ * given its aim — so the dock's most expensive per-frame work was guaranteed
+ * to land on the frames of its most-watched animation. `pressBusy` in the
+ * probe exists because of exactly this, and it is true on every tap.
+ *
+ * Mark put it as "there's two animations happening — maybe make the navbar
+ * not do the blurry thing, maybe the backdrop lowers opacity instead".
+ *
+ * So the press now fades the WASH — the flat gradient painted over the blur —
+ * and the blur itself is never touched. Fading a plain colour layer is a
+ * GPU-side alpha blend with nothing to recompute; the capsule lightens under
+ * the finger and the glass behind it is not asked to do anything at all. The
+ * icons and the chip keep their full strength, because the chip is the thing
+ * you are watching and dimming it would be the opposite of feedback.
+ */
+export const PRESS_DIM = 0.72;
 export const PRESS_IN_MS = 110;
 export const PRESS_OUT_MS = 200;
 

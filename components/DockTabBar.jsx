@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { InteractionManager, StyleSheet, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
-  Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming,
+  Easing, runOnJS, useSharedValue, withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomTabBar } from '@react-navigation/bottom-tabs';
@@ -10,7 +10,7 @@ import { CommonActions } from '@react-navigation/native';
 
 import { dockOccupied, slotAtX, slotUnderTouch } from './tabBarLayout';
 import {
-  CHIP_SLIDE_BASE_MS, CHIP_SLIDE_MAX_MS, PRESS_BEZIER, PRESS_IN_MS, PRESS_OUT_MS, PRESS_SCALE,
+  CHIP_SLIDE_BASE_MS, CHIP_SLIDE_MAX_MS, PRESS_BEZIER, PRESS_IN_MS, PRESS_OUT_MS,
 } from './dockMotion';
 import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 
@@ -71,21 +71,23 @@ import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
  *
  * ── The press ──────────────────────────────────────────────────────────────
  *
- * The whole dock swells a point and a half the instant a finger lands on it,
- * and HOLDS while the finger is down — so a press-and-scrub keeps the bar
- * lifted for the length of the drag rather than blinking at the start of it.
+ * The capsule's wash fades the instant a finger lands on it, and HOLDS while
+ * the finger is down — so a press-and-scrub keeps the dock lit for the length
+ * of the drag rather than blinking at the start of it. This component only
+ * DRIVES that value; TabBarPill paints it, because the wash is its layer.
  * The numbers and the reasoning are in dockMotion.
+ *
+ * It was a 1.5% SCALE on this wrapper, and that is why it moved: the capsule's
+ * BlurView is a descendant, and a transform on a blur's ancestor makes iOS
+ * re-sample the blur every frame — main-thread work landing on exactly the
+ * frames of the chip's travel, on every tap. Fading a flat gradient costs
+ * nothing and asks the glass for nothing.
  *
  * It hangs off onBegin/onFinalize rather than onStart/onEnd, and that is the
  * point: onStart fires only once the pan ACTIVATES, which a tap never does.
  * onBegin is the touch landing, whatever the gesture turns out to be, and
  * onFinalize is it leaving — including when the system cancels, which is the
- * one path that must never leave the dock stuck at its pressed size.
- *
- * Applied to THIS wrapper, the common ancestor of the capsule and the
- * buttons, so the bar and its contents scale as one object. Scaling the chip
- * separately would multiply its 1:1 drag tracking and slide it off the glyph
- * under the thumb.
+ * one path that must never leave the dock stuck in its pressed state.
  *
  * ── No haptic ──────────────────────────────────────────────────────────────
  *
@@ -166,9 +168,11 @@ export default function DockTabBar({
   // UI thread writes is otherwise unreadable from a test.
   const ownPress = useSharedValue(0);
   const press = pressLift ?? ownPress;
-  const pressStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: 1 + press.value * (PRESS_SCALE - 1) }],
-  }));
+  // NOTE: this component no longer draws the press. It only drives the value;
+  // TabBarPill fades the wash with it. The press used to be a SCALE applied
+  // to the wrapper below, and a transform on an ancestor of the capsule's
+  // BlurView makes iOS re-sample that blur every frame — on the main thread,
+  // during the chip's travel, every single tap. See dockMotion's note.
 
   // The navigator's state through a ref, NOT captured in the callback below.
   // `state` is a new object on every navigation — including the ones this
@@ -477,7 +481,7 @@ export default function DockTabBar({
         collapsable={false}
         pointerEvents="box-none"
         testID="dock-press-layer"
-        style={[styles.dock, { height: dockOccupied(insets.bottom) }, pressStyle]}
+        style={[styles.dock, { height: dockOccupied(insets.bottom) }]}
       >
         <BottomTabBar {...props} />
       </Reanimated.View>

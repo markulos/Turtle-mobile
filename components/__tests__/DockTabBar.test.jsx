@@ -470,11 +470,21 @@ describe('the dock answers the touch', () => {
     expect(bodyOf('onFinalize')).toMatch(/press\.value\s*=\s*withTiming\(0/);
   });
 
-  test('the scale is applied to the one view that holds the bar AND its buttons', () => {
-    // Scaling the chip separately would multiply its 1:1 drag tracking and
-    // slide it off the glyph under the thumb.
-    expect(SRC).toMatch(/testID="dock-press-layer"[\s\S]{0,200}pressStyle/);
-    expect(SRC).toMatch(/pressStyle[\s\S]{0,200}BottomTabBar/);
+  test('NOTHING here transforms the dock — the blur must not be re-sampled', () => {
+    // The press used to be a 1.5% scale on this wrapper, and the capsule's
+    // BlurView is a descendant of it. A transform on a blur's ancestor makes
+    // iOS re-derive the blur every frame, on the main thread, which is the
+    // thread compositing the chip's travel — and the press and the travel
+    // overlap on every tap, because the lift releases one as the other is
+    // given its aim. The press is a wash FADE now, painted in TabBarPill.
+    //
+    // Scanned rather than rendered because the cost is a native one that no
+    // jest assertion can see: the style would be perfectly valid, and the
+    // only symptom is frames.
+    expect(SRC).not.toMatch(/transform:\s*\[\{\s*scale/);
+    expect(SRC).not.toMatch(/useAnimatedStyle/);
+    // …and the value still reaches the component that draws it.
+    expect(SRC).toMatch(/const press = pressLift \?\? ownPress/);
   });
 
   test('the press timing is something the UI thread can run', () => {

@@ -6,7 +6,7 @@ import {
   chipSlideMs,
   TAB_SWITCH_BEZIER,
   PRESS_BEZIER,
-  PRESS_SCALE,
+  PRESS_DIM,
   PRESS_IN_MS,
   PRESS_OUT_MS,
   TAB_SWITCH_MS,
@@ -243,16 +243,19 @@ describe('how a page moves through a switch', () => {
 });
 
 describe('the press', () => {
-  it('is a swell, not a pop — under two points on a 370pt bar', () => {
-    const bar = 370;
-    expect(PRESS_SCALE).toBeGreaterThan(1);
-    // Mark asked for "ever so slightly" and "very subtle". Past ~3% of a bar
-    // this wide the capsule stops looking lifted and starts looking resized.
-    expect(PRESS_SCALE).toBeLessThan(1.03);
-    expect((PRESS_SCALE - 1) * bar).toBeLessThan(6);
-    // …and enough that the edge visibly moves against the screen edge it is
-    // parallel to. Below about a point it is indistinguishable from nothing.
-    expect((PRESS_SCALE - 1) * bar).toBeGreaterThan(1.5);
+  it('is a FADE, not a transform — the glass is never re-sampled', () => {
+    // It was a scale, and the capsule's BlurView sat underneath it: a
+    // transform on a blur's ancestor makes iOS re-derive the blur every
+    // frame, on the main thread, during the chip's travel, on every tap.
+    // An opacity on the flat wash costs a GPU blend and asks the glass for
+    // nothing. The value is the one thing that has to stay a fraction.
+    expect(PRESS_DIM).toBeGreaterThan(0);
+    expect(PRESS_DIM).toBeLessThan(1);
+    // Visible: below about a tenth of a step the dock does not look pressed.
+    expect(1 - PRESS_DIM).toBeGreaterThan(0.1);
+    // …but the wash is what gives the capsule its body, so taking too much of
+    // it away reads as the dock vanishing rather than as a press.
+    expect(1 - PRESS_DIM).toBeLessThan(0.45);
   });
 
   it('answers faster than it lets go', () => {
