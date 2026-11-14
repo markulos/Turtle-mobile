@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { runOnJS, useFrameCallback, useSharedValue } from 'react-native-reanimated';
 
 /**
@@ -159,8 +160,19 @@ export const describeDockMotion = (r) => {
  * That counts a stumble the way it is seen — six frames missing in one hitch
  * and six single missed frames both come out as six — and `worstMs` beside it
  * says which of the two it was.
+ *
+ * A WORKLET, and that is not optional. This is called from inside the frame
+ * callback below — on the UI thread, to build the report at the end of the
+ * window — and without the directive it reaches that runtime as a plain
+ * function, which throws "[Worklets] Tried to synchronously call a non-worklet
+ * function on the UI thread." In a release build that throw is fatal: the app
+ * died a fifth of a second after the first tab change, which is to say the
+ * probe added to diagnose the dock's lag was what was killing the app. The
+ * directive does not take the JS caller away — the tests below still call it
+ * directly.
  */
 export const framesMissing = (elapsedMs, bestMs, frames) => {
+  'worklet';
   if (!(bestMs > 0) || !(elapsedMs > 0)) return 0;
   return Math.max(0, Math.round(elapsedMs / bestMs) - frames);
 };
@@ -186,20 +198,17 @@ export const framesMissing = (elapsedMs, bestMs, frames) => {
  * starts on the travel's own first frame.
  */
 export function useDockMotionProbe(slideMs, pressLift) {
-  const probe = {
-    // Stamped by the dock's gesture the moment a finger lands — on the UI
-    // thread, which is what makes `startLateMs` an honest measure of a
-    // JS-thread delay rather than another victim of one.
-    touchAt: useSharedValue(NONE),
-    startedAt: useSharedValue(NONE),
-    startLate: useSharedValue(0),
-    sampling: useSharedValue(0),
-    frames: useSharedValue(0),
-    worst: useSharedValue(0),
-    best: useSharedValue(0),
-    pressBusy: useSharedValue(0),
-  };
-  const { touchAt, startedAt, startLate, sampling, frames, worst, best, pressBusy } = probe;
+  // Stamped by the dock's gesture the moment a finger lands — on the UI
+  // thread, which is what makes `startLateMs` an honest measure of a JS-thread
+  // delay rather than another victim of one.
+  const touchAt = useSharedValue(NONE);
+  const startedAt = useSharedValue(NONE);
+  const startLate = useSharedValue(0);
+  const sampling = useSharedValue(0);
+  const frames = useSharedValue(0);
+  const worst = useSharedValue(0);
+  const best = useSharedValue(0);
+  const pressBusy = useSharedValue(0);
 
   useFrameCallback((info) => {
     'worklet';
@@ -234,7 +243,19 @@ export function useDockMotionProbe(slideMs, pressLift) {
     });
   }, true);
 
-  return probe;
+  // ONE OBJECT, FOR THE LIFE OF THE DOCK.
+  //
+  // The shared values inside are stable whatever this returns, so it would be
+  // easy to read this memo as tidiness. It is not. DockTabBar lists `probe` in
+  // the dependencies of the useMemo that BUILDS ITS PAN GESTURE, so a fresh
+  // object here is a fresh Gesture handed to GestureDetector, which drops the
+  // native handler and attaches a new one — main-thread work, on a re-render
+  // that can land while a thumb is still down on the capsule. The note above
+  // `stateRef` in DockTabBar spells out the same hazard for `state`; an object
+  // literal in this hook's body had quietly reintroduced it.
+  return useMemo(() => ({
+    touchAt, startedAt, startLate, sampling, frames, worst, best, pressBusy,
+  }), [touchAt, startedAt, startLate, sampling, frames, worst, best, pressBusy]);
 }
 
 export default useDockMotionProbe;
