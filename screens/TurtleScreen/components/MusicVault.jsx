@@ -52,6 +52,7 @@ import {
   warmWebMusic, webPreviewRow, webRowId, webSearchStatus,
 } from '../../../services/webMusicSearch';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
+import { mixHex, readableOn } from '../../../utils/accentColor';
 import { useOfflineMusic } from '../../../utils/useOfflineMusic';
 import { formatBytes } from '../../../services/musicOfflineStore';
 import { rowOfflineAppearance } from './musicRowAppearance';
@@ -70,6 +71,14 @@ const tagsOf = audioTags;
 // green. accentInfo is the same value (ThemeContext repoints it) and is the
 // fallback for any theme that predates `accent`.
 const MUSIC_TINT = (c) => c.accent || c.accentInfo || c.primary;
+
+/**
+ * How much accent the little square behind a row's glyph carries. Named
+ * because TWO things are derived from it — the tile's fill and the glyph's
+ * colour — and the day they are worked out from different numbers is the day
+ * the contrast guarantee below stops being a guarantee. '22' is this as hex.
+ */
+const ART_TINT_ALPHA = 0x22 / 255;
 
 /**
  * How long the playing row takes to light up, and to let go.
@@ -1025,13 +1034,39 @@ export default function MusicVault({
     [duration, seekTo]
   );
 
+  // ── GLYPHS YOU CAN ACTUALLY SEE ────────────────────────────────────────
+  //
+  // The highlight colour is the user's, and a pale one used to disappear:
+  // an accent glyph on a tile tinted with that same accent is two shades of
+  // one hue, and with a pale lemon over a cream page it is three near-
+  // identical creams. Mark's screenshot of the Media Vault had four rows
+  // whose icons were simply not there.
+  //
+  // So the glyph is measured against the surface it ACTUALLY sits on and
+  // taken deeper (or lighter, on a dark page) only as far as it needs to go
+  // to clear WCAG's 3:1 floor for non-text content. Hue and saturation are
+  // kept, so it stays the colour that was chosen — see readableOn.
+  //
+  // Two surfaces, because there are two places an accent glyph lands: the
+  // tinted tile beside a row, and the page itself (the transport's play key,
+  // the "has a transcript" mark). A colour pale enough to vanish on one is
+  // usually pale enough to vanish on the other.
+  const glyphInk = useMemo(() => {
+    const accent = MUSIC_TINT(c);
+    const page = c.background;
+    return {
+      onTile: readableOn(accent, mixHex(page, accent, ART_TINT_ALPHA)),
+      onPage: readableOn(accent, page),
+    };
+  }, [c]);
+
   // Track-row styles hoisted out of renderTrack — the old inline objects
   // allocated five styles per row whenever the rows re-rendered (play/pause,
   // track change). Theme-keyed; active/idle title is a precomputed pair.
   const trackStyles = useMemo(() => {
     const accent = MUSIC_TINT(c);
     return StyleSheet.create({
-      artTint: { backgroundColor: accent + '22' },
+      artTint: { backgroundColor: accent + '22' },  // ART_TINT_ALPHA
       body: { flex: 1 },
       titleActive: { fontSize: 15, fontWeight: '600', color: accent },
       titleIdle: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
@@ -1359,7 +1394,7 @@ export default function MusicVault({
           <Icon
             name={active && isPlaying ? 'pause' : 'music-note'}
             size={20}
-            color={active ? (MUSIC_TINT(c)) : c.textSecondary}
+            color={active ? glyphInk.onTile : c.textSecondary}
           />
         </View>
         <View style={trackStyles.body}>
@@ -1424,7 +1459,7 @@ export default function MusicVault({
                   : offlineState.state === 'downloading' ? 'close-circle-outline'
                   : 'check-circle'}
                 size={16}
-                color={offlineState.state === 'failed' ? (c.accentError || c.textTertiary) : MUSIC_TINT(c)}
+                color={offlineState.state === 'failed' ? (c.accentError || c.textTertiary) : glyphInk.onPage}
               />
             </TouchableOpacity>
           )
@@ -1629,7 +1664,7 @@ export default function MusicVault({
         style={styles.row}
       >
         <View style={[styles.art, trackStyles.artTint]}>
-          <Icon name="microphone" size={22} color={MUSIC_TINT(c)} />
+          <Icon name="microphone" size={22} color={glyphInk.onTile} />
         </View>
         <View style={trackStyles.body}>
           <Text style={trackStyles.titleIdle} numberOfLines={1}>{VOICE_RECORDINGS_LABEL}</Text>
@@ -1659,7 +1694,7 @@ export default function MusicVault({
           style={styles.row}
         >
           <View style={[styles.art, trackStyles.artTint]}>
-            <Icon name="cloud-check-outline" size={22} color={MUSIC_TINT(c)} />
+            <Icon name="cloud-check-outline" size={22} color={glyphInk.onTile} />
           </View>
           <View style={trackStyles.body}>
             <Text style={trackStyles.titleIdle} numberOfLines={1}>On this device</Text>
@@ -1680,7 +1715,7 @@ export default function MusicVault({
         style={styles.row}
       >
         <View style={[styles.art, trackStyles.artTint]}>
-          <Icon name="playlist-music" size={22} color={MUSIC_TINT(c)} />
+          <Icon name="playlist-music" size={22} color={glyphInk.onTile} />
         </View>
         <View style={trackStyles.body}>
           <Text style={trackStyles.titleIdle} numberOfLines={1}>Playlists</Text>
@@ -1708,7 +1743,7 @@ export default function MusicVault({
           style={styles.row}
         >
           <View style={[styles.art, trackStyles.artTint]}>
-            <Icon name="account-music" size={22} color={MUSIC_TINT(c)} />
+            <Icon name="account-music" size={22} color={glyphInk.onTile} />
           </View>
           <View style={trackStyles.body}>
             <Text style={trackStyles.titleIdle} numberOfLines={1}>Shared with you</Text>
@@ -1740,7 +1775,7 @@ export default function MusicVault({
               act, the page is the result.
               (`text-to-speech`, which this started as, was the wrong way
               round: that glyph is a mouth emitting sound.) */}
-          <Icon name="signature-freehand" size={22} color={MUSIC_TINT(c)} />
+          <Icon name="signature-freehand" size={22} color={glyphInk.onTile} />
         </View>
         <View style={trackStyles.body}>
           <Text style={trackStyles.titleIdle} numberOfLines={1}>Transcribe</Text>
@@ -1769,7 +1804,7 @@ export default function MusicVault({
         style={styles.row}
       >
         <View style={[styles.art, trackStyles.artTint]}>
-          <Icon name="playlist-music" size={22} color={MUSIC_TINT(c)} />
+          <Icon name="playlist-music" size={22} color={glyphInk.onTile} />
         </View>
         <View style={trackStyles.body}>
           <Text style={trackStyles.titleIdle} numberOfLines={1}>{item}</Text>
@@ -1800,7 +1835,7 @@ export default function MusicVault({
         style={styles.row}
       >
         <View style={[styles.art, trackStyles.artTint]}>
-          <Icon name="playlist-music" size={22} color={MUSIC_TINT(c)} />
+          <Icon name="playlist-music" size={22} color={glyphInk.onTile} />
         </View>
         <View style={trackStyles.body}>
           <Text style={trackStyles.titleIdle} numberOfLines={1}>{item}</Text>
@@ -2025,7 +2060,7 @@ export default function MusicVault({
               testID="follow-along-caption"
               style={[styles.captionRow, { borderBottomColor: c.border }]}
             >
-              <Icon name="text-box-outline" size={15} color={MUSIC_TINT(c)} />
+              <Icon name="text-box-outline" size={15} color={glyphInk.onPage} />
               <Text style={[styles.captionText, { color: c.textSecondary }]} numberOfLines={1}>
                 {transcriptError
                   || (transcriptLoading ? 'Fetching the transcript…' : (caption || 'Transcript'))}
@@ -2051,7 +2086,7 @@ export default function MusicVault({
 
           <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, gap: 12 }}>
             <View style={[styles.art, trackStyles.artTint]}>
-              <Icon name="music-note" size={20} color={MUSIC_TINT(c)} />
+              <Icon name="music-note" size={20} color={glyphInk.onTile} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 15, fontWeight: '700', color: c.textPrimary }} numberOfLines={1}>{titleOf(nowTrack)}</Text>
@@ -2090,7 +2125,7 @@ export default function MusicVault({
                     <PreparingRing percent={preparingPct} tint={MUSIC_TINT(c)} track={c.border} />
                   </View>
                 )
-                : <Icon name={preparing || !isPlaying ? 'play-circle' : 'pause-circle'} size={44} color={MUSIC_TINT(c)} />}
+                : <Icon name={preparing || !isPlaying ? 'play-circle' : 'pause-circle'} size={44} color={glyphInk.onPage} />}
             </TouchableOpacity>
             <TouchableOpacity
               accessibilityRole="button"
@@ -2561,7 +2596,7 @@ export default function MusicVault({
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               style={styles.pageBackBtn}
             >
-              <Icon name={isPlaying ? 'pause-circle' : 'play-circle'} size={32} color={MUSIC_TINT(c)} />
+              <Icon name={isPlaying ? 'pause-circle' : 'play-circle'} size={32} color={glyphInk.onPage} />
             </TouchableOpacity>
           </View>
           <FollowAlongTranscript

@@ -213,6 +213,82 @@ export function accentFrostInk(accent, { page, alpha = FROST_TINT_ALPHA } = {}) 
  */
 export const LEGIBLE_MIN = 3;
 
+/**
+ * THE SAME COLOUR, MOVED UNTIL YOU CAN SEE IT.
+ *
+ * ── The problem ────────────────────────────────────────────────────────────
+ *
+ * A glyph drawn in the highlight colour on a backdrop TINTED with that same
+ * colour is two shades of one hue, and how far apart they are depends
+ * entirely on which hue you picked. A deep teal on a 13%-teal tile is a
+ * strong mark; a pale lemon on a 13%-lemon tile over a cream page is three
+ * near-identical creams, and the icon is simply not there. Mark hit exactly
+ * that in the Media Vault — "the icons are not visible" — and asked for a
+ * reliable mathematical means rather than another hand-picked constant.
+ *
+ * ── The means ──────────────────────────────────────────────────────────────
+ *
+ * WCAG relative luminance and contrast ratio, which this file already
+ * computes, against the surface the glyph ACTUALLY sits on — the tint
+ * composited over the page, not the raw accent. Those are two very different
+ * colours and only one of them is what the eye is comparing against.
+ *
+ * Hue and saturation are held; only LIGHTNESS moves. That is the rule
+ * `accentFrostInk` established a few lines up and the reason is the same: a
+ * tinted control whose glyph has been nudged toward grey looks disabled,
+ * where one carrying a deeper tone of its own colour reads as a single
+ * object. This differs from that function in two ways — it moves in EITHER
+ * direction, because a glyph on a dark surface needs to go lighter and the
+ * frost ink only ever had to go darker; and it returns the value CLOSEST to
+ * the colour you chose rather than the first on a fixed ladder, so a colour
+ * that barely fails is barely moved.
+ *
+ * ── Why 3:1 and not 4.5:1 ─────────────────────────────────────────────────
+ *
+ * 4.5 is the floor for body text, where you are resolving letterforms. An
+ * icon is a shape, and WCAG's own floor for non-text content and large text
+ * is 3:1 — the same number LEGIBLE_MIN already uses for this app's advisory.
+ * Holding glyphs to the text figure would drag every pale accent much darker
+ * than it needs to be and cost people the colour they picked.
+ *
+ * Exhaustive rather than iterative on purpose: it walks the whole lightness
+ * scale and takes the best answer, so there is no step size to tune and no
+ * way for it to stop early on a colour nobody tried. 101 contrast ratios is
+ * nothing, and callers memoise it per theme anyway.
+ */
+export const GLYPH_MIN = 3;
+
+export function readableOn(color, surface, min = GLYPH_MIN) {
+  const hsl = hexToHsl(color);
+  const base = normalizeHex(color);
+  if (!hsl || !base) return color;
+  const against = normalizeHex(surface);
+  // No surface to measure against is not a licence to invent one — the
+  // colour the caller chose is returned untouched.
+  if (!against) return base;
+  if (contrastRatio(base, against) >= min) return base;
+
+  let best = base;
+  let bestRatio = contrastRatio(base, against) || 0;
+  let closest = null;
+  let closestGap = Infinity;
+  for (let l = 0; l <= 100; l += 1) {
+    const candidate = hslToHex({ ...hsl, l });
+    const ratio = contrastRatio(candidate, against);
+    if (ratio == null) continue;
+    if (ratio > bestRatio) { bestRatio = ratio; best = candidate; }
+    if (ratio >= min) {
+      const gap = Math.abs(l - hsl.l);
+      if (gap < closestGap) { closestGap = gap; closest = candidate; }
+    }
+  }
+  // `closest` is the least change that works. `best` is the fallback for a
+  // surface nothing clears — mid-grey, where neither end of the scale gets
+  // to 3:1 — and returning the most legible thing available beats returning
+  // something known to be invisible.
+  return closest || best;
+}
+
 export function legibilityNote(color, background) {
   const ratio = contrastRatio(color, background);
   if (ratio == null || ratio >= LEGIBLE_MIN) return null;
