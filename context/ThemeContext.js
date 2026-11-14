@@ -6,6 +6,9 @@ import {
   DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR, DOCK_INKS, DEFAULT_DOCK_INK, DEFAULT_DOCK_INK_COLOR, DEFAULT_DOCK_GLOW,
 } from '../components/dockSkins';
 import { isDockTheme, legacyInkFor } from '../components/dockThemes';
+import {
+  addLook, captureLook, newLookId, readLooks, removeLook, renameLook,
+} from '../components/savedLooks';
 
 const THEME_STORAGE_KEY = '@connected_pass_theme';
 
@@ -50,6 +53,10 @@ const DOCK_GLOW_KEY = '@connected_pass_dock_glow';
 const DOCK_LOOK_INK_MOVED_KEY = '@connected_pass_dock_look_ink_auto';
 const DOCK_GLOW_COLOR_KEY = '@connected_pass_dock_glow_color';
 const DOCK_THEME_KEY = '@connected_pass_dock_theme';
+// The looks this person has built and named. One JSON array rather than a key
+// each: they are read and written as a whole list, and a dozen keys that have
+// to stay in step is how a half-saved look happens.
+const SAVED_LOOKS_KEY = '@connected_pass_saved_looks';
 
 /**
  * How the dock marks the tab you are on: the filled accent CHIP behind the
@@ -412,6 +419,11 @@ const ThemeContext = createContext({
   // theme's skin overrides are not recoverable from the settings above —
   // see components/dockThemes.
   dockTheme: '',
+  // The person's own named looks, newest first — see components/savedLooks.
+  savedLooks: [],
+  saveLook: () => {},
+  deleteLook: () => {},
+  renameSavedLook: () => {},
   setDockTheme: () => {},
   // The highlight colour: one of ACCENTS' keys, or CUSTOM_ACCENT for a colour
   // the user mixed themselves (`customAccent`, a '#RRGGBB').
@@ -451,6 +463,7 @@ export const ThemeProvider = ({ children }) => {
   const [dockGlow, setDockGlowState] = useState(DEFAULT_DOCK_GLOW);
   const [dockGlowColor, setDockGlowColorState] = useState(null);
   const [dockTheme, setDockThemeState] = useState('');
+  const [savedLooks, setSavedLooksState] = useState([]);
   const [accent, setAccentState] = useState(DEFAULT_ACCENT);
   // The user's own colour, '#RRGGBB', or null if they have never mixed one.
   // Remembered even while a preset is selected, so the custom swatch still
@@ -553,6 +566,11 @@ export const ThemeProvider = ({ children }) => {
       if (isDockTheme(savedDockTheme)) {
         setDockThemeState(savedDockTheme);
       }
+
+      // Never throws and never refuses the whole list for one bad entry —
+      // see readLooks. Losing a saved look is a disappointment; failing to
+      // finish this function is an app that opens on a white screen.
+      setSavedLooksState(readLooks(await AsyncStorage.getItem(SAVED_LOOKS_KEY)));
     } catch (error) {
       console.error('Error loading theme:', error);
     } finally {
@@ -663,6 +681,52 @@ export const ThemeProvider = ({ children }) => {
       console.error('Error saving dock-theme setting:', error);
     }
   };
+
+  // ── SAVED LOOKS ──────────────────────────────────────────────────────
+  //
+  // The list is written as a whole, every time, because that is what it is:
+  // one value. All three of these take the CURRENT list from the state they
+  // are closing over and hand the next one to both React and storage, so the
+  // two cannot disagree — a setter that wrote storage from a stale closure is
+  // how a deleted look comes back on the next launch.
+  //
+  // Storage failing does not roll the UI back. The look is applied and shown
+  // either way; what is lost is only its persistence, and a tile that
+  // vanished under your finger because a disk write failed would be a worse
+  // answer than one that quietly does not survive a restart.
+  const persistLooks = async (next) => {
+    setSavedLooksState(next);
+    try {
+      await AsyncStorage.setItem(SAVED_LOOKS_KEY, JSON.stringify(next));
+    } catch (error) {
+      console.error('Error saving your looks:', error);
+    }
+    return next;
+  };
+
+  /**
+   * Keep what the dock is wearing right now, under a name.
+   *
+   * Captured HERE rather than passed in, so the one list of fields a look is
+   * made of lives in savedLooks and nowhere else — a panel that assembled its
+   * own object would start dropping fields the day a control is added.
+   */
+  const saveLook = (name) => persistLooks(addLook(savedLooks, {
+    id: newLookId(),
+    name,
+    ...captureLook({
+      dockIndicator, dockStyle, dockColor, dockInk, dockInkColor,
+      dockGlow, dockGlowColor, dockTheme,
+      // The resolved highlight colour, whether it came from a preset or
+      // from the colour wheel — a look stores the COLOUR, not which of the
+      // two ways it was arrived at.
+      accentColor: accentColorFor(accent, customAccent),
+    }),
+  }));
+
+  const deleteLook = (id) => persistLooks(removeLook(savedLooks, id));
+
+  const renameSavedLook = (id, name) => persistLooks(renameLook(savedLooks, id, name));
 
   const setShowCalendarDayTasks = async (show) => {
     const next = !!show;
@@ -783,6 +847,7 @@ export const ThemeProvider = ({ children }) => {
     () => ({
       theme, isDark, toggleTheme, themeMode, setThemeMode, timeFormat, setTimeFormat,
       accent, setAccent, accentColor, customAccent, setCustomAccent,
+      savedLooks, saveLook, deleteLook, renameSavedLook,
       // Exposed so useAccountAccent can wait for AsyncStorage before it
       // adopts the account's colour — reconciling first would be undone a
       // moment later by this phone's own stored answer.
@@ -794,7 +859,7 @@ export const ThemeProvider = ({ children }) => {
       dockStyle, setDockStyle, dockColor, setDockColor, dockInk, setDockInk, dockInkColor, setDockInkColor, dockGlow, setDockGlow, dockGlowColor, setDockGlowColor,
       dockTheme, setDockTheme,
     }),
-    [dockGlow, dockGlowColor, dockInkColor, theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent, isLoading],
+    [dockGlow, dockGlowColor, dockInkColor, theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent, savedLooks, isLoading],
   );
 
   if (isLoading) {

@@ -41,6 +41,10 @@ import DockLivePreview from './DockLivePreview';
 import DockGlow from './DockGlow';
 import { dockLight, glowStrength } from './dockLight';
 import { impactHaptic } from '../utils/haptics';
+import AppTextInput from './AppTextInput';
+import { INPUT_FIELD } from '../utils/inputField';
+import { inkOn } from '../utils/accentColor';
+import { MAX_LOOKS, NAME_MAX, cleanName, wornLook } from './savedLooks';
 import {
   describeDockMotion, describeDockTouch, getDockMotionReport, onDockMotionReport,
 } from './dockMotionProbe';
@@ -193,6 +197,184 @@ function Tile({ label, selected, onPress, theme, children, testID, style }) {
 const INDICATOR_LABELS = { chip: 'Chip', underline: 'Underline' };
 
 /**
+ * A saved look's capsule, and the ink on its chip.
+ *
+ * A look that was saved while a THEME was on keeps that theme's key, and a
+ * theme may override fields no setting has a slot for — so the skin comes
+ * from the theme when there is one and from the ordinary style + colour when
+ * there is not. Without this a Godzilla-derived look would preview as a flat
+ * approximation of itself and then apply as the real thing, which is the one
+ * thing a preview must never do.
+ */
+const lookSkin = (look) => {
+  const named = findTheme(look.themeKey);
+  return named ? themeSkin(named) : dockSkin(look.style, look.color);
+};
+
+const lookInk = (look, skin) => activeInk(look.ink, look.accent, {
+  underline: look.indicator === 'underline',
+  darkDock: skin.blurTint === 'dark',
+  custom: look.inkColor,
+});
+
+/**
+ * YOUR LOOKS — the ones this person built and named.
+ *
+ * ── Why the naming happens INLINE and not in a dialog ──────────────────────
+ *
+ * `Alert.prompt` is iOS-only and AlbumActionsSheet already carries the note
+ * about it silently vanishing on Android. A <Modal> is worse here than merely
+ * unportable: this panel can itself be inside one (an EdgeSwipePage is a
+ * Modal), and on iOS a second sibling Modal over an open one never appears —
+ * which is the exact trap MusicVault's options button is written around. So
+ * the field opens in place, in the card you are already looking at, and the
+ * whole feature costs no new surface.
+ *
+ * ── Why there is no "update this look" ─────────────────────────────────────
+ *
+ * Saving under a name you already used replaces it (see savedLooks' addLook),
+ * so updating one is: wear it, change it, save it under the same name. One
+ * verb rather than two, and the one you would have reached for anyway.
+ */
+function SavedLooksRow({
+  // Defaulted rather than assumed: this is a settings page, and a context
+  // that is mid-load or partially stubbed must not take the whole card down
+  // over a feature that has nothing to show yet.
+  theme, looks = [], worn, canSave, onApply, onSave, onDelete,
+}) {
+  const c = theme.colors;
+  const [naming, setNaming] = useState(false);
+  const [draft, setDraft] = useState('');
+  const name = cleanName(draft);
+  const full = looks.length >= MAX_LOOKS;
+  // Saving over a name already in use REPLACES it rather than failing, so the
+  // button says which of the two is about to happen. Being told afterwards
+  // that something was overwritten is the version of this that loses work.
+  const replacing = looks.some((l) => l.name.toLowerCase() === name.toLowerCase());
+
+  const commit = () => {
+    if (!name) return;
+    impactHaptic('light');
+    onSave(name);
+    setDraft('');
+    setNaming(false);
+  };
+
+  return (
+    <View testID="saved-looks">
+      <Text style={[styles.rowTitle, { color: c.textSecondary, marginTop: 18 }]}>
+        Your looks
+      </Text>
+
+      {looks.map((look) => {
+        const selected = worn?.id === look.id;
+        const skin = lookSkin(look);
+        return (
+          <View key={look.id} style={styles.savedRow}>
+            <Tile
+              testID={`saved-look-${look.id}`}
+              label={look.name}
+              selected={selected}
+              theme={theme}
+              style={styles.wideTile}
+              onPress={() => onApply(look)}
+            >
+              <DockPreview
+                skin={skin}
+                indicator={look.indicator}
+                accent={look.accent || c.accent}
+                ink={lookInk(look, skin)}
+                glow={look.glow}
+                glowColor={look.glowColor}
+                theme={theme}
+              />
+            </Tile>
+            {/* Its own target, away from the tile: a look you spent twenty
+                minutes on must not be one mis-aimed thumb from gone. */}
+            <TouchableOpacity
+              testID={`saved-look-delete-${look.id}`}
+              accessibilityRole="button"
+              accessibilityLabel={`Delete the look ${look.name}`}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              onPress={() => { impactHaptic('light'); onDelete(look.id); }}
+              style={styles.savedDelete}
+            >
+              <Icon name="close" size={16} color={c.textTertiary} />
+            </TouchableOpacity>
+          </View>
+        );
+      })}
+
+      {naming ? (
+        <View style={styles.nameRow}>
+          <AppTextInput
+            testID="saved-look-name"
+            value={draft}
+            onChangeText={setDraft}
+            placeholder="Name this look"
+            placeholderTextColor={c.textTertiary}
+            maxLength={NAME_MAX}
+            autoFocus
+            returnKeyType="done"
+            onSubmitEditing={commit}
+            style={[
+              INPUT_FIELD,
+              styles.nameInput,
+              { color: c.textPrimary, backgroundColor: c.surfaceElevated, borderColor: c.border },
+            ]}
+          />
+          <TouchableOpacity
+            testID="saved-look-confirm"
+            accessibilityRole="button"
+            accessibilityLabel={replacing ? `Replace the look ${name}` : 'Save this look'}
+            disabled={!name}
+            onPress={commit}
+            style={[styles.nameBtn, { backgroundColor: c.accent }, !name && styles.nameBtnOff]}
+          >
+            <Text style={[styles.nameBtnText, { color: inkOn(c.accent) }]}>
+              {replacing ? 'Replace' : 'Save'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="saved-look-cancel"
+            accessibilityRole="button"
+            accessibilityLabel="Cancel"
+            onPress={() => { setNaming(false); setDraft(''); }}
+            style={styles.nameBtn}
+          >
+            <Text style={[styles.nameBtnText, { color: c.textSecondary }]}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <TouchableOpacity
+          testID="saved-look-add"
+          accessibilityRole="button"
+          accessibilityLabel="Save the dock you are wearing as a named look"
+          disabled={full || !canSave}
+          onPress={() => { impactHaptic('light'); setNaming(true); }}
+          style={[styles.saveBtn, { borderColor: c.border }, (full || !canSave) && styles.saveBtnOff]}
+        >
+          <Icon name="plus" size={16} color={c.textSecondary} />
+          <Text style={[styles.saveBtnText, { color: c.textSecondary }]}>
+            Save this look
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      <Text style={[styles.blurb, { color: c.textTertiary }]}>
+        {full
+          ? `That is all ${MAX_LOOKS}. Delete one to keep another.`
+          : looks.length === 0
+            ? 'Build a dock you like below, then keep it here under a name of your own.'
+            : canSave
+              ? 'Saving a name you have used before replaces that look.'
+              : `You are wearing “${worn?.name}”. Change something to save a new one.`}
+      </Text>
+    </View>
+  );
+}
+
+/**
  * DockMotionReadout — the last tab change, in numbers and then in a sentence.
  *
  * Subscribed to the probe's store rather than reading it through context: the
@@ -235,6 +417,7 @@ export default function DockStylePicker() {
     theme, dockStyle, setDockStyle, dockIndicator, setDockIndicator,
     dockColor, setDockColor, dockInk, setDockInk, dockInkColor, setDockInkColor, dockGlow, setDockGlow, dockGlowColor, setDockGlowColor,
     accentColor, setCustomAccent, dockTheme, setDockTheme,
+    savedLooks = [], saveLook, deleteLook,
   } = useTheme();
   const [colourOpen, setColourOpen] = useState(false);
   // …and the same sheet again, for the custom ICON colour.
@@ -299,6 +482,37 @@ export default function DockStylePicker() {
     if (Math.abs(glowLevel - 1) > 0.05) setDockGlow(1);
     if (dockGlowColor) setDockGlowColor(null);
     setMode('auto');
+  };
+
+  // WHICH saved look is on, worked out by comparing the settings rather than
+  // remembered — the same rule a palette follows, and for the same reason:
+  // nudge one control and you are no longer wearing what you saved, with
+  // nothing needing to be cleared for that to become true.
+  const wornSaved = wornLook(savedLooks, {
+    dockIndicator, dockStyle, dockColor, dockInk, dockInkColor,
+    dockGlow, dockGlowColor, dockTheme, accentColor,
+  });
+
+  /**
+   * Wear a saved look. Every field it holds, including the theme key — a look
+   * saved off Godzilla has to come back AS Godzilla or its overridden glyphs
+   * and rim are quietly lost.
+   *
+   * setDockTheme first, so no intermediate state has a theme key pointing at
+   * one look while the colours under it belong to another.
+   */
+  const applyLook = (look) => {
+    if (wornSaved?.id === look.id) return;
+    impactHaptic('light');
+    setDockTheme(look.themeKey || '');
+    setDockIndicator(look.indicator);
+    setDockStyle(look.style);
+    if (look.color) setDockColor(look.color);
+    setDockInk(look.ink);
+    if (look.inkColor) setDockInkColor(look.inkColor);
+    setDockGlow(look.glow);
+    setDockGlowColor(look.glowColor);
+    if (look.accent) setCustomAccent(look.accent);
   };
 
   const applyTheme = (t) => () => {
@@ -592,7 +806,25 @@ export default function DockStylePicker() {
         </>
       ) : null}
 
-      {/* THEMES first, and wide. These are whole composed looks rather than a
+      {/* ── YOUR LOOKS ─────────────────────────────────────────────────────
+          Above Themes on purpose: the ones you made are the ones you are
+          looking for. Everything below this point is a way to BUILD a look;
+          this is where they come back.
+
+          Drawn as the same wide dock preview a theme gets, because a saved
+          look IS a theme in every way that matters to the eye — and because
+          a swatch cannot show an indicator, a glow or an ink. */}
+      <SavedLooksRow
+        theme={theme}
+        looks={savedLooks}
+        worn={wornSaved}
+        canSave={!wornSaved}
+        onApply={applyLook}
+        onSave={saveLook}
+        onDelete={deleteLook}
+      />
+
+      {/* THEMES, and wide. These are whole composed looks rather than a
           colour pairing — the tile is the width of the card because that is
           the only way to show one as a dock rather than as a swatch, and
           because there will not be many of them. */}
@@ -795,6 +1027,32 @@ const styles = StyleSheet.create({
   // A theme gets the full width: it is a look, not a swatch, and a dock drawn
   // at a third of the card is a stripe.
   wideTile: { alignSelf: 'stretch' },
+
+  // ── Your looks ───────────────────────────────────────────────────────
+  // The tile takes the row and the delete key sits ON it, top-right: a
+  // separate column would narrow every preview by 32pt to hold a control
+  // you touch once in a month.
+  savedRow: { position: 'relative', marginBottom: 8 },
+  savedDelete: {
+    position: 'absolute', top: 6, right: 6,
+    width: 24, height: 24, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  nameInput: { flex: 1, borderWidth: StyleSheet.hairlineWidth },
+  nameBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10 },
+  nameBtnOff: { opacity: 0.4 },
+  nameBtnText: { fontSize: 13, fontWeight: '700' },
+  // An outline rather than a filled key: this is the quiet option on a card
+  // where the tiles are the loud ones.
+  saveBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 11, borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth, borderStyle: 'dashed',
+  },
+  saveBtnOff: { opacity: 0.4 },
+  saveBtnText: { fontSize: 13, fontWeight: '600' },
   tile: {
     flex: 1,
     borderRadius: 14,

@@ -13,6 +13,9 @@ const setDockColor = jest.fn();
 const setDockInk = jest.fn();
 const setCustomAccent = jest.fn();
 const setDockTheme = jest.fn();
+const setDockInkColor = jest.fn();
+const saveLook = jest.fn();
+const deleteLook = jest.fn();
 
 jest.mock('../../context/ThemeContext', () => ({
   DOCK_INDICATORS: ['chip', 'underline'],
@@ -45,6 +48,9 @@ jest.mock('../../context/ThemeContext', () => ({
     setDockGlowColor: mockState().setDockGlowColor,
     dockTheme: mockState().theme,
     setDockTheme: mockState().setDockTheme,
+    savedLooks: mockState().savedLooks,
+    saveLook: mockState().saveLook,
+    deleteLook: mockState().deleteLook,
   }),
 }));
 
@@ -55,7 +61,8 @@ let state = {
 global.mockState = () => ({
   ...state,
   setDockStyle, setDockIndicator, setDockColor, setDockInk, setCustomAccent, setDockTheme,
-  setDockGlow, setDockGlowColor,
+  setDockGlow, setDockGlowColor, setDockInkColor,
+  saveLook, deleteLook,
 });
 
 jest.mock('expo-linear-gradient', () => {
@@ -106,6 +113,8 @@ beforeEach(() => {
   setDockTheme.mockClear();
   setDockIndicator.mockClear();
   setDockColor.mockClear();
+  saveLook.mockClear();
+  deleteLook.mockClear();
   impactHaptic.mockClear();
 });
 
@@ -532,5 +541,133 @@ describe('the tiles are small docks, not swatches', () => {
     };
     find(json);
     expect([...new Set(stops(sub).map((s) => s.colour))]).toEqual(['#12AB34']);
+  });
+});
+
+describe('Your looks — saving the dock you built', () => {
+  // The model's rules (naming, capacity, what a capture holds) are pinned in
+  // savedLooks.test. What is pinned HERE is the wiring: that the panel offers
+  // it, that the name reaches the store, and — the part that would be worst
+  // to get wrong — that applying one writes back EVERY field, including the
+  // theme key a composed look cannot be rebuilt without.
+  const LOOK = {
+    id: 'l1',
+    name: 'Late night',
+    indicator: 'underline',
+    style: 'custom',
+    color: '#101614',
+    ink: 'dark',
+    inkColor: null,
+    glow: 2,
+    glowColor: '#4FD8F5',
+    accent: '#4FD8F5',
+    themeKey: 'godzilla',
+  };
+
+  test('with nothing saved it explains what the row is for', async () => {
+    const view = await render(<DockStylePicker />);
+    expect(view.getByTestId('saved-looks')).toBeTruthy();
+    expect(view.getByTestId('saved-look-add')).toBeTruthy();
+    expect(view.queryByTestId('saved-look-name')).toBeNull();
+  });
+
+  test('the name is asked for IN the card, not in a dialog', async () => {
+    // Alert.prompt is iOS-only, and a Modal would be worse: this panel can
+    // itself be inside one, and a second sibling Modal over an open one
+    // never appears on iOS.
+    const view = await render(<DockStylePicker />);
+    await act(async () => { fireEvent.press(view.getByTestId('saved-look-add')); });
+    expect(view.getByTestId('saved-look-name')).toBeTruthy();
+  });
+
+  test('saving hands the typed name to the store, trimmed', async () => {
+    const view = await render(<DockStylePicker />);
+    await act(async () => { fireEvent.press(view.getByTestId('saved-look-add')); });
+    await act(async () => {
+      fireEvent.changeText(view.getByTestId('saved-look-name'), '  Late   night  ');
+    });
+    await act(async () => { fireEvent.press(view.getByTestId('saved-look-confirm')); });
+    expect(saveLook).toHaveBeenCalledWith('Late night');
+    // …and the field closes behind it rather than sitting there half-filled.
+    expect(view.queryByTestId('saved-look-name')).toBeNull();
+  });
+
+  test('an empty name saves nothing', async () => {
+    const view = await render(<DockStylePicker />);
+    await act(async () => { fireEvent.press(view.getByTestId('saved-look-add')); });
+    await act(async () => { fireEvent.changeText(view.getByTestId('saved-look-name'), '   '); });
+    await act(async () => { fireEvent.press(view.getByTestId('saved-look-confirm')); });
+    expect(saveLook).not.toHaveBeenCalled();
+  });
+
+  test('a name already in use says REPLACE, because that is what it does', async () => {
+    state = { ...state, savedLooks: [LOOK] };
+    const view = await render(<DockStylePicker />);
+    await act(async () => { fireEvent.press(view.getByTestId('saved-look-add')); });
+    await act(async () => { fireEvent.changeText(view.getByTestId('saved-look-name'), 'late NIGHT'); });
+    // Being told afterwards that something was overwritten is the version of
+    // this that loses work.
+    expect(view.getByTestId('saved-look-confirm').props.accessibilityLabel)
+      .toMatch(/Replace/);
+  });
+
+  test('a saved look is drawn as a dock, in its OWN settings', async () => {
+    // Not in the ones currently on screen: a tile that previewed the live
+    // dock would make every saved look look identical.
+    state = { ...state, savedLooks: [LOOK] };
+    const view = await render(<DockStylePicker />);
+    const tile = view.getByTestId('saved-look-l1');
+    expect(tile.props.accessibilityLabel).toBe('Late night');
+    // Saved on the underline, so the tile shows a line — whatever the panel
+    // is set to right now (the default state here is 'chip').
+    expect(within(tile).queryByTestId('dock-preview-spot')).not.toBeNull();
+    expect(within(tile).queryByTestId('dock-preview-chip')).toBeNull();
+  });
+
+  test('applying one writes back every field, theme key included', async () => {
+    state = { ...state, savedLooks: [LOOK] };
+    const view = await render(<DockStylePicker />);
+    await act(async () => { fireEvent.press(view.getByTestId('saved-look-l1')); });
+
+    // The theme key especially: a look saved off a composed theme keeps that
+    // theme's overridden glyphs and rim, and nothing else can restore them.
+    expect(setDockTheme).toHaveBeenCalledWith('godzilla');
+    expect(setDockIndicator).toHaveBeenCalledWith('underline');
+    expect(setDockStyle).toHaveBeenCalledWith('custom');
+    expect(setDockColor).toHaveBeenCalledWith('#101614');
+    expect(setDockInk).toHaveBeenCalledWith('dark');
+    expect(setDockGlow).toHaveBeenCalledWith(2);
+    expect(setDockGlowColor).toHaveBeenCalledWith('#4FD8F5');
+    expect(setCustomAccent).toHaveBeenCalledWith('#4FD8F5');
+  });
+
+  test('deleting is its own target, not the tile', async () => {
+    // A look you spent twenty minutes on must not be one mis-aimed thumb
+    // from gone.
+    state = { ...state, savedLooks: [LOOK] };
+    const view = await render(<DockStylePicker />);
+    await act(async () => { fireEvent.press(view.getByTestId('saved-look-delete-l1')); });
+    expect(deleteLook).toHaveBeenCalledWith('l1');
+    expect(setDockTheme).not.toHaveBeenCalled();
+  });
+
+  test('wearing one already offers no way to save it again', async () => {
+    // The settings in `state` ARE this look, so it is the one that is on —
+    // and saving a second copy of what you are wearing is not a thing to
+    // offer.
+    state = {
+      ...state,
+      savedLooks: [LOOK],
+      indicator: 'underline',
+      style: 'custom',
+      colour: '#101614',
+      ink: 'dark',
+      glow: 2,
+      glowColour: '#4FD8F5',
+      accentColor: '#4FD8F5',
+      theme: 'godzilla',
+    };
+    const view = await render(<DockStylePicker />);
+    expect(view.getByTestId('saved-look-add').props.accessibilityState.disabled).toBe(true);
   });
 });
