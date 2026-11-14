@@ -28,9 +28,11 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import AnimalAvatar from '../../../components/AnimalAvatar';
+import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import DirectMessageIcon from '../../../components/DirectMessageIcon';
 import { dockOccupied } from '../../../components/tabBarLayout';
 import { tapHaptic } from '../../../utils/haptics';
@@ -43,10 +45,15 @@ import { messagePreviewLine } from '../../../utils/messageAttachments';
 import { threadRows, threadWhen } from '../../../utils/messageThreads';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
-function ThreadRow({ row, theme, onPress }) {
+function ThreadRow({ row, theme, onPress, baseUrl }) {
   const c = theme.colors;
   const unread = row.unread > 0;
   const preview = messagePreviewLine(row.last);
+  // The row has carried the photo all along (threadRows reads it off the pond
+  // roster, and `open` below hands it to the thread) — the list just never
+  // drew it, so the inbox showed generated animals for people whose own
+  // picture appears the moment you open the conversation.
+  const photo = resolveAvatarUrl(row.avatarUrl, baseUrl);
   return (
     <Pressable
       {...TAP_ONLY}
@@ -59,7 +66,22 @@ function ThreadRow({ row, theme, onPress }) {
       testID={`thread-row-${row.userId}`}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
     >
-      <AnimalAvatar id={row.userId} size={44} fallbackLabel={row.name} />
+      {/* The generated disc is UNDER the photo, not instead of it: a picture
+          still loading, or one that fails, shows a face rather than a hole.
+          Same layering as FaceStack, which is where this pattern lives. */}
+      <View style={styles.avatar}>
+        <AnimalAvatar id={row.userId} size={44} fallbackLabel={row.name} />
+        {photo ? (
+          <Image
+            testID={`thread-avatar-${row.userId}`}
+            source={{ uri: photo }}
+            style={StyleSheet.absoluteFillObject}
+            contentFit="cover"
+            transition={120}
+            recyclingKey={`thread-face:${photo}`}
+          />
+        ) : null}
+      </View>
       <View style={styles.rowText}>
         <View style={styles.rowTop}>
           <Text
@@ -93,7 +115,11 @@ function ThreadRow({ row, theme, onPress }) {
 
 export default function MessagesPage({ visible, onClose, onOpenThread, theme, insets }) {
   const c = theme.colors;
-  const { api } = useServer();
+  const { api, getBaseUrl } = useServer();
+  // Where a relative avatar path hangs off. The pond answers on several names
+  // (a LAN ip, a Tailscale name, app.t3d.ca), so the origin is whichever one
+  // we are actually talking to — see resolveAvatarUrl.
+  const base = getBaseUrl?.();
   const people = usePondPeople();
   const { messagesVersion } = useSyncSignals();
   const [payload, setPayload] = useState(null);
@@ -168,7 +194,7 @@ export default function MessagesPage({ visible, onClose, onOpenThread, theme, in
             )
           }
           renderItem={({ item }) => (
-            <ThreadRow row={item} theme={theme} onPress={() => open(item)} />
+            <ThreadRow row={item} theme={theme} onPress={() => open(item)} baseUrl={base} />
           )}
         />
       </View>
@@ -177,6 +203,9 @@ export default function MessagesPage({ visible, onClose, onOpenThread, theme, in
 }
 
 const styles = StyleSheet.create({
+  // Clips the photo to the same disc the generated avatar draws, and gives
+  // the two layers one box to share.
+  avatar: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden' },
   page: { flex: 1 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingBottom: 10 },
   title: { flex: 1, fontSize: 17, fontWeight: '700' },
