@@ -121,6 +121,33 @@ export function chipSlideMs(slots) {
 
 
 /**
+ * WHERE THE CHIP IS AIMED, from the three things that might know.
+ *
+ * Extracted from the reaction below so that the HANDOVER between them is
+ * testable. The rule itself is one line; what needed pinning is what happens
+ * across the sequence of writes a single tab change makes, because a
+ * disagreement between two of these sources for even one UI-thread job starts
+ * a whole travel in the wrong direction (the note on the handover effect has
+ * the history). A render test cannot see any of this — the component mounts,
+ * the style is valid, every assertion about colour and geometry passes, and
+ * the bug is only in the frames.
+ *
+ * Precedence, strongest first:
+ *
+ *   drag   a thumb on the capsule. Fractional, straight off the UI thread, and
+ *          it outranks everything — while a finger is down the chip IS the
+ *          finger and the navigator's opinion is irrelevant.
+ *   lead   the slot a tap or a lift chose, written before React has heard
+ *          about it. -1 once spent.
+ *   index  the navigator, which is the truth and has the last word.
+ */
+export const chipAim = (dragging, slot, lead, index) => {
+  'worklet';
+  if (dragging) return slot;
+  return lead >= 0 ? lead : index;
+};
+
+/**
  * The curve, as control points, because two Easing implementations have to
  * build it. Leaves at full speed (x1 = y1 = 0, so there is no ease-in to sit
  * through) and arrives with zero velocity (y2 = 1): a departure and a landing,

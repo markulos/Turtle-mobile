@@ -63,3 +63,44 @@ describe('the chip travels on ONE animation per move', () => {
     expect(SRC).toMatch(/cur\.offset !== prev\.offset/);
   });
 });
+
+/**
+ * THE HANDOVER'S ORDER, scanned — because splitting it back up is the bug.
+ *
+ * Mirroring `index` and spending the `lead` are two writes, and a shared value
+ * assigned from JS is a separate UI-thread job per assignment, each one running
+ * the reaction before the next lands. Spend first and the aim falls through to
+ * an `indexSV` that is still the slot the chip LEFT: a full travel backwards,
+ * then a third travel forwards from wherever that reached. That is what shipped
+ * as "the chip snaps about as it crosses the bar", and it got worse with
+ * distance.
+ *
+ * chipAim.test.js walks the sequences and proves the rule; this pins the thing
+ * that cannot be proved from the rule alone — that the two writes are in one
+ * effect, in the order that never lets them disagree.
+ */
+describe('the lead is spent AFTER the navigator is mirrored', () => {
+  test('both writes live in one effect, index first', () => {
+    const iAt = SRC.indexOf('indexSV.value = index;');
+    const spendAt = SRC.indexOf('lead.value = -1;');
+    expect(iAt).toBeGreaterThan(-1);
+    expect(spendAt).toBeGreaterThan(-1);
+    expect(spendAt).toBeGreaterThan(iAt);
+    // …and with no `useEffect(` between them, which is what would make them
+    // two effects again and put the spend back in the earlier one.
+    expect(SRC.slice(iAt, spendAt)).not.toMatch(/useEffect\(/);
+  });
+
+  test('the lead is spent in exactly one place', () => {
+    // Two spends would reintroduce the early one without failing the order
+    // check above.
+    expect(SRC.match(/lead\.value = -1;/g)).toHaveLength(1);
+  });
+
+  test('the clock for the move is written before the aim that will use it', () => {
+    // A travel timed against a stale duration is the other way these writes
+    // can be got wrong: the aim changes, the reaction reads ms.value, and the
+    // new one has not arrived yet.
+    expect(SRC.indexOf('ms.value = chipSlideMs(')).toBeLessThan(SRC.indexOf('indexSV.value = index;'));
+  });
+});

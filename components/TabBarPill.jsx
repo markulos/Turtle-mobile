@@ -16,7 +16,7 @@ import {
   TAB_SLOT, PILL_SIZE, PILL_RADIUS, PILL_TOP, BAR_CONTENT_HEIGHT, clusterStart,
   UNDERLINE_W, UNDERLINE_H, indicatorOffset, ridgeOffsets,
 } from './tabBarLayout';
-import { CHIP_SLIDE_BASE_MS, TAB_SWITCH_BEZIER, chipSlideMs } from './dockMotion';
+import { CHIP_SLIDE_BASE_MS, TAB_SWITCH_BEZIER, chipAim, chipSlideMs } from './dockMotion';
 import { dockSkin } from './dockSkins';
 import { resolveDockSkin } from './dockThemes';
 
@@ -159,7 +159,10 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
   // A lead is spent the moment the navigator agrees with it, so these never
   // fight: the lead gets the chip moving and `index` lands on the same slot,
   // which the driver below sees as no change at all.
-  useEffect(() => { lead.value = -1; }, [index, lead]);
+  //
+  // WHICH ORDER THE SPEND HAPPENS IN IS THE WHOLE THING — see the effect below,
+  // where it now lives. It used to be an effect of its own, declared above the
+  // one that mirrors `index`, and React runs effects in declaration order.
 
   // ── THE CHIP'S POSITION ────────────────────────────────────────────────
   //
@@ -191,6 +194,36 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
   const indexSV = useSharedValue(index);
   const offsetSV = useSharedValue(offset);
   const prevIndexRef = useRef(index);
+  // ── THE HANDOVER, AND WHY IT IS ONE EFFECT IN THIS ORDER ────────────────
+  //
+  // Three writes, and every one of them is a SEPARATE job on the UI thread: a
+  // shared value assigned from JS compiles to `runOnUI(() => { sv.value = v })`
+  // (see mutables.ts), and each assignment runs the reaction below before the
+  // next one lands. So the chip sees every intermediate state these three
+  // writes pass through, and one wrong order is a visible move.
+  //
+  // This is the bug Mark described as the chip "trying to snap to each tab as
+  // it travels", worst across the full width of the bar. The spend used to be
+  // an effect of its own, declared ABOVE this one, so on the commit where the
+  // navigator agreed the order was:
+  //
+  //   lead = -1        → aim falls through to `indexSV`, which is STILL THE
+  //                      SLOT THE CHIP LEFT. The aim has changed, so a full
+  //                      travel starts — BACKWARDS, to where it came from.
+  //   indexSV = 5      → the aim changes again, so a THIRD travel starts, from
+  //                      wherever the backward kick had got to, on a fresh
+  //                      full duration.
+  //
+  // Three travels per tab change, the middle one reversed, and the further the
+  // move the bigger the kick — which is exactly why it read as worst crossing
+  // the whole dock. Nothing about the curve could have fixed it.
+  //
+  // In one effect, in this order, no intermediate state changes the aim:
+  // `indexSV` arrives while the lead still holds the same slot (aim unchanged),
+  // and only then is the lead spent (aim unchanged again). It is also correct
+  // if Reanimated ever coalesces these into one job, because the END state is
+  // the same — the order is no longer load-bearing for correctness, only for
+  // the frames in between.
   useEffect(() => {
     const from = prevIndexRef.current;
     prevIndexRef.current = index;
@@ -199,9 +232,16 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
     // behind it, so nobody has said how far the chip is about to travel.
     // Measure it from the slot it is leaving. A press has already written the
     // same answer by now; writing it again changes nothing.
+    //
+    // FIRST, so that when the aim does change the clock it will be timed on is
+    // already there.
     if (from !== index) ms.value = chipSlideMs(index - from);
+    // THEN the truth, which the lead is already pointing at.
     indexSV.value = index;
-  }, [index, indexSV, ms]);
+    // ONLY THEN the spend. Last, so the fall-through from `lead` to `indexSV`
+    // happens between two values that agree.
+    lead.value = -1;
+  }, [index, indexSV, lead, ms]);
   useEffect(() => { offsetSV.value = offset; }, [offset, offsetSV]);
 
   // Nothing to place until the bar has been measured; staying invisible avoids
@@ -218,7 +258,7 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
         // ONE formula for all three sources: a slot (whole or fractional)
         // times the slot width, from the cluster's own left edge. A dragged
         // chip, a led chip and a navigated chip land in the same place.
-        aim: dragging ? slot.value : (lead.value >= 0 ? lead.value : indexSV.value),
+        aim: chipAim(dragging, slot.value, lead.value, indexSV.value),
         offset: offsetSV.value,
       };
     },
