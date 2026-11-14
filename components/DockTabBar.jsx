@@ -113,7 +113,7 @@ const DRAG_SLOP = 12;
 const PRESS_IN = { duration: PRESS_IN_MS, easing: Easing.bezier(...PRESS_BEZIER) };
 const PRESS_OUT = { duration: PRESS_OUT_MS, easing: Easing.bezier(...PRESS_BEZIER) };
 
-export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, ...props }) {
+export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, probe, ...props }) {
   const { state, navigation } = props;
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -240,6 +240,12 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, ...
     // next frame rather than after a hop to JS.
     .onBegin(() => {
       press.value = withTiming(1, PRESS_IN);
+      // WHEN THE FINGER LANDED, stamped on the UI thread before anything else
+      // happens. The chip's travel is timed against this, so "the chip left
+      // 180ms after the touch" is measured from the touch itself rather than
+      // from the first thing the JS thread got round to telling us about it —
+      // which is the delay being accused. See dockMotionProbe.
+      if (probe) probe.touchAt.value = Date.now();
       // From the TOUCH, not from the drag: a tap never reaches onStart, and a
       // tap is the case where the mount lands on top of the slide. Holding
       // here covers both, and onFinalize always gives it back.
@@ -285,7 +291,7 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, ...
       press.value = withTiming(0, PRESS_OUT);
       runOnJS(releaseAfterSlide)();
     }),
-  [count, goToIndex, hold, lead, ms, press, releaseAfterSlide, slot, width]);
+  [count, goToIndex, hold, lead, ms, press, probe, releaseAfterSlide, slot, width]);
 
   return (
     <GestureDetector gesture={pan}>

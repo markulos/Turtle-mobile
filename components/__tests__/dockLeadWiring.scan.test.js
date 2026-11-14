@@ -49,6 +49,24 @@ describe('the dock’s shared values reach both halves', () => {
     expect(APP).toMatch(/leadSlot\.value = i/);
   });
 
+  test('the probe reaches both halves, or it measures nothing', () => {
+    // The probe's two numbers come from two different components: the TOUCH is
+    // stamped by the dock's gesture, the TRAVEL by the chip's reaction. Miss
+    // either prop and there is no crash and no warning — the readout in
+    // Settings just never fills in, or fills in with a start time measured
+    // from a touch nobody recorded. Same silent failure as `leadSlot`'s, which
+    // is why it is scanned rather than trusted.
+    expect(APP).toMatch(/const dockProbe = useDockMotionProbe\(/);
+    expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('probe={dockProbe}');
+    expect(APP.match(/<TabBarPill[^>]*\/>/)[0]).toContain('probe={dockProbe}');
+    // The press swell has to be hoisted for the probe to see it, and
+    // DockTabBar falls back to a private value if it is not handed one — so a
+    // missing prop here costs the "was the glass still scaling?" answer
+    // without costing anything visible.
+    expect(APP).toMatch(/const dockPressLift = useSharedValue\(0\)/);
+    expect(APP.match(/<DockTabBar[^>]*\/>/)[0]).toContain('pressLift={dockPressLift}');
+  });
+
   test('the move carries its own duration, and both halves get it', () => {
     // How long the chip takes depends on how far it is going, so the number
     // travels with the move rather than living in the component. Same failure

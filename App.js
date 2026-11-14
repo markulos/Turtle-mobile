@@ -75,6 +75,7 @@ import { buildNavTheme } from './utils/navTheme';
 import { resolveDockSkin } from './components/dockThemes';
 import DockTabBar from './components/DockTabBar';
 import { CHIP_SLIDE_BASE_MS, TAB_SWITCH_SPEC, chipSlideMs, forTabTurn } from './components/dockMotion';
+import { useDockMotionProbe } from './components/dockMotionProbe';
 import { clusterPadding, BAR_CONTENT_HEIGHT, BAR_VERTICAL_PAD, CARD_MARGIN_H, CARD_GAP_BOTTOM, DOCK_CONTENT_Y_NUDGE } from './components/tabBarLayout';
 import { AnimalGlyph } from './components/AnimalAvatar';
 import { useMyAvatarAnimal } from './utils/avatarChoice';
@@ -162,6 +163,20 @@ function TabNavigator() {
   // ...and how long that move should take, which depends on how far it goes.
   // Written by whoever starts the move, read by the chip's worklet.
   const slideMs = useSharedValue(CHIP_SLIDE_BASE_MS);
+  // The dock's press swell — 0 at rest, 1 while a finger is down. DockTabBar
+  // owns the ANIMATION; the value lives here only because the probe below has
+  // to be able to tell whether the swell was still running while the chip was
+  // travelling (the swell scales the capsule, and the capsule is a blur view,
+  // so an overlap is expensive in a way nothing else here is). DockTabBar
+  // keeps its own fallback for when nobody hands it one.
+  const dockPressLift = useSharedValue(0);
+  // What the LAST move actually did — when it left relative to the touch, and
+  // whether it kept every frame on the way across. Owned here for the same
+  // reason the three values above are: the touch is stamped in the dock's
+  // gesture and the travel is started by the chip, and those are two different
+  // components. Reported into Settings → Navigation, in plain words, so this
+  // stops being judged by eye. See components/dockMotionProbe.
+  const dockProbe = useDockMotionProbe(slideMs, dockPressLift);
   // An immersive page (the PDF reader) asks for the dock to go. `display:none`
   // is the only thing that actually removes it — the bar is the navigator's
   // own child and paints above every screen, so a page cannot cover it.
@@ -174,7 +189,16 @@ function TabNavigator() {
       // changing tabs is a thumb sliding along the capsule and not only a tap.
       // Everything about how the bar looks still comes from screenOptions
       // below — see DockTabBar for why it wraps rather than replaces.
-      tabBar={(props) => <DockTabBar {...props} dragSlot={dragSlot} leadSlot={leadSlot} slideMs={slideMs} />}
+      tabBar={(props) => (
+        <DockTabBar
+          {...props}
+          dragSlot={dragSlot}
+          leadSlot={leadSlot}
+          slideMs={slideMs}
+          pressLift={dockPressLift}
+          probe={dockProbe}
+        />
+      )}
       // A TAP gets the same head start a DRAG already had.
       //
       // The drag writes `leadSlot` on the lift, from the gesture worklet, so
@@ -389,7 +413,9 @@ function TabNavigator() {
         // One accent pill that SLIDES between tabs, painted behind the buttons.
         // tabBarBackground is composited under navigation's own tab buttons, so
         // this adds the indicator without touching their layout or a11y.
-        tabBarBackground: () => <TabBarPill dragSlot={dragSlot} leadSlot={leadSlot} slideMs={slideMs} />,
+        tabBarBackground: () => (
+          <TabBarPill dragSlot={dragSlot} leadSlot={leadSlot} slideMs={slideMs} probe={dockProbe} />
+        ),
         headerShown: false, // Hide default header
       })}
     >

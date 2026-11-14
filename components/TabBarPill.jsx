@@ -105,7 +105,7 @@ const DOCK_LIP_H = 1.5;
 // Geometry is shared with the bar itself (see tabBarLayout) so the chip and the
 // icons can never disagree about where a slot is.
 
-export default function TabBarPill({ dragSlot, leadSlot, slideMs }) {
+export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
   const { theme, dockIndicator, dockStyle, dockColor, dockTheme } = useTheme();
   // Every colour the capsule draws, from the skin chosen in Settings — a
   // named theme if one is on, otherwise the chosen material. One resolver,
@@ -237,6 +237,25 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs }) {
       // A real move, and the only path that starts a travel: the aim changed.
       // Re-renders do not reach here, which is the whole point.
       if (cur.aim !== prev.aim) {
+        // ARM THE PROBE. This is the one instant in the app that knows a
+        // travel is beginning, so it is where the measurement starts — see
+        // dockMotionProbe for why it is written inline here rather than
+        // handed over as a function to call. Reset at the START of a move, so
+        // a move that gets interrupted leaves no half-filled numbers behind.
+        if (probe) {
+          const now = Date.now();
+          probe.startedAt.value = now;
+          // -1 for a move with no touch behind it — a deep link, the /command
+          // console, a guard bouncing you out of a tab. There is no delay to
+          // report when there was no finger.
+          probe.startLate.value = probe.touchAt.value === 0 ? -1 : now - probe.touchAt.value;
+          probe.touchAt.value = 0;
+          probe.frames.value = 0;
+          probe.worst.value = 0;
+          probe.best.value = 0;
+          probe.pressBusy.value = 0;
+          probe.sampling.value = 1;
+        }
         x.value = withTiming(px, { duration: ms.value, easing: EASE });
       }
     },
@@ -310,6 +329,30 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs }) {
       ))}
       <Reanimated.View
         testID={underline ? 'dock-underline' : 'dock-chip'}
+        // THE CHIP TRAVELS AS A CACHED BITMAP.
+        //
+        // It is a rounded, SHADOWED layer (see styles.pill) moving across a
+        // blur view. Without this, iOS re-renders that shadow offscreen on
+        // every frame of the travel — a shadow has no `shadowPath` here, so
+        // its shape is derived from the layer each time — and because the
+        // shadow is translucent over the capsule's glass, the blur underneath
+        // has to be recomposited everywhere the shadow's alpha lands. That is
+        // per-frame offscreen work on the main thread, which is the thread
+        // compositing the animation, so the chip competes with itself: the
+        // faster it moves, the more it costs.
+        //
+        // Rasterized, the whole thing — fill, corner curve and shadow — is
+        // drawn once into a texture and the texture is what moves. Correct
+        // because nothing about the chip's CONTENT changes while it travels;
+        // only its position does. (A layer whose content changed every frame
+        // would be re-cached every frame and this would make it worse.)
+        //
+        // Fabric sets `rasterizationScale` to the display scale alongside
+        // this, so the cache is retina and the chip does not go soft —
+        // verified in RCTViewComponentView.mm rather than assumed, because a
+        // blurry chip would be a worse bug than a stuttering one.
+        shouldRasterizeIOS
+        renderToHardwareTextureAndroid
         style={[
           underline ? styles.underline : styles.pill,
           {

@@ -119,6 +119,7 @@ export function chipSlideMs(slots) {
   return Math.min(CHIP_SLIDE_MAX_MS, Math.round(CHIP_SLIDE_BASE_MS + CHIP_SLIDE_PER_SLOT_MS * d));
 }
 
+
 /**
  * The curve, as control points, because two Easing implementations have to
  * build it. Leaves at full speed (x1 = y1 = 0, so there is no ease-in to sit

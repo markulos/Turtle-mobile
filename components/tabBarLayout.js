@@ -98,6 +98,7 @@ export const slotAtX = (x, screenWidth, count) => {
   return Math.min(count - 1, Math.max(0, raw));
 };
 
+
 /**
  * THE UNDERLINE — the dock's second indicator treatment (Settings → Navigation).
  *

@@ -23,7 +23,7 @@
  * existed, persisted and was read by the dock, and there was no way to reach
  * it from the app. A preference nobody can see is not a preference.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -36,6 +36,7 @@ import AccentColorPicker from './AccentColorPicker';
 import { DOCK_PALETTES, matchingPalette, paletteSkin } from './dockPalettes';
 import { DOCK_THEMES, dockTheme as findTheme, themeIsIntact, themeSkin } from './dockThemes';
 import { impactHaptic } from '../utils/haptics';
+import { describeDockMotion, getDockMotionReport, onDockMotionReport } from './dockMotionProbe';
 
 // The miniature. Not a scaled copy of the real geometry — at a third the size
 // a scaled 57pt chip in a 67pt slot leaves sub-pixel gaps — but the same
@@ -153,6 +154,35 @@ function Tile({ label, selected, onPress, theme, children, testID, style }) {
 }
 
 const INDICATOR_LABELS = { chip: 'Chip', underline: 'Underline' };
+
+/**
+ * DockMotionReadout — the last tab change, in numbers and then in a sentence.
+ *
+ * Subscribed to the probe's store rather than reading it through context: the
+ * report lands at the end of every tab change, and re-rendering the navigator's
+ * subtree that often would be a measurement that causes the thing it measures.
+ * Only this one line re-renders, and only while this card is on screen.
+ */
+function DockMotionReadout({ theme }) {
+  const [report, setReport] = useState(() => getDockMotionReport());
+  useEffect(() => onDockMotionReport(setReport), []);
+
+  const ms = (n) => `${Math.round(n)}ms`;
+  return (
+    <View testID="dock-motion-readout">
+      {report ? (
+        <Text style={[styles.readout, { color: theme.colors.text }]}>
+          {report.startLateMs < 0 ? 'no touch' : `left ${ms(report.startLateMs)} after the touch`}
+          {`  ·  ${report.frames} frames, worst ${ms(report.worstMs)}`}
+          {report.drops > 0 ? `  ·  ${report.drops} missing` : '  ·  none missing'}
+        </Text>
+      ) : null}
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary, marginTop: report ? 4 : 0 }]}>
+        {describeDockMotion(report)}
+      </Text>
+    </View>
+  );
+}
 
 export default function DockStylePicker() {
   const {
@@ -385,6 +415,18 @@ export default function DockStylePicker() {
           : 'Set by hand. Change the highlight colour and this stays as you left it.'}
       </Text>
 
+      {/* HOW THE LAST MOVE WENT.
+          Here rather than in a developer panel because this is the card you
+          are on while you are tapping the dock to see whether the chip is
+          right — and because "it still lags" and "it still stutters" are two
+          different faults with two different fixes, which is what cost an
+          afternoon of retiming a curve that was never the problem. See
+          components/dockMotionProbe. */}
+      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
+        Last move
+      </Text>
+      <DockMotionReadout theme={theme} />
+
       {/* The same sheet the highlight colour uses — three labelled sliders and
           a hex field, already built and already holding the edge-swipe guard
           so dragging a slider cannot close the Settings page underneath it.
@@ -438,6 +480,14 @@ const styles = StyleSheet.create({
   },
   tileLabel: { fontSize: 12, fontWeight: '600' },
   blurb: { fontSize: 12, lineHeight: 17, marginTop: 8 },
+  // The numbers themselves: tabular so the three figures do not shuffle
+  // sideways as they change between one tab change and the next, which is
+  // exactly the kind of movement that makes a readout hard to read.
+  readout: {
+    fontSize: 12,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+  },
   page: {
     height: 58,
     justifyContent: 'flex-end',
