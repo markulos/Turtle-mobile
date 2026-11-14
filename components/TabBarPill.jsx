@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useNavigationState } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
@@ -188,15 +188,12 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
   const fade = useSharedValue(0);
 
   // `index` and the geometry live in React state; the driver runs on the UI
-  // thread, so they are mirrored into shared values it can read. The mirror
-  // for `index` is written AFTER the duration, so the reaction never fires
-  // against a stale clock.
+  // thread, so they are mirrored into shared values it can read.
   const indexSV = useSharedValue(index);
   const offsetSV = useSharedValue(offset);
-  const prevIndexRef = useRef(index);
   // ── THE HANDOVER, AND WHY IT IS ONE EFFECT IN THIS ORDER ────────────────
   //
-  // Three writes, and every one of them is a SEPARATE job on the UI thread: a
+  // Two writes, and both of them are a SEPARATE job on the UI thread: a
   // shared value assigned from JS compiles to `runOnUI(() => { sv.value = v })`
   // (see mutables.ts), and each assignment runs the reaction below before the
   // next one lands. So the chip sees every intermediate state these three
@@ -225,23 +222,19 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
   // the same — the order is no longer load-bearing for correctness, only for
   // the frames in between.
   useEffect(() => {
-    const from = prevIndexRef.current;
-    prevIndexRef.current = index;
-    // A tab change made from SOMEWHERE ELSE — a deep link, the /command
-    // console, a guard bouncing you out of a tab — has no press and no gesture
-    // behind it, so nobody has said how far the chip is about to travel.
-    // Measure it from the slot it is leaving. A press has already written the
-    // same answer by now; writing it again changes nothing.
+    // The duration used to be written here too, for a tab change made from
+    // SOMEWHERE ELSE — a deep link, the /command console, a guard bouncing you
+    // out of a tab — which has no press behind it to have said how far the
+    // chip is about to go. The reaction works that out for itself now, from
+    // the distance it is actually covering, so every move is timed the same
+    // way whoever started it and there is nothing to write ahead.
     //
-    // FIRST, so that when the aim does change the clock it will be timed on is
-    // already there.
-    if (from !== index) ms.value = chipSlideMs(index - from);
-    // THEN the truth, which the lead is already pointing at.
+    // The truth first, which the lead is already pointing at.
     indexSV.value = index;
     // ONLY THEN the spend. Last, so the fall-through from `lead` to `indexSV`
     // happens between two values that agree.
     lead.value = -1;
-  }, [index, indexSV, lead, ms]);
+  }, [index, indexSV, lead]);
   useEffect(() => { offsetSV.value = offset; }, [offset, offsetSV]);
 
   // Nothing to place until the bar has been measured; staying invisible avoids
@@ -296,7 +289,20 @@ export default function TabBarPill({ dragSlot, leadSlot, slideMs, probe }) {
           probe.pressBusy.value = 0;
           probe.sampling.value = 1;
         }
-        x.value = withTiming(px, { duration: ms.value, easing: EASE });
+        // HOW LONG, worked out from the move that is actually happening.
+        //
+        // It used to be read out of `ms`, written by whoever started the move
+        // on the JS thread. That stopped being possible when the chip began
+        // leaving on the TOUCH rather than on the lift: at touch-down no JS
+        // has run yet, so `ms` still holds the LAST move's duration, and a
+        // one-slot hop would take a dock-crossing's time (or the reverse).
+        // The distance is right here — the aim it is leaving and the aim it is
+        // going to — so the clock is derived rather than delivered.
+        const duration = chipSlideMs(cur.aim - prev.aim);
+        // Written back for the probe, whose sampling window is `travel + tail`
+        // and would otherwise close against a duration this move never used.
+        ms.value = duration;
+        x.value = withTiming(px, { duration, easing: EASE });
       }
     },
     [],

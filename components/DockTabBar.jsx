@@ -101,6 +101,14 @@ import { holdEdgeSwipe } from '../utils/edgeSwipeGuard';
 // drag has not become harder to start — only harder to start by accident.
 const DRAG_SLOP = 12;
 
+// How long to give a press to turn into a navigate before deciding it never
+// will (see `guardLead`). Deliberately generous: the check itself is exact —
+// it asks the navigator where it ended up — so the only thing this number
+// decides is how long a CANCELLED touch may leave the chip parked, and being
+// early on a merely slow navigate would be the worse mistake of the two. A
+// commit takes a frame or two; this is most of a second.
+export const LEAD_GUARD_MS = 600;
+
 // The press timings, built ONCE here on the JS thread, with REANIMATED's
 // Easing. The gesture callbacks that use them are worklets on the UI thread,
 // and the UI thread can only call worklets: a helper function, or React
@@ -227,10 +235,45 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
       // releasing early puts the mount back on top of the travel.
     }, CHIP_SLIDE_MAX_MS);
   }, [release]);
+
+  // THE CHIP COMMITTED AT TOUCH-DOWN. THIS IS WHAT UNCOMMITS IT.
+  //
+  // `onBegin` aims the chip at the slot under the finger before anything has
+  // agreed to go there, which is what makes it leave on the touch. Almost
+  // always the press then lands, the navigator follows, and TabBarPill spends
+  // the lead the moment `index` matches it — by the time this runs there is
+  // nothing left to do.
+  //
+  // The exception is a touch that never becomes a press at all: the system
+  // takes it (a call, a notification, a modal), so no `tabPress`, no navigate,
+  // and the lead keeps pointing at a tab nobody chose. Left alone the chip
+  // sits on the wrong tab until the next time the dock is touched.
+  //
+  // Decided by ASKING THE NAVIGATOR rather than by waiting long enough: if it
+  // went where the touch pointed, the lead is right (and already spent); if it
+  // did not, there was no tab change and the chip goes back. A pure timeout
+  // would have to guess how slow a navigate may be, and guessing short
+  // reintroduces the backward kick 3686872 removed.
+  const guardTimerRef = useRef(null);
+  const guardLead = useCallback(() => {
+    if (guardTimerRef.current != null) clearTimeout(guardTimerRef.current);
+    guardTimerRef.current = setTimeout(() => {
+      guardTimerRef.current = null;
+      if (lead.value >= 0 && lead.value !== stateRef.current.index) lead.value = -1;
+    }, LEAD_GUARD_MS);
+  }, [lead]);
   // A handle leaked by an unmount mid-drag would stall every deferred mount in
   // the app for the rest of the session. `release` clears the pending timer
-  // too, so an unmount cannot leave one running against a dead component.
-  useEffect(() => release, [release]);
+  // too, so an unmount cannot leave one running against a dead component —
+  // and the lead guard's timer goes the same way, since it reads `stateRef`
+  // for a navigator this component no longer belongs to.
+  useEffect(() => () => {
+    release();
+    if (guardTimerRef.current != null) {
+      clearTimeout(guardTimerRef.current);
+      guardTimerRef.current = null;
+    }
+  }, [release]);
 
   const pan = useMemo(() => Gesture.Pan()
     .maxPointers(1)
@@ -238,7 +281,7 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
     // THE TOUCH LANDING — before the pan has decided whether it is a drag, and
     // therefore for a tap too. A worklet, so the swell is on screen on the
     // next frame rather than after a hop to JS.
-    .onBegin(() => {
+    .onBegin((e) => {
       press.value = withTiming(1, PRESS_IN);
       // WHEN THE FINGER LANDED, stamped on the UI thread before anything else
       // happens. The chip's travel is timed against this, so "the chip left
@@ -246,6 +289,35 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
       // from the first thing the JS thread got round to telling us about it —
       // which is the delay being accused. See dockMotionProbe.
       if (probe) probe.touchAt.value = Date.now();
+      // ── THE CHIP LEAVES ON THE TOUCH ───────────────────────────────────
+      //
+      // This line is the whole of the dock's remaining lateness.
+      //
+      // The aim used to come from `tabPress` (App.js), and react-navigation's
+      // tab button is a plain RN `Pressable`, whose `onPress` fires on
+      // RELEASE. So the chip could not start until the finger came off — and
+      // the probe, which stamps the touch at touch-DOWN, was reporting the
+      // length of the tap as if it were the app being slow. Mark's reading on
+      // 2026-11-14 was 138ms with a clean travel behind it; an ordinary
+      // deliberate tap is most of that.
+      //
+      // The slot under the finger is known HERE, at touch-down, and the whole
+      // chain from here is on the UI thread: this write, the reaction in
+      // TabBarPill, the timing. No JS hop, so a busy JS thread cannot delay
+      // the chip at all — which also removes the other half of the old number.
+      //
+      // Safe against the two things that are not a tab change:
+      //   • a DRAG — `slot` outranks `lead` in chipAim the moment the pan
+      //     activates, so the chip is back on the finger within a frame of it
+      //     moving, and onEnd overwrites the lead with what was chosen;
+      //   • a CANCELLED touch, where no navigate ever follows — see
+      //     `guardLead` below, which puts the chip back.
+      //
+      // onBegin, NOT a Tap gesture: a Tap ACTIVATES at release and an
+      // activating recogniser cancels the touch of the view beneath it, which
+      // would race react-navigation's own button for the navigate. onBegin
+      // never activates anything, so the button is untouched.
+      lead.value = Math.round(slotAtX(e.absoluteX, width, count));
       // From the TOUCH, not from the drag: a tap never reaches onStart, and a
       // tap is the case where the mount lands on top of the slide. Holding
       // here covers both, and onFinalize always gives it back.
@@ -290,8 +362,11 @@ export default function DockTabBar({ dragSlot, leadSlot, slideMs, pressLift, pro
       slot.value = -1;
       press.value = withTiming(0, PRESS_OUT);
       runOnJS(releaseAfterSlide)();
+      // The chip was aimed at touch-down on the promise of a press. This is
+      // what collects on that promise, or takes it back.
+      runOnJS(guardLead)();
     }),
-  [count, goToIndex, hold, lead, ms, press, probe, releaseAfterSlide, slot, width]);
+  [count, goToIndex, guardLead, hold, lead, ms, press, probe, releaseAfterSlide, slot, width]);
 
   return (
     <GestureDetector gesture={pan}>

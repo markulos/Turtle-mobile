@@ -107,14 +107,24 @@ export const CHIP_SLIDE_MAX_MS = 240;
 /**
  * How long the chip should take to cross `slots` slots.
  *
- * JS only, on purpose. It is called where a move BEGINS — the tab-press
- * listener, and the effect that catches a navigate made from somewhere else —
- * and the answer is written into a shared value the chip's worklet reads. The
- * UI thread therefore never calls a function to find out how long to take; it
- * reads a number. (A non-worklet function called on the UI thread is a crash
- * in a release build, and the dock has been taken down that way before.)
+ * A WORKLET, so the answer can be worked out where the move is — which since
+ * the chip started leaving on the TOUCH is the only place that knows. The aim
+ * is now written by the dock's `onBegin`, on the UI thread, before any JS has
+ * run; nothing on the JS thread has yet had the chance to say how far the move
+ * goes, so a duration pushed in from there would be the PREVIOUS move's. The
+ * chip's reaction therefore computes it from the distance it is actually about
+ * to cover, and writes it back for the probe's window.
+ *
+ * This used to be JS-only, deliberately, with the note "the UI thread never
+ * calls a function to find out how long to take; it reads a number" — because
+ * a non-worklet called on the UI thread is a release-build crash and the dock
+ * has been taken down that way three times. The directive is what makes it
+ * safe to call from both sides, and `workletSafety.scan.test.js` now fails the
+ * build if it ever loses it. Pure arithmetic, so there is nothing else in here
+ * that the UI runtime could trip over.
  */
 export function chipSlideMs(slots) {
+  'worklet';
   const d = Number.isFinite(slots) ? Math.abs(slots) : 0;
   return Math.min(CHIP_SLIDE_MAX_MS, Math.round(CHIP_SLIDE_BASE_MS + CHIP_SLIDE_PER_SLOT_MS * d));
 }
