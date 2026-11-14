@@ -145,7 +145,13 @@ const CHAT_HEADER_BAR_HEIGHT = 60;
 // (points per millisecond — a flick, not a scroll).
 // Claude's mark where it hangs over the header's inner ridge: wide enough to
 // read as a face with two hands, small enough to clear the row above it.
-const CLAUDE_PEEK_WIDTH = 44;
+// How wide Claude's mark is drawn in the header. It shares the corner with
+// nothing now (the brand turtle stands down for it), so it is sized to the
+// corner rather than to the gap beside something else — 44 was what fitted
+// UNDER the turtle, and at that width the drawing read as a squiggle.
+// The art is ~2.3:1, so this is about 35pt tall: a touch over half of it
+// above the ridge, the fingers draped below.
+const CLAUDE_PEEK_WIDTH = 80;
 const SWIFT_PULL_MIN_DY = 48;
 const SWIFT_PULL_MIN_SPEED = 1.2;
 // (The chat header's blur bands + fade-out scrim are gone: the header is OPAQUE
@@ -2340,14 +2346,22 @@ export default function TurtleScreen() {
           </View>
 
           {/* Brand mark, trailing. Decorative (the row owns the tap and the
-              long-press), it just anchors the header the way the turtle anchors
-              the dock. */}
-          <Image
-            source={turtleLogo}
-            style={styles.identityBrand}
-            contentFit="contain"
-            tintColor={theme.colors.textTertiary}
-          />
+              long-press), it just anchors the header the way the turtle
+              anchors the dock.
+
+              GONE during a Claude session, on the same condition that drops
+              the leading avatar ring: Claude's own mark hangs over the ridge
+              in this corner, and two marks stacked in one corner left neither
+              of them room — the drawing was reduced to a squiggle under a
+              turtle. One corner, one mark. */}
+          {!claudeMarkShown && (
+            <Image
+              source={turtleLogo}
+              style={styles.identityBrand}
+              contentFit="contain"
+              tintColor={theme.colors.textTertiary}
+            />
+          )}
         </TouchableOpacity>
         {/* Search everything — a sibling of the identity bar in the same
             60pt row, so the header's height is untouched. Stood down during a
@@ -3652,7 +3666,9 @@ const createStyles = (theme, insets) =>
     // under the trailing brand mark's column rather than against the edge.
     claudePeek: {
       position: 'absolute',
-      right: 8,
+      // Aligned with the header's own right gutter rather than tucked inside
+      // the column the brand mark used to occupy.
+      right: theme.spacing.lg,
       top: -ledgeOffset(CLAUDE_PEEK_WIDTH),
     },
     headerClaudeRow: {

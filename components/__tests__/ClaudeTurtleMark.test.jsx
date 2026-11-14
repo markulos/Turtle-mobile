@@ -102,4 +102,27 @@ describe('ClaudeTurtleMark', () => {
     const peek = src.slice(src.indexOf('    claudePeek: {'), src.indexOf('    headerClaudeRow: {'));
     expect(peek).not.toMatch(/border|backgroundColor/);
   });
+
+  test('ONE MARK PER CORNER — the brand turtle stands down for it', () => {
+    // Both marks were drawn in the same corner, so neither had room: the
+    // sketch came out as a squiggle tucked under a 22pt turtle (Mark's
+    // screenshot, 2026-11-14). The turtle leaves on exactly the condition
+    // that brings the mark in, the same one that drops the leading avatar
+    // ring — if those two ever disagree the corner is crowded again.
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    expect(src).toMatch(/\{!claudeMarkShown && \(\s*<Image\s+source=\{turtleLogo\}/);
+  });
+
+  test('…and takes the corner it is now alone in', () => {
+    // 44 was what fitted BESIDE something else. Sized to the corner, the
+    // drawing is legible: about 35pt tall, a touch over half above the
+    // ridge with the fingers draped below.
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    const width = Number(/const CLAUDE_PEEK_WIDTH = (\d+);/.exec(src)[1]);
+    expect(width).toBeGreaterThanOrEqual(72);
+    // …and still inside the header: what hangs ABOVE the ridge has to fit in
+    // the identity row, whose content is 34pt tall. Clipping the face would
+    // be the same bug with a bigger number.
+    expect(ledgeOffset(width)).toBeLessThanOrEqual(34);
+  });
 });
