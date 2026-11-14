@@ -152,6 +152,13 @@ const CHAT_HEADER_BAR_HEIGHT = 60;
 // The art is ~2.3:1, so this is about 35pt tall: a touch over half of it
 // above the ridge, the fingers draped below.
 const CLAUDE_PEEK_WIDTH = 80;
+
+// The header's own bottom padding — the gap between the identity row and the
+// header's edge rule. Named because the Claude session's ledge has to land on
+// exactly that rule's line (see claudeLedge): out of a session the line under
+// the title IS the header edge, and if the two are worked out from different
+// numbers the line jumps the moment a session starts.
+const HEADER_PAD_BOTTOM = 14;
 const SWIFT_PULL_MIN_DY = 48;
 const SWIFT_PULL_MIN_SPEED = 1.2;
 // (The chat header's blur bands + fade-out scrim are gone: the header is OPAQUE
@@ -3621,7 +3628,7 @@ const createStyles = (theme, insets) =>
       // height now measured, this padding is the header's real bottom edge, so
       // the console (and the transcript) sit exactly one PANEL_GAP below it —
       // the same gap the console keeps above the composer.
-      paddingBottom: 14,
+      paddingBottom: HEADER_PAD_BOTTOM,
       // OPAQUE base. The page colour, so the header reads as the top of the
       // page rather than a separate slab; the accent wash + gloss layered over
       // it at the render site are what give it depth, and the drop shadow below
@@ -3671,9 +3678,14 @@ const createStyles = (theme, insets) =>
     // a second bar.
     // The row's gap from the identity row lives on the wrapper, so the
     // wrapper's top edge IS the ridge — the line the mark hangs over.
-    // Clears the fingers hanging below the ledge, plus the row's own breath.
+    // Clears the rule, the fingers hanging below it, and the row's own
+    // breath — all three measured rather than guessed, so moving any one of
+    // them cannot leave the controls sitting on the drawing.
     headerClaudeWrap: {
-      marginTop: 8 + (markHeight(CLAUDE_PEEK_WIDTH) - ledgeOffset(CLAUDE_PEEK_WIDTH)),
+      marginTop:
+        HEADER_PAD_BOTTOM
+        + (markHeight(CLAUDE_PEEK_WIDTH) - ledgeOffset(CLAUDE_PEEK_WIDTH))
+        + 8,
     },
     // ONE GROUND LINE. The mark sits in the identity row with its LEDGE —
     // the line the sketch was drawn to hang over — on the row's bottom edge,
@@ -3687,9 +3699,11 @@ const createStyles = (theme, insets) =>
     // session". Sharing the ground line is what actually looks level.
     claudePeek: {
       alignSelf: 'flex-end',
-      // Hang the part BELOW the ledge past the row's edge, so the ledge
-      // itself lands exactly on the rule.
-      marginBottom: ledgeOffset(CLAUDE_PEEK_WIDTH) - markHeight(CLAUDE_PEEK_WIDTH),
+      // Hang the part BELOW the ledge past the rule, so the ledge itself
+      // lands on it — and drop the whole mark by the header's bottom padding
+      // too, because that is where the rule now is.
+      marginBottom:
+        ledgeOffset(CLAUDE_PEEK_WIDTH) - markHeight(CLAUDE_PEEK_WIDTH) - HEADER_PAD_BOTTOM,
       // Half the gutter it had: the mark is the last thing on the row, and a
       // full one left it looking parked rather than placed.
       marginRight: theme.spacing.lg / 2,
@@ -3702,7 +3716,12 @@ const createStyles = (theme, insets) =>
       position: 'absolute',
       left: -12,
       right: -12,
-      bottom: 0,
+      // ON THE LINE THE HEADER ALREADY DRAWS. Out of a session the rule under
+      // the title is `headerEdge`, which sits one HEADER_PAD_BOTTOM below
+      // this row; drawn at the row's own bottom instead, the line jumped up
+      // 14pt the moment a session started and back down when it ended. Same
+      // number, same place, whichever state the header is in.
+      bottom: -HEADER_PAD_BOTTOM,
       height: StyleSheet.hairlineWidth,
       backgroundColor: theme.colors.border,
     },

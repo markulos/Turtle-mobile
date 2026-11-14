@@ -115,13 +115,13 @@ describe('ClaudeTurtleMark', () => {
     // The RULE goes to the mark, not the mark to the rule: it is drawn at the
     // ledge so it passes through the middle of the hands, and both numbers
     // come from the art rather than from a measurement of it.
-    expect(src).toMatch(/marginBottom: ledgeOffset\(CLAUDE_PEEK_WIDTH\) - markHeight\(CLAUDE_PEEK_WIDTH\)/);
+    expect(src).toMatch(/marginBottom:\s*ledgeOffset\(CLAUDE_PEEK_WIDTH\) - markHeight\(CLAUDE_PEEK_WIDTH\)/);
     // Full width: the header's own gutter undone, so the rule is the ground
     // the mark stands on rather than an underline for the title.
     const ledge = src.slice(src.indexOf('    claudeLedge: {'));
     expect(ledge.slice(0, 400)).toMatch(/left: -12/);
     expect(ledge.slice(0, 400)).toMatch(/right: -12/);
-    expect(ledge.slice(0, 400)).toMatch(/bottom: 0/);
+    expect(ledge.slice(0, 600)).toMatch(/bottom: -HEADER_PAD_BOTTOM/);
     // …and the controls row must not draw a SECOND one eight points under it.
     const controls = src.slice(src.indexOf('    headerClaudeRow: {'), src.indexOf('    identityBar: {'));
     expect(controls).not.toMatch(/borderTopWidth/);
@@ -147,6 +147,23 @@ describe('ClaudeTurtleMark', () => {
     // close on the right, so a fill would leak across the gap.
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
     expect(src).toMatch(/handFill=\{theme\.colors\.background\}/);
+  });
+
+  test('THE LINE DOES NOT MOVE when a session starts', () => {
+    // Out of a session the rule under the title is the header's own edge,
+    // one bottom-padding below the identity row. Drawn at the row's bottom
+    // instead, the ledge sat 14pt higher — so starting a session jumped the
+    // line up and ending one dropped it back. Both now come off the same
+    // constant, which is the only way they stay equal when it is retuned.
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    expect(src).toMatch(/const HEADER_PAD_BOTTOM = \d+;/);
+    // The header's padding IS the constant — not a literal that happens to
+    // match it today.
+    const header = src.slice(src.indexOf('    chatHeader: {'), src.indexOf('    headerEdge: {'));
+    expect(header).toMatch(/paddingBottom: HEADER_PAD_BOTTOM,/);
+    // …and the mark drops by it too, or the drawing parts company with its
+    // own ledge.
+    expect(src).toMatch(/markHeight\(CLAUDE_PEEK_WIDTH\) - HEADER_PAD_BOTTOM/);
   });
 
   test('…and takes the corner it is now alone in', () => {
