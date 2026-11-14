@@ -143,3 +143,31 @@ describe('the dock capsule reads as a channel CUT INTO the page', () => {
     expect(queryByTestId('dock-lip')).not.toBeNull();
   });
 });
+
+describe('the underline\'s spot', () => {
+  test('a dark dock with the underline has one; the chip, and a light dock, never do', async () => {
+    indicator = 'underline';
+    style = 'smoked';
+    const dark = await render(<TabBarPill />);
+    const spot = dark.queryByTestId('dock-spot');
+    expect(spot).not.toBeNull();
+    // Bands, each fading to nothing at both sides.
+    const bands = spot.children.filter((ch) => ch && ch.props && Array.isArray(ch.props.colors));
+    expect(bands.length).toBeGreaterThan(6);
+    for (const band of bands) {
+      expect(band.props.colors[0]).toMatch(/,0\.000\)$/);
+      expect(band.props.colors[band.props.colors.length - 1]).toMatch(/,0\.000\)$/);
+    }
+    await dark.unmount();
+
+    indicator = 'chip';
+    const chip = await render(<TabBarPill />);
+    expect(chip.queryByTestId('dock-spot')).toBeNull();
+    await chip.unmount();
+
+    indicator = 'underline';
+    style = 'paper';
+    const light = await render(<TabBarPill />);
+    expect(light.queryByTestId('dock-spot')).toBeNull();
+  });
+});

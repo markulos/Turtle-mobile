@@ -79,10 +79,12 @@ describe('the chip travels on ONE animation per move', () => {
     expect(SRC).toMatch(/if \(cur\.dragging\) \{\s*endTo\.value = -2;/);
   });
 
-  test('the underline\'s spot is a glow on dark docks only, and belongs to the line', () => {
-    expect(SRC).toMatch(/underline && skin\.blurTint === 'dark'\s*\? \[styles\.spot, \{ shadowColor: theme\.colors\.accent \}\]/);
-    // Thrown upward, onto the glyph.
-    expect(SRC).toMatch(/spot: \{[^}]*shadowOffset: \{ width: 0, height: -\d+ \}/);
+  test('the underline\'s spot is on dark docks only, and travels with the line', () => {
+    expect(SRC).toMatch(/if \(!underline \|\| skin\.blurTint !== 'dark'\) return null;/);
+    // The same transform as the indicator — one position, two views.
+    expect(SRC).toMatch(/testID="dock-spot"[\s\S]{0,160}style=\{\[styles\.spot, pillStyle\]\}/);
+    // DRAWN, not cast: the shadow version could not be seen.
+    expect(SRC).not.toMatch(/shadowColor: theme\.colors\.accent/);
   });
 
   test('a layout change places the chip rather than sending it travelling', () => {

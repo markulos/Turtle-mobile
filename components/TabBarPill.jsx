@@ -4,6 +4,7 @@ import { NavigationHelpersContext, useNavigationState } from '@react-navigation/
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { blurProps } from '../utils/frostedChat';
+import { hexToRgb } from '../utils/accentColor';
 import Reanimated, {
   Easing,
   useAnimatedReaction,
@@ -102,6 +103,27 @@ const CATCH = { duration: CHIP_CATCH_MS, easing: EASE };
 //             glyphs are the skin's business, because they sit on the capsule
 //             rather than on the chip (dockSkins' inactiveTint).
 
+// THE SPOT — the underline's light, on dark docks only.
+//
+// A pool of the highlight colour standing on the line and fading up over the
+// glyph. It was first tried as the line's own shadow, coloured and thrown
+// upward, and could not be seen: a 3pt line is almost no source, and a
+// gaussian that wide spreads it to about a twentieth of its strength. So it
+// is DRAWN. A linear gradient only falls off one way and a spot falls off in
+// both, so it is built from bands: each band is a horizontal gradient that
+// fades to nothing at both sides, and the bands themselves fade from the
+// line upward on a square law. Eleven 4pt bands step by under three percent
+// of alpha each, which over frosted glass is not a step anyone can find.
+// Rasterised once and moved as a bitmap, exactly like the indicator.
+const SPOT_W = 62;
+const SPOT_H = 44;
+const SPOT_BANDS = 11;
+/** Alpha at the brightest point: bottom centre, right on the line. */
+const SPOT_PEAK = 0.36;
+const SPOT_STOPS = [0, 0.25, 0.5, 0.75, 1];
+const SPOT_START = { x: 0, y: 0.5 };
+const SPOT_END = { x: 1, y: 0.5 };
+
 // How thick the lip is, for the skins that have one: 1.5pt, ~4px at @3x. A
 // hairline disappears under the capsule's own curve at this radius, and 2pt
 // starts to read as a second bar.
@@ -153,6 +175,23 @@ export default function TabBarPill({
     () => (barWidth > 0 ? ridgeOffsets(barWidth, count) : []),
     [barWidth, count],
   );
+
+  // The spot's bands, top to bottom, or null when there is no spot to draw:
+  // the underline indicator, on a dark dock.
+  const spot = useMemo(() => {
+    if (!underline || skin.blurTint !== 'dark') return null;
+    const rgb = hexToRgb(theme.colors.accent);
+    if (!rgb) return null;
+    const ink = (alpha) => 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',' + alpha.toFixed(3) + ')';
+    return Array.from({ length: SPOT_BANDS }, (_, k) => {
+      const rise = (k + 1) / SPOT_BANDS; // 1 at the line, toward 0 at the top
+      const alpha = SPOT_PEAK * rise * rise;
+      return {
+        key: 'band-' + k,
+        colors: [ink(0), ink(alpha * 0.3), ink(alpha), ink(alpha * 0.3), ink(0)],
+      };
+    });
+  }, [underline, skin.blurTint, theme.colors.accent]);
 
   // THE NAVIGATOR IS THE SLOWEST OF THE THREE THINGS THAT KNOW.
   //
@@ -470,6 +509,27 @@ export default function TabBarPill({
           style={[styles.ridge, { left: x - StyleSheet.hairlineWidth / 2, backgroundColor: skin.ridge }]}
         />
       ))}
+      {spot ? (
+        <Reanimated.View
+          pointerEvents="none"
+          testID="dock-spot"
+          shouldRasterizeIOS
+          renderToHardwareTextureAndroid
+          style={[styles.spot, pillStyle]}
+        >
+          {spot.map((band) => (
+            <LinearGradient
+              key={band.key}
+              pointerEvents="none"
+              colors={band.colors}
+              locations={SPOT_STOPS}
+              start={SPOT_START}
+              end={SPOT_END}
+              style={styles.spotBand}
+            />
+          ))}
+        </Reanimated.View>
+      ) : null}
       <Reanimated.View
         testID={underline ? 'dock-underline' : 'dock-chip'}
         // THE CHIP TRAVELS AS A CACHED BITMAP.
@@ -507,11 +567,6 @@ export default function TabBarPill({
             // be inked against.
             backgroundColor: theme.colors.accent,
           },
-          // THE SPOT: on a dark dock the line throws a soft pool of its own
-          // colour up onto the glyph. See styles.spot.
-          underline && skin.blurTint === 'dark'
-            ? [styles.spot, { shadowColor: theme.colors.accent }]
-            : null,
           pillStyle,
         ]}
       />
@@ -585,23 +640,16 @@ const styles = StyleSheet.create({
     // No shadow: a 3pt line with a drop shadow reads as a smudge, and the line
     // is ON the capsule rather than resting on it the way the chip is.
   },
-  // THE SPOT — the underline's light, on dark docks only.
-  //
-  // A glow rather than a drawn gradient, because a linear gradient can only
-  // fall off in one direction and a spotlight falls off in all of them: this
-  // is the line's own shadow, in the accent colour, thrown UPWARD. iOS blurs
-  // a shadow as a gaussian, so there is no edge and no banding at any
-  // strength — which is what "smooth" needs — and because it belongs to the
-  // line it travels with it for free, inside the same rasterised bitmap.
-  // Kept subtle: enough to tint the glass under the glyph, not enough to read
-  // as a second object. Android has no coloured shadows and simply shows the
-  // line. (The note above about a shadow smudging the line was about a BLACK
-  // drop shadow under it; this is light, above it.)
+  // THE SPOT's box: SPOT_W wide, centred on the line (which is UNDERLINE_W
+  // wide and starts at the indicator's own left edge), and standing on it.
   spot: {
-    shadowOpacity: 0.55,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: -9 },
+    position: 'absolute',
+    top: PILL_TOP + PILL_SIZE - UNDERLINE_H - 4 - SPOT_H,
+    left: -(SPOT_W - UNDERLINE_W) / 2,
+    width: SPOT_W,
+    height: SPOT_H,
   },
+  spotBand: { width: SPOT_W, height: SPOT_H / SPOT_BANDS },
   // One ridge. A hairline, full height of the icon block less a breath at each
   // end, so it reads as a groove between two cells rather than as a divider
   // cutting the capsule in half.

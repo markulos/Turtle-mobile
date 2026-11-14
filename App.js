@@ -151,9 +151,18 @@ function TabNavigator() {
   // function of light/dark mode, so nothing in this navigator's chrome
   // branches on the theme.
   const {
-    theme, hideVaultButton, dockStyle, dockColor, dockInk, dockTheme,
+    theme, hideVaultButton, dockStyle, dockColor, dockInk, dockTheme, dockIndicator, dockInkColor,
   } = useTheme();
   const skin = resolveDockSkin({ dockTheme, dockStyle, dockColor }, dockSkin);
+  // The ACTIVE glyph's ink. It depends on what the glyph is sitting on — the
+  // accent chip, or (with the underline) the dock itself — as well as on the
+  // setting; see activeInk. One value, used for the navigator's tint and for
+  // the active layer every icon cross-fades to.
+  const activeTint = activeInk(dockInk, theme.colors.accent, {
+    underline: dockIndicator === 'underline',
+    darkDock: skin.blurTint === 'dark',
+    custom: dockInkColor,
+  });
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   // The avatar tab needs to know WHOSE avatar to draw…
@@ -466,7 +475,7 @@ function TabNavigator() {
               chipPos={chipPos}
               chipFrom={chipFrom}
               chipTo={chipTo}
-              active={draw({ focused: true, color: activeInk(dockInk, theme.colors.accent) })}
+              active={draw({ focused: true, color: activeTint })}
               inactive={draw({ focused: false, color: skin.inactiveTint })}
             />
           );
@@ -480,7 +489,7 @@ function TabNavigator() {
         // follows the DOCK's SKIN, not the app theme — the glyphs sit on the
         // capsule, so white-on-smoked and dark-on-paper are properties of the
         // material, and a theme-derived tint would vanish into one of them.
-        tabBarActiveTintColor: activeInk(dockInk, theme.colors.accent),
+        tabBarActiveTintColor: activeTint,
         tabBarInactiveTintColor: skin.inactiveTint,
         // Icons only — no text labels. Cleaner look and lets the
         // larger turtle icon breathe without crowding from a label

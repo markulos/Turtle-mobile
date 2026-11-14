@@ -3,7 +3,7 @@ import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { normalizeHex } from '../utils/accentColor';
 import {
-  DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR, DOCK_INKS, DEFAULT_DOCK_INK,
+  DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR, DOCK_INKS, DEFAULT_DOCK_INK, DEFAULT_DOCK_INK_COLOR,
 } from '../components/dockSkins';
 import { isDockTheme } from '../components/dockThemes';
 
@@ -45,6 +45,7 @@ const DOCK_INDICATOR_KEY = '@connected_pass_dock_indicator';
 const DOCK_STYLE_KEY = '@connected_pass_dock_style';
 const DOCK_COLOR_KEY = '@connected_pass_dock_color';
 const DOCK_INK_KEY = '@connected_pass_dock_ink';
+const DOCK_INK_COLOR_KEY = '@connected_pass_dock_ink_color';
 const DOCK_THEME_KEY = '@connected_pass_dock_theme';
 
 /**
@@ -390,6 +391,10 @@ const ThemeContext = createContext({
   // 'dark' are the manual override. See DOCK_INKS.
   dockInk: DEFAULT_DOCK_INK,
   setDockInk: () => {},
+  // The colour 'custom' ink draws in. Kept even while another mode is on,
+  // so switching back to Custom brings back the colour you chose.
+  dockInkColor: DEFAULT_DOCK_INK_COLOR,
+  setDockInkColor: () => {},
   // A named theme's key ('godzilla'), or '' for none. Stored because a
   // theme's skin overrides are not recoverable from the settings above —
   // see components/dockThemes.
@@ -429,6 +434,7 @@ export const ThemeProvider = ({ children }) => {
   const [dockStyle, setDockStyleState] = useState(DEFAULT_DOCK_STYLE);
   const [dockColor, setDockColorState] = useState(DEFAULT_DOCK_COLOR);
   const [dockInk, setDockInkState] = useState(DEFAULT_DOCK_INK);
+  const [dockInkColor, setDockInkColorState] = useState(DEFAULT_DOCK_INK_COLOR);
   const [dockTheme, setDockThemeState] = useState('');
   const [accent, setAccentState] = useState(DEFAULT_ACCENT);
   // The user's own colour, '#RRGGBB', or null if they have never mixed one.
@@ -501,6 +507,10 @@ export const ThemeProvider = ({ children }) => {
       if (DOCK_INKS.includes(savedInk)) {
         setDockInkState(savedInk);
       }
+      const savedInkColor = await AsyncStorage.getItem(DOCK_INK_COLOR_KEY);
+      if (/^#[0-9a-fA-F]{6}$/.test(savedInkColor || '')) {
+        setDockInkColorState(savedInkColor);
+      }
       // Checked against what we still ship: a theme dropped in a later build
       // must fall back to the ordinary settings rather than leave the dock
       // asking for a skin nobody can paint.
@@ -562,6 +572,16 @@ export const ThemeProvider = ({ children }) => {
       await AsyncStorage.setItem(DOCK_COLOR_KEY, next);
     } catch (error) {
       console.error('Error saving dock-colour setting:', error);
+    }
+  };
+
+  const setDockInkColor = async (hex) => {
+    const next = /^#[0-9a-fA-F]{6}$/.test(hex || '') ? hex : DEFAULT_DOCK_INK_COLOR;
+    setDockInkColorState(next);
+    try {
+      await AsyncStorage.setItem(DOCK_INK_COLOR_KEY, next);
+    } catch (error) {
+      console.error('Error saving dock-ink colour:', error);
     }
   };
 
@@ -712,10 +732,10 @@ export const ThemeProvider = ({ children }) => {
       showCalendarDayTasks, setShowCalendarDayTasks,
       calendarFreeScroll, setCalendarFreeScroll,
       dockIndicator, setDockIndicator,
-      dockStyle, setDockStyle, dockColor, setDockColor, dockInk, setDockInk,
+      dockStyle, setDockStyle, dockColor, setDockColor, dockInk, setDockInk, dockInkColor, setDockInkColor,
       dockTheme, setDockTheme,
     }),
-    [theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent, isLoading],
+    [dockInkColor, theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent, isLoading],
   );
 
   if (isLoading) {

@@ -198,12 +198,14 @@ function DockMotionReadout({ theme }) {
 export default function DockStylePicker() {
   const {
     theme, dockStyle, setDockStyle, dockIndicator, setDockIndicator,
-    dockColor, setDockColor, dockInk, setDockInk,
+    dockColor, setDockColor, dockInk, setDockInk, dockInkColor, setDockInkColor,
     accentColor, setCustomAccent, dockTheme, setDockTheme,
   } = useTheme();
   const [colourOpen, setColourOpen] = useState(false);
+  // …and the same sheet again, for the custom ICON colour.
+  const [inkColourOpen, setInkColourOpen] = useState(false);
   const accent = theme.colors.accent;
-  const ink = activeInk(dockInk, accent);
+  const ink = activeInk(dockInk, accent, { custom: dockInkColor });
 
   // WHICH named theme is on, if any — and only while the settings under it
   // still agree with it, because a theme you have edited is not that theme.
@@ -403,7 +405,15 @@ export default function DockStylePicker() {
               label={DOCK_INK_LABELS[key]}
               selected={selected}
               theme={theme}
-              onPress={choose(setDockInk, key, selected)}
+              // Custom is a mode AND a colour: tapping it switches to it and
+              // opens the sheet, and tapping it again reopens the sheet to
+              // change the colour.
+              onPress={key === 'custom'
+                ? () => {
+                  if (!selected) setDockInk('custom');
+                  setInkColourOpen(true);
+                }
+                : choose(setDockInk, key, selected)}
             >
               {/* Each tile draws the glyph in the ink it is offering, so the
                   one that LOOKS right is the one you tap. 'Auto' draws
@@ -413,7 +423,7 @@ export default function DockStylePicker() {
                 skin={current}
                 indicator="chip"
                 accent={accent}
-                ink={activeInk(key, accent)}
+                ink={activeInk(key, accent, { custom: dockInkColor })}
                 theme={theme}
               />
             </Tile>
@@ -422,7 +432,7 @@ export default function DockStylePicker() {
       </View>
       <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
         {dockInk === 'auto'
-          ? 'Chosen for you from the highlight colour — whichever of black or white reads better on it.'
+          ? 'Chosen for you — black or white, whichever reads better on the highlight colour (or on the bar itself, with the underline).'
           : 'Set by hand. Change the highlight colour and this stays as you left it.'}
       </Text>
 
@@ -448,6 +458,14 @@ export default function DockStylePicker() {
         initialColor={current.colour || dockColor}
         onSelect={setDockColor}
         onClose={() => setColourOpen(false)}
+      />
+      {/* The custom icon colour. Opens on the colour it is wearing. */}
+      <AccentColorPicker
+        testID="ink-sheet"
+        visible={inkColourOpen}
+        initialColor={dockInkColor}
+        onSelect={setDockInkColor}
+        onClose={() => setInkColourOpen(false)}
       />
     </View>
   );

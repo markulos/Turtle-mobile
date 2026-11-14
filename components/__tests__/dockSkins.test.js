@@ -245,3 +245,36 @@ describe('the dock’s skins', () => {
     }
   });
 });
+
+describe('the active glyph\'s ink reads what it is sitting ON', () => {
+  const { activeInk, DOCK_INKS, DOCK_INK_LABELS } = require('../dockSkins');
+  const { INK_DARK, INK_LIGHT } = require('../../utils/accentColor');
+  const PALE = '#FFE66D'; // a highlight colour that black reads on
+
+  test('on the chip, auto is a contrast check against the highlight colour', () => {
+    expect(activeInk('auto', PALE)).toBe(INK_DARK);
+    expect(activeInk('auto', PALE, { underline: false, darkDock: true })).toBe(INK_DARK);
+  });
+
+  test('with the underline there is no chip: auto reads the DOCK', () => {
+    // The bug: a pale highlight colour put a black glyph on a dark dock.
+    expect(activeInk('auto', PALE, { underline: true, darkDock: true })).toBe(INK_LIGHT);
+    expect(activeInk('auto', '#1F8A9B', { underline: true, darkDock: false })).toBe(INK_DARK);
+  });
+
+  test('white and black are fixed, whatever is under them', () => {
+    expect(activeInk('light', PALE, { underline: true, darkDock: false })).toBe(INK_LIGHT);
+    expect(activeInk('dark', PALE, { underline: true, darkDock: true })).toBe(INK_DARK);
+  });
+
+  test('custom is any colour, and white until one has been picked', () => {
+    expect(activeInk('custom', PALE, { custom: '#ff00aa' }).toLowerCase()).toBe('#ff00aa');
+    expect(activeInk('custom', PALE, { custom: 'not a colour' })).toBe(INK_LIGHT);
+    expect(activeInk('custom', PALE)).toBe(INK_LIGHT);
+  });
+
+  test('all four are offered, each with a label', () => {
+    expect(DOCK_INKS).toEqual(['auto', 'light', 'dark', 'custom']);
+    for (const key of DOCK_INKS) expect(typeof DOCK_INK_LABELS[key]).toBe('string');
+  });
+});

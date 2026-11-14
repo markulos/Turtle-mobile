@@ -80,15 +80,37 @@ const CUSTOM_ALPHA = 0.76;
  * (#1F2024), not #000 — the same near-black every dark glyph in the app uses,
  * because true black on a saturated colour reads as a hole.
  */
-export const DOCK_INKS = ['auto', 'light', 'dark'];
+export const DOCK_INKS = ['auto', 'light', 'dark', 'custom'];
 export const DEFAULT_DOCK_INK = 'auto';
 
-export const DOCK_INK_LABELS = { auto: 'Auto', light: 'White', dark: 'Black' };
+export const DOCK_INK_LABELS = {
+  auto: 'Auto', light: 'White', dark: 'Black', custom: 'Custom',
+};
 
-/** The colour the active glyph is drawn in, given the mode and the accent. */
-export function activeInk(mode, accent) {
+/** What 'custom' draws until a colour has been picked. */
+export const DEFAULT_DOCK_INK_COLOR = '#FFFFFF';
+
+/**
+ * The colour the active glyph is drawn in.
+ *
+ * `on` says what the glyph is sitting ON, which is what 'auto' has to read:
+ *
+ *   • with the CHIP it sits on the accent, so auto is `inkOn(accent)` —
+ *     whichever of black or white reads on your highlight colour;
+ *   • with the UNDERLINE there is no chip. The glyph sits on the dock itself,
+ *     and a contrast check against a colour that is not under it gave the
+ *     wrong answer exactly when it mattered: a pale highlight colour put a
+ *     BLACK glyph on a dark dock. So there auto reads the dock — white on a
+ *     dark one, near-black on a light one.
+ *
+ * 'custom' is `on.custom`, any colour, falling back to white while none has
+ * been picked. 'light' and 'dark' are the fixed pair.
+ */
+export function activeInk(mode, accent, on) {
   if (mode === 'light') return INK_LIGHT;
   if (mode === 'dark') return INK_DARK;
+  if (mode === 'custom') return normalizeHex(on && on.custom) || INK_LIGHT;
+  if (on && on.underline) return on.darkDock ? INK_LIGHT : INK_DARK;
   return inkOn(accent);
 }
 
