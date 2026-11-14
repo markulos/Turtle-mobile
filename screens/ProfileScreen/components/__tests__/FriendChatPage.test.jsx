@@ -30,14 +30,6 @@ jest.mock('../../../../context/ServerContext', () => ({
   getApiAuthToken: async () => 't',
 }));
 
-// The keyboard, drivable. The real hook listens to RN Keyboard events, which
-// jest does not emit; what the component cares about is only the HEIGHT.
-let mockKeyboardHeight = 0;
-jest.mock('../../../../utils/useKeyboardHeight', () => ({
-  __esModule: true,
-  default: () => mockKeyboardHeight,
-}));
-
 let mockSignals = { messagesVersion: 0, messagesPing: null };
 jest.mock('../../../../context/DownloadsContext', () => ({
   useSyncSignals: () => mockSignals,
@@ -106,7 +98,6 @@ afterEach(async () => {
 beforeEach(() => {
   jest.clearAllMocks();
   mockSignals = { messagesVersion: 0, messagesPing: null };
-  mockKeyboardHeight = 0;
   mockApi.get.mockResolvedValue({ success: true, messages: [msg()] });
   mockApi.post.mockResolvedValue({ success: true, message: msg({ id: 'real', mine: true }) });
   // The preview cache is module-level and outlives a test, which is the whole

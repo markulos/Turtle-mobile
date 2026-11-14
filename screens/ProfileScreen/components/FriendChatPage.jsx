@@ -96,7 +96,6 @@ import { panelTopInset, panelBottomInset } from '../../../components/tabBarLayou
 import { depth } from '../../../utils/surfaceDepth';
 import { inkOn } from '../../../utils/accentColor';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
-import useKeyboardHeight from '../../../utils/useKeyboardHeight';
 import { KEYBOARD_GAP, useKeyboardLiftStyle } from '../../../utils/keyboardMotion';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { copyText } from '../../../utils/copyText';
@@ -151,7 +150,6 @@ export default function FriendChatPage({
   const insets = useSafeAreaInsets();
   const { api, getBaseUrl } = useServer();
   const { messagesVersion, messagesPing } = useSyncSignals();
-  const keyboard = useKeyboardHeight();
 
   const [rows, setRows] = useState([]);        // what the pond says
   const [locals, setLocals] = useState([]);    // bubbles it has not caught up with
@@ -191,6 +189,12 @@ export default function FriendChatPage({
   // with the keyboard down. It is constant now: the keyboard covers the tab
   // dock, and the transform takes up exactly the difference, landing the
   // composer KEYBOARD_GAP above the keyboard.
+  //
+  // NOTHING ELSE happens on the keyboard — no state, no re-render, no scroll.
+  // This page used to keep the keyboard's height in state and scroll to the
+  // end when it came up; riding the keyboard already keeps the newest line
+  // over the composer, so that scroll became a SECOND motion on top of the
+  // first. The main chat does neither, and this matches it.
   //
   // The list can ride as a whole because the thread is pinned to the bottom
   // (CHAT_PINNED_TO_BOTTOM — a short conversation rests against the composer,
@@ -290,20 +294,20 @@ export default function FriendChatPage({
   }, [visible, onClose]);
 
   /**
-   * Going to TEXT brings you to the newest message.
+   * SENDING brings you to the newest message.
    *
-   * The ONE thing `maintainVisibleContentPosition` cannot do for us. The
-   * keyboard changes no CONTENT, so there is no size change for the list to
-   * anchor against — it only makes the dock taller, which pushes the bottom of
-   * the conversation up behind it. Unconditional on the way up: "I am about to
-   * type" is a statement about wanting the end of the conversation, even from
-   * someone who was reading history a moment ago.
+   * The list follows new messages on its own only when the reader is already
+   * near the bottom (CHAT_PINNED_TO_BOTTOM). Someone who scrolled up into
+   * history, typed and sent must still see what they sent — their own message
+   * is the one arrival that should always pull the view down. Tied to the
+   * send, not to the keyboard: opening the keyboard moves nothing but the
+   * ride above.
    */
-  const keyboardUp = keyboard > 0;
+  const [sentTick, setSentTick] = useState(0);
   useEffect(() => {
-    if (!visible || !keyboardUp || !thread.length) return;
+    if (!sentTick) return;
     try { listRef.current?.scrollToEnd?.({ animated: true }); } catch { /* list went away */ }
-  }, [keyboardUp, visible, thread.length]);
+  }, [sentTick]);
 
   // ── The draft's photos ────────────────────────────────────────────────────
   //
@@ -477,7 +481,7 @@ export default function FriendChatPage({
     setLocals((prev) => (retryOf
       ? prev.map((l) => (l.localId === retryOf.localId ? bubble : l))
       : [...prev, bubble]));
-    if (!retryOf) { setDraft(''); setPhotos([]); }
+    if (!retryOf) { setDraft(''); setPhotos([]); setSentTick((t) => t + 1); }
     setSending(true);
     try {
       // Usually already resolved — the upload began when the photo was picked.

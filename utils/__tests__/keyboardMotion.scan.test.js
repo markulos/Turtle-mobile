@@ -127,6 +127,13 @@ describe('the surfaces that ride the keyboard', () => {
     // which re-measured the dock and re-padded the list on the first frame.
     expect(src).toMatch(/marginBottom=\{dockRest\}/);
     expect(src).not.toMatch(/marginBottom=\{keyboard\b/);
+    // And no JS on the keyboard at all — the main chat runs none. A scroll
+    // fired when the keyboard came up was a second motion on top of the ride.
+    expect(src).not.toMatch(/useKeyboardHeight/);
+    expect(src).not.toMatch(/keyboardUp/);
+    // What that scroll was really for — seeing your own message after sending
+    // from up in history — now hangs off the send itself.
+    expect(src).toMatch(/setSentTick\(\(t\) => t \+ 1\)/);
   });
 
   test.each([

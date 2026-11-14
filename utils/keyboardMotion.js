@@ -48,26 +48,35 @@ export const KEYBOARD_GAP = 8;
 /**
  * How far a bar has risen, given where the keyboard is right now.
  *
- * A GLIDE, not a catch. The bar could stand still until the keyboard's top
- * edge reaches it and then be shoved the rest of the way — but the keyboard is
- * at full speed by then, so the bar starts with a jolt and, on the way down,
- * stops dead while the keyboard carries on beneath it. Instead the bar leaves
- * with the keyboard's first frame and covers its own (shorter) distance on the
- * keyboard's own curve, so the two arrive together and the space between them
- * closes smoothly from `rest` to `gap`. It can never be overlapped on the way:
- * the bar's clearance at progress p is rest·(1−p) + gap·p, which is never
- * negative.
+ * PUSHED BY THE KEYBOARD'S EDGE. The bar stays where it rests until the
+ * keyboard's top edge (plus `gap`) reaches it, and from then on it sits
+ * exactly `gap` above that edge on every frame — one object carried by
+ * another. This is the main Turtle chat's motion, and the one the owner
+ * called right; every surface gets the same one.
+ *
+ * A proportional glide was tried first (leave on the keyboard's first frame,
+ * cover a shorter distance on the same curve, arrive together). On a bar that
+ * rests well above the bottom — the friend chat's composer, clear of the tab
+ * dock — it read as TWO motions: the composer setting off on its own, then
+ * the keyboard arriving under it. Do not bring it back.
  *
  *   height    the keyboard's current height, 0 when down
  *   progress  0 (down) → 1 (fully up)
+ *
+ * `progress` only matters when `gap` is larger than `rest` (a bar flush with
+ * the bottom that wants air above the keyboard): the shortfall is eased in
+ * with the keyboard, because it cannot be there while the keyboard is down.
  *
  * Worklet-safe: it is called from UI-thread worklets, and a plain function
  * there crashes a release build.
  */
 export function keyboardLift(height, progress, rest = 0, gap = 0) {
   'worklet';
-  const lift = height + (gap - rest) * progress;
-  return lift > 0 ? lift : 0;
+  // How far the keyboard travels before it reaches the bar.
+  const reach = rest > gap ? rest - gap : 0;
+  const pushed = height > reach ? height - reach : 0;
+  const extra = gap > rest ? (gap - rest) * progress : 0;
+  return pushed + extra;
 }
 
 /**
@@ -137,23 +146,22 @@ const FAR = 4000;
  *
  *   <Animated.View style={{ transform: [{ translateY: lift }] }} />
  *
- * Same glide as `keyboardLift`, written as Animated arithmetic.
+ * Same motion as `keyboardLift`, written as Animated arithmetic.
  */
 export function useKeyboardLiftAnimated({ rest = 0, gap = 0, enabled = true } = {}) {
   const { height, progress } = useKeyboardAnimation();
   return useMemo(() => {
     if (!enabled) return STILL;
-    const shortfall = rest - gap;
-    // `height` is 0 → −keyboardHeight, which is already a translateY.
-    const raw = shortfall
-      ? Animated.add(height, Animated.multiply(progress, shortfall))
-      : height;
-    // Never below rest: a keyboard shorter than the bar's own clearance (a
-    // hardware keyboard's shortcut strip) must not push the bar DOWN.
-    return raw.interpolate({
+    const reach = rest > gap ? rest - gap : 0;
+    const extra = gap > rest ? gap - rest : 0;
+    // `height` is 0 → −keyboardHeight, which is already a translateY. Shifted
+    // by `reach` and clamped at 0, it is the bar standing still until the
+    // keyboard gets to it, then riding its edge.
+    const pushed = (reach ? Animated.add(height, reach) : height).interpolate({
       inputRange: [-FAR, 0],
       outputRange: [-FAR, 0],
       extrapolate: 'clamp',
     });
+    return extra ? Animated.add(pushed, Animated.multiply(progress, -extra)) : pushed;
   }, [height, progress, rest, gap, enabled]);
 }

@@ -40,11 +40,38 @@ describe('keyboardLift — how far a bar has risen', () => {
     expect(keyboardLift(OPEN, 1, 34, 12)).toBe(OPEN + 12 - 34);
   });
 
-  test('it leaves with the first frame — a glide, not a catch', () => {
-    // The keyboard has barely started (well short of the bar's 90pt rest), and
-    // the bar is already on its way. Waiting to be caught is the jolt.
-    const early = keyboardLift(20, 20 / OPEN, 90, 8);
-    expect(early).toBeGreaterThan(0);
+  test('it stays put until the keyboard reaches it', () => {
+    // Resting 90 up with 8 of air: the keyboard has 82pt to travel first.
+    expect(keyboardLift(20, 20 / OPEN, 90, 8)).toBe(0);
+    expect(keyboardLift(82, 82 / OPEN, 90, 8)).toBe(0);
+    expect(keyboardLift(83, 83 / OPEN, 90, 8)).toBe(1);
+  });
+
+  test('once reached, it holds exactly `gap` above the keyboard on every frame', () => {
+    // The main chat's motion: one object carried by another, not two things
+    // arriving at the same time.
+    const rest = 90;
+    const gap = 8;
+    for (let h = rest; h <= OPEN; h += 6) {
+      const barBottom = rest + keyboardLift(h, h / OPEN, rest, gap);
+      expect(barBottom - h).toBe(gap);
+    }
+  });
+
+  test('it is the main chat formula: max(keyboard − clearance, 0)', () => {
+    // TurtleScreen lifts its column by max(kb − dockH, 0) and keeps a static
+    // 8pt margin; a bar resting dockH + 8 up with gap 8 is the same thing.
+    const dockH = 111;
+    for (const h of [0, 60, 111, 112, 200, OPEN]) {
+      expect(keyboardLift(h, h / OPEN, dockH + 8, 8)).toBe(Math.max(h - dockH, 0));
+    }
+  });
+
+  test('a gap larger than the rest is eased in with the keyboard', () => {
+    // Flush with the bottom (no home indicator) but wanting 12 of air.
+    expect(keyboardLift(0, 0, 0, 12)).toBe(0);
+    expect(keyboardLift(OPEN / 2, 0.5, 0, 12)).toBe(OPEN / 2 + 6);
+    expect(keyboardLift(OPEN, 1, 0, 12)).toBe(OPEN + 12);
   });
 
   test('the keyboard never overlaps the bar on the way', () => {
@@ -129,9 +156,18 @@ describe('useKeyboardLiftAnimated — the same lift for RN Animated views', () =
   test('matches keyboardLift across the whole trip', async () => {
     let node;
     await render(<Probe rest={34} gap={12} onNode={(n) => { node = n; }} />);
-    for (const h of [0, 40, 168, OPEN]) {
+    for (const h of [0, 10, 22, 40, 168, OPEN]) {
       Controller.__moveKeyboard(h);
       expect(valueOf(node)).toBeCloseTo(-keyboardLift(h, h / OPEN, 34, 12));
+    }
+  });
+
+  test('matches keyboardLift when the gap is larger than the rest', async () => {
+    let node;
+    await render(<Probe rest={0} gap={12} onNode={(n) => { node = n; }} />);
+    for (const h of [0, 40, 168, OPEN]) {
+      Controller.__moveKeyboard(h);
+      expect(valueOf(node)).toBeCloseTo(-keyboardLift(h, h / OPEN, 0, 12));
     }
   });
 
