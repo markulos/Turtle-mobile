@@ -50,7 +50,11 @@ jest.mock('react-native-reanimated', () => {
     withTiming: (to) => to,
     // The gesture's callbacks are worklets on device; here they run inline, so
     // the hops between the threads have to be the identity rather than a queue.
-    runOnJS: (fn) => fn,
+    // …unless a test STALLS the JS thread: the hop then queues, exactly as it
+    // does on a phone that is busy mounting a screen, until the test lets it run.
+    runOnJS: (fn) => (...args) => (global.mockJsStalled
+      ? void global.mockJsQueue.push(() => fn(...args))
+      : fn(...args)),
     runOnUI: (fn) => fn,
     useSharedValue: (init) => require('react').useRef({ value: init }).current,
   };
@@ -153,7 +157,17 @@ const mount = async (element) => {
 beforeAll(() => { jest.useFakeTimers(); });
 afterAll(() => { jest.useRealTimers(); });
 
+global.mockJsStalled = false;
+global.mockJsQueue = [];
+/** The JS thread comes back and works through what was waiting, in order. */
+const jsCatchesUp = async () => {
+  global.mockJsStalled = false;
+  await act(() => { while (global.mockJsQueue.length) global.mockJsQueue.shift()(); });
+};
+
 beforeEach(() => {
+  global.mockJsStalled = false;
+  global.mockJsQueue = [];
   holdSwipe.mockClear();
   releaseSwipe.mockClear();
   for (const cb of CALLBACKS) delete mockPan[cb];
@@ -505,6 +519,62 @@ test('an abandoned touch does not take back a lead that a NEWER request owns', a
   await systemCancel();
 
   expect(leadSlot.value).toBe(2);
+});
+
+test('an abandoned touch leaves a lead that a request IN FLIGHT still owns', async () => {
+  // The JS thread is busy (a screen is mounting). A tap on Vault has been
+  // decided and its request is queued. A second touch lands on Vault too and
+  // the system takes it away. Its lead is the same number as the first
+  // touch's — and clearing it would send the chip back to Tasks until the
+  // queued request ran, and then forward again.
+  const props = buildProps(0);
+  const leadSlot = { value: -1 };
+  const navSlot = { value: 0 };
+  await mount(<DockTabBar {...props} leadSlot={leadSlot} navSlot={navSlot} />);
+
+  global.mockJsStalled = true;
+  await touchDown(onIcon(3));
+  await liftTap();
+  // Decided on the UI thread; nothing has reached the navigator yet.
+  expect(props.navigation.dispatch).not.toHaveBeenCalled();
+  expect(leadSlot.value).toBe(3);
+
+  await touchDown(onIcon(3));
+  await systemCancel();
+  // Still aimed at Vault: the first tap's request will answer it.
+  expect(leadSlot.value).toBe(3);
+
+  await jsCatchesUp();
+  expect(navigatedTo(props.navigation.dispatch)).toEqual(['Vault-3']);
+  expect(navSlot.value).toBe(3);
+  expect(leadSlot.value).toBe(-1);
+
+  // …and the claim was dropped with the answer: the NEXT abandoned touch on
+  // that slot is handed straight back, as usual.
+  await touchDown(onIcon(1));
+  await systemCancel();
+  expect(leadSlot.value).toBe(-1);
+});
+
+test('a second touch takes over the first one\'s hold instead of losing it mid-scrub', async () => {
+  // A lift arms a timer that releases the interaction handle and the
+  // back-swipe guard once the chip has landed. A touch that lands inside that
+  // window and stays down used to have both pulled out from under it.
+  const props = buildProps(0);
+  const dragSlot = { value: -1 };
+  await mount(<DockTabBar {...props} dragSlot={dragSlot} leadSlot={{ value: -1 }} />);
+
+  await touchDown(onIcon(1));
+  await liftTap();
+  await touchDown(onIcon(2));
+  await act(() => { mockPan.onStart({ absoluteX: onIcon(2) }); });
+  await afterSlide();
+  // Still scrubbing: the guard is still held.
+  expect(releaseSwipe).not.toHaveBeenCalled();
+
+  await liftDrag();
+  await afterSlide();
+  expect(releaseSwipe).toHaveBeenCalledTimes(1);
 });
 
 test('without touch events the dock falls back to the old rule rather than ignoring taps', async () => {

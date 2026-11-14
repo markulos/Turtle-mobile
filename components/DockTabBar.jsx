@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { InteractionManager, StyleSheet, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
-  Easing, runOnJS, useSharedValue, withTiming,
+  Easing, runOnJS, runOnUI, useSharedValue, withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomTabBar } from '@react-navigation/bottom-tabs';
@@ -219,20 +219,41 @@ export default function DockTabBar({
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
 
+  // THE SLOT A REQUEST IS IN FLIGHT FOR, or -1. Written on the UI thread at
+  // the moment the gesture hands a choice to JS, cleared from JS once that
+  // choice has been answered. It exists for one sequence: the JS thread is
+  // busy, a tap's request is still queued, and a SECOND touch lands on the
+  // same tab and is abandoned. That second touch's lead equals the first
+  // one's, so "is the lead still mine" says yes — and clearing it would send
+  // the chip back to the old tab until the queued request ran, then forward
+  // again. While a request for that slot is in flight, an abandoned touch
+  // leaves the lead for the request to answer.
+  const asked = useSharedValue(-1);
+
   // THE TAB THIS TOUCH CHOSE — a tap's, or a scrub's lift. One call, and the
   // chip is answered inside it (requestTab always settles, whatever happened).
   const chooseTab = useCallback((i) => {
-    // A LONG-PRESS is a different gesture with its own meaning: on Turtle it
-    // opens the console. The finger that did it still has to come off the
-    // glass, and that lift is not a tap. App.js raises this flag from
-    // `tabLongPress`; both run on the JS thread, in the order they happened.
-    if (suppressTap && suppressTap.current) {
-      suppressTap.current = false;
-      answer(i, currentTabIndex(navigation, stateRef.current));
-      return;
+    try {
+      // A LONG-PRESS is a different gesture with its own meaning: on Turtle it
+      // opens the console. The finger that did it still has to come off the
+      // glass, and that lift is not a tap. App.js raises this flag from
+      // `tabLongPress`; both run on the JS thread, in the order they happened.
+      if (suppressTap && suppressTap.current) {
+        suppressTap.current = false;
+        answer(i, currentTabIndex(navigation, stateRef.current));
+      } else {
+        requestTab(navigation, i, answer, stateRef.current);
+      }
+    } finally {
+      // Answered, one way or another — AFTER the answer itself, so the lead
+      // is spent before the claim on it is dropped. Only if it is still THIS
+      // request's slot: a later one may already have claimed the value.
+      runOnUI(() => {
+        'worklet';
+        if (asked.value === i) asked.value = -1;
+      })();
     }
-    requestTab(navigation, i, answer, stateRef.current);
-  }, [answer, navigation, suppressTap]);
+  }, [asked, answer, navigation, suppressTap]);
 
   // Held for the duration of a touch so that nothing deferred runs under the
   // thumb. The chip tracks the finger 1:1, which means every frame of the
@@ -246,9 +267,18 @@ export default function DockTabBar({
   // whole left panel). Without this, dragging the chip from the left of the
   // dock can close the page the dock is sitting on.
   const swipeRef = useRef(null);
+  const releaseTimerRef = useRef(null);
   const hold = useCallback(() => {
     // A fresh touch owes nothing to the last one's long press.
     if (suppressTap) suppressTap.current = false;
+    // …and it takes over the last one's hold. The previous lift armed a timer
+    // to release the interaction handle and the edge-swipe guard once the chip
+    // had landed; left running, it would fire UNDER this touch and drop both
+    // while a thumb is still scrubbing.
+    if (releaseTimerRef.current != null) {
+      clearTimeout(releaseTimerRef.current);
+      releaseTimerRef.current = null;
+    }
     if (holdRef.current == null) holdRef.current = InteractionManager.createInteractionHandle();
     if (swipeRef.current == null) swipeRef.current = holdEdgeSwipe();
   }, [suppressTap]);
@@ -264,7 +294,6 @@ export default function DockTabBar({
   // handle for the length of the travel costs nothing visible: the tab paints
   // its template immediately either way, and the real screen arrives a tenth
   // of a second later against a clear main thread.
-  const releaseTimerRef = useRef(null);
   const release = useCallback(() => {
     if (releaseTimerRef.current != null) {
       clearTimeout(releaseTimerRef.current);
@@ -402,11 +431,14 @@ export default function DockTabBar({
     // rounding is right HERE where it was wrong per-frame — a lift happens
     // once, so there is no midpoint for a wobbling thumb to flip across.
     //
-    // `success` is the whole point of the second argument. RNGH calls onEnd
-    // for a drag the system CANCELS as well (a call coming in, a modal taking
-    // the touch) — with `false`. This used to ignore it, so a cancelled scrub
-    // chose a tab on the user's behalf, which the comment here said it must
-    // never do.
+    // `success` is the whole point of the second argument. RNGH's dispatcher
+    // calls onEnd for an ACTIVE gesture that fails or is cancelled as well as
+    // for one that ends — with `false`. (On iOS a system cancel resets the
+    // handler's last state first, so END is skipped and only onFinalize runs;
+    // on Android it arrives here.) This used to ignore the flag, so a
+    // cancelled scrub could choose a tab on the user's behalf, which the
+    // comment here said it must never do. The cancel itself is handled in
+    // onFinalize, which runs on both.
     .onEnd((_e, success) => {
       if (!success) return;
       const chosen = Math.round(slot.value);
@@ -415,6 +447,7 @@ export default function DockTabBar({
       aimed.value = chosen;
       lead.value = chosen;
       ms.value = CHIP_SLIDE_BASE_MS;
+      asked.value = chosen;
       runOnJS(chooseTab)(chosen);
     })
     // Always, lift or cancel: the chip stops being the finger's, deferred work
@@ -428,15 +461,16 @@ export default function DockTabBar({
       if (wasDrag) {
         // A real lift already chose, in onEnd. A scrub the system cancelled
         // chose nothing: give the chip back to the navigator, now.
-        if (!success && lead.value === aimed.value) lead.value = -1;
+        if (!success && lead.value === aimed.value && asked.value !== aimed.value) lead.value = -1;
       } else {
         // Never a drag. A TAP if the finger lifted on the dock; without touch
         // events to say so, the old rule (see `touchEvents`).
         const tap = touchEvents.value === 1 ? lifted.value === 1 : true;
         if (tap) {
           if (probe) probe.tapCompleted.value = 1;
+          asked.value = aimed.value;
           runOnJS(chooseTab)(aimed.value);
-        } else if (lead.value === aimed.value) {
+        } else if (lead.value === aimed.value && asked.value !== aimed.value) {
           // Abandoned, or taken by the system. Nothing was asked of the
           // navigator, so nothing will answer: the lead is handed back here,
           // on the UI thread, in the same frame the finger went away.
@@ -446,7 +480,7 @@ export default function DockTabBar({
       dragged.value = 0;
       lifted.value = 0;
     }),
-  [aimed, chooseTab, count, dragged, hold, lead, lifted, ms, press, probe,
+  [aimed, asked, chooseTab, count, dragged, hold, lead, lifted, ms, press, probe,
     releaseAfterSlide, slot, touchEvents, width]);
 
   return (
