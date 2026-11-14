@@ -1,5 +1,5 @@
 import {
-  DOCK_THEMES, dockTheme, isDockTheme, themeSkin, themeIsIntact, resolveDockSkin,
+  DOCK_THEMES, dockTheme, isDockTheme, themeSkin, themeIsIntact, resolveDockSkin, inkModeFor,
 } from '../dockThemes';
 import { activeInk, customDockSkin, dockSkin, DOCK_INKS } from '../dockSkins';
 import { normalizeHex } from '../../utils/accentColor';
@@ -138,5 +138,33 @@ describe('the dock’s named themes', () => {
       expect(themeIsIntact(g, { ...worn, dockStyle: 'paper' })).toBe(false);
       expect(themeIsIntact(null, worn)).toBe(false);
     });
+  });
+});
+
+describe('a look\'s ink is chosen against its chip', () => {
+  const g = DOCK_THEMES[0];
+  const worn = {
+    dockTheme: g.key, dockStyle: 'custom', dockColor: g.backdrop, accentColor: g.accent, dockInk: g.ink,
+  };
+
+  test('with the chip, the theme\'s own ink is used', () => {
+    expect(inkModeFor({ ...worn, dockIndicator: 'chip' })).toBe(g.ink);
+  });
+
+  test('with the underline there is no chip, so it reads the bar instead', () => {
+    expect(inkModeFor({ ...worn, dockIndicator: 'underline' })).toBe('auto');
+    // …which on this theme's near-black bar is white, not the theme's black.
+    const skin = themeSkin(g);
+    expect(activeInk('auto', g.accent, { underline: true, darkDock: skin.blurTint === 'dark' }))
+      .toBe('#FFFFFF');
+  });
+
+  test('an ink set by hand is never second-guessed', () => {
+    const other = g.ink === 'dark' ? 'light' : 'dark';
+    expect(inkModeFor({ ...worn, dockInk: other, dockIndicator: 'underline' })).toBe(other);
+    expect(inkModeFor({
+      dockInk: 'dark', dockIndicator: 'underline', dockTheme: '', dockStyle: 'smoked',
+      dockColor: '#000000', accentColor: '#1F8A9B',
+    })).toBe('dark');
   });
 });

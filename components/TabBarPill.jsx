@@ -5,6 +5,9 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { blurProps } from '../utils/frostedChat';
 import DockGlow from './DockGlow';
+import {
+  SHADE_COLOR, SHADE_PEAK, SPOT_H, SPOT_PEAK, SPOT_W, glowStrength, pickedGlowColor, rimColor,
+} from './dockLight';
 import Reanimated, {
   Easing,
   useAnimatedReaction,
@@ -103,7 +106,7 @@ const CATCH = { duration: CHIP_CATCH_MS, easing: EASE };
 //             glyphs are the skin's business, because they sit on the capsule
 //             rather than on the chip (dockSkins' inactiveTint).
 
-// THE SPOT — the underline's light, on dark docks only.
+// THE SPOT — the underline's light.
 //
 // A pool of the highlight colour standing on the line and fading up over the
 // glyph. It was first tried as the line's own shadow, coloured and thrown
@@ -113,12 +116,7 @@ const CATCH = { duration: CHIP_CATCH_MS, easing: EASE };
 // standing in for a curve. Now it is the curve: one RADIAL gradient, as a
 // vector (DockGlow), centred on the line so only its upper half shows.
 // Rasterised once and moved as a bitmap, exactly like the indicator.
-const SPOT_W = 72;
-const SPOT_H = 46;
-/** Alpha at the brightest point: bottom centre, right on the line. */
-const SPOT_PEAK = 0.5;
-/** The chip's bloom: white, in its middle, much quieter than the spot. */
-const BLOOM_PEAK = 0.24;
+// Its numbers live in dockLight, shared with the live preview in Settings.
 
 // How thick the lip is, for the skins that have one: 1.5pt, ~4px at @3x. A
 // hairline disappears under the capsule's own curve at this radius, and 2pt
@@ -176,18 +174,17 @@ export default function TabBarPill({
 
   // HOW STRONG THE GLOW IS — the Settings step (0 is off, 1 as designed).
   // Undefined in a harness with no such setting, which means "as designed".
-  const glow = Number.isFinite(dockGlow) ? dockGlow : 1;
+  const glow = glowStrength(dockGlow);
   // The underline's spot, on every dock. It began dark-only (on a light bar
   // a tinted pool was judged a stain); the owner asked for it on light bars
   // too, in the highlight colour, so now only "Off" removes it.
   const spot = underline && glow > 0;
-  // WHAT COLOUR THE LIGHT IS. A colour picked in Settings wins, for both the
-  // spot and the chip's bloom. Otherwise the spot is the highlight colour —
-  // it is the line's own light — and the bloom is white, because accent on
-  // an accent fill is no light at all.
-  const pickedGlow = /^#[0-9a-fA-F]{6}$/.test(dockGlowColor || '') ? dockGlowColor : null;
+  // WHAT COLOUR THE LIGHT IS. A colour picked in Settings wins: it is the
+  // spot's colour, and the colour of the chip's rim. Otherwise the spot is
+  // the highlight colour — it is the line's own light — and the rim is plain
+  // light. The chip's SHADE is never coloured; see dockLight.
+  const pickedGlow = pickedGlowColor(dockGlowColor);
   const spotColor = pickedGlow || theme.colors.accent;
-  const bloomColor = pickedGlow || '#FFFFFF';
 
   // THE NAVIGATOR IS THE SLOWEST OF THE THREE THINGS THAT KNOW.
   //
@@ -563,21 +560,23 @@ export default function TabBarPill({
           },
           // The chip's translucent ridge. Not the line's: a 3pt line with
           // a border is just a thicker line.
-          underline ? null : styles.rim,
+          underline ? null : [styles.rim, { borderColor: rimColor(pickedGlow) }],
           pillStyle,
         ]}
       >
-        {/* THE CHIP'S BLOOM — a soft white light in its middle, so the fill
-            is not flat. Inside the chip, so it is part of the same cached
-            bitmap and travels with it for nothing. */}
+        {/* THE CHIP'S SHADE — darker in its middle, so with the lit rim it
+            reads as a piece of glass set INTO the bar rather than a flat
+            fill (or, as it briefly was with a white bloom here, a dome).
+            Inside the chip, so it is part of the same cached bitmap and
+            travels with it for nothing. */}
         {!underline && glow > 0 ? (
-          <View pointerEvents="none" style={styles.bloom} testID="dock-chip-bloom">
+          <View pointerEvents="none" style={styles.shade} testID="dock-chip-shade">
             <DockGlow
               id="dock-chip-glow"
               width={PILL_SIZE}
               height={PILL_SIZE}
-              color={bloomColor}
-              peak={BLOOM_PEAK * glow}
+              color={SHADE_COLOR}
+              peak={SHADE_PEAK * glow}
             />
           </View>
         ) : null}
@@ -666,10 +665,11 @@ const styles = StyleSheet.create({
   // than a hairline — at a third of a point it disappears into the accent.
   rim: {
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.26)',
+    // The colour is set where it is drawn: dockLight's rimColor.
+    borderColor: 'transparent',
   },
-  // …and its bloom sits exactly over it.
-  bloom: { position: 'absolute', top: -1, left: -1 },
+  // …and its shade sits exactly over it.
+  shade: { position: 'absolute', top: -1, left: -1 },
   // One ridge. A hairline, full height of the icon block less a breath at each
   // end, so it reads as a groove between two cells rather than as a divider
   // cutting the capsule in half.

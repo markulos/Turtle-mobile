@@ -38,6 +38,10 @@ jest.mock('../../context/ThemeContext', () => ({
     setDockInk: mockState().setDockInk,
     accentColor: mockState().accentColor,
     setCustomAccent: mockState().setCustomAccent,
+    dockGlow: mockState().glow,
+    setDockGlow: mockState().setDockGlow,
+    dockGlowColor: mockState().glowColour,
+    setDockGlowColor: mockState().setDockGlowColor,
     dockTheme: mockState().theme,
     setDockTheme: mockState().setDockTheme,
   }),
@@ -50,6 +54,7 @@ let state = {
 global.mockState = () => ({
   ...state,
   setDockStyle, setDockIndicator, setDockColor, setDockInk, setCustomAccent, setDockTheme,
+  setDockGlow, setDockGlowColor,
 });
 
 jest.mock('expo-linear-gradient', () => {
@@ -57,6 +62,18 @@ jest.mock('expo-linear-gradient', () => {
   return { LinearGradient: (props) => <View {...props} /> };
 });
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
+// The live preview draws the glow as a vector. Virtual: the desktop mirror
+// has no react-native-svg installed.
+jest.mock('react-native-svg', () => {
+  const ReactLib = require('react');
+  const { View } = require('react-native');
+  const Part = (props) => ReactLib.createElement(View, props);
+  return {
+    __esModule: true, default: Part, Defs: Part, Ellipse: Part, RadialGradient: Part, Stop: Part,
+  };
+}, { virtual: true });
+const setDockGlow = jest.fn();
+const setDockGlowColor = jest.fn();
 
 // The colour sheet is a unit of its own (sliders, a hex field, safe-area and
 // keyboard wiring) with its own tests. What this file cares about is WHETHER
@@ -81,6 +98,8 @@ beforeEach(() => {
     accentColor: '#1F8A9B', theme: '',
   };
   setDockStyle.mockClear();
+  setDockGlow.mockClear();
+  setDockGlowColor.mockClear();
   setDockInk.mockClear();
   setCustomAccent.mockClear();
   setDockTheme.mockClear();
@@ -92,6 +111,8 @@ beforeEach(() => {
 describe('Settings → Navigation → Navbar style', () => {
   test('offers every backdrop and every indicator', async () => {
     const { getByTestId } = await render(<DockStylePicker />);
+    // The ink row is one of the hand-set controls: it is behind Custom.
+    await fireEvent.press(getByTestId('dock-mode-custom'));
     for (const id of ['dock-skin-smoked', 'dock-skin-paper', 'dock-skin-custom',
       'dock-indicator-chip', 'dock-indicator-underline',
       'dock-ink-auto', 'dock-ink-light', 'dock-ink-dark',
@@ -169,6 +190,8 @@ describe('Settings → Navigation → Navbar style', () => {
 
   test('the ink row overrides the contrast check, and says so', async () => {
     const { getByTestId } = await render(<DockStylePicker />);
+    await fireEvent.press(getByTestId('dock-mode-custom'));
+    setDockInk.mockClear();
     fireEvent.press(getByTestId('dock-ink-dark'));
     expect(setDockInk).toHaveBeenCalledWith('dark');
   });
@@ -347,5 +370,90 @@ describe('Settings → Navigation → Navbar style', () => {
         .getByTestId('dock-preview-capsule');
       expect(styleOf(capsule).borderColor).toBe(dockSkin('paper').edge);
     }
+  });
+});
+
+describe('one panel: the live preview, and Auto or Custom', () => {
+  test('the live preview is the dock you have, and follows the indicator', async () => {
+    const chip = await render(<DockStylePicker />);
+    expect(chip.getByTestId('dock-live')).toBeTruthy();
+    expect(chip.queryByTestId('dock-live-chip')).not.toBeNull();
+    expect(chip.queryByTestId('dock-live-line')).toBeNull();
+    await chip.unmount();
+
+    state = { ...state, indicator: 'underline' };
+    const line = await render(<DockStylePicker />);
+    expect(line.queryByTestId('dock-live-chip')).toBeNull();
+    expect(line.queryByTestId('dock-live-line')).not.toBeNull();
+    // On the smoked (dark) bar with no chip, auto ink is white.
+    expect(line.getByTestId('dock-live-active-icon').props.color).toBe('#FFFFFF');
+  });
+
+  test('a worn theme\'s black ink does not land on its black bar under the underline', async () => {
+    const g = DOCK_THEMES[0];
+    state = {
+      style: 'custom', indicator: 'underline', colour: g.backdrop, ink: g.ink,
+      accentColor: g.accent, theme: g.key,
+    };
+    const view = await render(<DockStylePicker />);
+    expect(view.getByTestId('dock-live-active-icon').props.color).toBe('#FFFFFF');
+  });
+
+  test('Auto hides the hand-set controls; Custom shows them', async () => {
+    const view = await render(<DockStylePicker />);
+    expect(view.getByTestId('dock-mode-auto').props.accessibilityState.selected).toBe(true);
+    for (const id of ['dock-ink-auto', 'dock-glow-medium', 'dock-glow-colour-custom', 'dock-highlight']) {
+      expect(view.queryByTestId(id)).toBeNull();
+    }
+    // The look itself is not a hand-set detail: it is offered either way.
+    expect(view.queryByTestId('dock-skin-paper')).not.toBeNull();
+    expect(view.queryByTestId('dock-indicator-underline')).not.toBeNull();
+
+    await fireEvent.press(view.getByTestId('dock-mode-custom'));
+    for (const id of ['dock-ink-auto', 'dock-glow-medium', 'dock-glow-colour-custom', 'dock-highlight']) {
+      expect(view.queryByTestId(id)).not.toBeNull();
+    }
+    // Looking at the controls changes nothing.
+    expect(setDockInk).not.toHaveBeenCalled();
+    expect(setDockGlow).not.toHaveBeenCalled();
+  });
+
+  test('anything set by hand opens the panel on Custom', async () => {
+    state = { ...state, glow: 1.6 };
+    const view = await render(<DockStylePicker />);
+    expect(view.getByTestId('dock-mode-custom').props.accessibilityState.selected).toBe(true);
+    expect(view.queryByTestId('dock-glow-strong')).not.toBeNull();
+  });
+
+  test('going back to Auto undoes what was set by hand', async () => {
+    state = { ...state, ink: 'dark', glow: 1.6, glowColour: '#12AB34' };
+    const view = await render(<DockStylePicker />);
+    fireEvent.press(view.getByTestId('dock-mode-auto'));
+    expect(setDockInk).toHaveBeenCalledWith('auto');
+    expect(setDockGlow).toHaveBeenCalledWith(1);
+    expect(setDockGlowColor).toHaveBeenCalledWith(null);
+  });
+
+  test('Auto leaves a worn look\'s own ink alone — nobody set it by hand', async () => {
+    const p = DOCK_PALETTES[0];
+    state = {
+      style: 'custom', indicator: 'chip', colour: p.backdrop, ink: p.ink,
+      accentColor: p.accent, theme: '', glow: 0.6,
+    };
+    const view = await render(<DockStylePicker />);
+    fireEvent.press(view.getByTestId('dock-mode-auto'));
+    expect(setDockInk).not.toHaveBeenCalled();
+    expect(setDockGlow).toHaveBeenCalledWith(1);
+  });
+
+  test('the highlight colour can be changed from here, with the app\'s own sheet', async () => {
+    const view = await render(<DockStylePicker />);
+    await fireEvent.press(view.getByTestId('dock-mode-custom'));
+    expect(view.queryByTestId('highlight-sheet')).toBeNull();
+    await fireEvent.press(view.getByTestId('dock-highlight'));
+    const sheet = view.getByTestId('highlight-sheet');
+    expect(sheet.props.initialColor).toBe('#1F8A9B');
+    act(() => sheet.props.onSelect('#AA5500'));
+    expect(setCustomAccent).toHaveBeenCalledWith('#AA5500');
   });
 });

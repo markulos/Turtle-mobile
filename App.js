@@ -72,7 +72,7 @@ import TabBarIcon from './components/TabBarIcon';
 import TabBarPill from './components/TabBarPill';
 import { activeInk, dockSkin } from './components/dockSkins';
 import { buildNavTheme } from './utils/navTheme';
-import { resolveDockSkin } from './components/dockThemes';
+import { inkModeFor, resolveDockSkin } from './components/dockThemes';
 import DockTabBar from './components/DockTabBar';
 import { CHIP_SLIDE_BASE_MS, TAB_SWITCH_SPEC, forTabTurn } from './components/dockMotion';
 import { requestTabWhenClear, useDockSettle } from './components/dockNav';
@@ -152,13 +152,19 @@ function TabNavigator() {
   // branches on the theme.
   const {
     theme, hideVaultButton, dockStyle, dockColor, dockInk, dockTheme, dockIndicator, dockInkColor,
+    accentColor,
   } = useTheme();
   const skin = resolveDockSkin({ dockTheme, dockStyle, dockColor }, dockSkin);
   // The ACTIVE glyph's ink. It depends on what the glyph is sitting on — the
   // accent chip, or (with the underline) the dock itself — as well as on the
   // setting; see activeInk. One value, used for the navigator's tint and for
   // the active layer every icon cross-fades to.
-  const activeTint = activeInk(dockInk, theme.colors.accent, {
+  // A worn theme's or palette's fixed ink was chosen against its chip; with
+  // the underline it reads as auto instead. See inkModeFor.
+  const inkMode = inkModeFor({
+    dockInk, dockIndicator, dockTheme, dockStyle, dockColor, accentColor,
+  });
+  const activeTint = activeInk(inkMode, theme.colors.accent, {
     underline: dockIndicator === 'underline',
     darkDock: skin.blurTint === 'dark',
     custom: dockInkColor,

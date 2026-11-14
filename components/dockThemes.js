@@ -27,6 +27,7 @@
  */
 
 import { customDockSkin } from './dockSkins';
+import { matchingPalette } from './dockPalettes';
 import { normalizeHex } from '../utils/accentColor';
 
 export const DOCK_THEMES = [
@@ -107,6 +108,31 @@ export function themeIsIntact(theme, { dockStyle, dockColor, accentColor, dockIn
     && normalizeHex(dockColor) === theme.backdrop
     && normalizeHex(accentColor) === theme.accent
     && dockInk === theme.ink;
+}
+
+/**
+ * WHICH INK MODE THE ACTIVE GLYPH IS ACTUALLY DRAWN IN.
+ *
+ * A theme or a palette writes a FIXED ink (Godzilla: black) — and that ink was
+ * chosen against the look's CHIP, which is the pale highlight colour. With the
+ * underline there is no chip: the glyph sits on the bar, and Godzilla's black
+ * glyph lands on Godzilla's near-black bar. Nobody picked that; the look did,
+ * for an indicator that is not on screen.
+ *
+ * So while a look is being worn intact and the indicator is the underline, its
+ * ink reads as 'auto' (white on a dark bar, near-black on a light one). The
+ * moment the ink is set by hand the look is no longer intact and the hand
+ * wins, as everywhere else. The saved setting is not touched — go back to the
+ * chip and the look's own ink is still there.
+ */
+export function inkModeFor({
+  dockInk, dockIndicator, dockTheme: key, dockStyle, dockColor, accentColor,
+}) {
+  if (dockIndicator !== 'underline') return dockInk;
+  const worn = { dockStyle, dockColor, accentColor, dockInk };
+  if (themeIsIntact(dockTheme(key), worn)) return 'auto';
+  if (matchingPalette(worn)) return 'auto';
+  return dockInk;
 }
 
 export default DOCK_THEMES;

@@ -185,7 +185,7 @@ describe('the indicator\'s glow', () => {
     expect(colours[0]).not.toBe('#12AB34');
   });
 
-  test('a colour picked in Settings recolours the spot and the chip\'s bloom', async () => {
+  test('a colour picked in Settings recolours the spot and the chip\'s rim — never its shade', async () => {
     glowColour = '#12AB34';
     indicator = 'underline';
     const line = await render(<TabBarPill />);
@@ -194,12 +194,14 @@ describe('the indicator\'s glow', () => {
 
     indicator = 'chip';
     const chip = await render(<TabBarPill />);
-    expect(glowColours(chip, 'dock-chip-bloom')).toEqual(['#12AB34']);
+    expect(glowColours(chip, 'dock-chip-shade')).toEqual(['#000000']);
+    expect(StyleSheet.flatten(chip.getByTestId('dock-chip').props.style).borderColor)
+      .toBe('rgba(18,171,52,0.4)');
   });
 
-  test('left alone, the chip\'s bloom is white — accent on accent is no light', async () => {
+  test('the chip is DARKER in its middle, not lighter — glass set in, not a dome', async () => {
     const chip = await render(<TabBarPill />);
-    expect(glowColours(chip, 'dock-chip-bloom')).toEqual(['#FFFFFF']);
+    expect(glowColours(chip, 'dock-chip-shade')).toEqual(['#000000']);
   });
 
   test('the underline has a spot and no bloom', async () => {
@@ -208,12 +210,12 @@ describe('the indicator\'s glow', () => {
     expect(dark.queryByTestId('dock-spot')).not.toBeNull();
     // One radial gradient, as a vector — not a staircase of bands.
     expect(dark.queryByTestId('dock-spot-glow')).not.toBeNull();
-    expect(dark.queryByTestId('dock-chip-bloom')).toBeNull();
+    expect(dark.queryByTestId('dock-chip-shade')).toBeNull();
   });
 
-  test('the chip has a bloom in its middle and a translucent ridge round its edge', async () => {
+  test('the chip has a shade in its middle and a translucent ridge round its edge', async () => {
     const view = await render(<TabBarPill />);
-    expect(view.queryByTestId('dock-chip-bloom')).not.toBeNull();
+    expect(view.queryByTestId('dock-chip-shade')).not.toBeNull();
     expect(view.queryByTestId('dock-spot')).toBeNull();
     const chip = StyleSheet.flatten(view.getByTestId('dock-chip').props.style);
     expect(chip.borderWidth).toBe(1);
@@ -230,7 +232,7 @@ describe('the indicator\'s glow', () => {
   test('Off in Settings removes the glow from both, and leaves the indicator', async () => {
     glowLevel = 0;
     const chip = await render(<TabBarPill />);
-    expect(chip.queryByTestId('dock-chip-bloom')).toBeNull();
+    expect(chip.queryByTestId('dock-chip-shade')).toBeNull();
     expect(chip.queryByTestId('dock-chip')).not.toBeNull();
     await chip.unmount();
 

@@ -34,7 +34,11 @@ import {
 } from './dockSkins';
 import AccentColorPicker from './AccentColorPicker';
 import { DOCK_PALETTES, matchingPalette, paletteSkin } from './dockPalettes';
-import { DOCK_THEMES, dockTheme as findTheme, themeIsIntact, themeSkin } from './dockThemes';
+import {
+  DOCK_THEMES, dockTheme as findTheme, inkModeFor, themeIsIntact, themeSkin,
+} from './dockThemes';
+import DockLivePreview from './DockLivePreview';
+import { glowStrength } from './dockLight';
 import { impactHaptic } from '../utils/haptics';
 import {
   describeDockMotion, describeDockTouch, getDockMotionReport, onDockMotionReport,
@@ -215,6 +219,7 @@ export default function DockStylePicker() {
   // …and the same sheet again, for the custom ICON colour.
   const [inkColourOpen, setInkColourOpen] = useState(false);
   const [glowColourOpen, setGlowColourOpen] = useState(false);
+  const [highlightOpen, setHighlightOpen] = useState(false);
   const accent = theme.colors.accent;
   const ink = activeInk(dockInk, accent, { custom: dockInkColor });
 
@@ -233,6 +238,49 @@ export default function DockStylePicker() {
 
   // A theme writes the same four settings a palette does, PLUS its key — the
   // key is the only thing that can bring its skin overrides back.
+  // WHAT THE REAL DOCK IS WEARING, for the live preview — the same two
+  // calls App.js makes, so the picture and the bar cannot disagree.
+  const glowLevel = glowStrength(dockGlow);
+  const liveInk = activeInk(
+    inkModeFor({
+      dockInk, dockIndicator, dockTheme, dockStyle, dockColor, accentColor,
+    }),
+    accent,
+    {
+      underline: dockIndicator === 'underline',
+      darkDock: current.blurTint === 'dark',
+      custom: dockInkColor,
+    },
+  );
+
+  // AUTO OR CUSTOM.
+  //
+  // Three things in this panel can be worked out from the look instead of
+  // chosen: the active icon's ink, how strong the glow is, and what colour it
+  // is. Auto is "work them out"; Custom shows the controls. A look's own ink
+  // (a theme or palette writes one) counts as worked out — nobody chose it by
+  // hand. The mode is not a stored setting: it is read from whether any of
+  // the three has been set by hand, so there is nothing to get out of step.
+  const inkByHand = dockInk !== 'auto' && !wearing && !palette;
+  const byHand = inkByHand || !!dockGlowColor || Math.abs(glowLevel - 1) > 0.05;
+  const [mode, setMode] = useState(byHand ? 'custom' : 'auto');
+  const custom = mode === 'custom';
+  const goCustom = () => {
+    if (custom) return;
+    impactHaptic('light');
+    setMode('custom');
+  };
+  // Going back to Auto UNDOES the hand-set values — otherwise "Auto" would be
+  // a label on a dock that is still wearing last week's custom glow.
+  const goAuto = () => {
+    if (!custom) return;
+    impactHaptic('light');
+    if (inkByHand) setDockInk('auto');
+    if (Math.abs(glowLevel - 1) > 0.05) setDockGlow(1);
+    if (dockGlowColor) setDockGlowColor(null);
+    setMode('auto');
+  };
+
   const applyTheme = (t) => () => {
     if (t.key === wearing) return;
     impactHaptic('light');
@@ -270,11 +318,239 @@ export default function DockStylePicker() {
 
   return (
     <View>
+      {/* THE WHOLE NAVBAR, LIVE. Every choice in this panel is drawn here the
+          moment it is made, at the bar's real size — see DockLivePreview. */}
+      <DockLivePreview
+        skin={current}
+        indicator={dockIndicator}
+        accent={accent}
+        ink={liveInk}
+        glow={glowLevel}
+        glowColor={dockGlowColor}
+        theme={theme}
+      />
+
+      {/* AUTO OR CUSTOM. One lit key of two, like the status keys on Tasks. */}
+      <View style={[styles.modeRow, { borderColor: theme.colors.border }]}>
+        {[['auto', 'Auto', goAuto], ['custom', 'Custom', goCustom]].map(([key, label, go]) => {
+          const on = mode === key;
+          return (
+            <TouchableOpacity
+              key={key}
+              testID={`dock-mode-${key}`}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: on }}
+              accessibilityLabel={`${label} navbar appearance${on ? ', selected' : ''}`}
+              activeOpacity={0.6}
+              onPress={go}
+              style={[styles.modeKey, on && { backgroundColor: theme.colors.textPrimary }]}
+            >
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.modeLabel,
+                  { color: on ? theme.colors.background : theme.colors.textSecondary },
+                ]}
+              >
+                {label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
+        {custom
+          ? 'Set by hand: the active icon, the glow and the highlight colour, below.'
+          : 'Pick a look. The active icon and the glow are worked out from it.'}
+      </Text>
+
+      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
+        Active tab
+      </Text>
+      <View style={styles.row}>
+        {DOCK_INDICATORS.map((key) => {
+          const selected = key === dockIndicator;
+          return (
+            <Tile
+              key={key}
+              testID={`dock-indicator-${key}`}
+              label={INDICATOR_LABELS[key] || key}
+              selected={selected}
+              theme={theme}
+              onPress={choose(setDockIndicator, key, selected)}
+            >
+              <DockPreview
+                skin={current}
+                indicator={key}
+                accent={accent}
+                ink={ink}
+                theme={theme}
+              />
+            </Tile>
+          );
+        })}
+      </View>
+
+      {custom ? (
+        <>
+      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
+        Active icon
+      </Text>
+      <View style={styles.row}>
+        {DOCK_INKS.map((key) => {
+          const selected = key === dockInk;
+          return (
+            <Tile
+              key={key}
+              testID={`dock-ink-${key}`}
+              label={DOCK_INK_LABELS[key]}
+              selected={selected}
+              theme={theme}
+              // Custom is a mode AND a colour: tapping it switches to it and
+              // opens the sheet, and tapping it again reopens the sheet to
+              // change the colour.
+              onPress={key === 'custom'
+                ? () => {
+                  if (!selected) setDockInk('custom');
+                  setInkColourOpen(true);
+                }
+                : choose(setDockInk, key, selected)}
+            >
+              {/* Each tile draws the glyph in the ink it is offering, so the
+                  one that LOOKS right is the one you tap. 'Auto' draws
+                  whatever the contrast check currently answers for your
+                  accent — which is why it is a preview and not a word. */}
+              <DockPreview
+                skin={current}
+                indicator="chip"
+                accent={accent}
+                ink={activeInk(key, accent, { custom: dockInkColor })}
+                theme={theme}
+              />
+            </Tile>
+          );
+        })}
+      </View>
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
+        {dockInk === 'auto'
+          ? 'Chosen for you — black or white, whichever reads better on the highlight colour (or on the bar itself, with the underline).'
+          : 'Set by hand. Change the highlight colour and this stays as you left it.'}
+      </Text>
+
+      {/* THE GLOW. The light the indicator gives off: a pool rising from the
+          underline; a darker middle and a lit rim on the chip.
+          Four steps, because the gap between two neighbouring strengths of a
+          subtle effect is not something a slider can be set to by eye. */}
+      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
+        Glow
+      </Text>
+      <View style={styles.row}>
+        {DOCK_GLOWS.map((g) => {
+          const selected = Math.abs((Number.isFinite(dockGlow) ? dockGlow : 1) - g.value) < 0.05;
+          return (
+            <Tile
+              key={g.key}
+              testID={`dock-glow-${g.key}`}
+              label={g.label}
+              selected={selected}
+              theme={theme}
+              onPress={choose(setDockGlow, g.value, selected)}
+            >
+              {/* A line and the light above it, at this step's strength. */}
+              <View style={GLOW_SWATCH}>
+                <View
+                  style={[GLOW_SWATCH_LIGHT, { backgroundColor: accent, opacity: 0.38 * g.value }]}
+                />
+                <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
+              </View>
+            </Tile>
+          );
+        })}
+      </View>
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
+        How much light the guide gives off. Off leaves just the line or the chip.
+      </Text>
+
+      {/* THE GLOW'S COLOUR. It follows the highlight colour unless one is
+          picked — on light bars and dark ones alike. Custom is a mode AND a
+          colour, exactly like the icon ink above: tapping it switches to it
+          and opens the sheet, tapping it again reopens the sheet. */}
+      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
+        Glow colour
+      </Text>
+      <View style={styles.row}>
+        <Tile
+          testID="dock-glow-colour-accent"
+          label="Highlight"
+          selected={!dockGlowColor}
+          theme={theme}
+          onPress={choose(setDockGlowColor, null, !dockGlowColor)}
+        >
+          <View style={GLOW_SWATCH}>
+            <View style={[GLOW_SWATCH_LIGHT, { backgroundColor: accent, opacity: 0.38 }]} />
+            <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
+          </View>
+        </Tile>
+        <Tile
+          testID="dock-glow-colour-custom"
+          label="Custom"
+          selected={!!dockGlowColor}
+          theme={theme}
+          onPress={() => {
+            if (!dockGlowColor) {
+              impactHaptic('light');
+              if (dockTheme) setDockTheme('');
+              // Starts from the colour it is already wearing, so opening the
+              // sheet changes nothing until a slider moves.
+              setDockGlowColor(accent);
+            }
+            setGlowColourOpen(true);
+          }}
+        >
+          <View style={GLOW_SWATCH}>
+            <View
+              style={[GLOW_SWATCH_LIGHT, { backgroundColor: dockGlowColor || '#FFFFFF', opacity: 0.38 }]}
+            />
+            <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
+          </View>
+        </Tile>
+      </View>
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
+        {dockGlowColor
+          ? 'Set by hand. Change the highlight colour and the glow stays as you left it.'
+          : 'The glow takes your highlight colour, and changes with it.'}
+      </Text>
+
+
+      {/* THE HIGHLIGHT COLOUR, here as well as on its own row above — it is
+          the chip, the line and (unless one is picked) the glow, so a navbar
+          panel without it is missing its main colour. Same setting, same
+          sheet. */}
+      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
+        Highlight colour
+      </Text>
+      <View style={styles.row}>
+        <Tile
+          testID="dock-highlight"
+          label="Change colour"
+          selected={false}
+          theme={theme}
+          onPress={() => setHighlightOpen(true)}
+        >
+          <View style={[GLOW_SWATCH, { width: undefined, alignSelf: 'stretch', backgroundColor: accent }]} />
+        </Tile>
+      </View>
+      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
+        Used across the whole app, not just the navbar.
+      </Text>
+        </>
+      ) : null}
+
       {/* THEMES first, and wide. These are whole composed looks rather than a
           colour pairing — the tile is the width of the card because that is
           the only way to show one as a dock rather than as a swatch, and
           because there will not be many of them. */}
-      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary }]}>
+      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
         Themes
       </Text>
       {DOCK_THEMES.map((t) => {
@@ -376,161 +652,6 @@ export default function DockStylePicker() {
         {current.blurb}
       </Text>
 
-      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
-        Active tab
-      </Text>
-      <View style={styles.row}>
-        {DOCK_INDICATORS.map((key) => {
-          const selected = key === dockIndicator;
-          return (
-            <Tile
-              key={key}
-              testID={`dock-indicator-${key}`}
-              label={INDICATOR_LABELS[key] || key}
-              selected={selected}
-              theme={theme}
-              onPress={choose(setDockIndicator, key, selected)}
-            >
-              <DockPreview
-                skin={current}
-                indicator={key}
-                accent={accent}
-                ink={ink}
-                theme={theme}
-              />
-            </Tile>
-          );
-        })}
-      </View>
-
-      <Text style={[styles.rowTitle, { color: theme.colors.textSecondary, marginTop: 18 }]}>
-        Active icon
-      </Text>
-      <View style={styles.row}>
-        {DOCK_INKS.map((key) => {
-          const selected = key === dockInk;
-          return (
-            <Tile
-              key={key}
-              testID={`dock-ink-${key}`}
-              label={DOCK_INK_LABELS[key]}
-              selected={selected}
-              theme={theme}
-              // Custom is a mode AND a colour: tapping it switches to it and
-              // opens the sheet, and tapping it again reopens the sheet to
-              // change the colour.
-              onPress={key === 'custom'
-                ? () => {
-                  if (!selected) setDockInk('custom');
-                  setInkColourOpen(true);
-                }
-                : choose(setDockInk, key, selected)}
-            >
-              {/* Each tile draws the glyph in the ink it is offering, so the
-                  one that LOOKS right is the one you tap. 'Auto' draws
-                  whatever the contrast check currently answers for your
-                  accent — which is why it is a preview and not a word. */}
-              <DockPreview
-                skin={current}
-                indicator="chip"
-                accent={accent}
-                ink={activeInk(key, accent, { custom: dockInkColor })}
-                theme={theme}
-              />
-            </Tile>
-          );
-        })}
-      </View>
-      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
-        {dockInk === 'auto'
-          ? 'Chosen for you — black or white, whichever reads better on the highlight colour (or on the bar itself, with the underline).'
-          : 'Set by hand. Change the highlight colour and this stays as you left it.'}
-      </Text>
-
-      {/* THE GLOW. The light the indicator gives off: a pool rising from the
-          underline (on a dark bar), a soft bloom in the middle of the chip.
-          Four steps, because the gap between two neighbouring strengths of a
-          subtle effect is not something a slider can be set to by eye. */}
-      <Text style={[styles.blurb, { color: theme.colors.textSecondary }]}>
-        Glow
-      </Text>
-      <View style={styles.row}>
-        {DOCK_GLOWS.map((g) => {
-          const selected = Math.abs((Number.isFinite(dockGlow) ? dockGlow : 1) - g.value) < 0.05;
-          return (
-            <Tile
-              key={g.key}
-              testID={`dock-glow-${g.key}`}
-              label={g.label}
-              selected={selected}
-              theme={theme}
-              onPress={choose(setDockGlow, g.value, selected)}
-            >
-              {/* A line and the light above it, at this step's strength. */}
-              <View style={GLOW_SWATCH}>
-                <View
-                  style={[GLOW_SWATCH_LIGHT, { backgroundColor: accent, opacity: 0.38 * g.value }]}
-                />
-                <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
-              </View>
-            </Tile>
-          );
-        })}
-      </View>
-      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
-        How much light the guide gives off. Off leaves just the line or the chip.
-      </Text>
-
-      {/* THE GLOW'S COLOUR. It follows the highlight colour unless one is
-          picked — on light bars and dark ones alike. Custom is a mode AND a
-          colour, exactly like the icon ink above: tapping it switches to it
-          and opens the sheet, tapping it again reopens the sheet. */}
-      <Text style={[styles.blurb, { color: theme.colors.textSecondary }]}>
-        Glow colour
-      </Text>
-      <View style={styles.row}>
-        <Tile
-          testID="dock-glow-colour-accent"
-          label="Highlight"
-          selected={!dockGlowColor}
-          theme={theme}
-          onPress={choose(setDockGlowColor, null, !dockGlowColor)}
-        >
-          <View style={GLOW_SWATCH}>
-            <View style={[GLOW_SWATCH_LIGHT, { backgroundColor: accent, opacity: 0.38 }]} />
-            <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
-          </View>
-        </Tile>
-        <Tile
-          testID="dock-glow-colour-custom"
-          label="Custom"
-          selected={!!dockGlowColor}
-          theme={theme}
-          onPress={() => {
-            if (!dockGlowColor) {
-              impactHaptic('light');
-              if (dockTheme) setDockTheme('');
-              // Starts from the colour it is already wearing, so opening the
-              // sheet changes nothing until a slider moves.
-              setDockGlowColor(accent);
-            }
-            setGlowColourOpen(true);
-          }}
-        >
-          <View style={GLOW_SWATCH}>
-            <View
-              style={[GLOW_SWATCH_LIGHT, { backgroundColor: dockGlowColor || '#FFFFFF', opacity: 0.38 }]}
-            />
-            <View style={[GLOW_SWATCH_LINE, { backgroundColor: accent }]} />
-          </View>
-        </Tile>
-      </View>
-      <Text style={[styles.blurb, { color: theme.colors.textTertiary }]}>
-        {dockGlowColor
-          ? 'Set by hand. Change the highlight colour and the glow stays as you left it.'
-          : 'The glow takes your highlight colour, and changes with it.'}
-      </Text>
-
       {/* HOW THE LAST MOVE WENT.
           Here rather than in a developer panel because this is the card you
           are on while you are tapping the dock to see whether the chip is
@@ -555,6 +676,17 @@ export default function DockStylePicker() {
         onClose={() => setColourOpen(false)}
       />
       {/* The custom icon colour. Opens on the colour it is wearing. */}
+      <AccentColorPicker
+        testID="highlight-sheet"
+        visible={highlightOpen}
+        initialColor={accent}
+        onSelect={(hex) => {
+          // A hand-made change, like any other: it drops the theme.
+          if (dockTheme) setDockTheme('');
+          setCustomAccent(hex);
+        }}
+        onClose={() => setHighlightOpen(false)}
+      />
       <AccentColorPicker
         testID="glow-sheet"
         visible={glowColourOpen}
@@ -585,6 +717,25 @@ const styles = StyleSheet.create({
   // wider than the other.
   row: { flexDirection: 'row', gap: 8 },
   rowWrap: { flexWrap: 'wrap' },
+  // The Auto / Custom keys: one hairline pill holding two equal keys, the lit
+  // one inverted against the card.
+  modeRow: {
+    flexDirection: 'row',
+    marginTop: 12,
+    padding: 3,
+    borderRadius: 14,
+    borderCurve: 'continuous',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  modeKey: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 11,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeLabel: { fontSize: 14, fontWeight: '600' },
   // Three to a line, so five palettes are 3 + 2 rather than a scroller. The
   // flexBasis is what makes the second line's two tiles stay the width of the
   // first line's three instead of stretching to half the row each.
