@@ -51,6 +51,7 @@ import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
+import ClaudeTurtleMark from '../../components/ClaudeTurtleMark';
 import TypingIndicator from '../../components/TypingIndicator';
 import MarkdownText from '../../components/MarkdownText';
 import CopyKey from '../../components/CopyKey';
@@ -2271,16 +2272,23 @@ export default function TurtleScreen() {
           {/* Avatar in an accent ring, with a live presence dot on its corner —
               the same language the Claude console's status pill uses, so the
               chat's connection state is legible without a banner. In a Claude
-              session the ring holds the robot mark instead, so the whole handle
-              (mark + name) reads as Claude rather than as you. */}
+              session the ring holds Claude's mark instead (the owner's own
+              sketch — components/ClaudeTurtleMark), so the whole handle (mark +
+              name) reads as Claude rather than as you. It is a wide drawing:
+              24 across in a 34 ring leaves it air on every side. Signing in
+              keeps its door glyph. */}
           <View style={styles.identityAvatarWrap}>
             <View style={styles.identityAvatarRing}>
               {inClaudeSession ? (
-                <Icon
-                  name={claudeUiMode === 'login' ? 'login-variant' : 'robot-outline'}
-                  size={20}
-                  color={theme.colors.accent || theme.colors.accentInfo}
-                />
+                claudeUiMode === 'login' ? (
+                  <Icon
+                    name="login-variant"
+                    size={20}
+                    color={theme.colors.accent || theme.colors.accentInfo}
+                  />
+                ) : (
+                  <ClaudeTurtleMark size={24} />
+                )
               ) : selfAvatarUrl ? (
                 <Image
                   source={{ uri: selfAvatarUrl }}

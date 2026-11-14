@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="30 54 316 136" width="632" height="272" fill="none" stroke="#F5821F" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+  <title>Claude x Turtle mark</title>
+  <path d="M264 126 C263 101 246 72 214 68 C184 64 149 85 133 112 C124 127 124 141 138 147 C156 154 186 150 198 130"/>
+  <path d="M44 160 C46 142 62 128 84 126 C97 124 110 128 111 138 C112 146 101 150 92 152 C95 160 85 167 78 158 C79 170 65 175 62 163 C60 178 44 177 44 160 Z"/>
+  <path d="M338 128 C331 113 300 111 285 122 C272 131 264 142 268 150 C272 159 284 155 286 146 C290 158 304 155 304 144 C312 153 326 147 322 136 C332 139 339 135 338 128 Z"/>
+  <circle cx="176" cy="103" r="5.5" fill="#F5821F" stroke="none"/>
+  <circle cx="215" cy="92" r="6" fill="#F5821F" stroke="none"/>
+</svg>
