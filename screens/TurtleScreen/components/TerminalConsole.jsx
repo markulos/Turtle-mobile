@@ -8,12 +8,11 @@ import {
   Modal,
   Platform,
   Animated,
-  Keyboard,
-  Easing,
 } from 'react-native';
 import AppTextInput from '../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
+import { useKeyboardLiftAnimated } from '../../../utils/keyboardMotion';
 
 /**
  * TerminalConsole — a vintage green-phosphor terminal for the `/terminal`
@@ -41,11 +40,6 @@ const VT = {
   glow: 'rgba(92,255,143,0.45)',
 };
 const MONO = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
-// The classic iOS keyboard ease — Animated has no built-in "keyboard" curve, so
-// this bezier matches it closely; what really syncs the speed is the OS-reported
-// duration. Module-scope so it's a stable reference (no listener re-subscribe).
-const KB_EASING = Easing.bezier(0.17, 0.59, 0.4, 0.77);
-
 export default function TerminalConsole({
   transcript = [],
   active,
@@ -62,41 +56,11 @@ export default function TerminalConsole({
   const [cmd, setCmd] = useState('');
   const blink = useRef(new Animated.Value(1)).current;
 
-  // Keyboard-follow motion. The chat composer uses Reanimated's
-  // useAnimatedKeyboard, but THIS view is a fullscreen <Modal> (its own native
-  // window), and useAnimatedKeyboard tracks the keyboard off the ROOT window —
-  // so inside the modal it never follows smoothly. Instead we drive the lift
-  // from the keyboard's own show/hide events and animate with the SAME duration
-  // (and curve) iOS reports for the keyboard, so the input column rises in
-  // lockstep with it — matching the chat's open speed. Native driver = the
-  // transform runs off the JS thread, no relayout. (iOS gets the pre-animation
-  // `keyboardWillShow` + a real duration; Android only has `keyboardDidShow`,
-  // so we fall back to a short default there.)
-  const kbY = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    if (!fullscreen) { kbY.setValue(0); return undefined; }
-    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const onShow = (e) => {
-      Animated.timing(kbY, {
-        toValue: -(e?.endCoordinates?.height ?? 0),
-        duration: e?.duration || 250,
-        easing: KB_EASING,
-        useNativeDriver: true,
-      }).start();
-    };
-    const onHide = (e) => {
-      Animated.timing(kbY, {
-        toValue: 0,
-        duration: e?.duration || 220,
-        easing: KB_EASING,
-        useNativeDriver: true,
-      }).start();
-    };
-    const subShow = Keyboard.addListener(showEvt, onShow);
-    const subHide = Keyboard.addListener(hideEvt, onHide);
-    return () => { subShow.remove(); subHide.remove(); };
-  }, [fullscreen, kbY]);
+  // Keyboard-follow motion. This view is a fullscreen <Modal> — its own
+  // native window — which Reanimated's keyboard hook cannot see into. The
+  // app's keyboard source (utils/keyboardMotion) can: the input column rides
+  // the keyboard frame for frame on a native-driven transform, no relayout.
+  const kbY = useKeyboardLiftAnimated({ enabled: fullscreen });
 
   // Auto-scroll to the newest line.
   useEffect(() => {

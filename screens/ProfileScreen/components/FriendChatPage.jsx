@@ -67,6 +67,7 @@ import {
   ActivityIndicator, Alert, BackHandler, Linking, Pressable, StyleSheet, Text, View,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import Reanimated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
@@ -96,6 +97,7 @@ import { depth } from '../../../utils/surfaceDepth';
 import { inkOn } from '../../../utils/accentColor';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import useKeyboardHeight from '../../../utils/useKeyboardHeight';
+import { KEYBOARD_GAP, useKeyboardLiftStyle } from '../../../utils/keyboardMotion';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { copyText } from '../../../utils/copyText';
 import { FROST_OVERLAP } from '../../../utils/frostedChat';
@@ -171,6 +173,31 @@ export default function FriendChatPage({
   // frame later, under-guessing hides the newest message behind the composer,
   // which is the one thing this screen must never do.
   const [dockHeight, setDockHeight] = useState(220);
+
+  // ── Riding the keyboard ───────────────────────────────────────────────────
+  //
+  // The composer and the conversation rise WITH the keyboard, frame for frame,
+  // as one rigid piece — the way a chat is expected to move. Both take the same
+  // UI-thread transform (utils/keyboardMotion), so nothing here is laid out
+  // again while the keyboard travels.
+  //
+  // It used to be a state snap: the keyboard's height went into React state on
+  // `keyboardWillShow` and became the composer's bottom margin, which put the
+  // composer at its final position on the first frame — a jump the keyboard then
+  // spent a quarter of a second catching up with — re-measured the dock, and
+  // re-padded the list underneath it.
+  //
+  // `dockRest` is the clearance the composer keeps over the floating tab dock
+  // with the keyboard down. It is constant now: the keyboard covers the tab
+  // dock, and the transform takes up exactly the difference, landing the
+  // composer KEYBOARD_GAP above the keyboard.
+  //
+  // The list can ride as a whole because the thread is pinned to the bottom
+  // (CHAT_PINNED_TO_BOTTOM — a short conversation rests against the composer,
+  // not against the header), so what rises is always the newest messages and
+  // what slides under the header is always the oldest.
+  const dockRest = panelBottomInset(insets.bottom);
+  const keyboardRide = useKeyboardLiftStyle({ rest: dockRest, gap: KEYBOARD_GAP });
 
   const thread = useMemo(() => mergeThread(rows, locals), [rows, locals]);
 
@@ -664,7 +691,7 @@ export default function FriendChatPage({
       <View style={[s.page, { backgroundColor: c.background }]}>
         {/* The back key is IN the row, so the name lays out beside it rather
             than under it (STYLE-RULES §4b). */}
-        <View style={[s.header, { paddingTop: panelTopInset(insets.top) }]}>
+        <View style={[s.header, { paddingTop: panelTopInset(insets.top), backgroundColor: c.background }]}>
           <Pressable
             onPressIn={() => tapHaptic()}
             onPress={onClose}
@@ -694,7 +721,7 @@ export default function FriendChatPage({
             </Pressable>
           </View>
         ) : (
-          <View style={s.listWrap}>
+          <Reanimated.View style={[s.listWrap, keyboardRide]} testID="friend-chat-list-wrap">
           <FlashList
             ref={listRef}
             data={thread}
@@ -720,7 +747,7 @@ export default function FriendChatPage({
             )}
             testID="friend-chat-list"
           />
-          </View>
+          </Reanimated.View>
         )}
 
         {/* The composer DOCK — an absolute overlay, not a row in the column.
@@ -731,9 +758,10 @@ export default function FriendChatPage({
 
             The composer clears the floating tab dock when the keyboard is
             down — it reserves no layout space. With the keyboard up there is
-            no dock to clear, only the keyboard itself. */}
-        <View
-          style={s.dock}
+            no dock to clear, only the keyboard itself: `keyboardRide` carries
+            the whole dock up by the difference, in step with the keyboard. */}
+        <Reanimated.View
+          style={[s.dock, keyboardRide]}
           // box-none, or the transparent strip between the composer and the
           // tab dock becomes a dead zone that eats presses meant for the
           // messages showing through it.
@@ -741,8 +769,9 @@ export default function FriendChatPage({
           testID="friend-chat-dock"
           onLayout={(e) => {
             const h = Math.round(e.nativeEvent.layout.height);
-            // Guard: this fires on every keyboard frame and on every line the
-            // input grows by, and each set re-lays out the list.
+            // Guard: this fires on every line the input grows by, and each set
+            // re-lays out the list. (Not on the keyboard any more — the dock
+            // rides it on a transform and keeps its height.)
             setDockHeight((prev) => (prev === h ? prev : h));
           }}
         >
@@ -786,10 +815,10 @@ export default function FriendChatPage({
                 onPress={addPhotos}
               />
             )}
-            marginBottom={keyboard > 0 ? keyboard + 8 : panelBottomInset(insets.bottom)}
+            marginBottom={dockRest}
             inputProps={{ testID: 'friend-chat-input' }}
           />
-        </View>
+        </Reanimated.View>
       </View>
 
       <MessageActionsSheet
@@ -832,9 +861,12 @@ const makeStyles = (theme) => {
   const c = theme.colors;
   return StyleSheet.create({
     page: { flex: 1 },
+    // Above the list in the stack, and filled: the conversation rises with the
+    // keyboard and its oldest lines pass UNDER this bar, not over it.
     header: {
       flexDirection: 'row', alignItems: 'center', gap: 8,
       paddingHorizontal: 12, paddingBottom: 10,
+      zIndex: 2,
     },
     backKey: { width: 30, height: 36, marginLeft: -6, alignItems: 'center', justifyContent: 'center' },
     avatar: { width: 32, height: 32, borderRadius: 16 },

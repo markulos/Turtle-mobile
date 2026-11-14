@@ -8,8 +8,6 @@ import {
   StyleSheet,
   ScrollView,
   Animated,
-  Easing,
-  Keyboard,
   Platform,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
@@ -20,12 +18,8 @@ import { useTheme } from '../context/ThemeContext';
 import { blurProps, frostOverlayColor, frostBorderColor } from '../utils/frostedChat';
 import ChatComposer, { ComposerAction } from './ChatComposer';
 import { tapHaptic } from '../utils/haptics';
+import { useKeyboardLiftAnimated } from '../utils/keyboardMotion';
 import { SCROLL_INDICATOR } from '../utils/scrollIndicator';
-
-// The iOS keyboard ease — Animated has no built-in "keyboard" curve, so this
-// bezier matches it closely; the OS-reported duration is what really syncs the
-// speed. Mirrors the constant in TerminalConsole.
-const KB_EASING = Easing.bezier(0.17, 0.59, 0.4, 0.77);
 
 // Command names stay monospace — that is the one typographic cue this list
 // shares with the chat's own slash-command dropdown, and it is what makes a
@@ -75,11 +69,11 @@ export default function CommandConsole({ visible, onClose }) {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const [value, setValue] = useState('');
-  // Lift driven off the keyboard's own show/hide events: the bar rises in
-  // lockstep with the keyboard (same duration + curve) instead of snapping to
-  // its final spot via a one-frame paddingBottom change. Native driver → the
-  // transform runs off the JS thread with no relayout.
-  const kbY = useRef(new Animated.Value(0)).current;
+  // The bar rides the keyboard frame for frame (utils/keyboardMotion) — a
+  // native-driven transform, no relayout. It already rests `insets.bottom`
+  // up, so it only covers the part of the keyboard above that and lands
+  // flush on its top edge.
+  const kbY = useKeyboardLiftAnimated({ rest: insets.bottom, enabled: visible });
   const inputRef = useRef(null);
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
@@ -89,40 +83,6 @@ export default function CommandConsole({ visible, onClose }) {
     const t = setTimeout(() => inputRef.current?.focus(), 90);
     return () => clearTimeout(t);
   }, [visible]);
-
-  useEffect(() => {
-    if (!visible) {
-      kbY.setValue(0);
-      return;
-    }
-    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const onShow = (e) => {
-      // The bar already rests at insets.bottom; only lift it by the part of the
-      // keyboard that sits above that, so it lands just above the keyboard.
-      const h = e?.endCoordinates?.height ?? 0;
-      Animated.timing(kbY, {
-        toValue: -Math.max(h - insets.bottom, 0),
-        duration: e?.duration || 250,
-        easing: KB_EASING,
-        useNativeDriver: true,
-      }).start();
-    };
-    const onHide = (e) => {
-      Animated.timing(kbY, {
-        toValue: 0,
-        duration: e?.duration || 220,
-        easing: KB_EASING,
-        useNativeDriver: true,
-      }).start();
-    };
-    const s = Keyboard.addListener(showEvt, onShow);
-    const h = Keyboard.addListener(hideEvt, onHide);
-    return () => {
-      s.remove();
-      h.remove();
-    };
-  }, [visible, insets.bottom, kbY]);
 
   // Suggestions: empty input → the full list; typed → prefix-match (the "/" is
   // implied by the button, so "pomo" matches "/pomodoro …"). Capped at 8.

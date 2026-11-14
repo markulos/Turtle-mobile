@@ -10,7 +10,6 @@ import {
   Keyboard,
   Switch,
   Animated,
-  Easing,
   LayoutAnimation,
 } from 'react-native';
 import { depth } from '../../../utils/surfaceDepth';
@@ -19,6 +18,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useKeyboardHeight from '../../../utils/useKeyboardHeight';
+import { useKeyboardLiftAnimated } from '../../../utils/keyboardMotion';
 import { useTheme } from '../../../context/ThemeContext';
 import { inkOn } from '../../../utils/accentColor';
 import { useServer } from '../../../context/ServerContext';
@@ -275,27 +275,13 @@ export const TaskForm = ({
   // Keyboard: the fields ScrollView keeps its size and iOS adjusts its inset
   // natively (automaticallyAdjustKeyboardInsets — the OS scrolls the focused
   // field into view ONLY if the keyboard covers it, which is the house rule).
-  // The pinned Save bar rides up on a native-driver transform matched to the
-  // keyboard's own duration; nothing is re-laid-out per keyboard frame.
+  // The pinned Save bar rides the keyboard frame for frame on a native-driven
+  // transform (utils/keyboardMotion); nothing is re-laid-out while it moves.
+  // The bar's own safe-area padding is dead space once it sits on the
+  // keyboard, so it rises by that much less and the button lands FOOTER_GAP
+  // above the keyboard's edge.
   const keyboardHeight = useKeyboardHeight();
-  const footerLift = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const ios = Platform.OS === 'ios';
-    const run = (toValue, duration) => Animated.timing(footerLift, {
-      toValue,
-      duration: duration || 250,
-      easing: Easing.bezier(0.17, 0.59, 0.4, 0.77),
-      useNativeDriver: true,
-    }).start();
-    const show = Keyboard.addListener(ios ? 'keyboardWillShow' : 'keyboardDidShow', (e) => {
-      const h = e?.endCoordinates?.height || 0;
-      // The bar's own safe-area padding is dead space once it sits on the
-      // keyboard, so lift by that much less and the button lands on its edge.
-      run(-Math.max(h - (insets.bottom || 0) + FOOTER_GAP, 0), e?.duration);
-    });
-    const hide = Keyboard.addListener(ios ? 'keyboardWillHide' : 'keyboardDidHide', (e) => run(0, e?.duration));
-    return () => { show.remove(); hide.remove(); };
-  }, [footerLift, insets.bottom]);
+  const footerLift = useKeyboardLiftAnimated({ rest: insets.bottom || 0, gap: FOOTER_GAP });
   // Inline board picker under the Board row (replaces the old Alert picker —
   // Android caps Alert at 3 buttons, silently dropping the rest).
   const [boardListOpen, setBoardListOpen] = useState(false);

@@ -38,7 +38,7 @@ import { panelBottomInset } from './tabBarLayout';
 import { useTheme } from '../context/ThemeContext';
 import { useSheetDismiss } from '../utils/useSheetDismiss';
 import { useSuppressEdgeSwipe } from '../utils/edgeSwipeGuard';
-import useKeyboardHeight from '../utils/useKeyboardHeight';
+import { useKeyboardLiftAnimated } from '../utils/keyboardMotion';
 import { depth } from '../utils/surfaceDepth';
 import { impactHaptic, markGesture } from '../utils/haptics';
 import { INPUT_FIELD } from '../utils/inputField';
@@ -177,7 +177,6 @@ export default function AccentColorPicker({ visible, initialColor, onSelect, onC
   // drags are ever a back-swipe.
   useSuppressEdgeSwipe(visible);
   const insets = useSafeAreaInsets();
-  const keyboardH = useKeyboardHeight();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   // ONE colour, two ways in. `hex` is the answer; `hsl` is the same colour in
@@ -192,7 +191,11 @@ export default function AccentColorPicker({ visible, initialColor, onSelect, onC
 
   const backdrop = useRef(new Animated.Value(0)).current;
   const sheetY = useRef(new Animated.Value(SCREEN_H)).current;
-  const lift = useRef(new Animated.Value(0)).current;
+  // §4: no KeyboardAvoidingView. The card rides the keyboard frame for frame
+  // on a native-driven transform (utils/keyboardMotion) — it is short enough
+  // that clearing the keyboard entirely leaves everything reachable, so there
+  // is nothing to scroll.
+  const lift = useKeyboardLiftAnimated({ enabled: visible });
 
   // Seed from the live accent on every open, and slide up.
   useEffect(() => {
@@ -210,17 +213,6 @@ export default function AccentColorPicker({ visible, initialColor, onSelect, onC
     ]).start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, initialColor]);
-
-  // §4: no KeyboardAvoidingView. The card lifts by the keyboard's height on a
-  // native-driver transform — it is short enough that clearing the keyboard
-  // entirely leaves everything reachable, so there is nothing to scroll.
-  useEffect(() => {
-    Animated.timing(lift, {
-      toValue: keyboardH > 0 ? -keyboardH : 0,
-      duration: 220,
-      useNativeDriver: true,
-    }).start();
-  }, [keyboardH, lift]);
 
   const animateOut = useCallback(
     (after) => {

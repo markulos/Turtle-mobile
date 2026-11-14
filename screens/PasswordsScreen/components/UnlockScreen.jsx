@@ -4,12 +4,15 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   ScrollView,
   Alert,
 } from 'react-native';
+// The keyboard-avoiding wrapper comes from the keyboard controller, not from
+// React Native: same props, but it follows the keyboard frame for frame on the
+// UI thread instead of animating a layout prop from JS a beat behind it.
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { depth } from '../../../utils/surfaceDepth';
 import AppTextInput from '../../../components/AppTextInput';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
