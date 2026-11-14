@@ -79,7 +79,6 @@ export default function ProfileScreen() {
   const c = theme.colors;
   const insets = useSafeAreaInsets();
   // Name edit keyboard: pad the page so the field can scroll clear of it.
-  const keyboardHeight = useKeyboardHeight();
   const navigation = useNavigation();
   const { api, getBaseUrl } = useServer();
   // The socket's content-free "there is traffic" ping, which is what makes the
@@ -109,6 +108,13 @@ export default function ProfileScreen() {
   // Stable, so the memoised chat page is NOT re-rendered when this screen
   // re-renders for the keyboard (see FriendChatPage's export).
   const closeChat = useCallback(() => setChatFriend(null), []);
+  // This screen pads its own scroll body by the keyboard — but NOT while the
+  // friend chat is open over it. The chat rides the keyboard on the UI thread;
+  // this whole screen re-rendering underneath it, a few frames into the
+  // keyboard's trip, stalled that ride (the conversation moved in two steps).
+  // Nothing here is visible or focusable while the chat covers it, so it
+  // simply does not listen.
+  const keyboardHeight = useKeyboardHeight(!chatFriend);
   const [messagesOpen, setMessagesOpen] = useState(false);
   /**
    * How many messages are waiting, for the card's badge.

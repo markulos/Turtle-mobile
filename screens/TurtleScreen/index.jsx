@@ -51,7 +51,7 @@ import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
-import ClaudeTurtleMark from '../../components/ClaudeTurtleMark';
+import ClaudeTurtleMark, { ledgeOffset } from '../../components/ClaudeTurtleMark';
 import TypingIndicator from '../../components/TypingIndicator';
 import MarkdownText from '../../components/MarkdownText';
 import CopyKey from '../../components/CopyKey';
@@ -143,6 +143,9 @@ const DEBUG_TOGGLE_HEIGHT = 44;
 const CHAT_HEADER_BAR_HEIGHT = 60;
 // A "swift pull down" on the transcript: at least this far, at least this fast
 // (points per millisecond — a flick, not a scroll).
+// Claude's mark where it hangs over the header's inner ridge: wide enough to
+// read as a face with two hands, small enough to clear the row above it.
+const CLAUDE_PEEK_WIDTH = 44;
 const SWIFT_PULL_MIN_DY = 48;
 const SWIFT_PULL_MIN_SPEED = 1.2;
 // (The chat header's blur bands + fade-out scrim are gone: the header is OPAQUE
@@ -548,6 +551,8 @@ export default function TurtleScreen() {
   // True whenever the Claude console is on screen (a live session OR the login
   // flow).
   const inClaudeSession = !!claudeUiMode;
+  // A live session wears Claude's mark; the sign-in step is not Claude yet.
+  const claudeMarkShown = inClaudeSession && claudeUiMode !== 'login';
   // ── Claude console room ───────────────────────────────────────────────────
   // The tallest the console may be with the keyboard DOWN: everything from just
   // under the chat header down to the top of the composer group, minus one
@@ -2272,11 +2277,11 @@ export default function TurtleScreen() {
           {/* Avatar in an accent ring, with a live presence dot on its corner —
               the same language the Claude console's status pill uses, so the
               chat's connection state is legible without a banner. In a Claude
-              session the ring holds Claude's mark instead (the owner's own
-              sketch — components/ClaudeTurtleMark), so the whole handle (mark +
-              name) reads as Claude rather than as you. It is a wide drawing:
-              24 across in a 34 ring leaves it air on every side. Signing in
-              keeps its door glyph. */}
+              session there is NO ring: Claude's mark is not an avatar in a
+              circle, it hangs over the ridge under this row (see the peek
+              below), and the title stands on its own. Signing in keeps the
+              ring and its door glyph. */}
+          {!claudeMarkShown && (
           <View style={styles.identityAvatarWrap}>
             <View style={styles.identityAvatarRing}>
               {inClaudeSession ? (
@@ -2286,9 +2291,7 @@ export default function TurtleScreen() {
                     size={20}
                     color={theme.colors.accent || theme.colors.accentInfo}
                   />
-                ) : (
-                  <ClaudeTurtleMark size={24} />
-                )
+                ) : null
               ) : selfAvatarUrl ? (
                 <Image
                   source={{ uri: selfAvatarUrl }}
@@ -2308,6 +2311,7 @@ export default function TurtleScreen() {
               ]}
             />
           </View>
+          )}
 
           {/* Name over a live status line. In a Claude session the handle is the
               session itself — "Claude x Turtle", with "| Admin" appended in the
@@ -2369,6 +2373,7 @@ export default function TurtleScreen() {
             card header of their own. The header is measured (onLayout above),
             so this extra row simply moves the console's ceiling down with it. */}
         {inClaudeSession && (
+          <View style={styles.headerClaudeWrap}>
           <ClaudeSessionControls
             style={styles.headerClaudeRow}
             mode={claudeUiMode}
@@ -2381,6 +2386,17 @@ export default function TurtleScreen() {
             onToggleExpanded={() => setClaudeExpanded((e) => !e)}
             onClose={claudeClose}
           />
+          {/* Claude's mark, HANGING OVER THE RIDGE between the two rows, on the
+              right: the face above the line, the fingers draped over it. No
+              circle and no plate behind it — it is a drawing on the header,
+              not a badge. After the controls in the tree so the hands are in
+              front of the line they hold; it takes no touches. */}
+          {claudeMarkShown && (
+            <View pointerEvents="none" style={styles.claudePeek} testID="claude-mark-peek">
+              <ClaudeTurtleMark size={CLAUDE_PEEK_WIDTH} />
+            </View>
+          )}
+          </View>
         )}
       </Reanimated.View>
 
@@ -3628,8 +3644,18 @@ const createStyles = (theme, insets) =>
     // The header's second row, session only: the Claude controls. A hairline
     // above it separates the controls from the identity without the weight of
     // a second bar.
+    // The row's gap from the identity row lives on the wrapper, so the
+    // wrapper's top edge IS the ridge — the line the mark hangs over.
+    headerClaudeWrap: { marginTop: 8 },
+    // Lifted by exactly the mark's ledge line, so that line lands on the
+    // ridge: face above it, fingers below. Right-hand side, inset to sit
+    // under the trailing brand mark's column rather than against the edge.
+    claudePeek: {
+      position: 'absolute',
+      right: 8,
+      top: -ledgeOffset(CLAUDE_PEEK_WIDTH),
+    },
     headerClaudeRow: {
-      marginTop: 8,
       paddingTop: 8,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: theme.colors.border,

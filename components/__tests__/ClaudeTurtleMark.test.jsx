@@ -21,6 +21,8 @@ jest.mock('react-native-svg', () => {
 import ClaudeTurtleMark, {
   CLAUDE_MARK_ASPECT,
   CLAUDE_MARK_COLOR,
+  CLAUDE_MARK_LEDGE,
+  ledgeOffset,
   penFor,
 } from '../ClaudeTurtleMark';
 
@@ -75,12 +77,29 @@ describe('ClaudeTurtleMark', () => {
     }
   });
 
-  test('the session header wears it in place of the robot', () => {
+  test('the ledge runs under the chin and through the hands', () => {
+    // Above the line: the whole face. Below it: only fingers. That is what
+    // makes it hang OVER an edge instead of sitting on one.
+    expect(CLAUDE_MARK_LEDGE).toBeGreaterThan(0.6);
+    expect(CLAUDE_MARK_LEDGE).toBeLessThan(0.8);
+    expect(ledgeOffset(44)).toBeCloseTo((44 / CLAUDE_MARK_ASPECT) * CLAUDE_MARK_LEDGE);
+  });
+
+  test('the session header hangs it over the ridge, with no ring around it', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    // Not in the avatar ring any more — and the robot is not back in it.
     const ring = src.slice(src.indexOf('styles.identityAvatarRing'), src.indexOf('styles.identityDot'));
-    expect(ring).toMatch(/<ClaudeTurtleMark size=\{24\} \/>/);
+    expect(ring).not.toMatch(/ClaudeTurtleMark/);
     expect(ring).not.toMatch(/robot-outline/);
-    // Signing in is still a door, not a face.
+    // Signing in is still a door, in its ring.
     expect(ring).toMatch(/login-variant/);
+    // The ring itself stands down for a live session.
+    expect(src).toMatch(/\{!claudeMarkShown && \(\s*<View style=\{styles\.identityAvatarWrap\}>/);
+    // It hangs from the ridge: lifted by its own ledge line, touch-transparent.
+    expect(src).toMatch(/<View pointerEvents="none" style=\{styles\.claudePeek\} testID="claude-mark-peek">/);
+    expect(src).toMatch(/top: -ledgeOffset\(CLAUDE_PEEK_WIDTH\)/);
+    // No circle and no plate: the peek's style positions it and nothing else.
+    const peek = src.slice(src.indexOf('    claudePeek: {'), src.indexOf('    headerClaudeRow: {'));
+    expect(peek).not.toMatch(/border|backgroundColor/);
   });
 });

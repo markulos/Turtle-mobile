@@ -166,6 +166,9 @@ describe('the surfaces that ride the keyboard', () => {
     expect(src).toMatch(/contentContainerStyle=\{listContentStyle\}/);
     const parent = read('screens/ProfileScreen/index.jsx');
     expect(parent).toMatch(/onClose=\{closeChat\}/);
+    // And the parent does not even LISTEN to the keyboard while the chat is
+    // up: a whole screen committing mid-ride stalls the ride.
+    expect(parent).toMatch(/useKeyboardHeight\(!chatFriend\)/);
     // What that scroll was really for — seeing your own message after sending
     // from up in history — now hangs off the send itself.
     expect(src).toMatch(/setSentTick\(\(t\) => t \+ 1\)/);

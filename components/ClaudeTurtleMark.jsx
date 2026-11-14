@@ -28,6 +28,18 @@ export const CLAUDE_MARK_COLOR = '#F5821F';
 const BOX = { x: 30, y: 54, w: 316, h: 136 };
 export const CLAUDE_MARK_ASPECT = BOX.w / BOX.h;
 
+/**
+ * Where a LEDGE runs for the mark to hang over, as a fraction of its height:
+ * just under the chin, through the middle of the hands. Put that line on an
+ * edge and the face sits above it with the fingers draped down over it —
+ * which is what the sketch is a drawing of.
+ */
+const LEDGE_Y = 150;
+export const CLAUDE_MARK_LEDGE = (LEDGE_Y - BOX.y) / BOX.h;
+
+/** How far below its own top edge the ledge is, for a mark `size` wide. */
+export const ledgeOffset = (size) => (size / CLAUDE_MARK_ASPECT) * CLAUDE_MARK_LEDGE;
+
 const HEAD = 'M264 126 C263 101 246 72 214 68 C184 64 149 85 133 112 '
   + 'C124 127 124 141 138 147 C156 154 186 150 198 130';
 const LEFT_HAND = 'M44 160 C46 142 62 128 84 126 C97 124 110 128 111 138 '
