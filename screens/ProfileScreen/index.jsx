@@ -107,6 +107,9 @@ export default function ProfileScreen() {
   // not an id: the thread's header wants their name and avatar immediately,
   // and the row that was pressed already holds both.
   const [chatFriend, setChatFriend] = useState(null);
+  // Stable, so the memoised chat page is NOT re-rendered when this screen
+  // re-renders for the keyboard (see FriendChatPage's export).
+  const closeChat = useCallback(() => setChatFriend(null), []);
   const [messagesOpen, setMessagesOpen] = useState(false);
   /**
    * How many messages are waiting, for the card's badge.
@@ -725,7 +728,7 @@ export default function ProfileScreen() {
 
       <FriendChatPage
         visible={!!chatFriend}
-        onClose={() => setChatFriend(null)}
+        onClose={closeChat}
         friend={chatFriendResolved}
         theme={theme}
         isDark={isDark}
