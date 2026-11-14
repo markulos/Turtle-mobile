@@ -115,10 +115,11 @@ describe('the surfaces that ride the keyboard', () => {
   test('the friend chat: composer and conversation take ONE transform', () => {
     const src = read('screens/ProfileScreen/components/FriendChatPage.jsx');
     expect(src).toMatch(/useKeyboardLiftStyle\(\{ rest: dockRest, gap: KEYBOARD_GAP \}\)/);
-    // Rigid: the same style on both, or the newest message and the composer
-    // drift apart mid-flight.
-    expect(src).toMatch(/style=\{\[s\.listWrap, keyboardRide\]\}/);
-    expect(src).toMatch(/style=\{\[s\.dock, keyboardRide\]\}/);
+    // Rigid, the way the main chat is: ONE lifted column holding both the
+    // conversation and the composer. Two views given the same style are two
+    // things that can settle at different times.
+    expect(src.match(/keyboardRide\]\}/g)).toHaveLength(1);
+    expect(src).toMatch(/style=\{\[s\.column, keyboardRide\]\}/);
   });
 
   test('the friend chat: the keyboard changes no layout', () => {
@@ -131,6 +132,12 @@ describe('the surfaces that ride the keyboard', () => {
     // fired when the keyboard came up was a second motion on top of the ride.
     expect(src).not.toMatch(/useKeyboardHeight/);
     expect(src).not.toMatch(/keyboardUp/);
+    // Nor a re-render: the parent re-renders on every keyboard event, and a
+    // list re-rendered mid-ride re-settles — the messages' second step.
+    expect(src).toMatch(/export default React\.memo\(FriendChatPage\);/);
+    expect(src).toMatch(/contentContainerStyle=\{listContentStyle\}/);
+    const parent = read('screens/ProfileScreen/index.jsx');
+    expect(parent).toMatch(/onClose=\{closeChat\}/);
     // What that scroll was really for — seeing your own message after sending
     // from up in history — now hangs off the send itself.
     expect(src).toMatch(/setSentTick\(\(t\) => t \+ 1\)/);

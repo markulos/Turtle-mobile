@@ -138,7 +138,7 @@ const CHAT_PINNED_TO_BOTTOM = {
   autoscrollToBottomThreshold: 0.2,
 };
 
-export default function FriendChatPage({
+function FriendChatPage({
   visible,
   onClose,
   friend,          // { id, name, avatarUrl }
@@ -202,6 +202,15 @@ export default function FriendChatPage({
   // what slides under the header is always the oldest.
   const dockRest = panelBottomInset(insets.bottom);
   const keyboardRide = useKeyboardLiftStyle({ rest: dockRest, gap: KEYBOARD_GAP });
+
+  // The list's content style keeps its identity from one render to the next. A
+  // fresh object literal each time is, to the list, a changed layout — and anything
+  // that re-rendered this page while the keyboard was moving made the
+  // messages re-settle in the middle of the ride.
+  const listContentStyle = useMemo(
+    () => ({ paddingVertical: 10, paddingBottom: dockHeight + FROST_OVERLAP }),
+    [dockHeight],
+  );
 
   const thread = useMemo(() => mergeThread(rows, locals), [rows, locals]);
 
@@ -715,6 +724,10 @@ export default function FriendChatPage({
           <Text style={s.title} numberOfLines={1}>{friend?.name || 'Message'}</Text>
         </View>
 
+        {/* ONE column, ONE transform — the main chat's arrangement. The
+            conversation and the composer are children of the same lifted
+            view, so they cannot move apart or settle at different times. */}
+        <Reanimated.View style={[s.column, keyboardRide]} testID="friend-chat-column">
         {loading && !thread.length ? (
           <View style={s.centre}><ActivityIndicator color={c.textSecondary} /></View>
         ) : error && !thread.length ? (
@@ -725,7 +738,7 @@ export default function FriendChatPage({
             </Pressable>
           </View>
         ) : (
-          <Reanimated.View style={[s.listWrap, keyboardRide]} testID="friend-chat-list-wrap">
+          <View style={s.listWrap} testID="friend-chat-list-wrap">
           <FlashList
             ref={listRef}
             data={thread}
@@ -735,7 +748,7 @@ export default function FriendChatPage({
             // hand-rolled version of it here any more. See CHAT_PINNED_TO_BOTTOM.
             maintainVisibleContentPosition={CHAT_PINNED_TO_BOTTOM}
             // FlashList ignores `style`, so the flex:1 lives on the wrapper View.
-            contentContainerStyle={{ paddingVertical: 10, paddingBottom: dockHeight + FROST_OVERLAP }}
+            contentContainerStyle={listContentStyle}
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
             // The scrollbar stops at the composer rather than running under it.
@@ -751,7 +764,7 @@ export default function FriendChatPage({
             )}
             testID="friend-chat-list"
           />
-          </Reanimated.View>
+          </View>
         )}
 
         {/* The composer DOCK — an absolute overlay, not a row in the column.
@@ -762,10 +775,10 @@ export default function FriendChatPage({
 
             The composer clears the floating tab dock when the keyboard is
             down — it reserves no layout space. With the keyboard up there is
-            no dock to clear, only the keyboard itself: `keyboardRide` carries
-            the whole dock up by the difference, in step with the keyboard. */}
-        <Reanimated.View
-          style={[s.dock, keyboardRide]}
+            no dock to clear, only the keyboard itself: the column's ride
+            carries it up by the difference, in step with the keyboard. */}
+        <View
+          style={s.dock}
           // box-none, or the transparent strip between the composer and the
           // tab dock becomes a dead zone that eats presses meant for the
           // messages showing through it.
@@ -822,6 +835,7 @@ export default function FriendChatPage({
             marginBottom={dockRest}
             inputProps={{ testID: 'friend-chat-input' }}
           />
+        </View>
         </Reanimated.View>
       </View>
 
@@ -861,6 +875,17 @@ export default function FriendChatPage({
   );
 }
 
+/**
+ * Memoised, and that is load-bearing. The Profile screen keeps the keyboard's
+ * height in state (it pads its own scroll body), so it re-renders on every
+ * keyboard event — and used to re-render this page with it, a few frames into
+ * the keyboard's trip. The list re-settled mid-ride: the messages moved in
+ * two steps while the composer, which has nothing to re-lay-out, moved in
+ * one. The main chat renders nothing while the keyboard moves; with stable
+ * props from the parent, neither does this.
+ */
+export default React.memo(FriendChatPage);
+
 const makeStyles = (theme) => {
   const c = theme.colors;
   return StyleSheet.create({
@@ -876,6 +901,9 @@ const makeStyles = (theme) => {
     avatar: { width: 32, height: 32, borderRadius: 16 },
     title: { flex: 1, fontSize: 17, fontWeight: '700', color: c.textPrimary },
 
+    // Everything under the header: the conversation, and the composer docked
+    // over the bottom of it. This is the view the keyboard lifts.
+    column: { flex: 1 },
     listWrap: { flex: 1 },
     centre: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 28 },
     emptyText: { fontSize: 14, color: c.textTertiary, textAlign: 'center' },
