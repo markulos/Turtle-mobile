@@ -27,7 +27,7 @@
  */
 
 import { customDockSkin } from './dockSkins';
-import { matchingPalette } from './dockPalettes';
+import { DOCK_PALETTES } from './dockPalettes';
 import { normalizeHex } from '../utils/accentColor';
 
 export const DOCK_THEMES = [
@@ -50,7 +50,12 @@ export const DOCK_THEMES = [
     // Near-black on that cyan, like the dark core inside a lit plate. Stored
     // rather than left on auto for the same reason a palette's is: a composed
     // look must not move when the contrast derivation is retuned.
-    ink: 'dark',
+    // Auto: the glyph sits on the chip in one mode and on the bar in the
+    // other, and only auto reads whichever it is on. `legacyInk` is what
+    // this look wrote before 2026-11-14 — kept only so a look applied
+    // back then can be recognised and moved to auto (legacyInkFor).
+    ink: 'auto',
+    legacyInk: 'dark',
 
     // …and the part a palette could not say. SCALES: the tabs you are not on
     // are a muted hide-green, and the grooves between them the same colour,
@@ -111,28 +116,21 @@ export function themeIsIntact(theme, { dockStyle, dockColor, accentColor, dockIn
 }
 
 /**
- * WHICH INK MODE THE ACTIVE GLYPH IS ACTUALLY DRAWN IN.
+ * THE FIXED INK A LOOK USED TO WRITE, for the backdrop colour it wrote with it
+ * — or null if that colour is not one of ours.
  *
- * A theme or a palette writes a FIXED ink (Godzilla: black) — and that ink was
- * chosen against the look's CHIP, which is the pale highlight colour. With the
- * underline there is no chip: the glyph sits on the bar, and Godzilla's black
- * glyph lands on Godzilla's near-black bar. Nobody picked that; the look did,
- * for an indicator that is not on screen.
- *
- * So while a look is being worn intact and the indicator is the underline, its
- * ink reads as 'auto' (white on a dark bar, near-black on a light one). The
- * moment the ink is set by hand the look is no longer intact and the hand
- * wins, as everywhere else. The saved setting is not touched — go back to the
- * chip and the look's own ink is still there.
+ * Themes and palettes wrote a fixed ink (Godzilla: black), chosen against the
+ * look's chip. With the underline there is no chip, and Godzilla's black glyph
+ * landed on Godzilla's near-black bar. They write 'auto' now; this is how a
+ * look applied BEFORE that is recognised, once, at load (ThemeContext) and
+ * moved to auto as well. Matching on the backdrop alone is enough: it is a
+ * colour nobody arrives at by hand.
  */
-export function inkModeFor({
-  dockInk, dockIndicator, dockTheme: key, dockStyle, dockColor, accentColor,
-}) {
-  if (dockIndicator !== 'underline') return dockInk;
-  const worn = { dockStyle, dockColor, accentColor, dockInk };
-  if (themeIsIntact(dockTheme(key), worn)) return 'auto';
-  if (matchingPalette(worn)) return 'auto';
-  return dockInk;
+export function legacyInkFor(dockColor) {
+  const bg = normalizeHex(dockColor);
+  if (!bg) return null;
+  const look = [...DOCK_THEMES, ...DOCK_PALETTES].find((l) => l.backdrop === bg);
+  return (look && look.legacyInk) || null;
 }
 
 export default DOCK_THEMES;

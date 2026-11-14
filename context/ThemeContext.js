@@ -5,7 +5,7 @@ import { normalizeHex } from '../utils/accentColor';
 import {
   DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR, DOCK_INKS, DEFAULT_DOCK_INK, DEFAULT_DOCK_INK_COLOR, DEFAULT_DOCK_GLOW,
 } from '../components/dockSkins';
-import { isDockTheme } from '../components/dockThemes';
+import { isDockTheme, legacyInkFor } from '../components/dockThemes';
 
 const THEME_STORAGE_KEY = '@connected_pass_theme';
 
@@ -47,6 +47,7 @@ const DOCK_COLOR_KEY = '@connected_pass_dock_color';
 const DOCK_INK_KEY = '@connected_pass_dock_ink';
 const DOCK_INK_COLOR_KEY = '@connected_pass_dock_ink_color';
 const DOCK_GLOW_KEY = '@connected_pass_dock_glow';
+const DOCK_LOOK_INK_MOVED_KEY = '@connected_pass_dock_look_ink_auto';
 const DOCK_GLOW_COLOR_KEY = '@connected_pass_dock_glow_color';
 const DOCK_THEME_KEY = '@connected_pass_dock_theme';
 
@@ -517,7 +518,19 @@ export const ThemeProvider = ({ children }) => {
       if (savedDockColor) {
         setDockColorState(savedDockColor);
       }
-      const savedInk = await AsyncStorage.getItem(DOCK_INK_KEY);
+      let savedInk = await AsyncStorage.getItem(DOCK_INK_KEY);
+      // ONCE: a theme or palette applied before they wrote 'auto' left its
+      // fixed ink behind (Godzilla: black — on its own near-black bar, with
+      // the underline). Recognise that by the look's backdrop + the ink it
+      // used to write, and move it to auto. Flagged, so an ink picked BY HAND
+      // on the same backdrop afterwards is never undone at the next launch.
+      if (!(await AsyncStorage.getItem(DOCK_LOOK_INK_MOVED_KEY))) {
+        if (savedSkin === 'custom' && savedInk && savedInk === legacyInkFor(savedDockColor)) {
+          savedInk = 'auto';
+          await AsyncStorage.setItem(DOCK_INK_KEY, 'auto');
+        }
+        await AsyncStorage.setItem(DOCK_LOOK_INK_MOVED_KEY, '1');
+      }
       if (DOCK_INKS.includes(savedInk)) {
         setDockInkState(savedInk);
       }

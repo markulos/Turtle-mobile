@@ -35,7 +35,7 @@ import {
 import AccentColorPicker from './AccentColorPicker';
 import { DOCK_PALETTES, matchingPalette, paletteSkin } from './dockPalettes';
 import {
-  DOCK_THEMES, dockTheme as findTheme, inkModeFor, themeIsIntact, themeSkin,
+  DOCK_THEMES, dockTheme as findTheme, themeIsIntact, themeSkin,
 } from './dockThemes';
 import DockLivePreview from './DockLivePreview';
 import { glowStrength } from './dockLight';
@@ -238,20 +238,14 @@ export default function DockStylePicker() {
 
   // A theme writes the same four settings a palette does, PLUS its key — the
   // key is the only thing that can bring its skin overrides back.
-  // WHAT THE REAL DOCK IS WEARING, for the live preview — the same two
-  // calls App.js makes, so the picture and the bar cannot disagree.
+  // WHAT THE REAL DOCK IS WEARING, for the live preview — the same
+  // call App.js makes, so the picture and the bar cannot disagree.
   const glowLevel = glowStrength(dockGlow);
-  const liveInk = activeInk(
-    inkModeFor({
-      dockInk, dockIndicator, dockTheme, dockStyle, dockColor, accentColor,
-    }),
-    accent,
-    {
-      underline: dockIndicator === 'underline',
-      darkDock: current.blurTint === 'dark',
-      custom: dockInkColor,
-    },
-  );
+  const liveInk = activeInk(dockInk, accent, {
+    underline: dockIndicator === 'underline',
+    darkDock: current.blurTint === 'dark',
+    custom: dockInkColor,
+  });
 
   // AUTO OR CUSTOM.
   //

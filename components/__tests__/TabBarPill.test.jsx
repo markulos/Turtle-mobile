@@ -4,12 +4,13 @@ import { render } from '@testing-library/react-native';
 
 import { BAR_CONTENT_HEIGHT } from '../tabBarLayout';
 import { dockSkin } from '../dockSkins';
+import { shadeColor } from '../dockLight';
 
 const ACCENT = '#1F8A9B';
 
 jest.mock('../../context/ThemeContext', () => ({
   useTheme: () => ({
-    theme: { mode: 'dark', colors: { accent: '#1F8A9B' } },
+    theme: { mode: 'dark', colors: { accent: mockSettings().accent || '#1F8A9B' } },
     dockIndicator: mockSettings().indicator,
     dockStyle: mockSettings().style,
     dockGlow: mockSettings().glow,
@@ -21,7 +22,7 @@ jest.mock('../../context/ThemeContext', () => ({
 // because the mock factory is hoisted above everything else in the file.
 let indicator = 'chip';
 let style = 'smoked';
-global.mockSettings = () => ({ indicator, style, glow: glowLevel, glowColour });
+global.mockSettings = () => ({ indicator, style, glow: glowLevel, glowColour, accent: chipColour });
 
 jest.mock('expo-blur', () => ({ BlurView: () => null }));
 
@@ -38,6 +39,7 @@ jest.mock('react-native-svg', () => {
 
 let glowLevel;
 let glowColour;
+let chipColour;
 
 // The real gradient is a native view; what this file cares about is the stops
 // it was handed and the box it was given to paint them in.
@@ -76,7 +78,7 @@ const parse = (css) => {
   return { r: +m[1], g: +m[2], b: +m[3], a: +m[4] };
 };
 
-beforeEach(() => { indicator = 'chip'; style = 'smoked'; glowLevel = undefined; glowColour = undefined; });
+beforeEach(() => { indicator = 'chip'; style = 'smoked'; glowLevel = undefined; glowColour = undefined; chipColour = undefined; });
 
 describe('the dock capsule reads as a channel CUT INTO the page', () => {
   test('the wash is painted top-to-bottom, darkest at the top edge', async () => {
@@ -194,14 +196,33 @@ describe('the indicator\'s glow', () => {
 
     indicator = 'chip';
     const chip = await render(<TabBarPill />);
-    expect(glowColours(chip, 'dock-chip-shade')).toEqual(['#000000']);
+    expect(glowColours(chip, 'dock-chip-shade')).toEqual([shadeColor('#1F8A9B')]);
     expect(StyleSheet.flatten(chip.getByTestId('dock-chip').props.style).borderColor)
       .toBe('rgba(18,171,52,0.4)');
   });
 
-  test('the chip is DARKER in its middle, not lighter — glass set in, not a dome', async () => {
+  test('the chip\'s middle is a DEEPER TONE OF ITS OWN COLOUR — not white, not black', async () => {
     const chip = await render(<TabBarPill />);
-    expect(glowColours(chip, 'dock-chip-shade')).toEqual(['#000000']);
+    const [shade] = glowColours(chip, 'dock-chip-shade');
+    expect(shade).toBe(shadeColor('#1F8A9B'));
+    const part = (hex, i) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+    // Darker in every channel, and in the same proportions: the same hue.
+    const ratios = [0, 1, 2].map((i) => part(shade, i) / part('#1F8A9B', i));
+    for (const r of ratios) {
+      expect(r).toBeGreaterThan(0.3);
+      expect(r).toBeLessThan(0.6);
+      expect(Math.abs(r - ratios[1])).toBeLessThan(0.03);
+    }
+  });
+
+  test('a fully white chip gets no shade — darker white is a grey smudge', async () => {
+    chipColour = '#FFFFFF';
+    const chip = await render(<TabBarPill />);
+    expect(chip.queryByTestId('dock-chip-shade')).toBeNull();
+    expect(chip.queryByTestId('dock-chip')).not.toBeNull();
+    expect(shadeColor('#FFFFFF')).toBeNull();
+    // Only FULLY white: a pale colour still has a hue to deepen.
+    expect(shadeColor('#F4F1EA')).not.toBeNull();
   });
 
   test('the underline has a spot and no bloom', async () => {

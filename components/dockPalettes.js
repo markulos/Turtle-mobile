@@ -42,7 +42,12 @@ export const DOCK_PALETTES = [
     // talking.
     backdrop: '#0E1116',
     accent: '#4C8DFF',
-    ink: 'light',
+    // Auto: the glyph sits on the chip in one mode and on the bar in the
+    // other, and only auto reads whichever it is on. `legacyInk` is what
+    // this look wrote before 2026-11-14 — kept only so a look applied
+    // back then can be recognised and moved to auto (legacyInkFor).
+    ink: 'auto',
+    legacyInk: 'light',
   },
   {
     key: 'ember',
@@ -52,7 +57,12 @@ export const DOCK_PALETTES = [
     // with an orange".
     backdrop: '#1B1517',
     accent: '#F2793D',
-    ink: 'dark',
+    // Auto: the glyph sits on the chip in one mode and on the bar in the
+    // other, and only auto reads whichever it is on. `legacyInk` is what
+    // this look wrote before 2026-11-14 — kept only so a look applied
+    // back then can be recognised and moved to auto (legacyInkFor).
+    ink: 'auto',
+    legacyInk: 'dark',
   },
   {
     key: 'lagoon',
@@ -62,7 +72,12 @@ export const DOCK_PALETTES = [
     // a light on it rather than two colours sharing a bar.
     backdrop: '#07252B',
     accent: '#37C9B0',
-    ink: 'dark',
+    // Auto: the glyph sits on the chip in one mode and on the bar in the
+    // other, and only auto reads whichever it is on. `legacyInk` is what
+    // this look wrote before 2026-11-14 — kept only so a look applied
+    // back then can be recognised and moved to auto (legacyInkFor).
+    ink: 'auto',
+    legacyInk: 'dark',
   },
   {
     key: 'linen',
@@ -72,7 +87,12 @@ export const DOCK_PALETTES = [
     // standing on it.
     backdrop: '#F3EFE6',
     accent: '#7B2D5E',
-    ink: 'light',
+    // Auto: the glyph sits on the chip in one mode and on the bar in the
+    // other, and only auto reads whichever it is on. `legacyInk` is what
+    // this look wrote before 2026-11-14 — kept only so a look applied
+    // back then can be recognised and moved to auto (legacyInkFor).
+    ink: 'auto',
+    legacyInk: 'light',
   },
   {
     key: 'sand',
@@ -84,7 +104,12 @@ export const DOCK_PALETTES = [
     // to be telling each other apart at a glance.)
     backdrop: '#F0E6DA',
     accent: '#4F7A28',
-    ink: 'light',
+    // Auto: the glyph sits on the chip in one mode and on the bar in the
+    // other, and only auto reads whichever it is on. `legacyInk` is what
+    // this look wrote before 2026-11-14 — kept only so a look applied
+    // back then can be recognised and moved to auto (legacyInkFor).
+    ink: 'auto',
+    legacyInk: 'light',
   },
 ];
 

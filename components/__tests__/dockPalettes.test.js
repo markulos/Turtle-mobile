@@ -40,9 +40,10 @@ describe('the dock’s palettes', () => {
     expect(normalizeHex(p.backdrop)).toBe(p.backdrop);
     expect(normalizeHex(p.accent)).toBe(p.accent);
     expect(DOCK_INKS).toContain(p.ink);
-    // Stored, not left on auto: a finished look must not move when the
-    // derivation behind it is retuned.
-    expect(p.ink).not.toBe('auto');
+    // Auto, since 2026-11-14: a fixed ink is right for the chip OR for the
+    // underline, never both — the glyph sits on a different colour in each.
+    expect(p.ink).toBe('auto');
+    expect(['light', 'dark']).toContain(p.legacyInk);
   });
 
   test.each(DOCK_PALETTES.map((p) => [p.name, p]))('%s’s chip stands ON its backdrop', (_, p) => {
@@ -95,7 +96,7 @@ describe('the dock’s palettes', () => {
 
     test('nudge ANY of the four and the tick leaves — honestly', () => {
       const p = DOCK_PALETTES[0];
-      expect(matchingPalette({ ...state(p), dockInk: 'auto' })).toBeNull();
+      expect(matchingPalette({ ...state(p), dockInk: 'dark' })).toBeNull();
       expect(matchingPalette({ ...state(p), dockColor: '#123456' })).toBeNull();
       expect(matchingPalette({ ...state(p), accentColor: '#123456' })).toBeNull();
       // A palette paints a CUSTOM backdrop. On smoked or paper, the colour it

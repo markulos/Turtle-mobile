@@ -6,7 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { blurProps } from '../utils/frostedChat';
 import DockGlow from './DockGlow';
 import {
-  SHADE_COLOR, SHADE_PEAK, SPOT_H, SPOT_PEAK, SPOT_W, glowStrength, pickedGlowColor, rimColor,
+  SHADE_PEAK, SPOT_H, SPOT_PEAK, SPOT_W, glowStrength, pickedGlowColor, rimColor, shadeColor,
 } from './dockLight';
 import Reanimated, {
   Easing,
@@ -182,9 +182,11 @@ export default function TabBarPill({
   // WHAT COLOUR THE LIGHT IS. A colour picked in Settings wins: it is the
   // spot's colour, and the colour of the chip's rim. Otherwise the spot is
   // the highlight colour — it is the line's own light — and the rim is plain
-  // light. The chip's SHADE is never coloured; see dockLight.
+  // light. The chip's SHADE follows the chip, not this; see dockLight.
   const pickedGlow = pickedGlowColor(dockGlowColor);
   const spotColor = pickedGlow || theme.colors.accent;
+  // The chip's shade: its own colour, deeper. Null for a white chip.
+  const chipShade = shadeColor(theme.colors.accent);
 
   // THE NAVIGATOR IS THE SLOWEST OF THE THREE THINGS THAT KNOW.
   //
@@ -564,18 +566,18 @@ export default function TabBarPill({
           pillStyle,
         ]}
       >
-        {/* THE CHIP'S SHADE — darker in its middle, so with the lit rim it
-            reads as a piece of glass set INTO the bar rather than a flat
-            fill (or, as it briefly was with a white bloom here, a dome).
+        {/* THE CHIP'S SHADE — a deeper tone of its own colour in its middle,
+            so with the lit rim it reads as a piece of glass set INTO the bar
+            rather than a flat fill. Never black, and none on a white chip.
             Inside the chip, so it is part of the same cached bitmap and
             travels with it for nothing. */}
-        {!underline && glow > 0 ? (
+        {!underline && glow > 0 && chipShade ? (
           <View pointerEvents="none" style={styles.shade} testID="dock-chip-shade">
             <DockGlow
               id="dock-chip-glow"
               width={PILL_SIZE}
               height={PILL_SIZE}
-              color={SHADE_COLOR}
+              color={chipShade}
               peak={SHADE_PEAK * glow}
             />
           </View>

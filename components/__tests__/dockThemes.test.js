@@ -1,5 +1,5 @@
 import {
-  DOCK_THEMES, dockTheme, isDockTheme, themeSkin, themeIsIntact, resolveDockSkin, inkModeFor,
+  DOCK_THEMES, dockTheme, isDockTheme, themeSkin, themeIsIntact, resolveDockSkin, legacyInkFor,
 } from '../dockThemes';
 import { activeInk, customDockSkin, dockSkin, DOCK_INKS } from '../dockSkins';
 import { normalizeHex } from '../../utils/accentColor';
@@ -31,9 +31,10 @@ describe('the dock’s named themes', () => {
     expect(normalizeHex(t.backdrop)).toBe(t.backdrop);
     expect(normalizeHex(t.accent)).toBe(t.accent);
     expect(DOCK_INKS).toContain(t.ink);
-    // Composed, not derived: a theme that leaves its ink on auto would move
-    // the day the contrast check is retuned.
-    expect(t.ink).not.toBe('auto');
+    // Auto, since 2026-11-14: a fixed ink is right for the chip OR for the
+    // underline, never both — the glyph sits on a different colour in each.
+    expect(t.ink).toBe('auto');
+    expect(['light', 'dark']).toContain(t.legacyInk);
   });
 
   test.each(DOCK_THEMES.map((t) => [t.name, t]))('%s builds ON the derived skin', (_, t) => {
@@ -132,7 +133,7 @@ describe('the dock’s named themes', () => {
     });
 
     test('edit any one of them and it is no longer that theme', () => {
-      expect(themeIsIntact(g, { ...worn, dockInk: 'auto' })).toBe(false);
+      expect(themeIsIntact(g, { ...worn, dockInk: 'dark' })).toBe(false);
       expect(themeIsIntact(g, { ...worn, dockColor: '#101010' })).toBe(false);
       expect(themeIsIntact(g, { ...worn, accentColor: '#101010' })).toBe(false);
       expect(themeIsIntact(g, { ...worn, dockStyle: 'paper' })).toBe(false);
@@ -141,30 +142,23 @@ describe('the dock’s named themes', () => {
   });
 });
 
-describe('a look\'s ink is chosen against its chip', () => {
+describe('a look applied before looks wrote auto', () => {
   const g = DOCK_THEMES[0];
-  const worn = {
-    dockTheme: g.key, dockStyle: 'custom', dockColor: g.backdrop, accentColor: g.accent, dockInk: g.ink,
-  };
 
-  test('with the chip, the theme\'s own ink is used', () => {
-    expect(inkModeFor({ ...worn, dockIndicator: 'chip' })).toBe(g.ink);
+  test('is recognised by its backdrop, and says which ink it used to write', () => {
+    expect(legacyInkFor(g.backdrop)).toBe(g.legacyInk);
+    expect(legacyInkFor(g.backdrop.toLowerCase())).toBe(g.legacyInk);
   });
 
-  test('with the underline there is no chip, so it reads the bar instead', () => {
-    expect(inkModeFor({ ...worn, dockIndicator: 'underline' })).toBe('auto');
-    // …which on this theme's near-black bar is white, not the theme's black.
+  test('a colour that is not one of ours is nobody\'s look', () => {
+    expect(legacyInkFor('#123456')).toBeNull();
+    expect(legacyInkFor('')).toBeNull();
+    expect(legacyInkFor(undefined)).toBeNull();
+  });
+
+  test('on auto, the theme\'s glyph reads the bar under the underline', () => {
     const skin = themeSkin(g);
-    expect(activeInk('auto', g.accent, { underline: true, darkDock: skin.blurTint === 'dark' }))
+    expect(activeInk(g.ink, g.accent, { underline: true, darkDock: skin.blurTint === 'dark' }))
       .toBe('#FFFFFF');
-  });
-
-  test('an ink set by hand is never second-guessed', () => {
-    const other = g.ink === 'dark' ? 'light' : 'dark';
-    expect(inkModeFor({ ...worn, dockInk: other, dockIndicator: 'underline' })).toBe(other);
-    expect(inkModeFor({
-      dockInk: 'dark', dockIndicator: 'underline', dockTheme: '', dockStyle: 'smoked',
-      dockColor: '#000000', accentColor: '#1F8A9B',
-    })).toBe('dark');
   });
 });

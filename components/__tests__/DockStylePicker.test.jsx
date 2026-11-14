@@ -240,7 +240,7 @@ describe('Settings → Navigation → Navbar style', () => {
 
     // Nudge one of the four it wrote. The tile must let go rather than keep a
     // tick on a look that has since been edited — it is recomputed, not saved.
-    state = { ...state, ink: 'auto' };
+    state = { ...state, ink: 'dark' };
     const off = await render(<DockStylePicker />);
     expect(off.getByTestId(`dock-palette-${p.key}`).props.accessibilityState)
       .toMatchObject({ selected: false });
@@ -301,7 +301,7 @@ describe('Settings → Navigation → Navbar style', () => {
       expect(on.getByTestId(`dock-theme-${g.key}`).props.accessibilityState)
         .toMatchObject({ selected: true });
 
-      state = { ...worn(), ink: 'auto' };
+      state = { ...worn(), ink: 'dark' };
       const off = await render(<DockStylePicker />);
       expect(off.getByTestId(`dock-theme-${g.key}`).props.accessibilityState)
         .toMatchObject({ selected: false });

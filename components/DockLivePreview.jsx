@@ -90,7 +90,7 @@ export default function DockLivePreview({
                   testID="dock-live-chip"
                   style={[styles.chip, { backgroundColor: accent, borderColor: light.rimColor }]}
                 >
-                  {light.strength > 0 ? (
+                  {light.strength > 0 && light.shadeColor ? (
                     <View pointerEvents="none" style={styles.shade}>
                       <DockGlow
                         id="dock-live-shade"
