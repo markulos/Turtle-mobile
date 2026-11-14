@@ -224,6 +224,32 @@ export function insetRule(theme) {
 }
 
 /**
+ * listGlyphInk — the colour of the little icon at the head of a list row.
+ *
+ * Part of STYLE-RULES §8, and here rather than in a screen because the rule
+ * only holds if the next list reaches for the same thing.
+ *
+ * VERY DARK GREY, not the highlight colour. A column of nine accent glyphs is
+ * the loudest thing on a page that is otherwise text, and it says "look at
+ * me" nine times for rows that are only doors. The accent is for STATE — the
+ * tab you are on, the track that is playing, a count that is waiting — and
+ * spending it on navigation leaves nothing to say those with.
+ *
+ * It is also the safe choice: the highlight colour is the user's, and a pale
+ * one drawn on a pale tile disappears (see readableOn in accentColor, and the
+ * Media Vault rows that shipped invisible). A fixed ink cannot.
+ *
+ * Near-black rather than black, so it reads as ink rather than as a hole —
+ * and flipped in dark mode, where "very dark grey" would be the same
+ * invisibility the other way up.
+ */
+export const LIST_GLYPH_LIGHT = '#2A2A2A';
+
+export const listGlyphInk = (theme) => (
+  theme?.mode === 'dark' ? (theme?.colors?.textPrimary || '#E0E0E0') : LIST_GLYPH_LIGHT
+);
+
+/**
  * ridgeRule — the same trick the other way up: a line that stands PROUD.
  *
  * `insetRule` is a shadow with a highlight under it and reads as a cut.

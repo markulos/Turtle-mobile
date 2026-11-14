@@ -3,7 +3,7 @@ import {
   View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, ActivityIndicator,
   RefreshControl, AppState,
 } from 'react-native';
-import { depth, insetRule } from '../../utils/surfaceDepth';
+import { depth, insetRule, listGlyphInk } from '../../utils/surfaceDepth';
 import AppTextInput from '../../components/AppTextInput';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useKeyboardHeight from '../../utils/useKeyboardHeight';
@@ -1865,11 +1865,8 @@ const makeStyles = (theme) => {
   const c = theme.colors;
   return StyleSheet.create({
     page: { flex: 1, backgroundColor: c.background },
-    // VERY DARK GREY for the row glyphs, as asked — a near-black that is not
-    // quite black, so it reads as ink rather than as a hole. Flipped in dark
-    // mode for the obvious reason: "very dark grey" on a black page is the
-    // same invisibility the highlight colour had on a pale one.
-    cardGlyph: { color: theme.mode === 'dark' ? c.textPrimary : '#2A2A2A' },
+    // STYLE-RULES §8 — the shared ink, not a copy of it.
+    cardGlyph: { color: listGlyphInk(theme) },
     // Hero card: centred column, taller radius than the list cards below so it
     // reads as the page's header rather than the first row of the list.
     // NOT a card. It used to be a tinted, rounded, bordered, shadowed panel,

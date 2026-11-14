@@ -17,6 +17,7 @@ import { tapHaptic } from '../../../utils/haptics';
 import PhotoVaultBoardCard from './PhotoVaultBoardCard';
 import SharedWithYouStrip from './SharedWithYouStrip';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
+import { insetRule, listGlyphInk } from '../../../utils/surfaceDepth';
 import {
   HIT_SLOP_8,
   PICKER_GAP,
@@ -326,12 +327,9 @@ const PhotoVaultBoardsPage = forwardRef(({
           accessibilityLabel="New album"
           testID="vault-new-album-row"
           onPress={() => { tapHaptic(); onNewAlbum(); }}
-          style={[styles.canvasRow, {
-            backgroundColor: theme.colors.surfaceElevated,
-            borderColor: theme.colors.border,
-          }]}
+          style={styles.canvasRow}
         >
-          <Icon name="plus-box-outline" size={20} color={theme.colors.accentInfo || theme.colors.textSecondary} />
+          <Icon name="plus-box-outline" size={20} color={listGlyphInk(theme)} />
           <View style={styles.canvasRowBody}>
             <Text style={[styles.canvasRowTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
               New album
@@ -342,6 +340,13 @@ const PhotoVaultBoardsPage = forwardRef(({
           </View>
           <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
         </TouchableOpacity>
+      ) : null}
+
+      {/* STYLE-RULES §8: a LIST, not a stack of panels. The rule is an
+          element between the two rather than a border on either, and it only
+          exists when both rows do. */}
+      {onNewAlbum && onOpenCanvases && !displayQuery ? (
+        <View pointerEvents="none" style={[insetRule(theme), styles.canvasSep]} />
       ) : null}
 
       {/* The canvases. A fixed entry point like All Photos above — not a
@@ -359,12 +364,9 @@ const PhotoVaultBoardsPage = forwardRef(({
           accessibilityLabel="Canvases"
           testID="vault-canvases-row"
           onPress={() => { tapHaptic(); onOpenCanvases(); }}
-          style={[styles.canvasRow, {
-            backgroundColor: theme.colors.surfaceElevated,
-            borderColor: theme.colors.border,
-          }]}
+          style={styles.canvasRow}
         >
-          <Icon name="shape-outline" size={20} color={theme.colors.accentInfo || theme.colors.textSecondary} />
+          <Icon name="shape-outline" size={20} color={listGlyphInk(theme)} />
           <View style={styles.canvasRowBody}>
             <Text style={[styles.canvasRowTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
               Canvases
@@ -532,16 +534,18 @@ const PhotoVaultBoardsPage = forwardRef(({
 const styles = StyleSheet.create({
   page: { flex: 1 },
   // A row, not a card: the boards below are pictures and this is a door.
+  // STYLE-RULES §8. No fill, no border, no radius, no margin between: these
+  // are rows of one list and `insetRule` is what separates them.
   canvasRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 14,
     paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 14,
   },
+  // Inset past the glyph (20) and its gap (12), plus the row's own padding,
+  // so the rule separates the TEXT and the glyphs read as a column.
+  canvasSep: { marginLeft: 46 },
   canvasRowBody: { flex: 1, minWidth: 0 },
   canvasRowTitle: { fontSize: 15, fontWeight: '600' },
   canvasRowMeta: { fontSize: 12, marginTop: 1 },

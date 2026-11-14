@@ -512,6 +512,56 @@ repo skill (loaded before any UI work) and by review.
   failure, always with functional updaters.
 - Loading never blanks a screen: the resting tile / row IS the placeholder; content fades in over it.
 
+## 8. A list of rows is a LIST, not a stack of cards
+
+A column of things you can tap is **rows separated by a rule**. It is not a
+stack of rounded, bordered, shadowed panels with gaps between them.
+
+```jsx
+// NO — eleven floating boxes on a page
+<View style={{ gap: 10 }}>
+  {items.map((i) => <Row key={i.key} style={{
+    backgroundColor: c.surfaceElevated, borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border, ...depth(theme, 'card'),
+  }} />)}
+</View>
+
+// YES — one list
+{items.map((item, index) => (
+  <React.Fragment key={item.key}>
+    {index > 0 && <View pointerEvents="none" style={[insetRule(theme), { marginLeft: 52 }]} />}
+    <Row style={{ flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 }} />
+  </React.Fragment>
+))}
+```
+
+**Why.** Chrome should be spent on what varies. When every row carries a fill,
+a border, a radius and a shadow, the chrome is the loudest thing on the page
+and the rows stop reading as a set — you see eleven objects instead of one
+list. The Media Vault's Files tab was already right; the Profile page and the
+Photos page were not, and were brought over on 2026-11-14.
+
+**The rules:**
+
+- **The separator is an ELEMENT between rows, never a border on one.**
+  `insetRule` is two hairlines a point apart (a shadow with a highlight under
+  it, see §1); as a border it draws across the row's top edge as well.
+- **None before the first row.** Whatever is above the list — a header, a
+  search dock — already has its own edge.
+- **Inset it past the leading glyph** (`marginLeft`: glyph width + its gap +
+  the row's padding) so the rule separates the text and the glyphs read as a
+  column of their own.
+- **A rule BETWEEN two regions is full-bleed**, not inset: it is separating a
+  header from a list, not one item from the next.
+- **The leading glyph is `listGlyphInk(theme)`** — very dark grey, never the
+  highlight colour. The accent is for STATE (the tab you are on, the track
+  playing, a count waiting); a column of nine accent glyphs spends it on
+  doors and leaves nothing to say state with. It is also the safe choice: the
+  highlight colour is the user's, and a pale one can vanish (§1, and
+  `readableOn` in utils/accentColor).
+- **A card is still right for a single thing**: one summary panel, one hero,
+  one callout. The rule is about COLUMNS of peers.
+
 ## Checklist before shipping any UI change
 
 1. Which surface is it — white-on-black or black-on-white — and does every element on it contrast?
@@ -522,4 +572,6 @@ repo skill (loaded before any UI work) and by review.
 4. Sheets: in-tree, two detents (opens at 60 %, drag up to full screen, drag down closes), top search, keyboard lift, scroll-indicator inset.
    Keyboard anywhere: no KeyboardAvoidingView, no LayoutAnimation on the event, body pads / pinned bar lifts on a native transform.
 5. Motion on the UI thread only; swift curve for shared-element moves.
-6. Ran `turtle-mobile-verify` (parse, jest, undef-audit, bundle) and listed the on-device checks.
+6. A column of tappable rows is a list: `insetRule` between them, no per-row card, glyphs in
+   `listGlyphInk` (§8).
+7. Ran `turtle-mobile-verify` (parse, jest, undef-audit, bundle) and listed the on-device checks.
