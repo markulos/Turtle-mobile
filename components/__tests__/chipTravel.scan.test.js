@@ -71,6 +71,20 @@ describe('the chip travels on ONE animation per move', () => {
     expect(styleBody()).toMatch(/translateX: x\.value \+ catchUp\.value/);
   });
 
+  test('every travel names its two ends — and a drag names none', () => {
+    // The icons light only at the ends of a travel (TabBarIcon). "From" is
+    // where the LAST travel was going, so a chip re-aimed in flight fades
+    // out the icon it was approaching instead of snapping a neighbour on.
+    expect(SRC).toMatch(/endFrom\.value = endTo\.value >= 0 \? endTo\.value : Math\.round\(prev\.aim\);\s*endTo\.value = cur\.aim;/);
+    expect(SRC).toMatch(/if \(cur\.dragging\) \{\s*endTo\.value = -2;/);
+  });
+
+  test('the underline\'s spot is a glow on dark docks only, and belongs to the line', () => {
+    expect(SRC).toMatch(/underline && skin\.blurTint === 'dark'\s*\? \[styles\.spot, \{ shadowColor: theme\.colors\.accent \}\]/);
+    // Thrown upward, onto the glyph.
+    expect(SRC).toMatch(/spot: \{[^}]*shadowOffset: \{ width: 0, height: -\d+ \}/);
+  });
+
   test('a layout change places the chip rather than sending it travelling', () => {
     // A rotation, or hiding the Vault tab in Settings, moves every slot. The
     // chip belongs somewhere new, but it did not MOVE there.

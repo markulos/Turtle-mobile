@@ -111,7 +111,7 @@ const DOCK_LIP_H = 1.5;
 // icons can never disagree about where a slot is.
 
 export default function TabBarPill({
-  dragSlot, leadSlot, navSlot, chipPos, slideMs, probe, pressLift,
+  dragSlot, leadSlot, navSlot, chipPos, chipFrom, chipTo, slideMs, probe, pressLift,
 }) {
   const { theme, dockIndicator, dockStyle, dockColor, dockTheme } = useTheme();
   // Every colour the capsule draws, from the skin chosen in Settings — a
@@ -203,6 +203,16 @@ export default function TabBarPill({
   // `x` itself stays the raw position under the thumb.
   const catchUp = useSharedValue(0);
 
+  // THE ENDS OF THE TRAVEL, for the icons: the slot the chip is leaving and
+  // the slot it is going to. Only those two glyphs change ink (TabBarIcon) —
+  // the one behind fades out as the chip pulls away, the one ahead fades in
+  // as it arrives, and anything in between is passed over untouched. -2 is
+  // "no ends": a thumb has the chip, and whatever it is over lights.
+  const ownFrom = useSharedValue(-2);
+  const ownTo = useSharedValue(-2);
+  const endFrom = chipFrom ?? ownFrom;
+  const endTo = chipTo ?? ownTo;
+
   // `index` and the geometry live in React state; the driver runs on the UI
   // thread, so they are mirrored into shared values it can read. App.js owns
   // the index's mirror and hands it in, because the dock writes it too (the
@@ -284,6 +294,7 @@ export default function TabBarPill({
       // Under the thumb the chip IS the finger: written straight out, every
       // frame, with nothing in between.
       if (cur.dragging) {
+        endTo.value = -2;
         // …except on the frame the thumb TAKES it. The chip is wherever it
         // was — resting half a slot from the finger, or still crossing the
         // dock on its way to the touch — and written raw from there it
@@ -300,10 +311,21 @@ export default function TabBarPill({
       // rotation, a tab being hidden in Settings), and the moment the
       // navigator's index is first KNOWN (it starts as -1): none of those is a
       // move, so the chip is PLACED rather than sent travelling.
-      if (!prev || cur.offset !== prev.offset || prev.aim < 0) { x.value = px; return; }
+      if (!prev || cur.offset !== prev.offset || prev.aim < 0) {
+        x.value = px;
+        endFrom.value = cur.aim;
+        endTo.value = cur.aim;
+        return;
+      }
       // The thumb let go. What is left is a fraction of a slot, so it settles
       // on the shortest clock the dock has rather than a full crossing's.
-      if (prev.dragging) { x.value = withTiming(px, SETTLE); return; }
+      if (prev.dragging) {
+        x.value = withTiming(px, SETTLE);
+        // The thumb let go on (or beside) one icon: that one is both ends.
+        endFrom.value = cur.aim;
+        endTo.value = cur.aim;
+        return;
+      }
       // A real move, and the only path that starts a travel: the aim changed.
       // Re-renders do not reach here, which is the whole point.
       if (cur.aim !== prev.aim) {
@@ -335,6 +357,13 @@ export default function TabBarPill({
         // one-slot hop would take a dock-crossing's time (or the reverse).
         // The distance is right here — the aim it is leaving and the aim it is
         // going to — so the clock is derived rather than delivered.
+        // The ends of THIS travel. "From" is where the last travel was
+        // going rather than the nearest slot: at rest those are the same
+        // icon, and if the chip is re-aimed in flight it is the one icon
+        // that may already be part-lit — so it fades out from where it is
+        // instead of some passed-over neighbour snapping on.
+        endFrom.value = endTo.value >= 0 ? endTo.value : Math.round(prev.aim);
+        endTo.value = cur.aim;
         const duration = chipSlideMs(cur.aim - prev.aim);
         // Written back for the probe, whose sampling window is `travel + tail`
         // and would otherwise close against a duration this move never used.
@@ -478,6 +507,11 @@ export default function TabBarPill({
             // be inked against.
             backgroundColor: theme.colors.accent,
           },
+          // THE SPOT: on a dark dock the line throws a soft pool of its own
+          // colour up onto the glyph. See styles.spot.
+          underline && skin.blurTint === 'dark'
+            ? [styles.spot, { shadowColor: theme.colors.accent }]
+            : null,
           pillStyle,
         ]}
       />
@@ -550,6 +584,23 @@ const styles = StyleSheet.create({
     borderRadius: UNDERLINE_H / 2,
     // No shadow: a 3pt line with a drop shadow reads as a smudge, and the line
     // is ON the capsule rather than resting on it the way the chip is.
+  },
+  // THE SPOT — the underline's light, on dark docks only.
+  //
+  // A glow rather than a drawn gradient, because a linear gradient can only
+  // fall off in one direction and a spotlight falls off in all of them: this
+  // is the line's own shadow, in the accent colour, thrown UPWARD. iOS blurs
+  // a shadow as a gaussian, so there is no edge and no banding at any
+  // strength — which is what "smooth" needs — and because it belongs to the
+  // line it travels with it for free, inside the same rasterised bitmap.
+  // Kept subtle: enough to tint the glass under the glyph, not enough to read
+  // as a second object. Android has no coloured shadows and simply shows the
+  // line. (The note above about a shadow smudging the line was about a BLACK
+  // drop shadow under it; this is light, above it.)
+  spot: {
+    shadowOpacity: 0.55,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: -9 },
   },
   // One ridge. A hairline, full height of the icon block less a breath at each
   // end, so it reads as a groove between two cells rather than as a divider

@@ -78,6 +78,37 @@ describe('the icon is drawn in both inks, and follows the chip', () => {
     expect(scaleIn(view)).toBe(1);
   });
 
+  test('an icon the chip only PASSES OVER keeps its resting ink', async () => {
+    // Tasks → Profile: the chip is dead centre on this slot for a frame, and
+    // this slot is neither end of the travel.
+    const { view } = await draw({ chipPos: { value: 2 }, chipFrom: { value: 0 }, chipTo: { value: 5 } });
+    expect(scaleIn(view)).toBe(1);
+    expect(opacitiesIn(view).sort()).toEqual([0, 1]);
+  });
+
+  test('the tab being ARRIVED AT lights as the chip lands on it', async () => {
+    const far = await draw({ chipPos: { value: 0.4 }, chipFrom: { value: 0 }, chipTo: { value: 2 } });
+    expect(scaleIn(far.view)).toBe(1);
+    await far.view.unmount();
+    const near = await draw({ chipPos: { value: 1.7 }, chipFrom: { value: 0 }, chipTo: { value: 2 } });
+    expect(scaleIn(near.view)).toBeGreaterThan(1);
+    await near.view.unmount();
+    const there = await draw({ chipPos: { value: 2 }, chipFrom: { value: 0 }, chipTo: { value: 2 } });
+    expect(scaleIn(there.view)).toBeCloseTo(1.04, 5);
+  });
+
+  test('the tab being LEFT fades out as the chip pulls away', async () => {
+    const { view } = await draw({ chipPos: { value: 2.3 }, chipFrom: { value: 2 }, chipTo: { value: 5 } });
+    const s = scaleIn(view);
+    expect(s).toBeGreaterThan(1);
+    expect(s).toBeLessThan(1.04);
+  });
+
+  test('under a dragging thumb there are no ends: whatever the chip is over lights', async () => {
+    const { view } = await draw({ chipPos: { value: 2 }, chipFrom: { value: 0 }, chipTo: { value: -2 } });
+    expect(scaleIn(view)).toBeCloseTo(1.04, 5);
+  });
+
   test('half-way across, the ink is half-way too — not a step', async () => {
     const { view } = await draw({ chipPos: { value: 2.5 } });
     const opacities = opacitiesIn(view);

@@ -56,6 +56,12 @@ describe('the dock’s shared values reach both halves', () => {
     expect(icon).not.toBeNull();
     expect(icon[0]).toContain('chipPos={chipPos}');
     expect(icon[0]).toContain('slot={slot}');
+    // …and which two icons are the ends of the travel, or every icon the
+    // chip passes over lights in turn.
+    for (const end of ['chipFrom={chipFrom}', 'chipTo={chipTo}']) {
+      expect(icon[0]).toContain(end);
+      expect(APP.match(/<TabBarPill[^>]*\/>/)[0]).toContain(end);
+    }
     // Both inks, or there is nothing to cross-fade between.
     expect(icon[0]).toMatch(/active=\{draw\(\{ focused: true/);
     expect(icon[0]).toMatch(/inactive=\{draw\(\{ focused: false/);

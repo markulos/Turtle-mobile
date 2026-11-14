@@ -45,10 +45,12 @@ import Reanimated, {
  * So the ink arrives exactly as the chip does, at the chip's own speed, and
  * a busy JS thread cannot make it late or abrupt.
  *
- * It also means a glyph the chip passes OVER on a long move takes the active
- * ink while the chip is under it. That is not decoration: the active ink is
- * chosen against the chip's fill (App.js), so it is the colour that glyph
- * needs for exactly those frames.
+ * ONLY THE TWO ENDS OF A TRAVEL CHANGE, though: the tab being left and the
+ * tab being arrived at (`chipFrom` / `chipTo`). A glyph the chip merely
+ * passes over on a long move keeps its resting ink — lighting each one in
+ * turn made a long move look like five selections instead of one. Under a
+ * dragging thumb there are no ends, and whichever icon the chip is over
+ * lights, because there the chip can stop anywhere.
  *
  * Before the chip's position is known (`chipPos` < 0: first frame, a test, a
  * harness without the pill) it falls back to `focused`, as a step.
@@ -59,10 +61,16 @@ const SWELL = 0.04;
 const LIFT = 1;
 
 export default function TabBarIcon({
-  focused, brand = false, slot, chipPos, active, inactive, badge, children,
+  focused, brand = false, slot, chipPos, chipFrom, chipTo, active, inactive, badge, children,
 }) {
   const ownPos = useSharedValue(-1);
   const pos = chipPos ?? ownPos;
+  // The two ends of the chip's travel (TabBarPill). -2 = no ends: light by
+  // position alone, which is what a dragging thumb wants.
+  const ownFrom = useSharedValue(-2);
+  const ownTo = useSharedValue(-2);
+  const from = chipFrom ?? ownFrom;
+  const to = chipTo ?? ownTo;
   const fallback = focused ? 1 : 0;
   const index = Number.isInteger(slot) ? slot : -1;
 
@@ -71,6 +79,11 @@ export default function TabBarIcon({
   const on = useDerivedValue(() => {
     const p = pos.value;
     if (p < -0.5 || index < 0) return fallback;
+    // ONLY THE ENDS CHANGE. On a travel, the icon being left fades out as the
+    // chip pulls away and the one being arrived at fades in as it lands; an
+    // icon the chip merely passes over on the way keeps its resting ink.
+    const end = to.value;
+    if (end !== -2 && index !== end && index !== from.value) return 0;
     const t = Math.max(0, 1 - Math.abs(p - index));
     return t * t * (3 - 2 * t);
   }, [fallback, index]);

@@ -191,6 +191,12 @@ function TabNavigator() {
   // how much of the chip is under it — so the glyphs change with the chip,
   // on the UI thread, instead of in one step when React commits the change.
   const chipPos = useSharedValue(-1);
+  // …and the two ENDS of the travel it is on: the tab being left and the tab
+  // being arrived at. Only those two icons change ink; the ones the chip
+  // merely passes over on a long move stay as they are. -2 means "no ends" —
+  // a thumb is dragging the chip, and whichever icon it is over lights.
+  const chipFrom = useSharedValue(-2);
+  const chipTo = useSharedValue(-2);
   // ...and how long that move should take, which depends on how far it goes.
   // Written by whoever starts the move, read by the chip's worklet.
   const slideMs = useSharedValue(CHIP_SLIDE_BASE_MS);
@@ -458,6 +464,8 @@ function TabNavigator() {
               brand={route.name === 'Turtle'}
               slot={slot}
               chipPos={chipPos}
+              chipFrom={chipFrom}
+              chipTo={chipTo}
               active={draw({ focused: true, color: activeInk(dockInk, theme.colors.accent) })}
               inactive={draw({ focused: false, color: skin.inactiveTint })}
             />
@@ -554,6 +562,8 @@ function TabNavigator() {
             leadSlot={leadSlot}
             navSlot={navSlot}
             chipPos={chipPos}
+            chipFrom={chipFrom}
+            chipTo={chipTo}
             slideMs={slideMs}
             probe={dockProbe}
             pressLift={dockPressLift}
