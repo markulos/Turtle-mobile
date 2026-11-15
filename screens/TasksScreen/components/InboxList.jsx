@@ -27,14 +27,18 @@
 import React, { memo, useEffect, useRef } from 'react';
 import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Grain from '../../../components/Grain';
 import { tapHaptic } from '../../../utils/haptics';
-import { ridgeRule } from '../../../utils/surfaceDepth';
+import { neuRaised, neuTones } from '../../../utils/neumorph';
+import { focusSkin } from '../utils/focusSkin';
 // Shared with the board rows and with the tasks they reveal: every bead on this
 // page sits on ONE string, so the geometry cannot live in any one of them.
 import { THREAD_X, BEAD, ROW_PAD_LEFT } from '../utils/threadGeometry';
 
 /** Long enough to read as an arrival, short enough not to be in the way. */
 const DROP_MS = 260;
+/** The panel's radius — the capture block's, because they are a pair. */
+const PANEL_RADIUS = 24;
 
 /**
  * One line on the string.
@@ -43,7 +47,10 @@ const DROP_MS = 260;
  * else renders at rest, which matters more than it sounds — animating the whole
  * list on every add would re-play a dozen rows for one new line.
  */
-const Line = memo(function Line({ task, fresh, last, c, surface, ridge, onPress }) {
+const Line = memo(function Line({ task, fresh, last, c, surface, rule, onPress }) {
+  // `surface` is the PANEL's colour, not `c.background`: the thread runs behind
+  // the bead, so a bead filled with the theme's page token would have a line
+  // through a disc that does not match what is actually behind it.
   const drop = useRef(new Animated.Value(fresh ? 0 : 1)).current;
   useEffect(() => {
     if (!fresh) return undefined;
@@ -83,25 +90,29 @@ const Line = memo(function Line({ task, fresh, last, c, surface, ridge, onPress 
           <Icon name="calendar-blank-outline" size={14} color={c.textTertiary} />
         )}
       </Pressable>
-      {/* A RIDGE, not a hairline: each line you write sits on its own edge.
-          See `ridgeRule` — the highlight above the shadow is what makes two
-          hairlines read as a lip rather than as a drawn line. */}
-      {!last && <View style={[styles.rule, ridge]} />}
+      {/* ONE HAIRLINE, in the surface's own shadow tone.
+          It was a `ridgeRule` — two hairlines, a highlight over a shadow, which
+          is how you cut a line into a flat page. On a grained neumorphic panel
+          that is one texture too many: the lip and the tooth fight, and what
+          you see is a hard double line drawn across a soft surface. Mark asked
+          for it simplified. A single line, taken from the panel's own cast tone
+          (so it follows the theme like everything else in §9), separates the
+          rows and says nothing else. */}
+      {!last && <View style={[styles.rule, { backgroundColor: rule }]} />}
     </Animated.View>
   );
 });
 
 function InboxList({
   items, total, freshId, c, theme, onOpenTask, onOpenAll, destinationLabel,
-  // THE PAGE'S OWN COLOUR, for the bead to be filled with. Not `c.background`:
-  // this tab's ground is the neumorphic surface (STYLE-RULES §9), so the token
-  // is the wrong colour here and a bead in it has the thread showing either
-  // side of a disc that does not match the page.
-  surface,
+  // Settings → Appearance → Surface grain (see InboxCapture).
+  grain = 1,
 }) {
-  // Built once for the whole list rather than per row: it is the same two
-  // hairlines twelve times over.
-  const ridge = ridgeRule(theme || { mode: 'light', colors: c });
+  const mode = theme?.mode;
+  const pal = focusSkin(theme || { mode: 'light' });
+  const neu = neuRaised(pal.card, mode);
+  // Built once for the whole list rather than per row: one colour, twelve rows.
+  const rule = neuTones(pal.card, mode)?.cast || pal.edge;
   if (!items || items.length === 0) {
     return (
       <Text style={[styles.empty, { color: c.textTertiary }]} testID="inbox-list-empty">
@@ -110,9 +121,11 @@ function InboxList({
     );
   }
   return (
-    <View style={styles.wrap} testID="inbox-list">
+    <View style={[styles.wrap, neu]} testID="inbox-list">
+      {/* The panel's tooth, clipped to its radius. */}
+      <Grain level={grain} radius={PANEL_RADIUS} />
       {/* One thread, behind everything, rather than a segment per row. */}
-      <View style={[styles.thread, { backgroundColor: c.border }]} pointerEvents="none" />
+      <View style={[styles.thread, { backgroundColor: rule }]} pointerEvents="none" />
       {items.map((t, i) => (
         <Line
           key={t.id}
@@ -120,8 +133,8 @@ function InboxList({
           fresh={t.id === freshId}
           last={i === items.length - 1}
           c={c}
-          surface={surface}
-          ridge={ridge}
+          surface={pal.card}
+          rule={rule}
           onPress={onOpenTask}
         />
       ))}
@@ -145,7 +158,21 @@ function InboxList({
 }
 
 const styles = StyleSheet.create({
-  wrap: { position: 'relative' },
+  // A PANEL, like the capture block above it and the Focus tab's tiles — the
+  // list used to sit bare on the page under a block that was also bare, and
+  // the two read as one undifferentiated column of text.
+  wrap: {
+    position: 'relative',
+    borderRadius: PANEL_RADIUS,
+    borderCurve: 'continuous',
+    paddingVertical: 4,
+    // NO horizontal padding, deliberately. `THREAD_X` is measured from the
+    // CONTENT EDGE and three surfaces draw on that one string — this list, the
+    // board rows below it and the tasks a board reveals. Padding here would
+    // move only this one of the three inward, and a string with a kink in it
+    // does not read as a near miss, it reads as a bug (threadGeometry).
+    paddingHorizontal: 0,
+  },
   // Stops short at both ends so the string does not run out of the list into
   // the field above or the boards below.
   thread: {
@@ -160,7 +187,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     paddingLeft: ROW_PAD_LEFT,
-    paddingRight: 2,
+    // Enough to clear the panel's own corner: the row runs to the panel edge
+    // now, and a due-date glyph in the curve reads as falling off it.
+    paddingRight: 14,
     paddingVertical: 11,
   },
   // Filled with the PAGE's colour, not left hollow: the thread runs behind it,
@@ -174,12 +203,11 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
   },
   title: { flex: 1, fontSize: 15.5, lineHeight: 20 },
-  // The rule starts where the text does, so it never crosses the thread. Its
-  // own height comes from `ridgeRule` — the two borders ARE the line.
-  rule: { marginLeft: ROW_PAD_LEFT },
+  // The rule starts where the text does, so it never crosses the thread.
+  rule: { marginLeft: ROW_PAD_LEFT, marginRight: 14, height: StyleSheet.hairlineWidth },
   more: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingLeft: ROW_PAD_LEFT, paddingVertical: 10,
+    paddingLeft: ROW_PAD_LEFT, paddingRight: 14, paddingVertical: 10,
   },
   moreText: { fontSize: 13, fontWeight: '600' },
   empty: { fontSize: 13.5, lineHeight: 19, paddingVertical: 10 },

@@ -18,8 +18,7 @@ import {
   AppState,
 } from 'react-native';
 import { depth, insetRule } from '../../utils/surfaceDepth';
-import { NEU_PAGE_TOP } from '../../utils/neumorph';
-import { focusSkin } from './utils/focusSkin';
+import { NEU_GAP, NEU_PAGE_TOP } from '../../utils/neumorph';
 import { panelBottomInset } from '../../components/tabBarLayout';
 import { PAGE_WASH_COLORS, PAGE_WASH_LOCATIONS, PAGE_WASH_START, PAGE_WASH_END, pageColor } from '../../utils/pageWash';
 import { SCREEN_TITLE, SCREEN_TITLE_ROW_H } from '../../utils/headerType';
@@ -4157,7 +4156,7 @@ export default function TasksScreen() {
                   freshId={freshInboxId}
                   destinationLabel={inboxLabel}
                   c={theme.colors}
-                  surface={focusSkin(theme).card}
+                  grain={grain}
                   theme={theme}
                   onOpenTask={openDetail}
                   onOpenAll={() => setSelectedProject(inboxDestination(projects, selectedProject) || 'No Project')}
@@ -4973,7 +4972,10 @@ const createStyles = (theme) => StyleSheet.create({
   // Overview page's scroller now, whose contentContainer already carries the
   // page's 16pt margin — taking it again here would inset it from everything
   // it sits above.
+  // The capture panel and the list panel, one gutter apart — the same gap the
+  // Focus tab's panels keep (STYLE-RULES §9).
   inboxCaptureRow: {
+    gap: NEU_GAP,
     paddingBottom: 12,
   },
   // The header's two keys. Bare glyphs at rest — the title line is not a

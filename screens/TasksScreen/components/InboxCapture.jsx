@@ -38,8 +38,11 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AppTextInput from '../../../components/AppTextInput';
 import Grain from '../../../components/Grain';
 import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
-import { neuPressed } from '../../../utils/neumorph';
+import { neuRaised } from '../../../utils/neumorph';
 import { focusSkin } from '../utils/focusSkin';
+
+/** The deck's radius on the Focus tab, which this is the Inbox tab's copy of. */
+const DECK_RADIUS = 24;
 
 export default function InboxCapture({
   destinationLabel = 'Unsorted', onAdd, theme, trailing = null,
@@ -50,11 +53,11 @@ export default function InboxCapture({
   const [text, setText] = useState('');
   const clean = text.trim();
   const c = theme.colors;
-  // A WELL, not a bordered box. The tab is neumorphic now (STYLE-RULES §9) and
-  // the one state this style has for "put something in here" is pressed: the
-  // field is the page's own colour, dented. Which is also why the hairline
-  // goes — an edge is the thing this style replaces.
-  const well = neuPressed(focusSkin(theme).card, theme?.mode);
+  // THE PANEL. The capture block is a raised surface on the tab's own ground,
+  // the same piece of furniture the Focus tab's deck and tiles are — which is
+  // what Mark asked for: "match the focus tab styling more".
+  const pal = focusSkin(theme);
+  const neu = neuRaised(pal.card, theme?.mode);
 
   const submit = useCallback(() => {
     const title = text.trim();
@@ -84,62 +87,72 @@ export default function InboxCapture({
         {trailing}
       </View>
 
-      <View style={[styles.field, well]}>
-        <Grain level={grain} radius={14} />
-        <AppTextInput
-          style={[styles.input, { color: c.textPrimary }]}
-          placeholder="What needs doing?"
-          placeholderTextColor={c.textMuted || c.textTertiary}
-          value={text}
-          onChangeText={setText}
-          // Sentences, not `none`: this is prose a person is writing, unlike a
-          // search field where autocaps fights a name they are spelling.
-          autoCapitalize="sentences"
-          returnKeyType="done"
-          blurOnSubmit={false}
-          onSubmitEditing={submit}
-          accessibilityLabel="What needs doing?"
-          testID="inbox-capture-input"
-        />
-        <Pressable
-          onPressIn={() => impactHaptic('medium')}
-          onPress={submit}
-          // Disabled rather than hidden: a key that appears as you type is a key
-          // you cannot aim for, and its absence reads as "this box does nothing".
-          disabled={!clean}
-          accessibilityRole="button"
-          accessibilityState={{ disabled: !clean }}
-          accessibilityLabel="Add this task"
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          testID="inbox-capture-add"
-          style={({ pressed }) => [
-            styles.addKey,
-            { backgroundColor: clean ? c.textPrimary : 'transparent' },
-            pressed && styles.pressed,
-          ]}
-        >
-          {/* DOWN, not up. The list builds downward from this field, so the
-              arrow points where the thing you typed is about to go — up would
-              be "send it away", which is the opposite of what happens. */}
-          <Icon
-            name="arrow-down"
-            size={18}
-            color={clean ? c.background : (c.textMuted || c.textTertiary)}
+      <View style={[styles.deck, neu]} testID="inbox-capture-deck">
+        {/* The surface's tooth, clipped to the panel it dresses. */}
+        <Grain level={grain} radius={DECK_RADIUS} />
+        {/* A FLAT FIELD on the panel, not a dent in it. The pressed well was the
+            first thing tried and it is what Mark called out: at 52pt with the
+            grain inside it, a soft inset on a pale surface has no edge to read
+            and the whole box turns to fog. The Focus deck's task field is the
+            shape that works — the panel's own tile colour, one hairline, and
+            nothing else — so this is literally that, and the two tabs now share
+            a field rather than resembling one another. */}
+        <View style={[styles.field, { backgroundColor: pal.tile, borderColor: pal.control }]}>
+          <AppTextInput
+            style={[styles.input, { color: c.textPrimary }]}
+            placeholder="What needs doing?"
+            placeholderTextColor={c.textMuted || c.textTertiary}
+            value={text}
+            onChangeText={setText}
+            // Sentences, not `none`: this is prose a person is writing, unlike a
+            // search field where autocaps fights a name they are spelling.
+            autoCapitalize="sentences"
+            returnKeyType="done"
+            blurOnSubmit={false}
+            onSubmitEditing={submit}
+            accessibilityLabel="What needs doing?"
+            testID="inbox-capture-input"
           />
-        </Pressable>
-      </View>
+          <Pressable
+            onPressIn={() => impactHaptic('medium')}
+            onPress={submit}
+            // Disabled rather than hidden: a key that appears as you type is a key
+            // you cannot aim for, and its absence reads as "this box does nothing".
+            disabled={!clean}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !clean }}
+            accessibilityLabel="Add this task"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            testID="inbox-capture-add"
+            style={({ pressed }) => [
+              styles.addKey,
+              { backgroundColor: clean ? c.textPrimary : 'transparent' },
+              pressed && styles.pressed,
+            ]}
+          >
+            {/* DOWN, not up. The list builds downward from this field, so the
+                arrow points where the thing you typed is about to go — up would
+                be "send it away", which is the opposite of what happens. */}
+            <Icon
+              name="arrow-down"
+              size={18}
+              color={clean ? c.background : (c.textMuted || c.textTertiary)}
+            />
+          </Pressable>
+        </View>
 
-      {/* "It is saved" only reassures if you know WHERE — a box that swallows
-          things anonymously is one people stop trusting after the first thing
-          they cannot find. Said plainly, as a sentence, rather than as a row of
-          bulleted attributes. */}
-      <Text
-        style={[styles.note, { color: c.textTertiary }]}
-        numberOfLines={2}
-        testID="inbox-capture-note"
-      >
-        {`Goes to ${destinationLabel}. Give it a date or a board whenever you like.`}
-      </Text>
+        {/* "It is saved" only reassures if you know WHERE — a box that swallows
+            things anonymously is one people stop trusting after the first thing
+            they cannot find. Said plainly, as a sentence, rather than as a row of
+            bulleted attributes. */}
+        <Text
+          style={[styles.note, { color: c.textTertiary }]}
+          numberOfLines={2}
+          testID="inbox-capture-note"
+        >
+          {`Goes to ${destinationLabel}. Give it a date or a board whenever you like.`}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -156,9 +169,17 @@ const styles = StyleSheet.create({
   headingThin: { fontWeight: '200' },
   headingDivider: { fontWeight: '200' },
   headingStrong: { fontWeight: '700' },
+  // The panel itself: the deck's radius and padding, so the Inbox tab's first
+  // block and the Focus tab's first block are the same object.
+  deck: {
+    borderRadius: DECK_RADIUS,
+    borderCurve: 'continuous',
+    padding: 14,
+    gap: 10,
+  },
   field: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    height: 52, borderRadius: 14,
+    height: 48, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth,
     paddingLeft: 14, paddingRight: 7,
   },
   // The single-line field metrics this app uses everywhere

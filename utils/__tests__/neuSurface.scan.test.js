@@ -39,6 +39,7 @@ const SURFACES = [
   'screens/TasksScreen/components/FocusStatsPanel.jsx',
   'screens/TasksScreen/components/OverviewPage.jsx',
   'screens/TasksScreen/components/InboxCapture.jsx',
+  'screens/TasksScreen/components/InboxList.jsx',
 ];
 /**
  * The ones that BUILD the palette, as opposed to being handed one.
@@ -89,8 +90,9 @@ describe('STYLE-RULES §9 — the neumorphic surfaces', () => {
     // turns every panel back into a card, which is the other style.
     for (const rel of OWNS_PALETTE) {
       const src = code(rel);
-      // The ground is painted, and painted the panels' colour…
-      expect(src).toMatch(/backgroundColor:\s*(pal|well|focusSkin\(theme\))\.card|styles\.field, well|\broot,\s*\{\s*backgroundColor:\s*pal\.card/);
+      // The colour comes from the §9 palette — painted onto the ground, or
+      // handed to neuRaised/neuPressed, which returns it as the panel's fill.
+      expect(src).toMatch(/backgroundColor:\s*pal\.card|neu(Raised|Pressed)\(pal\.card/);
       // …and no page root falls back to the theme's own page colour. Scoped to
       // a ROOT rather than banned outright: `c.background` is still the right
       // ink ON a `textPrimary`-filled key, which is a contrast question and
