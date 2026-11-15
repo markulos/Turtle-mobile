@@ -112,7 +112,7 @@ export function clockFromMs(ms) {
  */
 function FocusDeck({
   running, remaining, focusMinutes, block, todaySessions,
-  progress, pulse, pal, neu, accent, breakAccent,
+  progress, pulse, pal, neu, grain, accent, breakAccent,
   task, onPickTask, onClearTask, onJot,
   onStartFocus, onStartBreak, onStop,
 }) {
@@ -147,7 +147,7 @@ function FocusDeck({
         { transform: [{ scale: pulse }] },
       ]}
     >
-        <Grain radius={24} />
+        <Grain level={grain} radius={24} />
       <View style={styles.deckHead}>
         <View style={[styles.badge, { backgroundColor: pal.tile }]}>
           <Icon name={isBreak ? 'coffee' : 'brain'} size={12} color={tint} />
@@ -384,14 +384,14 @@ function useCountUp(value, ms = 520) {
  * counts up to it and `format` turns each step into what you read, so "1h 05m"
  * climbs as honestly as "65" would.
  */
-function Tile({ icon, label, count, format, value, caption, pal, neu, accent, enter, onPress, testID }) {
+function Tile({ icon, label, count, format, value, caption, pal, neu, grain, accent, enter, onPress, testID }) {
   const shown = useCountUp(count ?? 0);
   const text = count == null ? value : (format ? format(shown) : String(shown));
   const skin = neu;
   const body = (
     <>
       {/* tileCard's radius — the tooth is clipped to the panel it dresses. */}
-      <Grain radius={22} />
+      <Grain level={grain} radius={22} />
       <View style={styles.tileTop}>
         <View style={[styles.iconTile, { backgroundColor: pal.tile }]}>
           <Icon name={icon} size={15} color={accent || pal.text} />
@@ -550,6 +550,10 @@ function FocusPage({
   onStartBreak,
   onStop,
   theme,
+  // Surface grain, from Settings → Appearance. A prop like `theme` rather
+  // than a reach into the context: the leaf that draws it must not import
+  // ThemeContext (see Grain), and this page already takes its chrome.
+  grain = 1,
   bottomInset = 0,
   // Injected in tests; the page is otherwise a clock and would be untestable.
   nowMs,
@@ -722,7 +726,7 @@ function FocusPage({
     <View style={[styles.root, { backgroundColor: pal.card }]}>
       {/* The surface's tooth. Over the ground, under everything else: a flat
           fill beneath soft shadows reads as plastic. */}
-      <Grain />
+      <Grain level={grain} />
     <ScrollView
       style={styles.page}
       contentContainerStyle={[styles.body, { paddingBottom: 32 + bottomInset }]}
@@ -732,6 +736,7 @@ function FocusPage({
       {/* The countdown, the bar, and the one control that matters. */}
       <FocusDeck
         neu={neu}
+        grain={grain}
         running={running}
         remaining={remaining}
         focusMinutes={focusMinutes}
@@ -758,7 +763,7 @@ function FocusPage({
           count={stats.todayMinutes}
           format={formatMinutes}
           caption={stats.todaySessions === 1 ? '1 block' : `${stats.todaySessions} blocks`}
-          pal={pal} neu={neu}
+          pal={pal} neu={neu} grain={grain}
           enter={enterAt(0, 0.35)}
           // The only tile that opens: "50m · 2 blocks" is a number with
           // nothing beside it, and whether 50 minutes is good depends on what
@@ -772,7 +777,7 @@ function FocusPage({
           count={stats.weekMinutes}
           format={formatMinutes}
           caption="last 7 days"
-          pal={pal} neu={neu}
+          pal={pal} neu={neu} grain={grain}
           enter={enterAt(0.08, 0.45)}
           testID="focus-tile-week"
         />
@@ -781,7 +786,7 @@ function FocusPage({
           label="Streak"
           value={stats.streak ? `${stats.streak}d` : '—'}
           caption={stats.streak ? 'days running' : 'start one today'}
-          pal={pal} neu={neu}
+          pal={pal} neu={neu} grain={grain}
           accent={stats.streak >= 3 ? '#F59E0B' : null}
           enter={enterAt(0.16, 0.55)}
           testID="focus-tile-streak"
@@ -791,7 +796,7 @@ function FocusPage({
           label="Average"
           value={stats.averageMinutes ? `${stats.averageMinutes}m` : '—'}
           caption={stats.totalSessions === 1 ? 'over 1 block' : `over ${stats.totalSessions} blocks`}
-          pal={pal} neu={neu}
+          pal={pal} neu={neu} grain={grain}
           enter={enterAt(0.24, 0.65)}
           testID="focus-tile-average"
         />
@@ -803,7 +808,7 @@ function FocusPage({
       <Animated.View
         style={[styles.panel, neu, enterAt(0.3, 0.7)]}
       >
-        <Grain radius={24} />
+        <Grain level={grain} radius={24} />
         <WeekBars
           week={stats.week}
           pal={pal}
@@ -834,7 +839,7 @@ function FocusPage({
               pressed && styles.pressed,
             ]}
           >
-        <Grain radius={22} />
+        <Grain level={grain} radius={22} />
             <View style={styles.statKeyTop}>
               <Text style={[styles.label, { color: pal.muted }]} numberOfLines={1}>{r.title}</Text>
               <Icon name="chevron-right" size={15} color={pal.muted} />
@@ -859,7 +864,7 @@ function FocusPage({
       <Animated.View
         style={[styles.panel, neu, enterAt(0.38, 0.78)]}
       >
-        <Grain radius={24} />
+        <Grain level={grain} radius={24} />
         <HourStrip byHour={stats.byHour} pal={pal} accent={accent} />
       </Animated.View>
 
@@ -892,7 +897,7 @@ function FocusPage({
             ]}
             testID="focus-recent-panel"
           >
-        <Grain radius={24} />
+        <Grain level={grain} radius={24} />
             {stats.recent.map((r, i) => {
               const task = r.taskId ? (taskOfId?.(r.taskId) || null) : null;
               // What the block was: its task if we can still name one, otherwise
@@ -956,7 +961,7 @@ function FocusPage({
             style={[styles.row, neu]}
             testID={`focus-board-${b.name}`}
           >
-        <Grain radius={20} />
+        <Grain level={grain} radius={20} />
             <View style={styles.rowTop}>
               <Text style={[styles.rowName, { color: pal.text }]} numberOfLines={1}>{boardLabel(b.name)}</Text>
               <Text style={[styles.rowFigure, { color: pal.text }]} numberOfLines={1}>{formatMinutes(b.minutes)}</Text>
@@ -1006,6 +1011,7 @@ function FocusPage({
     <EdgeSwipePage visible={!!statsRange} onClose={() => setStatsRange(null)}>
       {!!statsRange && (
         <FocusStatsPanel
+          grain={grain}
           sessions={sessions}
           boardOfTask={boardOfTask}
           pal={pal}

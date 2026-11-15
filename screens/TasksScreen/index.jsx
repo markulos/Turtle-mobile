@@ -563,7 +563,7 @@ function FourColorBoardsIcon({ size = 18, gap = 2 }) {
 }
 
 export default function TasksScreen() {
-  const { theme, timeFormat } = useTheme();
+  const { theme, timeFormat, grain } = useTheme();
   const insets = useSafeAreaInsets();
   // The tab bar floats over the page now, so lists clear it themselves.
   const tabBarHeight = useBottomTabBarHeight();
@@ -4240,6 +4240,7 @@ export default function TasksScreen() {
             HERE instead of handing you to the chat. */}
         <View style={{ width: pagerSize.width, height: pagerSize.height }}>
           <FocusPage
+            grain={grain}
             sessions={pomoLog}
             active={focusBlock}
             focusMinutes={focusMinutes}

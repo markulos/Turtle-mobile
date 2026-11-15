@@ -68,10 +68,23 @@ const SEARCH_PAGE = { key: '__search__', label: 'Results', icon: 'magnify' };
  * answer that, and a second hand-kept list would drift out of agreement
  * with the first.
  */
+/**
+ * The grain's four strengths. `value` multiplies the designed opacity, so the
+ * relative weights inside a surface are kept and the setting moves all of
+ * them together.
+ */
+const GRAIN_LEVELS = [
+  { key: 'off', label: 'Off', value: 0 },
+  { key: 'fine', label: 'Fine', value: 0.45 },
+  { key: 'medium', label: 'Medium', value: 1 },
+  { key: 'strong', label: 'Strong', value: 1.6 },
+];
+
 const SETTING_TERMS = {
   profile: 'profile display name avatar photo picture alias points stats tasks pomodoros',
   darkMode: 'dark mode theme appearance night light colour color automatic auto system follow phone sunset sunrise schedule day',
   accent: 'highlight colour color accent theme appearance swatch pink light pink custom own pick picker hex shade hue rainbow',
+  grain: 'grain texture noise speckle surface finish matte material focus panels neumorphism appearance',
   hideVault: 'hide vault button navbar tab bar navigation photos',
   dockStyle: 'navbar style dock bar bottom appearance backdrop capsule white paper smoked glass dark black hairline border theme look chip underline active tab indicator highlight custom colour color own pick hex background shade',
   autoUpload: 'auto upload camera roll new photos videos background sync vault automatic icloud',
@@ -183,7 +196,7 @@ async function pollHealToCompletion(api, onProgress, { intervalMs = 2000, maxMs 
 }
 
 export default function SettingsScreen({ active = true }) {
-  const { theme, isDark, themeMode, setThemeMode, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll, accent, setAccent, accentColor, customAccent, setCustomAccent } = useTheme();
+  const { theme, isDark, themeMode, setThemeMode, timeFormat, setTimeFormat, hideVaultButton, setHideVaultButton, showCalendarDayTasks, setShowCalendarDayTasks, calendarFreeScroll, setCalendarFreeScroll, accent, setAccent, accentColor, customAccent, setCustomAccent, grain, setGrain } = useTheme();
   // The custom-colour sheet, opened by the last swatch in the Appearance row.
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
   const { serverIP, isConnected, pondEnv, loading, saveIP, checkConnection, api, getBaseUrl } = useServer();
@@ -993,6 +1006,61 @@ export default function SettingsScreen({ active = true }) {
                         ]}
                       >
                         {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              </SettingsItem>
+
+              {/* SURFACE GRAIN. The focus page's panels are the page's own
+                  colour, lifted by light alone (utils/neumorph), and a
+                  perfectly flat fill under soft shadows reads as plastic — so
+                  they carry a fine speckle. How much is a taste call on a real
+                  screen, and the gap between "a material" and "a broken image"
+                  is not large, so it is a setting rather than a constant.
+
+                  Four steps, not a slider: the same reasoning as the dock's
+                  glow row. A subtle effect cannot be set to a particular
+                  strength by dragging. */}
+              <SettingsItem terms={SETTING_TERMS.grain}>
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Surface grain</Text>
+                  <Text style={styles.settingDescription}>
+                    {grain === 0
+                      ? 'Off — the focus panels are a flat colour.'
+                      : 'A fine speckle on the focus panels, so they read as a material rather than as plastic.'}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.modeRow}>
+                {GRAIN_LEVELS.map((g) => {
+                  const selected = Math.abs((Number.isFinite(grain) ? grain : 1) - g.value) < 0.01;
+                  return (
+                    <TouchableOpacity
+                      key={g.key}
+                      testID={`grain-${g.key}`}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={g.label}
+                      onPress={() => { if (!selected) { tapHaptic(); setGrain(g.value); } }}
+                      style={[
+                        styles.modeKey,
+                        {
+                          borderColor: selected ? theme.colors.accent : theme.colors.border,
+                          backgroundColor: selected ? theme.colors.accent : 'transparent',
+                        },
+                      ]}
+                    >
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.modeKeyLabel,
+                          { color: selected ? inkOn(theme.colors.accent) : theme.colors.textSecondary },
+                        ]}
+                      >
+                        {g.label}
                       </Text>
                     </TouchableOpacity>
                   );

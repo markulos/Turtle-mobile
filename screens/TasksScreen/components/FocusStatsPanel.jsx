@@ -137,7 +137,7 @@ function RangeSegment({ value, onChange, theme }) {
 }
 
 /** A section: a title, an optional one-line note, and the plot under them. */
-function Chart({ title, note, children, pal, neu, testID }) {
+function Chart({ title, note, children, pal, neu, grain, testID }) {
   return (
     <View
       style={[styles.card, neu]}
@@ -145,7 +145,7 @@ function Chart({ title, note, children, pal, neu, testID }) {
     >
       {/* The card's own radius: a square of speckle hanging off a rounded
           panel's corners is worse than no texture at all. */}
-      <Grain radius={24} />
+      <Grain level={grain} radius={24} />
       <Text style={[styles.cardTitle, { color: pal.text }]} numberOfLines={1}>{title}</Text>
       {!!note && <Text style={[styles.cardNote, { color: pal.muted }]} numberOfLines={2}>{note}</Text>}
       {children}
@@ -326,6 +326,8 @@ function FocusStatsPanel({
   boardOfTask,
   pal,
   theme,
+  // Surface grain, from Settings → Appearance (see FocusPage).
+  grain = 1,
   onClose,
   // Which period the panel opens on — the tile that was tapped to get here.
   initialRange = 'week',
@@ -361,7 +363,7 @@ function FocusStatsPanel({
 
   return (
     <View style={[styles.page, { backgroundColor: pal.card, paddingTop: insetTop }]}>
-      <Grain />
+      <Grain level={grain} />
       <View style={[styles.topBar, { borderBottomColor: c.border }]}>
         <Pressable
           onPress={onClose}
@@ -394,7 +396,7 @@ function FocusStatsPanel({
         <Chart
           title={s.label}
           note={deltaLine(s.prev)}
-          pal={pal} neu={neu}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-total"
         >
           <Text style={[styles.hero, { color: pal.text }]} numberOfLines={1} testID="focus-stats-hero">
@@ -430,7 +432,7 @@ function FocusStatsPanel({
           )}
         </Chart>
 
-        <Chart title={seriesTitle} note={seriesNote} pal={pal} neu={neu} testID="focus-stats-series">
+        <Chart title={seriesTitle} note={seriesNote} pal={pal} neu={neu} grain={grain} testID="focus-stats-series">
           <Series
             series={s.series}
             pal={pal}
@@ -455,7 +457,7 @@ function FocusStatsPanel({
               ? `${s.activeDays} day${s.activeDays === 1 ? '' : 's'} with focus on them`
               : `Focus on ${s.activeDays} of the ${s.elapsedDays} day${s.elapsedDays === 1 ? '' : 's'} so far`
           }
-          pal={pal} neu={neu}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-rhythm"
         >
           {s.range !== 'all' && (
@@ -493,7 +495,7 @@ function FocusStatsPanel({
         <Chart
           title="When you focus"
           note={s.peakBand ? `Most of it in the ${s.peakBand.label.toLowerCase()}` : 'Nothing to place yet'}
-          pal={pal} neu={neu}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-when"
         >
           <Bars
@@ -508,7 +510,7 @@ function FocusStatsPanel({
         <Chart
           title="By weekday"
           note={s.bestWeekday ? `${s.bestWeekday} is your day` : 'Nothing to place yet'}
-          pal={pal} neu={neu}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-weekday"
         >
           <View style={styles.columns} testID="focus-stats-weekday-cols">
@@ -547,7 +549,7 @@ function FocusStatsPanel({
         <Chart
           title="Where it went"
           note={s.boards.length ? `${s.boards.length} board${s.boards.length === 1 ? '' : 's'} · share of the period` : null}
-          pal={pal} neu={neu}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-boards"
         >
           {s.boards.length === 0 ? (
@@ -572,7 +574,7 @@ function FocusStatsPanel({
         <Chart
           title="Records · all time"
           note={records.firstBlockAt ? `Focusing since ${dayLabel(records.firstBlockAt)}` : null}
-          pal={pal} neu={neu}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-records"
         >
           <View style={styles.figureRow}>

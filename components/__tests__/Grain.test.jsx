@@ -50,9 +50,12 @@ describe('Grain', () => {
     // A surface one point wider than a tile needs a second column, not a
     // stretched tile: the speckle must never scale.
     expect(grainTiles(GRAIN_TILE + 1, GRAIN_TILE)).toEqual([2, 1]);
-    // A whole phone page, and a small stat tile.
-    expect(grainTiles(390, 900)).toEqual([2, 4]);
-    expect(grainTiles(165, 105)).toEqual([1, 1]);
+    // A whole phone page, and a small stat tile — worked out from the tile
+    // size rather than written down, so changing the art cannot leave this
+    // asserting yesterday's arithmetic.
+    expect(grainTiles(390, 900))
+      .toEqual([Math.ceil(390 / GRAIN_TILE), Math.ceil(900 / GRAIN_TILE)]);
+    expect(grainTiles(GRAIN_TILE - 1, GRAIN_TILE - 1)).toEqual([1, 1]);
   });
 
   test('nothing is laid down before it has been measured', () => {
@@ -60,6 +63,26 @@ describe('Grain', () => {
     // case" is how a small tile ends up with dozens of discarded quads.
     expect(grainTiles(0, 0)).toEqual([0, 0]);
     expect(grainTiles(-5, 100)).toEqual([0, 1]);
+  });
+
+  test('the art ships at every density, all the same size in POINTS', () => {
+    // This is what makes the speckle FINE rather than blocky: at @3x one
+    // speckle is one device pixel. A single-density asset draws 1pt blocks,
+    // which is what Mark was looking at. The three files must agree on the
+    // point size or the tiles stop meeting edge to edge and the repeat is
+    // no longer seamless.
+    const fs = require('fs');
+    const path = require('path');
+    const dir = path.resolve(__dirname, '..', '..', 'assets');
+    const px = (file) => {
+      const b = fs.readFileSync(path.join(dir, file));
+      return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+    };
+    for (const [file, scale] of [['grain.png', 1], ['grain@2x.png', 2], ['grain@3x.png', 3]]) {
+      const { w, h } = px(file);
+      expect(w).toBe(h);
+      expect(w / scale).toBe(GRAIN_TILE);
+    }
   });
 
   test('tiles are laid at 1:1, so the speckle is the same size everywhere', async () => {
@@ -85,6 +108,28 @@ describe('Grain', () => {
     // Texture, not noise: past about two thirds the speckle stops reading as
     // a surface and starts reading as a broken image.
     expect(GRAIN_OPACITY).toBeLessThanOrEqual(0.66);
+  });
+
+  test('the SETTING scales it, and Off draws nothing at all', async () => {
+    // Settings → Appearance. A multiplier on the designed opacity rather than
+    // an opacity itself, so a surface keeps its relative weights and one
+    // control moves all of them.
+    const half = await render(<Grain level={0.5} />);
+    expect(flat(clipOf(half)).opacity).toBeCloseTo(GRAIN_OPACITY * 0.5);
+
+    // Off is off: nothing rendered, not a transparent layer still measuring
+    // itself and laying tiles nobody can see.
+    const off = await render(<Grain level={0} />);
+    expect(off.queryByTestId('grain-clip', HIDDEN)).toBeNull();
+  });
+
+  test('a level it cannot read falls back to the designed strength', async () => {
+    // A surface with its texture silently off looks like a bug, not like a
+    // preference — so junk means "as designed", never "none".
+    for (const junk of [undefined, null, NaN, 'lots']) {
+      const view = await render(<Grain level={junk} />);
+      expect(flat(clipOf(view)).opacity).toBe(GRAIN_OPACITY);
+    }
   });
 
   test('a square surface asks for no radius and still clips', async () => {

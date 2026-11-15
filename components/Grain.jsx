@@ -44,8 +44,17 @@ import { Image, StyleSheet, View } from 'react-native';
 
 const GRAIN = require('../assets/grain.png');
 
-/** The art's own size. Tiles are laid at 1:1 so the speckle never scales. */
-export const GRAIN_TILE = 256;
+/**
+ * The art's own size IN POINTS. Tiles are laid at exactly this, so they meet
+ * edge to edge with no gap and no overlap — which is what makes the repeat
+ * seamless. Change it here and the asset has to change with it.
+ *
+ * The art ships at three densities (grain.png / @2x / @3x), all of them this
+ * many points. On a modern phone that means @3x, where one speckle is ONE
+ * DEVICE PIXEL — the fine tooth Mark asked for, rather than the 1pt blocks
+ * the single-density asset was drawing.
+ */
+export const GRAIN_TILE = 128;
 
 /**
  * How much of the speckle lands. The tile's own alpha is already low; this is
@@ -67,11 +76,24 @@ export function grainTiles(width, height, tile = GRAIN_TILE) {
   return [cols, rows];
 }
 
-export default function Grain({ opacity = GRAIN_OPACITY, radius = 0, style, testID = 'grain' }) {
+/**
+ * `level` is the person's setting (Settings → Appearance), passed DOWN rather
+ * than read from the theme here. Reaching into ThemeContext from a leaf like
+ * this pulls AsyncStorage into every consumer's tests — utils/inputField.js
+ * carries the note about what that cost last time. It multiplies the designed
+ * opacity, so a surface keeps its relative weights and the setting moves all
+ * of them together.
+ */
+export default function Grain({
+  level = 1, opacity = GRAIN_OPACITY, radius = 0, style, testID = 'grain',
+}) {
+  const strength = opacity * (Number.isFinite(level) ? Math.max(0, level) : 1);
   // Measured rather than assumed: a fixed grid big enough for the largest
   // surface would lay dozens of tiles inside a small one and throw them away.
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [cols, rows] = grainTiles(size.width, size.height);
+  // Off is off: no measurement to honour, no tiles to lay.
+  if (strength <= 0) return null;
 
   return (
     <View
@@ -87,7 +109,7 @@ export default function Grain({ opacity = GRAIN_OPACITY, radius = 0, style, test
       }}
       style={[
         StyleSheet.absoluteFillObject,
-        { borderRadius: radius, overflow: 'hidden', opacity },
+        { borderRadius: radius, overflow: 'hidden', opacity: strength },
         style,
       ]}
     >

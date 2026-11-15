@@ -57,6 +57,8 @@ const DOCK_THEME_KEY = '@connected_pass_dock_theme';
 // each: they are read and written as a whole list, and a dozen keys that have
 // to stay in step is how a half-saved look happens.
 const SAVED_LOOKS_KEY = '@connected_pass_saved_looks';
+// How much surface grain the neumorphic pages carry (Settings → Appearance).
+const GRAIN_KEY = '@connected_pass_grain';
 
 /**
  * How the dock marks the tab you are on: the filled accent CHIP behind the
@@ -419,6 +421,16 @@ const ThemeContext = createContext({
   // theme's skin overrides are not recoverable from the settings above —
   // see components/dockThemes.
   dockTheme: '',
+  /**
+   * SURFACE GRAIN, 0..1 — the speckle on the focus page's panels.
+   *
+   * A MULTIPLIER on the designed opacity, not an opacity itself — so the
+   * relative weights inside a surface are kept and the setting moves all of
+   * them together. 1 is as designed; the top step goes a little past it,
+   * which is why the range is 0..2 rather than 0..1.
+   */
+  grain: 1,
+  setGrain: () => {},
   // The person's own named looks, newest first — see components/savedLooks.
   savedLooks: [],
   saveLook: () => {},
@@ -464,6 +476,7 @@ export const ThemeProvider = ({ children }) => {
   const [dockGlowColor, setDockGlowColorState] = useState(null);
   const [dockTheme, setDockThemeState] = useState('');
   const [savedLooks, setSavedLooksState] = useState([]);
+  const [grain, setGrainState] = useState(1);
   const [accent, setAccentState] = useState(DEFAULT_ACCENT);
   // The user's own colour, '#RRGGBB', or null if they have never mixed one.
   // Remembered even while a preset is selected, so the custom swatch still
@@ -571,6 +584,12 @@ export const ThemeProvider = ({ children }) => {
       // see readLooks. Losing a saved look is a disappointment; failing to
       // finish this function is an app that opens on a white screen.
       setSavedLooksState(readLooks(await AsyncStorage.getItem(SAVED_LOOKS_KEY)));
+
+      // Stored as a number. A value this build does not understand falls back
+      // to the designed strength rather than to nothing — a surface with its
+      // texture silently off looks like a bug, not like a preference.
+      const savedGrain = parseFloat(await AsyncStorage.getItem(GRAIN_KEY));
+      if (Number.isFinite(savedGrain)) setGrainState(Math.max(0, Math.min(2, savedGrain)));
     } catch (error) {
       console.error('Error loading theme:', error);
     } finally {
@@ -728,6 +747,16 @@ export const ThemeProvider = ({ children }) => {
 
   const renameSavedLook = (id, name) => persistLooks(renameLook(savedLooks, id, name));
 
+  const setGrain = async (level) => {
+    const next = Number.isFinite(level) ? Math.max(0, Math.min(2, level)) : 1;
+    setGrainState(next);
+    try {
+      await AsyncStorage.setItem(GRAIN_KEY, String(next));
+    } catch (error) {
+      console.error('Error saving grain setting:', error);
+    }
+  };
+
   const setShowCalendarDayTasks = async (show) => {
     const next = !!show;
     setShowCalendarDayTasksState(next);
@@ -848,6 +877,7 @@ export const ThemeProvider = ({ children }) => {
       theme, isDark, toggleTheme, themeMode, setThemeMode, timeFormat, setTimeFormat,
       accent, setAccent, accentColor, customAccent, setCustomAccent,
       savedLooks, saveLook, deleteLook, renameSavedLook,
+      grain, setGrain,
       // Exposed so useAccountAccent can wait for AsyncStorage before it
       // adopts the account's colour — reconciling first would be undone a
       // moment later by this phone's own stored answer.
@@ -859,7 +889,7 @@ export const ThemeProvider = ({ children }) => {
       dockStyle, setDockStyle, dockColor, setDockColor, dockInk, setDockInk, dockInkColor, setDockInkColor, dockGlow, setDockGlow, dockGlowColor, setDockGlowColor,
       dockTheme, setDockTheme,
     }),
-    [dockGlow, dockGlowColor, dockInkColor, theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent, savedLooks, isLoading],
+    [dockGlow, dockGlowColor, dockInkColor, theme, isDark, themeMode, timeFormat, hideVaultButton, showCalendarDayTasks, calendarFreeScroll, dockIndicator, dockStyle, dockColor, dockInk, dockTheme, accent, accentColor, customAccent, savedLooks, grain, isLoading],
   );
 
   if (isLoading) {
