@@ -63,8 +63,39 @@ export const CLAUDE_MARK_LEVEL = 2.3;
  — the art drives it, not a guess. */
 export const markHeight = (size) => size / CLAUDE_MARK_ASPECT;
 
-const HEAD = 'M264 126 C263 101 246 72 214 68 C184 64 149 85 133 112 '
-  + 'C124 127 124 141 138 147 C156 154 186 150 198 130';
+// The head is two things in one stroke: the DOME (right side, over the top,
+// down the left to the chin) and the SMILE, which the same line hooks into.
+const DOME = 'M264 126 C263 101 246 72 214 68 C184 64 149 85 133 112 '
+  + 'C124 127 124 141 138 147';
+const HEAD = `${DOME} C156 154 186 150 198 130`;
+
+// The centre the art turns about, and where a FILLED face ends: just above
+// the ledge line, so the face stands behind the ridge rather than over it.
+const CX = BOX.x + BOX.w / 2;
+const CY = BOX.y + BOX.h / 2;
+const FACE_BASE_Y = LEDGE_Y - 1;
+
+/**
+ * The face as a closed SHAPE, for a filled mark: the dome, shut along a
+ * straight base. The stroke cannot be filled as it is — it is open, and
+ * closing it corner to corner cuts a wedge out of the face along the smile.
+ *
+ * The base is drawn pre-turned against `tilt`, so that after the whole
+ * drawing is turned it comes out LEVEL — parallel to the ridge it sits on,
+ * not sloping across it.
+ */
+export function facePath(tilt = 0) {
+  const a = (tilt * Math.PI) / 180;
+  const baseAt = (x) => CY + (FACE_BASE_Y - CY - (x - CX) * Math.sin(a)) / Math.cos(a);
+  return `${DOME} L146 ${baseAt(146).toFixed(2)} L264 ${baseAt(264).toFixed(2)} Z`;
+}
+
+/**
+ * The mark at night: a white figure with a black line. On a dark header the
+ * black outline disappears into the page and what is left is the shapes —
+ * a white face with black eyes and a black smile, a white hand either side.
+ */
+export const CLAUDE_MARK_NIGHT = { line: '#000000', fill: '#FFFFFF' };
 const LEFT_HAND = 'M44 160 C46 142 62 128 84 126 C97 124 110 128 111 138 '
   + 'C112 146 101 150 92 152 C95 160 85 167 78 158 C79 170 65 175 62 163 '
   + 'C60 178 44 177 44 160 Z';
@@ -102,6 +133,12 @@ export default function ClaudeTurtleMark({
    */
   handFill = 'none',
   /**
+   * What the FACE is filled with. 'none' by default. A colour draws the face
+   * as a solid shape behind the line (see facePath) — the head STROKE itself
+   * is still never filled, for the reason above.
+   */
+  faceFill = 'none',
+  /**
    * Degrees clockwise to turn the whole drawing about its own centre. 0 — as
    * drawn — everywhere it floats free; CLAUDE_MARK_LEVEL where it hangs over
    * a straight edge and the hands have to sit level on it.
@@ -125,8 +162,11 @@ export default function ClaudeTurtleMark({
           nothing reaches the edge. */}
       <G
         testID={`${testID}-art`}
-        transform={tilt ? `rotate(${tilt} ${BOX.x + BOX.w / 2} ${BOX.y + BOX.h / 2})` : undefined}
+        transform={tilt ? `rotate(${tilt} ${CX} ${CY})` : undefined}
       >
+        {faceFill !== 'none' && (
+          <Path testID={`${testID}-face`} d={facePath(tilt)} fill={faceFill} stroke="none" />
+        )}
         {[HEAD, LEFT_HAND, RIGHT_HAND].map((d) => (
           <Path
             key={d}

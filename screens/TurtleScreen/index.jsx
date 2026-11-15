@@ -51,7 +51,9 @@ import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
-import ClaudeTurtleMark, { CLAUDE_MARK_LEVEL, ledgeOffset, markHeight } from '../../components/ClaudeTurtleMark';
+import ClaudeTurtleMark, {
+  CLAUDE_MARK_LEVEL, CLAUDE_MARK_NIGHT, ledgeOffset, markHeight,
+} from '../../components/ClaudeTurtleMark';
 import TypingIndicator from '../../components/TypingIndicator';
 import MarkdownText from '../../components/MarkdownText';
 import CopyKey from '../../components/CopyKey';
@@ -2357,7 +2359,13 @@ export default function TurtleScreen() {
               either. Nothing is painted behind the words to hide a line —
               there is no line there to hide. */}
           {claudeMarkShown && <View pointerEvents="none" style={styles.claudeRidgeLead} />}
-          <View style={[styles.identityText, claudeMarkShown && styles.identityTextOnRidge]}>
+          {/* One style OR the other — never the ridge style layered over
+              identityText. That one carries `flex: 1`, and in Yoga a
+              `flex: 1` still in the merged style turns `flexBasis: 'auto'`
+              into a basis of ZERO: the title was laid out 0pt wide and the
+              header shipped with no name in it (a browser does the
+              opposite, which is why the mock-up looked right). */}
+          <View style={claudeMarkShown ? styles.identityTextOnRidge : styles.identityText}>
             {inClaudeSession ? (
               <Text style={styles.identityName} numberOfLines={1}>
                 {claudeUiMode === 'login' ? 'Claude sign-in' : (
@@ -2441,7 +2449,13 @@ export default function TurtleScreen() {
                 // Turned so both hands rest on the ridge. As drawn, the left
                 // one droops below the rule and the right barely reaches it.
                 tilt={CLAUDE_MARK_LEVEL}
-                handFill={theme.colors.background}
+                // LIGHT: the felt-pen drawing — orange line, hands filled
+                // with the header's own colour so the ridge passes under
+                // them. DARK (Mark, 2026-11-15): a white figure with a black
+                // line — face and hands solid white, eyes and smile black.
+                color={theme.mode === 'dark' ? CLAUDE_MARK_NIGHT.line : undefined}
+                handFill={theme.mode === 'dark' ? CLAUDE_MARK_NIGHT.fill : theme.colors.background}
+                faceFill={theme.mode === 'dark' ? CLAUDE_MARK_NIGHT.fill : 'none'}
               />
             </View>
           </>
@@ -3797,7 +3811,14 @@ const createStyles = (theme, insets) =>
     identityBarOnRidge: { gap: CLAUDE_RIDGE_GAP },
     // …and the title takes only the width of its words, so the rule can
     // start where they end. (Outside a session it fills the row.)
-    identityTextOnRidge: { flexGrow: 0, flexShrink: 1, flexBasis: 'auto' },
+    //
+    // Used INSTEAD of identityText, not on top of it, and with no `flex` or
+    // `flexBasis` of its own: left alone, the basis is the content — the
+    // words. It may shrink (a long title ellipsizes before it reaches the
+    // mark) and that is all it says. Checked in the real Yoga engine:
+    // title 172pt wide, its middle, the ridge and the mark's ledge all on
+    // one line.
+    identityTextOnRidge: { flexShrink: 1, minWidth: 0 },
     // No border of its own: the seam above IS the line between the identity
     // row and this one, and two hairlines eight points apart read as a
     // mistake.

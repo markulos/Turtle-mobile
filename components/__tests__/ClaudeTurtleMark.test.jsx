@@ -22,6 +22,8 @@ import ClaudeTurtleMark, {
   CLAUDE_MARK_ASPECT,
   CLAUDE_MARK_COLOR,
   CLAUDE_MARK_LEVEL,
+  CLAUDE_MARK_NIGHT,
+  facePath,
   CLAUDE_MARK_LEDGE,
   ledgeOffset,
   markHeight,
@@ -121,7 +123,46 @@ describe('ClaudeTurtleMark', () => {
     expect(src).toMatch(/tilt=\{CLAUDE_MARK_LEVEL\}/);
   });
 
+  test('AT NIGHT it is a white figure with a black line', async () => {
+    // Mark (2026-11-15): in dark mode, white fill with the outline black.
+    expect(CLAUDE_MARK_NIGHT).toEqual({ line: '#000000', fill: '#FFFFFF' });
+    await render(
+      <ClaudeTurtleMark color={CLAUDE_MARK_NIGHT.line} handFill={CLAUDE_MARK_NIGHT.fill} faceFill={CLAUDE_MARK_NIGHT.fill} />,
+    );
+    // The face is a shape of its own, behind the line — and has no outline
+    // of its own to double the stroke.
+    const face = screen.getByTestId('claude-turtle-mark-face');
+    expect(face.props.fill).toBe('#FFFFFF');
+    expect(face.props.stroke).toBe('none');
+    // Eyes take the line colour, so they are black on the white face.
+    for (const eye of screen.getAllByTestId('svg-Circle')) expect(eye.props.fill).toBe('#000000');
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    expect(src).toMatch(/color=\{theme\.mode === 'dark' \? CLAUDE_MARK_NIGHT\.line : undefined\}/);
+    expect(src).toMatch(/faceFill=\{theme\.mode === 'dark' \? CLAUDE_MARK_NIGHT\.fill : 'none'\}/);
+  });
+
+  test('no face shape unless one is asked for — by day it is still a line drawing', async () => {
+    await render(<ClaudeTurtleMark />);
+    expect(screen.queryByTestId('claude-turtle-mark-face')).toBeNull();
+  });
+
+  test('the filled face ends LEVEL, just above the ledge, whatever the tilt', () => {
+    // The base is drawn pre-turned, so that once the drawing is turned it is
+    // parallel to the ridge. Turn its two ends and they share a height —
+    // one unit above the ledge line (150), so the face is behind the ridge.
+    for (const tilt of [0, CLAUDE_MARK_LEVEL, 5]) {
+      const nums = facePath(tilt).split(' L').slice(1).map((p) => p.replace(' Z', '').split(' ').map(Number));
+      const a = (tilt * Math.PI) / 180;
+      const turnedY = ([x, y]) => 122 + (x - 188) * Math.sin(a) + (y - 122) * Math.cos(a);
+      expect(turnedY(nums[0])).toBeCloseTo(149, 1);
+      expect(turnedY(nums[1])).toBeCloseTo(149, 1);
+    }
+    // Closed, and closed along that base — not corner to corner across the smile.
+    expect(facePath(0)).toMatch(/ Z$/);
+  });
+
   test('the ledge runs under the chin and through the hands', () => {
+
 
     // Above the line: the whole face. Below it: only fingers. That is what
     // makes it hang OVER an edge instead of sitting on one.
@@ -164,15 +205,26 @@ describe('ClaudeTurtleMark', () => {
     const from = src.indexOf('styles.identityBar, claudeMarkShown && styles.identityBarOnRidge');
     const bar = src.slice(from, src.indexOf('</TouchableOpacity>', from));
     const lead = bar.indexOf('style={styles.claudeRidgeLead}');
-    const title = bar.indexOf('styles.identityText, claudeMarkShown && styles.identityTextOnRidge');
+    const title = bar.indexOf('style={claudeMarkShown ? styles.identityTextOnRidge : styles.identityText}');
     const ridge = bar.indexOf('style={styles.claudeRidge} testID="claude-ridge"');
     expect(lead).toBeGreaterThan(-1);
     expect(title).toBeGreaterThan(lead);
     expect(ridge).toBeGreaterThan(title);
     const barStyle = src.slice(src.indexOf('    identityBar: {'), src.indexOf('    identityAvatarWrap: {'));
     expect(barStyle).toMatch(/alignItems: 'center',/);
-    // The title is as wide as its words, so the rule starts where they end…
-    expect(src).toMatch(/identityTextOnRidge: \{ flexGrow: 0, flexShrink: 1, flexBasis: 'auto' \},/);
+    // The title is as wide as its words, so the rule starts where they end.
+    //
+    // THE BUG THIS PINS (device, 2026-11-15): the ridge style was layered
+    // over identityText, which carries `flex: 1`. In Yoga a `flex: 1` still
+    // in the merged style makes `flexBasis: 'auto'` a basis of ZERO, so the
+    // title was 0pt wide and the header shipped with no name in it. A
+    // browser resolves the same styles the other way, so the mock-up was
+    // fine. One style or the other, and the ridge one says nothing about
+    // `flex` or `flexBasis`.
+    expect(src).not.toMatch(/styles\.identityText, claudeMarkShown/);
+    const onRidge = /identityTextOnRidge: \{([^}]*)\},/.exec(src)[1];
+    expect(onRidge).toMatch(/flexShrink: 1/);
+    expect(onRidge).not.toMatch(/flex:|flexBasis|flexGrow/);
     // …and nothing is painted behind the words to hide a line under them.
     const titleStyles = src.slice(src.indexOf('    identityBarOnRidge: {'), src.indexOf('    headerClaudeRow: {'));
     expect(titleStyles).not.toMatch(/backgroundColor/);
@@ -211,7 +263,7 @@ describe('ClaudeTurtleMark', () => {
     // never filled whatever is passed: its outline deliberately does not
     // close on the right, so a fill would leak across the gap.
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
-    expect(src).toMatch(/handFill=\{theme\.colors\.background\}/);
+    expect(src).toMatch(/handFill=\{theme\.mode === 'dark' \? CLAUDE_MARK_NIGHT\.fill : theme\.colors\.background\}/);
   });
 
   test('THE LINE DOES NOT MOVE when a session starts', () => {
