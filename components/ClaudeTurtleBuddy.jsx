@@ -5,8 +5,13 @@
  *   • he JUMPS UP from behind the ledge when a session starts — the face rises
  *     past its resting place and settles, then the hands come down on the edge;
  *   • he BLINKS, at random, sometimes twice;
- *   • he THINKS while Claude is working — the head tips up and one finger
- *     goes up beside it — and comes back to rest when the answer starts.
+ *   • he THINKS while Claude is working — one hand comes off the ledge and up
+ *     to his chin, and the head tips back a little — and he puts it back down
+ *     when the answer starts.
+ *
+ * (The thinking pose was first a raised finger. Mark, 2026-11-15: "thinking
+ * should have his hand on his chin not a finger up … that finger looks like a
+ * tail". It did. There is no finger in the drawing any more.)
  *
  * HOW IT IS BUILT, and why:
  *
@@ -23,9 +28,9 @@
  *      is not seen — which is all the "jump up from behind it" needs. The eyes
  *      are two round Views on the face (not SVG circles), so each can close
  *      about its own middle without the pair sliding down the face;
- *   2. the FINGER, behind the hands, so its base is hidden by the hand it
- *      belongs to and it can simply slide up into view;
- *   3. the HANDS, in front of the ledge — they are what is over it.
+ *   2. the RIGHT hand, which stays on the ledge;
+ *   3. the LEFT hand, which is the one that goes to the chin — so it is in
+ *      front of the face when it gets there.
  *
  * Reduce Motion: he is simply there, at rest. No jump, no blink, and thinking
  * shows as the pose without the travel.
@@ -35,7 +40,7 @@ import {
   AccessibilityInfo, Animated, Easing, StyleSheet, View,
 } from 'react-native';
 import ClaudeTurtleMark, {
-  CLAUDE_MARK_COLOR, eyeDots, ledgeOffset, markHeight,
+  CLAUDE_MARK_COLOR, artPoint, eyeDots, ledgeOffset, markHeight,
 } from './ClaudeTurtleMark';
 
 /** Blink timing, in ms. A blink is fast to shut and a touch slower to open. */
@@ -53,9 +58,18 @@ export function nextBlinkGap(rand = Math.random) {
   return BLINK.minGap + rand() * (BLINK.maxGap - BLINK.minGap);
 }
 
-// How far the head tips back while he thinks, and how far he overshoots the
-// ledge on the way up (as a fraction of the distance he travels).
-export const THINK_TILT_DEG = -8;
+// How far the head tips back while he thinks.
+export const THINK_TILT_DEG = -6;
+/**
+ * HAND ON CHIN, in the drawing's own units: the left hand's middle, how far it
+ * travels to reach the chin, and how far it turns on the way so the fingers
+ * come round under the jaw instead of arriving flat. Chosen by rendering five
+ * candidates in both themes; this is the one that reads as a hand to the chin
+ * rather than a hand over the mouth.
+ */
+export const CHIN_HAND = { cx: 77, cy: 151, dx: 58, dy: -16, turn: -22 };
+
+// How far he overshoots the ledge on the way up, as a fraction of the trip.
 const JUMP_OVERSHOOT = 0.16;
 // Room above the mark, inside the clip, for the overshoot and the tipped head.
 const HEADROOM = 12;
@@ -70,8 +84,8 @@ const CLIP_FILLED = -0.5;
 const FACE_DROP = 40;
 
 const FACE = ['face'];
-const FINGER = ['finger'];
-const HANDS = ['hands'];
+const LEFT = ['leftHand'];
+const RIGHT = ['rightHand'];
 
 export default function ClaudeTurtleBuddy({
   size = 80,
@@ -97,6 +111,20 @@ export default function ClaudeTurtleBuddy({
   thinkingRef.current = thinking;
 
   const eyes = useMemo(() => eyeDots(size, tilt), [size, tilt]);
+
+  // The chin move, in POINTS on this mark: where the hand's middle is (as an
+  // offset from the layer's own middle, which is what a View turns about) and
+  // the trip it makes. Both follow `tilt`, since the hand is drawn turned.
+  const chin = useMemo(() => {
+    const from = artPoint(size, tilt, CHIN_HAND.cx, CHIN_HAND.cy);
+    const to = artPoint(size, tilt, CHIN_HAND.cx + CHIN_HAND.dx, CHIN_HAND.cy + CHIN_HAND.dy);
+    return {
+      pivotX: from.x - size / 2,
+      pivotY: from.y - height / 2,
+      moveX: to.x - from.x,
+      moveY: to.y - from.y,
+    };
+  }, [size, tilt, height]);
 
   // ── the jump, then a life of blinking ─────────────────────────────────
   useEffect(() => {
@@ -156,12 +184,12 @@ export default function ClaudeTurtleBuddy({
     };
   }, [rise, grab, lid, think]);
 
-  // ── thinking: head back, one finger up ────────────────────────────────
+  // ── thinking: hand to chin, head back ─────────────────────────────────
   useEffect(() => {
     if (calm.current) { think.setValue(thinking ? 1 : 0); return undefined; }
     const move = Animated.timing(think, {
       toValue: thinking ? 1 : 0,
-      duration: thinking ? 280 : 220,
+      duration: thinking ? 320 : 240,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     });
@@ -173,18 +201,29 @@ export default function ClaudeTurtleBuddy({
     transform: [
       { translateY: Animated.add(
         Animated.multiply(rise, travel),
-        think.interpolate({ inputRange: [0, 1], outputRange: [0, -1.5] }),
+        think.interpolate({ inputRange: [0, 1], outputRange: [0, -1] }),
       ) },
       { rotate: think.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${THINK_TILT_DEG}deg`] }) },
     ],
   };
-  const handsStyle = {
-    opacity: grab.interpolate({ inputRange: [0, 0.35], outputRange: [0, 1], extrapolate: 'clamp' }),
-    transform: [{ translateY: grab.interpolate({ inputRange: [0, 1], outputRange: [-7, 0] }) }],
-  };
-  const fingerStyle = {
-    opacity: think.interpolate({ inputRange: [0, 0.3], outputRange: [0, 1], extrapolate: 'clamp' }),
-    transform: [{ translateY: think.interpolate({ inputRange: [0, 1], outputRange: [height * 0.3, 0] }) }],
+  // Both hands arrive the same way: down onto the ledge, just after the face.
+  const grabOpacity = grab.interpolate({ inputRange: [0, 0.35], outputRange: [0, 1], extrapolate: 'clamp' });
+  const grabY = grab.interpolate({ inputRange: [0, 1], outputRange: [-7, 0] });
+  const rightStyle = { opacity: grabOpacity, transform: [{ translateY: grabY }] };
+  // The left one also goes to the chin. Read right to left, as a transform is
+  // applied: bring the hand's middle to the layer's, TURN, put it back, then
+  // make the trip — so it turns about itself rather than swinging on an arm.
+  const leftStyle = {
+    opacity: grabOpacity,
+    transform: [
+      { translateX: think.interpolate({ inputRange: [0, 1], outputRange: [0, chin.moveX] }) },
+      { translateY: Animated.add(grabY, think.interpolate({ inputRange: [0, 1], outputRange: [0, chin.moveY] })) },
+      { translateX: chin.pivotX },
+      { translateY: chin.pivotY },
+      { rotate: think.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${CHIN_HAND.turn}deg`] }) },
+      { translateX: -chin.pivotX },
+      { translateY: -chin.pivotY },
+    ],
   };
 
   const layer = { position: 'absolute', left: 0, top: 0, width: size, height };
@@ -218,13 +257,13 @@ export default function ClaudeTurtleBuddy({
           ))}
         </Animated.View>
       </View>
-      {/* 2 — the finger, behind the hand it belongs to. */}
-      <Animated.View testID={`${testID}-finger`} style={[layer, fingerStyle]}>
-        <ClaudeTurtleMark {...art} parts={FINGER} handFill={handFill} testID={`${testID}-finger-art`} />
+      {/* 2 — the hand that stays on the ledge. */}
+      <Animated.View testID={`${testID}-hand-right`} style={[layer, rightStyle]}>
+        <ClaudeTurtleMark {...art} parts={RIGHT} handFill={handFill} testID={`${testID}-hand-right-art`} />
       </Animated.View>
-      {/* 3 — the hands, over the ledge. */}
-      <Animated.View testID={`${testID}-hands`} style={[layer, handsStyle]}>
-        <ClaudeTurtleMark {...art} parts={HANDS} handFill={handFill} testID={`${testID}-hands-art`} />
+      {/* 3 — the hand that goes to the chin, in front of the face. */}
+      <Animated.View testID={`${testID}-hand-left`} style={[layer, leftStyle]}>
+        <ClaudeTurtleMark {...art} parts={LEFT} handFill={handFill} testID={`${testID}-hand-left-art`} />
       </Animated.View>
     </View>
   );

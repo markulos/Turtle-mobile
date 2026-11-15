@@ -116,32 +116,34 @@ export function penFor(size, weight) {
   return units > DRAWN_PEN ? units : DRAWN_PEN;
 }
 
-// One raised finger, for the thinking pose: an open-bottomed outline rising
-// from the knuckles of the right hand. Open at the base on purpose — it is
-// drawn BEHIND the hand, which hides where it starts.
-const FINGER_UP = 'M283 124 C282 108 283 92 290 88 C297 85 300 96 299 124';
-
-/** The layers the mark can be drawn in. `finger` is not part of the still mark. */
+/** The layers of the still mark. A caller may also ask for one hand alone. */
 export const CLAUDE_MARK_PARTS = ['face', 'eyes', 'hands'];
 
 /**
- * Where the two eyes are, in POINTS inside a mark `size` wide turned by
- * `tilt` — centre and radius. For a caller that draws the eyes itself (the
- * animated mark closes each one about its own middle to blink).
+ * A point of the DRAWING — in its own units — as POINTS inside a mark `size`
+ * wide turned by `tilt`. For a caller that has to put or move something
+ * where a part of the drawing is (the animated mark: its eyes, and the hand
+ * it lifts to the chin).
  */
+export function artPoint(size, tilt, x, y) {
+  const k = size / BOX.w;
+  const a = (tilt * Math.PI) / 180;
+  const dx = x - CX;
+  const dy = y - CY;
+  return {
+    x: (CX + dx * Math.cos(a) - dy * Math.sin(a) - BOX.x) * k,
+    y: (CY + dx * Math.sin(a) + dy * Math.cos(a) - BOX.y) * k,
+  };
+}
+
+/** Where the two eyes are, in points — centre and radius. See artPoint. */
 export function eyeDots(size, tilt = 0, weight = 1.3) {
   const k = size / BOX.w;
   const floor = penFor(size, weight) * 0.62;
-  const a = (tilt * Math.PI) / 180;
-  return EYES.map((e) => {
-    const dx = e.cx - CX;
-    const dy = e.cy - CY;
-    return {
-      x: (CX + dx * Math.cos(a) - dy * Math.sin(a) - BOX.x) * k,
-      y: (CY + dx * Math.sin(a) + dy * Math.cos(a) - BOX.y) * k,
-      r: (e.r > floor ? e.r : floor) * k,
-    };
-  });
+  return EYES.map((e) => ({
+    ...artPoint(size, tilt, e.cx, e.cy),
+    r: (e.r > floor ? e.r : floor) * k,
+  }));
 }
 
 export default function ClaudeTurtleMark({
@@ -179,9 +181,9 @@ export default function ClaudeTurtleMark({
   tilt = 0,
   /**
    * Which layers to draw: any of 'face' (the head line, and the face shape
-   * when `faceFill` is set), 'eyes', 'hands', 'finger'. The still mark is the
-   * first three. The animated mark draws them one layer at a time so each
-   * can move on its own.
+   * when `faceFill` is set), 'eyes', 'hands' — or 'leftHand' / 'rightHand'
+   * for one of them alone. The still mark is the first three. The animated
+   * mark draws them one layer at a time so each can move on its own.
    */
   parts = CLAUDE_MARK_PARTS,
   testID = 'claude-turtle-mark',
@@ -204,24 +206,13 @@ export default function ClaudeTurtleMark({
         testID={`${testID}-art`}
         transform={tilt ? `rotate(${tilt} ${CX} ${CY})` : undefined}
       >
-        {parts.includes('finger') && (
-          <Path
-            testID={`${testID}-finger`}
-            d={FINGER_UP}
-            fill={handFill}
-            stroke={color}
-            strokeWidth={pen}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        )}
         {parts.includes('face') && faceFill !== 'none' && (
           <Path testID={`${testID}-face`} d={facePath(tilt, faceDrop)} fill={faceFill} stroke="none" />
         )}
         {[
           parts.includes('face') && HEAD,
-          parts.includes('hands') && LEFT_HAND,
-          parts.includes('hands') && RIGHT_HAND,
+          (parts.includes('hands') || parts.includes('leftHand')) && LEFT_HAND,
+          (parts.includes('hands') || parts.includes('rightHand')) && RIGHT_HAND,
         ].filter(Boolean).map((d) => (
           <Path
             key={d}

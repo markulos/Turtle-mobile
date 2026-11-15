@@ -23,6 +23,7 @@ import ClaudeTurtleMark, {
   CLAUDE_MARK_COLOR,
   CLAUDE_MARK_LEVEL,
   CLAUDE_MARK_NIGHT,
+  artPoint,
   facePath,
   CLAUDE_MARK_LEDGE,
   ledgeOffset,
@@ -162,18 +163,35 @@ describe('ClaudeTurtleMark', () => {
   });
 
   test('it can be drawn a LAYER at a time, for the animated mark', async () => {
-    const { unmount } = await render(<ClaudeTurtleMark parts={['hands']} handFill="#FFFFFF" />);
+    const both = await render(<ClaudeTurtleMark parts={['hands']} handFill="#FFFFFF" />);
     expect(parts('Path')).toHaveLength(2);
     expect(screen.queryAllByTestId('svg-Circle')).toHaveLength(0);
-    await unmount();
-    await render(<ClaudeTurtleMark parts={['finger']} />);
-    expect(screen.getByTestId('claude-turtle-mark-finger')).toBeTruthy();
-    expect(screen.queryAllByTestId('svg-Circle')).toHaveLength(0);
+    await both.unmount();
+    // One hand alone — the one the animated mark lifts to the chin, and the
+    // one it leaves on the ledge.
+    const left = await render(<ClaudeTurtleMark parts={['leftHand']} />);
+    expect(parts('Path')).toHaveLength(1);
+    expect(parts('Path')[0].props.d).toMatch(/^M44 160/);
+    await left.unmount();
+    await render(<ClaudeTurtleMark parts={['rightHand']} />);
+    expect(parts('Path')).toHaveLength(1);
+    expect(parts('Path')[0].props.d).toMatch(/^M338 128/);
   });
 
-  test('the still mark has no raised finger', async () => {
-    await render(<ClaudeTurtleMark />);
-    expect(screen.queryByTestId('claude-turtle-mark-finger')).toBeNull();
+  test('there is no raised finger in the drawing', () => {
+    // It was the first thinking pose, and it read as a tail (Mark, 2026-11-15).
+    const mark = fs.readFileSync(path.resolve(__dirname, '..', 'ClaudeTurtleMark.jsx'), 'utf8');
+    expect(mark).not.toMatch(/FINGER_UP|includes..finger/);
+  });
+
+  test('artPoint places a point of the drawing on a turned mark', () => {
+    // The centre of the art does not move, whatever the turn.
+    expect(artPoint(316, 0, 188, 122)).toEqual({ x: 158, y: 68 });
+    const c = artPoint(316, 30, 188, 122);
+    expect(c.x).toBeCloseTo(158);
+    expect(c.y).toBeCloseTo(68);
+    // Clockwise: a point to the right of centre goes DOWN.
+    expect(artPoint(316, 10, 288, 122).y).toBeGreaterThan(68);
   });
 
   test('the ledge runs under the chin and through the hands', () => {

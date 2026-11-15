@@ -20,7 +20,7 @@ jest.mock('react-native-svg', () => {
   return { __esModule: true, default: make('Svg'), Path: make('Path'), G: make('G'), Circle: make('Circle') };
 }, { virtual: true });
 
-import ClaudeTurtleBuddy, { BLINK, nextBlinkGap, THINK_TILT_DEG } from '../ClaudeTurtleBuddy';
+import ClaudeTurtleBuddy, { BLINK, CHIN_HAND, nextBlinkGap, THINK_TILT_DEG } from '../ClaudeTurtleBuddy';
 import { eyeDots, ledgeOffset } from '../ClaudeTurtleMark';
 
 const SRC = fs.readFileSync(path.resolve(__dirname, '..', 'ClaudeTurtleBuddy.jsx'), 'utf8');
@@ -60,14 +60,39 @@ describe('ClaudeTurtleBuddy', () => {
     await filled.unmount();
   });
 
-  test('three layers, back to front: face, finger, hands', async () => {
+  test('three layers, back to front: face, the hand that stays, the hand that thinks', async () => {
     const { unmount } = await render(<ClaudeTurtleBuddy size={80} />);
     const kids = screen.getByTestId('claude-turtle-buddy').children.map((c) => c.props.testID);
-    expect(kids).toEqual(['claude-turtle-buddy-clip', 'claude-turtle-buddy-finger', 'claude-turtle-buddy-hands']);
-    // The finger is its own drawing, with a finger in it; the hands layer has none.
-    expect(screen.getByTestId('claude-turtle-buddy-finger-art-finger')).toBeTruthy();
-    expect(screen.queryByTestId('claude-turtle-buddy-hands-art-finger')).toBeNull();
+    expect(kids).toEqual(['claude-turtle-buddy-clip', 'claude-turtle-buddy-hand-right', 'claude-turtle-buddy-hand-left']);
+    // The LEFT hand is last — it goes to the chin, so it has to be in front
+    // of the face when it gets there.
     await unmount();
+  });
+
+  test('THINKING IS A HAND ON THE CHIN, not a finger in the air', () => {
+    // Mark, 2026-11-15: "thinking should have his hand on his chin not a
+    // finger up … that finger looks like a tail".
+    expect(CODE).not.toMatch(/FINGER|-finger/);
+    // The hand travels right and UP, toward the chin (which is at about
+    // x 138–156, y 147–154 in the drawing), and turns as it goes.
+    expect(CHIN_HAND.dx).toBeGreaterThan(40);
+    expect(CHIN_HAND.dy).toBeLessThan(0);
+    const arrives = { x: CHIN_HAND.cx + CHIN_HAND.dx, y: CHIN_HAND.cy + CHIN_HAND.dy };
+    expect(arrives.x).toBeGreaterThan(120);
+    expect(arrives.x).toBeLessThan(160);
+    expect(arrives.y).toBeGreaterThan(120);
+    expect(arrives.y).toBeLessThan(150);
+    expect(Math.abs(CHIN_HAND.turn)).toBeGreaterThan(10);
+    // It turns about ITSELF: the pivot is put at the layer's middle, turned,
+    // and put back, before the trip is made.
+    const at = (needle) => { const i = CODE.indexOf(needle); expect([needle, i >= 0]).toEqual([needle, true]); return i; };
+    const toMiddle = at('{ translateX: chin.pivotX }');
+    const turn = at("CHIN_HAND.turn}deg`] }) },");
+    const back = at('{ translateX: -chin.pivotX }');
+    expect(turn).toBeGreaterThan(toMiddle);
+    expect(back).toBeGreaterThan(turn);
+    // …and the trip itself comes FIRST in the list (so it is applied last).
+    expect(at('outputRange: [0, chin.moveX]')).toBeLessThan(toMiddle);
   });
 
   test('the eyes are two Views on the face, each closing about its own middle', async () => {
