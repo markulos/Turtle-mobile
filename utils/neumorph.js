@@ -52,13 +52,35 @@
 import { hexToHsl, hslToHex, normalizeHex } from './accentColor';
 
 /**
- * How far the light is from the surface, in points. The reference's cards sit
- * at roughly this against their own size: big enough to read as a bump at
- * arm's length, small enough that the panel does not look like it is hovering.
+ * How far the light is from the surface, and how soft — in points.
+ *
+ * ── Why these are small, and tied to the gap between panels ───────────────
+ *
+ * The shading describes AN EDGE, not a card floating over a page. That is the
+ * whole claim of the style: the panel is the page, extruded, one continuous
+ * material. So the shadow has to stay on the panel's own border.
+ *
+ * At 6/14 it did not. Its reach — offset plus blur — was 20pt against a 10pt
+ * gap, so a panel's cast shadow crossed the gap entirely and landed on its
+ * neighbour's highlight. What you got in between was a dark smudge belonging
+ * to nothing, which is a thing a surface cannot do and an object hovering
+ * above one can. Mark circled exactly that gap: "it doesn't make sense to
+ * have a shadow there."
+ *
+ * So the rule, and `neumorph.test` holds it: REACH ≤ GAP. At 3 + 7 the
+ * shading stops at the edge of the gutter and the panels still read as
+ * raised — the illusion never needed the distance, only the direction.
  */
-export const NEU_OFFSET = 6;
+export const NEU_OFFSET = 3;
 /** Soft, not sharp: a hard shadow is a drop shadow, which is the other style. */
-export const NEU_BLUR = 14;
+export const NEU_BLUR = 7;
+/**
+ * The space between two neumorphic panels, which is what the reach above is
+ * measured against. Kept here rather than in the page's styles so the two
+ * cannot drift apart — a wider gap may take a longer shadow, a tighter one
+ * may not.
+ */
+export const NEU_GAP = 10;
 
 /**
  * How far the two tones move from the surface, in HSL lightness points.
@@ -136,4 +158,4 @@ export function neuPressed(surface, mode, { offset = NEU_OFFSET, blur = NEU_BLUR
   };
 }
 
-export default { neuRaised, neuPressed, neuTones, NEU_OFFSET, NEU_BLUR };
+export default { neuRaised, neuPressed, neuTones, NEU_OFFSET, NEU_BLUR, NEU_GAP };

@@ -1,6 +1,6 @@
 import { hexToHsl } from '../accentColor';
 import {
-  NEU_BLUR, NEU_OFFSET, neuPressed, neuRaised, neuTones,
+  NEU_BLUR, NEU_GAP, NEU_OFFSET, neuPressed, neuRaised, neuTones,
 } from '../neumorph';
 
 /**
@@ -14,6 +14,20 @@ const PANEL_DARK = '#241F1D';   // the focus page's charcoal
 const PANEL_LIGHT = '#E8E6E1';
 
 describe('neumorphic surfaces', () => {
+  test('THE SHADING STAYS ON ITS OWN PANEL — reach must not cross the gap', () => {
+    // The style's claim is that the panel IS the page, extruded. A shadow
+    // that reaches past the gutter lands on the NEXT panel's highlight, and
+    // what pools in between is a dark smudge belonging to nothing — which is
+    // something a continuous surface cannot do, and a floating card can.
+    // It shipped at 6 + 14 = 20 against a 10pt gap and Mark circled the
+    // result.
+    expect(NEU_OFFSET + NEU_BLUR).toBeLessThanOrEqual(NEU_GAP);
+    // …and still far enough to read as raised at arm's length. The illusion
+    // needs the DIRECTION, not the distance, but it does need both tones.
+    expect(NEU_OFFSET).toBeGreaterThan(0);
+    expect(NEU_BLUR).toBeGreaterThan(NEU_OFFSET);
+  });
+
   test('the surface keeps its own colour — there is no fill change', () => {
     // If the element is a different colour from its page, the light is
     // decoration on a card rather than the thing that makes the shape.
