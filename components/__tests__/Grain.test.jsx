@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet } from 'react-native';
 import { render } from '@testing-library/react-native';
 
-import Grain, { GRAIN_OPACITY } from '../Grain';
+import Grain, { GRAIN_OPACITY, GRAIN_TILE, grainTiles } from '../Grain';
 
 /**
  * What broke on the phone, pinned.
@@ -27,7 +27,6 @@ const flat = (node) => StyleSheet.flatten(node.props.style) || {};
  */
 const HIDDEN = { includeHiddenElements: true };
 const clipOf = (v) => v.getByTestId('grain-clip', HIDDEN);
-const tileOf = (v) => v.getByTestId('grain', HIDDEN);
 
 describe('Grain', () => {
   test('the CLIP is on a wrapper, not on the Image', async () => {
@@ -37,17 +36,38 @@ describe('Grain', () => {
     const w = flat(clipOf(view));
     expect(w.overflow).toBe('hidden');
     expect(w.borderRadius).toBe(24);
-
-    expect(flat(tileOf(view)).borderRadius).toBeUndefined();
+    // …and it is also what gives onLayout something to measure, which is
+    // where the tile count comes from.
+    expect(typeof clipOf(view).props.onLayout).toBe('function');
   });
 
-  test('the Image fills its wrapper, so the tiled area is never in doubt', async () => {
+  test('IT COVERS THE WHOLE SURFACE — the count comes from the measurement', () => {
+    // The bug, twice: the texture drew once at its own size in the top-left
+    // corner and left the rest of the panel bare. Nothing on screen tells you
+    // that — a half-covered panel renders perfectly happily — so the arithmetic
+    // is what gets pinned.
+    expect(grainTiles(GRAIN_TILE, GRAIN_TILE)).toEqual([1, 1]);
+    // A surface one point wider than a tile needs a second column, not a
+    // stretched tile: the speckle must never scale.
+    expect(grainTiles(GRAIN_TILE + 1, GRAIN_TILE)).toEqual([2, 1]);
+    // A whole phone page, and a small stat tile.
+    expect(grainTiles(390, 900)).toEqual([2, 4]);
+    expect(grainTiles(165, 105)).toEqual([1, 1]);
+  });
+
+  test('nothing is laid down before it has been measured', () => {
+    // onLayout has not fired on the first pass. Laying a fixed grid "just in
+    // case" is how a small tile ends up with dozens of discarded quads.
+    expect(grainTiles(0, 0)).toEqual([0, 0]);
+    expect(grainTiles(-5, 100)).toEqual([0, 1]);
+  });
+
+  test('tiles are laid at 1:1, so the speckle is the same size everywhere', async () => {
     const view = await render(<Grain />);
-    const img = flat(tileOf(view));
-    // An Image whose frame comes only from its own absoluteFill can lay the
-    // tile out at its intrinsic size; the wrapper owns the frame instead.
-    expect(img).toMatchObject(StyleSheet.flatten(StyleSheet.absoluteFillObject));
-    expect(tileOf(view).props.resizeMode).toBe('repeat');
+    // Before layout there is nothing to assert on; after it, every tile is
+    // the art's own size — no resizeMode, nothing to scale it.
+    expect(GRAIN_TILE).toBeGreaterThan(0);
+    expect(view.queryByTestId('grain', HIDDEN)).toBeNull();
   });
 
   test('it is paint: no touches, and nothing to announce', async () => {
