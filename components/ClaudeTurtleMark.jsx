@@ -84,9 +84,12 @@ const FACE_BASE_Y = LEDGE_Y - 1;
  * drawing is turned it comes out LEVEL — parallel to the ridge it sits on,
  * not sloping across it.
  */
-export function facePath(tilt = 0) {
+export function facePath(tilt = 0, drop = 0) {
   const a = (tilt * Math.PI) / 180;
-  const baseAt = (x) => CY + (FACE_BASE_Y - CY - (x - CX) * Math.sin(a)) / Math.cos(a);
+  // `drop` carries the base further DOWN, for a caller that clips the face at
+  // the ledge itself and needs shape below the line to clip (the animated mark
+  // tips the head back, and a base that ended at the ledge would lift off it).
+  const baseAt = (x) => CY + (FACE_BASE_Y + drop - CY - (x - CX) * Math.sin(a)) / Math.cos(a);
   return `${DOME} L146 ${baseAt(146).toFixed(2)} L264 ${baseAt(264).toFixed(2)} Z`;
 }
 
@@ -111,6 +114,34 @@ const EYES = [{ cx: 176, cy: 103, r: 5.5 }, { cx: 215, cy: 92, r: 6 }];
 export function penFor(size, weight) {
   const units = (weight * BOX.w) / (size || 1);
   return units > DRAWN_PEN ? units : DRAWN_PEN;
+}
+
+// One raised finger, for the thinking pose: an open-bottomed outline rising
+// from the knuckles of the right hand. Open at the base on purpose — it is
+// drawn BEHIND the hand, which hides where it starts.
+const FINGER_UP = 'M283 124 C282 108 283 92 290 88 C297 85 300 96 299 124';
+
+/** The layers the mark can be drawn in. `finger` is not part of the still mark. */
+export const CLAUDE_MARK_PARTS = ['face', 'eyes', 'hands'];
+
+/**
+ * Where the two eyes are, in POINTS inside a mark `size` wide turned by
+ * `tilt` — centre and radius. For a caller that draws the eyes itself (the
+ * animated mark closes each one about its own middle to blink).
+ */
+export function eyeDots(size, tilt = 0, weight = 1.3) {
+  const k = size / BOX.w;
+  const floor = penFor(size, weight) * 0.62;
+  const a = (tilt * Math.PI) / 180;
+  return EYES.map((e) => {
+    const dx = e.cx - CX;
+    const dy = e.cy - CY;
+    return {
+      x: (CX + dx * Math.cos(a) - dy * Math.sin(a) - BOX.x) * k,
+      y: (CY + dx * Math.sin(a) + dy * Math.cos(a) - BOX.y) * k,
+      r: (e.r > floor ? e.r : floor) * k,
+    };
+  });
 }
 
 export default function ClaudeTurtleMark({
@@ -138,12 +169,21 @@ export default function ClaudeTurtleMark({
    * is still never filled, for the reason above.
    */
   faceFill = 'none',
+  /** Units to carry the face shape below the ledge — see facePath. */
+  faceDrop = 0,
   /**
    * Degrees clockwise to turn the whole drawing about its own centre. 0 — as
    * drawn — everywhere it floats free; CLAUDE_MARK_LEVEL where it hangs over
    * a straight edge and the hands have to sit level on it.
    */
   tilt = 0,
+  /**
+   * Which layers to draw: any of 'face' (the head line, and the face shape
+   * when `faceFill` is set), 'eyes', 'hands', 'finger'. The still mark is the
+   * first three. The animated mark draws them one layer at a time so each
+   * can move on its own.
+   */
+  parts = CLAUDE_MARK_PARTS,
   testID = 'claude-turtle-mark',
 }) {
   const pen = penFor(size, weight);
@@ -164,10 +204,25 @@ export default function ClaudeTurtleMark({
         testID={`${testID}-art`}
         transform={tilt ? `rotate(${tilt} ${CX} ${CY})` : undefined}
       >
-        {faceFill !== 'none' && (
-          <Path testID={`${testID}-face`} d={facePath(tilt)} fill={faceFill} stroke="none" />
+        {parts.includes('finger') && (
+          <Path
+            testID={`${testID}-finger`}
+            d={FINGER_UP}
+            fill={handFill}
+            stroke={color}
+            strokeWidth={pen}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         )}
-        {[HEAD, LEFT_HAND, RIGHT_HAND].map((d) => (
+        {parts.includes('face') && faceFill !== 'none' && (
+          <Path testID={`${testID}-face`} d={facePath(tilt, faceDrop)} fill={faceFill} stroke="none" />
+        )}
+        {[
+          parts.includes('face') && HEAD,
+          parts.includes('hands') && LEFT_HAND,
+          parts.includes('hands') && RIGHT_HAND,
+        ].filter(Boolean).map((d) => (
           <Path
             key={d}
             d={d}
@@ -178,7 +233,7 @@ export default function ClaudeTurtleMark({
             strokeLinejoin="round"
           />
         ))}
-        {EYES.map((e) => (
+        {parts.includes('eyes') && EYES.map((e) => (
           <Circle key={e.cx} cx={e.cx} cy={e.cy} r={e.r > eyeFloor ? e.r : eyeFloor} fill={color} />
         ))}
       </G>

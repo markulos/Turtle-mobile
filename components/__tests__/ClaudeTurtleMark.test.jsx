@@ -161,7 +161,23 @@ describe('ClaudeTurtleMark', () => {
     expect(facePath(0)).toMatch(/ Z$/);
   });
 
+  test('it can be drawn a LAYER at a time, for the animated mark', async () => {
+    const { unmount } = await render(<ClaudeTurtleMark parts={['hands']} handFill="#FFFFFF" />);
+    expect(parts('Path')).toHaveLength(2);
+    expect(screen.queryAllByTestId('svg-Circle')).toHaveLength(0);
+    await unmount();
+    await render(<ClaudeTurtleMark parts={['finger']} />);
+    expect(screen.getByTestId('claude-turtle-mark-finger')).toBeTruthy();
+    expect(screen.queryAllByTestId('svg-Circle')).toHaveLength(0);
+  });
+
+  test('the still mark has no raised finger', async () => {
+    await render(<ClaudeTurtleMark />);
+    expect(screen.queryByTestId('claude-turtle-mark-finger')).toBeNull();
+  });
+
   test('the ledge runs under the chin and through the hands', () => {
+
 
 
     // Above the line: the whole face. Below it: only fingers. That is what
@@ -191,9 +207,8 @@ describe('ClaudeTurtleMark', () => {
     expect(peek).toMatch(/marginTop: -ledgeOffset\(CLAUDE_PEEK_WIDTH\),/);
     // No circle and no plate: the style positions it and nothing else.
     expect(peek).not.toMatch(/border|backgroundColor/);
-    // …and the controls row must not draw a rule of its own under it.
-    const controls = src.slice(src.indexOf('    headerClaudeRow: {'), src.indexOf('    identityBar: {'));
-    expect(controls).not.toMatch(/borderTopWidth/);
+    // …and there is no controls row under it to draw a second rule.
+    expect(src).not.toMatch(/headerClaudeRow|headerClaudeWrap/);
   });
 
   test('THE TITLE AND THE MARK SHARE THE RIDGE — centred on it, not stood on it', () => {
@@ -226,7 +241,7 @@ describe('ClaudeTurtleMark', () => {
     expect(onRidge).toMatch(/flexShrink: 1/);
     expect(onRidge).not.toMatch(/flex:|flexBasis|flexGrow/);
     // …and nothing is painted behind the words to hide a line under them.
-    const titleStyles = src.slice(src.indexOf('    identityBarOnRidge: {'), src.indexOf('    headerClaudeRow: {'));
+    const titleStyles = src.slice(src.indexOf('    identityBarOnRidge: {'), src.indexOf('    composerControls: {'));
     expect(titleStyles).not.toMatch(/backgroundColor/);
     // Edge to edge: the long run undoes the inset and the gutter on the
     // right, the lead-in starts at the gutter on the left.
@@ -266,32 +281,55 @@ describe('ClaudeTurtleMark', () => {
     expect(src).toMatch(/handFill=\{theme\.mode === 'dark' \? CLAUDE_MARK_NIGHT\.fill : theme\.colors\.background\}/);
   });
 
-  test('THE LINE DOES NOT MOVE when a session starts', () => {
-    // Out of a session the rule under the title is the header's own edge,
-    // one bottom-padding below the identity row. Drawn at the row's bottom
-    // instead, the ledge sat 14pt higher — so starting a session jumped the
-    // line up and ending one dropped it back. Both now come off the same
-    // constant, which is the only way they stay equal when it is retuned.
+  test('THE LINE DOES NOT MOVE when a session starts — NO SECOND ROW', () => {
+    // Mark, three times now: the ridge must be in the same place whether a
+    // session is open or closed. It jumped because the header grew a row of
+    // controls in a session — so its edge moved, and with it everything
+    // measured from it. The header is ONE row in both states; the controls
+    // are in the composer's corner.
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    const headerJsx = src.slice(src.indexOf('style={[styles.chatHeader,'), src.indexOf('{/* History failed to load'));
+    expect(headerJsx).not.toMatch(/<ClaudeSessionControls/);
+    // Exactly one cluster of controls on the screen, and it is the compact
+    // one inside the composer.
+    expect(src.match(/<ClaudeSessionControls/g)).toHaveLength(1);
+    const composer = src.slice(src.indexOf('<ChatComposer'));
+    expect(composer).toMatch(/\{inClaudeSession && \(\s*<ClaudeSessionControls\s+compact\s+style=\{styles\.composerControls\}/);
+    // The same padding above and below the row in both states — neither is
+    // conditional on the session.
     expect(src).toMatch(/const HEADER_PAD_BOTTOM = \d+;/);
-    // The header's padding IS the constant — not a literal that happens to
-    // match it today.
+    expect(src).toMatch(/const HEADER_PAD_TOP = \d+;/);
     const header = src.slice(src.indexOf('    chatHeader: {'), src.indexOf('    headerEdge: {'));
     expect(header).toMatch(/paddingBottom: HEADER_PAD_BOTTOM,/);
-    // …and the SEAM — the line that holds that position in a session — is
-    // anchored to the identity row by the same constant, so it lands exactly
-    // where the edge rule does when there is no session.
-    const seam = src.slice(src.indexOf('    claudeSeam: {'));
-    expect(seam.slice(0, 600)).toMatch(/bottom: -HEADER_PAD_BOTTOM,/);
-    // Two lines, and they are not the same one: the ridge is on the hands,
-    // the seam is one padding below the row.
-    expect(src).toMatch(/style=\{styles\.claudeSeam\}/);
-    expect(src).toMatch(/style=\{styles\.claudeRidge\}/);
-    // The row is one height in both states, or "the same distance below the
-    // row" is not the same place: out of a session the search key set it,
-    // in one nothing did.
-    const row = src.slice(src.indexOf('    headerTopRow: {'), src.indexOf('    claudeSeam: {'));
+    expect(src).toMatch(/style=\{\[styles\.chatHeader, \{ paddingTop: insets\.top \+ HEADER_PAD_TOP \}, headerCounterStyle\]\}/);
+    // …and the row itself is one height in both: out of a session the
+    // search key set it, in one nothing did.
+    const row = src.slice(src.indexOf('    headerTopRow: {'), src.indexOf('    claudePeek: {'));
     expect(row).toMatch(/minHeight: HEADER_ROW_MIN_HEIGHT,/);
+    // The seam that stood in for the header edge is gone with the row that
+    // made it necessary.
+    expect(src).not.toMatch(/claudeSeam/);
+    expect(src).toMatch(/style=\{styles\.claudeRidge\}/);
+  });
+
+  test('the controls in the composer are the COMPACT form: packed right, the status pill gives way', () => {
+    const ctl = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'components', 'ClaudeSessionControls.jsx'), 'utf8');
+    expect(ctl).toMatch(/compact = false,/);
+    expect(ctl).toMatch(/rowCompact: \{ justifyContent: 'flex-end', gap: 6 \},/);
+    // No spacer splitting the cluster in two when it is in a corner.
+    expect(ctl).toMatch(/\{!compact && <View style=\{styles\.spacer\} \/>\}/);
+    // In the composer it starts from the width of its own buttons — `flex: 1`
+    // would be a basis of zero — and attached thumbs sit on a line above it
+    // rather than fighting it for the row.
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    expect(src).toMatch(/composerControls: \{ flexGrow: 1, flexShrink: 1, minWidth: 0 \},/);
+    const top = src.slice(src.indexOf('topSlot={'), src.indexOf('actions={'));
+    expect(top.indexOf('styles.composerThumbRail')).toBeGreaterThan(top.indexOf('styles.composerTopStack'));
+    expect(top.indexOf('styles.composerTopRow')).toBeGreaterThan(top.indexOf('styles.composerThumbRail'));
+    expect(top.indexOf('<ClaudeSessionControls')).toBeGreaterThan(top.indexOf('styles.botSlot'));
+    // The pill shrinks; the buttons do not (they carry the labels you tap).
+    expect(ctl).toMatch(/statusPillCompact: \{ flexShrink: 1, minWidth: 0 \},/);
+    expect(ctl).toMatch(/numberOfLines=\{1\}>\{statusText\}/);
   });
 
   test('…and takes the corner it is now alone in', () => {

@@ -16,6 +16,12 @@ import { notifyHaptic } from '../../../utils/haptics';
  * old single-row card header truncated "Claude x Turtle | Admin" to fit.
  *
  * Rendered as a plain row; the caller owns the surrounding padding.
+ *
+ * `compact` is the form it takes in the COMPOSER's top-right corner (Mark,
+ * 2026-11-15: the controls belong with the thing you type into, not on the
+ * header). There the row is packed to the trailing edge, there is no spacer
+ * splitting it in two, and the status pill is the part that gives way when
+ * the panel is narrow — the buttons never do.
  */
 export default function ClaudeSessionControls({
   mode,
@@ -27,6 +33,7 @@ export default function ClaudeSessionControls({
   expanded,
   onToggleExpanded,
   onClose,
+  compact = false,
   style,
 }) {
   const { theme } = useTheme();
@@ -44,12 +51,12 @@ export default function ClaudeSessionControls({
   const HIT = { top: 8, bottom: 8, left: 8, right: 8 };
 
   return (
-    <View style={[styles.row, style]}>
-      <View style={styles.statusPill}>
+    <View style={[styles.row, compact && styles.rowCompact, style]}>
+      <View style={[styles.statusPill, compact && styles.statusPillCompact]}>
         {busy && !isLogin && !paused
           ? <ActivityIndicator size="small" color={theme.colors.accentInfo} />
           : <View style={[styles.dot, { backgroundColor: dotColor }]} />}
-        <Text style={styles.statusText}>{statusText}</Text>
+        <Text style={[styles.statusText, compact && styles.statusTextCompact]} numberOfLines={1}>{statusText}</Text>
       </View>
 
       {/* Live-view toggle. Pausing stops the per-chunk log stream (the session
@@ -84,7 +91,7 @@ export default function ClaudeSessionControls({
 
       {/* Pushes the two icon buttons to the trailing edge, so the labelled
           controls read as one left-aligned group. */}
-      <View style={styles.spacer} />
+      {!compact && <View style={styles.spacer} />}
 
       <TouchableOpacity
         onPress={onToggleExpanded}
@@ -116,6 +123,11 @@ const createStyles = (theme) => StyleSheet.create({
     gap: 8,
   },
   spacer: { flex: 1 },
+  // In the composer: packed to the trailing edge, a little tighter, and the
+  // status pill is what shrinks (down to its dot) on a narrow phone.
+  rowCompact: { justifyContent: 'flex-end', gap: 6 },
+  statusPillCompact: { flexShrink: 1, minWidth: 0 },
+  statusTextCompact: { flexShrink: 1 },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -51,9 +51,8 @@ import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
-import ClaudeTurtleMark, {
-  CLAUDE_MARK_LEVEL, CLAUDE_MARK_NIGHT, ledgeOffset, markHeight,
-} from '../../components/ClaudeTurtleMark';
+import { CLAUDE_MARK_LEVEL, CLAUDE_MARK_NIGHT, ledgeOffset } from '../../components/ClaudeTurtleMark';
+import ClaudeTurtleBuddy from '../../components/ClaudeTurtleBuddy';
 import TypingIndicator from '../../components/TypingIndicator';
 import MarkdownText from '../../components/MarkdownText';
 import CopyKey from '../../components/CopyKey';
@@ -142,7 +141,7 @@ const DEBUG_TOGGLE_HEIGHT = 44;
 // to be the authority, which meant any over-estimate became permanent dead space
 // under the header: the gap above the Claude console read wider than the one
 // below it, even though both are one PANEL_GAP by construction.
-const CHAT_HEADER_BAR_HEIGHT = 60;
+const CHAT_HEADER_BAR_HEIGHT = 68; // top pad 10 + row 44 + bottom pad 14
 // A "swift pull down" on the transcript: at least this far, at least this fast
 // (points per millisecond — a flick, not a scroll).
 // Claude's mark where it hangs over the header's inner ridge: wide enough to
@@ -156,11 +155,15 @@ const CHAT_HEADER_BAR_HEIGHT = 60;
 const CLAUDE_PEEK_WIDTH = 80;
 
 // The header's own bottom padding — the gap between the identity row and the
-// header's edge rule. Named because the Claude session's ledge has to land on
-// exactly that rule's line (see claudeSeam): out of a session the line under
-// the title IS the header edge, and if the two are worked out from different
-// numbers the line jumps the moment a session starts.
+// header's edge rule. Named because it is the same in and out of a Claude
+// session: the header is one row either way, so the line under the title is
+// in one place whether a session is open or not.
 const HEADER_PAD_BOTTOM = 14;
+// …and its top padding, under the status bar. The title, the ridge and
+// Claude's mark all sit this much lower than the safe-area edge: without it
+// the mark's head stood right against the clock. The same in and out of a
+// session, so nothing on the header moves when one starts.
+const HEADER_PAD_TOP = 10;
 
 // THE RIDGE — the rule Claude's mark hangs over in a session. One point, in a
 // text tone: at hairline weight in the accent-tinted `border` colour it was
@@ -2243,7 +2246,7 @@ export default function TurtleScreen() {
           const h = Math.round(e.nativeEvent.layout.height);
           if (h > 0) setChatHeaderH((prev) => (prev === h ? prev : h));
         }}
-        style={[styles.chatHeader, { paddingTop: insets.top }, headerCounterStyle]}
+        style={[styles.chatHeader, { paddingTop: insets.top + HEADER_PAD_TOP }, headerCounterStyle]}
       >
         {/* OPAQUE surface, built in layers rather than a flat fill — the chat no
             longer reads through it, so the depth has to come from the header
@@ -2439,13 +2442,13 @@ export default function TurtleScreen() {
             identity bar underneath still owns the tap and the long-press. */}
         {claudeMarkShown && (
           <>
-            {/* …and the header's own line, held at the distance below the
-                title it has when there is NO session, so starting one does
-                not move it. */}
-            <View pointerEvents="none" style={styles.claudeSeam} />
             <View pointerEvents="none" style={styles.claudePeek} testID="claude-mark-peek">
-              <ClaudeTurtleMark
+              {/* ALIVE: he jumps up from behind the ridge when the session
+                  starts, blinks, and thinks — head back, one finger up —
+                  for as long as a turn is in flight. */}
+              <ClaudeTurtleBuddy
                 size={CLAUDE_PEEK_WIDTH}
+                thinking={claudeBusy}
                 // Turned so both hands rest on the ridge. As drawn, the left
                 // one droops below the rule and the right barely reaches it.
                 tilt={CLAUDE_MARK_LEVEL}
@@ -2462,25 +2465,12 @@ export default function TurtleScreen() {
         )}
         </View>
 
-        {/* Row 2 — the live session's controls, on the top bar rather than on a
-            card header of their own. The header is measured (onLayout above),
-            so this extra row simply moves the console's ceiling down with it. */}
-        {inClaudeSession && (
-          <View style={styles.headerClaudeWrap}>
-          <ClaudeSessionControls
-            style={styles.headerClaudeRow}
-            mode={claudeUiMode}
-            active={claudeActive}
-            busy={claudeBusy}
-            live={claude.live}
-            onToggleLive={claude.toggleLive}
-            onStop={() => { if (claudeUiMode === 'login') claudeLoginStop(); else requestClaudeStop(); }}
-            expanded={claudeExpanded}
-            onToggleExpanded={() => setClaudeExpanded((e) => !e)}
-            onClose={claudeClose}
-          />
-          </View>
-        )}
+        {/* NO second row. The session's controls used to sit here, which
+            made the header a row taller in a session than out of one — so
+            its edge, and everything hung from it, jumped the moment a
+            session opened. They are in the composer's top-right corner now
+            (see the topSlot below), and the header is ONE height always:
+            the line under the title is in the same place, open or closed. */}
       </Reanimated.View>
 
       {/* History failed to load — an inline strip under the header rather than
@@ -3166,7 +3156,7 @@ export default function TurtleScreen() {
           active={claudeActive}
           live={claude.live}
           // Only for the paused banner's tap-to-resume — the Live toggle itself
-          // is on the chat header now (ClaudeSessionControls).
+          // is in the composer's corner now (ClaudeSessionControls).
           onToggleLive={claude.toggleLive}
           mode={claudeUiMode}
           permissions={claude.permissions}
@@ -3174,7 +3164,7 @@ export default function TurtleScreen() {
           questions={claude.questions}
           onRespondQuestion={claude.respondQuestion}
           // Still needed for the height animation (the toggle that drives it
-          // moved to the header).
+          // moved to the composer).
           expanded={claudeExpanded}
           // Pass the SAME keyboard tracker that lifts the dock, so the console's
           // height shrink stays frame-locked to that lift (a separate
@@ -3366,7 +3356,11 @@ export default function TurtleScreen() {
             autoCapitalize: (claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && keyboardMode === 'code' ? 'none' : 'sentences',
           }}
           topSlot={
-            <>
+            // A STACK, not one row: attached thumbs get a line of their own
+            // above the bot slot and the session controls. One row cannot
+            // hold all three — laid out in Yoga at 390pt, three thumbs plus
+            // the controls pushed the controls back over the bot slot.
+            <View style={styles.composerTopStack}>
               {claudeImages.length > 0 && (
                 // A RAIL, not a row: eight 64pt thumbs do not fit a phone, and
                 // the composer must not grow a second line or start squeezing
@@ -3413,6 +3407,7 @@ export default function TurtleScreen() {
                   ))}
                 </ScrollView>
               )}
+              <View style={styles.composerTopRow}>
               {/* Bot slot — opens/hides the Claude session; long-press = model picker. */}
               <TouchableOpacity
                 style={[styles.botSlot, claudeUiMode === 'session' && styles.botSlotActive]}
@@ -3430,7 +3425,27 @@ export default function TurtleScreen() {
               >
                 <Icon name="robot-outline" size={17} color={claudeUiMode === 'session' ? (theme.mode === 'dark' ? '#FACC15' : '#CA8A04') : theme.colors.textMuted} />
               </TouchableOpacity>
-            </>
+              {/* The live session's controls — status, Live, Stop, expand,
+                  hide — in the TOP-RIGHT CORNER of the composer, beside
+                  the bot slot that opened the session. They were a second
+                  row on the chat header. */}
+              {inClaudeSession && (
+                <ClaudeSessionControls
+                  compact
+                  style={styles.composerControls}
+                  mode={claudeUiMode}
+                  active={claudeActive}
+                  busy={claudeBusy}
+                  live={claude.live}
+                  onToggleLive={claude.toggleLive}
+                  onStop={() => { if (claudeUiMode === 'login') claudeLoginStop(); else requestClaudeStop(); }}
+                  expanded={claudeExpanded}
+                  onToggleExpanded={() => setClaudeExpanded((e) => !e)}
+                  onClose={claudeClose}
+                />
+              )}
+              </View>
+            </View>
           }
           actions={
             <>
@@ -3669,7 +3684,7 @@ const createStyles = (theme, insets) =>
       zIndex: 101,
       // A COLUMN of rows, not a single row: the identity row sits on top, and a
       // Claude session adds its control row underneath (see headerTopRow /
-      // headerClaudeRow). One row could not hold the title AND the live/Stop/
+      // history). One row could not hold the title AND the live/Stop/
       // expand cluster without truncating the title.
       flexDirection: 'column',
       alignItems: 'stretch',
@@ -3727,37 +3742,6 @@ const createStyles = (theme, insets) =>
       // title, and the seam hung off this row's bottom, do not shift when a
       // session starts.
       minHeight: HEADER_ROW_MIN_HEIGHT,
-    },
-    // The header's second row, session only: the Claude controls. A hairline
-    // above it separates the controls from the identity without the weight of
-    // a second bar.
-    // The row's gap from the identity row lives on the wrapper, so the
-    // wrapper's top edge IS the ridge — the line the mark hangs over.
-    // THE LINE THAT DOES NOT MOVE. Out of a session the rule under the title
-    // is the header's own edge, one HEADER_PAD_BOTTOM below the identity
-    // row. In a session the header grows, so that edge goes to the bottom of
-    // the whole thing — and this seam takes its place, at exactly the same
-    // distance from the title. Same number, same position, both states.
-    //
-    // The ridge the mark hangs over is a different line, higher up: it runs
-    // through the row's middle (see claudeRidge). The fingers end well short
-    // of this one.
-    claudeSeam: {
-      position: 'absolute',
-      left: -HEADER_GUTTER,
-      right: -HEADER_GUTTER,
-      // Anchored to the IDENTITY ROW, like the ledge above it, so both are
-      // one offset from the title rather than one from the title and one
-      // from a wrapper whose own margin is derived from them.
-      bottom: -HEADER_PAD_BOTTOM,
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: theme.colors.border,
-    },
-    // Clears the seam, plus the row's own breath. The fingers no longer hang
-    // past the identity row — the ledge is its centre line, so they end
-    // inside it — and nothing here has to make room for them.
-    headerClaudeWrap: {
-      marginTop: HEADER_PAD_BOTTOM + 8,
     },
     // OVER THE LEDGE. Out of the flow, so the identity bar (and the ridge in
     // it) runs the full width underneath; hung from the row's centre line by
@@ -3819,12 +3803,18 @@ const createStyles = (theme, insets) =>
     // title 172pt wide, its middle, the ridge and the mark's ledge all on
     // one line.
     identityTextOnRidge: { flexShrink: 1, minWidth: 0 },
-    // No border of its own: the seam above IS the line between the identity
-    // row and this one, and two hairlines eight points apart read as a
-    // mistake.
-    headerClaudeRow: {
-      paddingTop: 8,
-    },
+    // The session's controls, in the composer's top row: everything after
+    // the bot slot is theirs, packed to the trailing corner. minWidth 0 so
+    // the cluster can give way (its status pill shrinks) instead of pushing
+    // the row wider than the panel.
+    //
+    // NOT `flex: 1`: that is a basis of zero, and the cluster must start from
+    // the width of its own buttons and only then give way.
+    composerControls: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
+    // The composer's top zone as a stack: the thumb rail (when there are
+    // attachments) over the bot-slot row.
+    composerTopStack: { flex: 1, minWidth: 0, gap: 10 },
+    composerTopRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
     identityBar: {
       flex: 1,
       flexDirection: 'row',
@@ -4395,6 +4385,9 @@ const createStyles = (theme, insets) =>
     // padding is the room the X badges need to hang outside their thumbs
     // without being clipped by the scroll view.
     composerThumbRail: {
+      // On a line of its own now (see composerTopStack). A horizontal
+      // ScrollView defaults to flexGrow 1, which in a column is HEIGHT.
+      flexGrow: 0,
       flexShrink: 1,
       marginVertical: -8,
     },
