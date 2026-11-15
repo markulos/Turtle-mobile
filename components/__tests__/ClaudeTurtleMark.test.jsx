@@ -115,13 +115,13 @@ describe('ClaudeTurtleMark', () => {
     // The RULE goes to the mark, not the mark to the rule: it is drawn at the
     // ledge so it passes through the middle of the hands, and both numbers
     // come from the art rather than from a measurement of it.
-    expect(src).toMatch(/marginBottom:\s*ledgeOffset\(CLAUDE_PEEK_WIDTH\) - markHeight\(CLAUDE_PEEK_WIDTH\)/);
+    expect(src).toMatch(/marginBottom: ledgeOffset\(CLAUDE_PEEK_WIDTH\) - markHeight\(CLAUDE_PEEK_WIDTH\),/);
     // Full width: the header's own gutter undone, so the rule is the ground
     // the mark stands on rather than an underline for the title.
     const ledge = src.slice(src.indexOf('    claudeLedge: {'));
     expect(ledge.slice(0, 400)).toMatch(/left: -12/);
     expect(ledge.slice(0, 400)).toMatch(/right: -12/);
-    expect(ledge.slice(0, 600)).toMatch(/bottom: -HEADER_PAD_BOTTOM/);
+    expect(ledge.slice(0, 600)).toMatch(/bottom: 0,/);
     // …and the controls row must not draw a SECOND one eight points under it.
     const controls = src.slice(src.indexOf('    headerClaudeRow: {'), src.indexOf('    identityBar: {'));
     expect(controls).not.toMatch(/borderTopWidth/);
@@ -161,9 +161,15 @@ describe('ClaudeTurtleMark', () => {
     // match it today.
     const header = src.slice(src.indexOf('    chatHeader: {'), src.indexOf('    headerEdge: {'));
     expect(header).toMatch(/paddingBottom: HEADER_PAD_BOTTOM,/);
-    // …and the mark drops by it too, or the drawing parts company with its
-    // own ledge.
-    expect(src).toMatch(/markHeight\(CLAUDE_PEEK_WIDTH\) - HEADER_PAD_BOTTOM/);
+    // …and the SEAM — the line that holds that position in a session — is
+    // anchored to the identity row by the same constant, so it lands exactly
+    // where the edge rule does when there is no session.
+    const seam = src.slice(src.indexOf('    claudeSeam: {'));
+    expect(seam.slice(0, 600)).toMatch(/bottom: -HEADER_PAD_BOTTOM,/);
+    // Two lines, and they are not the same one: the ledge is on the hands,
+    // the seam is one padding below it.
+    expect(src).toMatch(/style=\{styles\.claudeSeam\}/);
+    expect(src).toMatch(/style=\{styles\.claudeLedge\}/);
   });
 
   test('…and takes the corner it is now alone in', () => {

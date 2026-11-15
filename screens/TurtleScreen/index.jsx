@@ -2401,6 +2401,10 @@ export default function TurtleScreen() {
         {claudeMarkShown && (
           <>
             <View pointerEvents="none" style={styles.claudeLedge} />
+            {/* …and the header's own line, held at the distance below the
+                title it has when there is NO session, so starting one does
+                not move it. The fingers hang between the two. */}
+            <View pointerEvents="none" style={styles.claudeSeam} />
             <View pointerEvents="none" style={styles.claudePeek} testID="claude-mark-peek">
               <ClaudeTurtleMark
                 size={CLAUDE_PEEK_WIDTH}
@@ -3678,9 +3682,28 @@ const createStyles = (theme, insets) =>
     // a second bar.
     // The row's gap from the identity row lives on the wrapper, so the
     // wrapper's top edge IS the ridge — the line the mark hangs over.
-    // Clears the rule, the fingers hanging below it, and the row's own
-    // breath — all three measured rather than guessed, so moving any one of
-    // them cannot leave the controls sitting on the drawing.
+    // THE LINE THAT DOES NOT MOVE. Out of a session the rule under the title
+    // is the header's own edge, one HEADER_PAD_BOTTOM below the identity
+    // row. In a session the header grows, so that edge goes to the bottom of
+    // the whole thing — and this seam takes its place, at exactly the same
+    // distance from the title. Same number, same position, both states.
+    //
+    // The fingers hang between the two lines: resting on the ledge above,
+    // ending just short of this one.
+    claudeSeam: {
+      position: 'absolute',
+      left: -12,
+      right: -12,
+      // Anchored to the IDENTITY ROW, like the ledge above it, so both are
+      // one offset from the title rather than one from the title and one
+      // from a wrapper whose own margin is derived from them.
+      bottom: -HEADER_PAD_BOTTOM,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: theme.colors.border,
+    },
+    // Clears the seam, the fingers hanging past it, and the row's own breath
+    // — all measured rather than guessed, so moving any one of them cannot
+    // leave the controls sitting on the drawing.
     headerClaudeWrap: {
       marginTop:
         HEADER_PAD_BOTTOM
@@ -3699,11 +3722,10 @@ const createStyles = (theme, insets) =>
     // session". Sharing the ground line is what actually looks level.
     claudePeek: {
       alignSelf: 'flex-end',
-      // Hang the part BELOW the ledge past the rule, so the ledge itself
-      // lands on it — and drop the whole mark by the header's bottom padding
-      // too, because that is where the rule now is.
-      marginBottom:
-        ledgeOffset(CLAUDE_PEEK_WIDTH) - markHeight(CLAUDE_PEEK_WIDTH) - HEADER_PAD_BOTTOM,
+      // Hang the part BELOW the ledge past the row's edge, so the ledge
+      // itself lands on the row's bottom — which is the line the title
+      // stands on, and therefore the line the mark is level with.
+      marginBottom: ledgeOffset(CLAUDE_PEEK_WIDTH) - markHeight(CLAUDE_PEEK_WIDTH),
       // Half the gutter it had: the mark is the last thing on the row, and a
       // full one left it looking parked rather than placed.
       marginRight: theme.spacing.lg / 2,
@@ -3716,12 +3738,11 @@ const createStyles = (theme, insets) =>
       position: 'absolute',
       left: -12,
       right: -12,
-      // ON THE LINE THE HEADER ALREADY DRAWS. Out of a session the rule under
-      // the title is `headerEdge`, which sits one HEADER_PAD_BOTTOM below
-      // this row; drawn at the row's own bottom instead, the line jumped up
-      // 14pt the moment a session started and back down when it ended. Same
-      // number, same place, whichever state the header is in.
-      bottom: -HEADER_PAD_BOTTOM,
+      // The mark's OWN line, on the row's bottom edge: the title stands on
+      // it and the fingers drape over it, which is what puts the two on one
+      // line. The header's own rule is a separate thing and stays exactly
+      // where it is in both states — see claudeSeam.
+      bottom: 0,
       height: StyleSheet.hairlineWidth,
       backgroundColor: theme.colors.border,
     },
