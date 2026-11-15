@@ -15,12 +15,13 @@ jest.mock('react-native-svg', () => {
     C.displayName = name;
     return C;
   };
-  return { __esModule: true, default: make('Svg'), Path: make('Path'), Circle: make('Circle') };
+  return { __esModule: true, default: make('Svg'), Path: make('Path'), G: make('G'), Circle: make('Circle') };
 }, { virtual: true });
 
 import ClaudeTurtleMark, {
   CLAUDE_MARK_ASPECT,
   CLAUDE_MARK_COLOR,
+  CLAUDE_MARK_LEVEL,
   CLAUDE_MARK_LEDGE,
   ledgeOffset,
   markHeight,
@@ -92,7 +93,36 @@ describe('ClaudeTurtleMark', () => {
     expect(fills.filter((f) => f === 'none')).toHaveLength(1);
   });
 
+  test('as drawn by default; `tilt` turns the whole drawing about its centre', async () => {
+    const { unmount } = await render(<ClaudeTurtleMark />);
+    expect(screen.getByTestId('claude-turtle-mark-art').props.transform).toBeUndefined();
+    await unmount();
+    await render(<ClaudeTurtleMark tilt={2.3} />);
+    // About the middle of the art (viewBox 30 54 316 136), so one hand comes
+    // up as far as the other goes down and the ledge between them stays put.
+    expect(screen.getByTestId('claude-turtle-mark-art').props.transform).toBe('rotate(2.3 188 122)');
+  });
+
+  test('CLAUDE_MARK_LEVEL puts the hands level, and the header uses it', () => {
+    // Measured off Mark's mock-up (2026-11-15): 2.2–2.35° clockwise.
+    expect(CLAUDE_MARK_LEVEL).toBeGreaterThanOrEqual(2);
+    expect(CLAUDE_MARK_LEVEL).toBeLessThanOrEqual(2.6);
+    // What it is for: the hand centres as drawn are (77.5, 151.5) and
+    // (301, 135) — the right one 16.5 units higher. Turned, the gap more
+    // than halves, and the two straddle the ledge line at 150.
+    const a = (CLAUDE_MARK_LEVEL * Math.PI) / 180;
+    const yAfter = (x, y) => 122 + (x - 188) * Math.sin(a) + (y - 122) * Math.cos(a);
+    const left = yAfter(77.5, 151.5);
+    const right = yAfter(301, 135);
+    expect(Math.abs(left - right)).toBeLessThan(16.5 / 2);
+    expect(left).toBeLessThan(151.5);
+    expect(right).toBeGreaterThan(135);
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    expect(src).toMatch(/tilt=\{CLAUDE_MARK_LEVEL\}/);
+  });
+
   test('the ledge runs under the chin and through the hands', () => {
+
     // Above the line: the whole face. Below it: only fingers. That is what
     // makes it hang OVER an edge instead of sitting on one.
     expect(CLAUDE_MARK_LEDGE).toBeGreaterThan(0.6);

@@ -18,7 +18,7 @@
  * the eyes are never drawn smaller than the pen that drew them.
  */
 import React from 'react';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle, G, Path } from 'react-native-svg';
 
 /** The felt pen's orange, sampled from the sketch. */
 export const CLAUDE_MARK_COLOR = '#F5821F';
@@ -40,7 +40,27 @@ export const CLAUDE_MARK_LEDGE = (LEDGE_Y - BOX.y) / BOX.h;
 /** How far below its own top edge the ledge is, for a mark `size` wide. */
 export const ledgeOffset = (size) => (size / CLAUDE_MARK_ASPECT) * CLAUDE_MARK_LEDGE;
 
-/** How tall the mark is for a given width — the art drives it, not a guess. */
+/**
+ * The turn, in degrees clockwise, that puts the two HANDS LEVEL.
+ *
+ * The sketch was drawn leaning: the right hand sits about 16 units higher
+ * than the left. Floating on a page that is its charm. Hung over a straight
+ * rule it reads as a mistake — the left hand droops well below the line and
+ * the right one barely reaches it, so he is not holding on to anything.
+ *
+ * Measured, not chosen: Mark's own mock-up (2026-11-15) has the mark turned
+ * so both hands rest on the ridge, and the angle between the two hands there
+ * is 2.2–2.35° clockwise of the art as drawn. The face keeps most of its
+ * tilt, which is where the character is.
+ *
+ * The ledge does not move with it: the turn is about the centre of the art,
+ * one hand comes up as far as the other goes down, and the line they share
+ * stays at LEDGE_Y.
+ */
+export const CLAUDE_MARK_LEVEL = 2.3;
+
+/** How tall the mark is for a given width
+ — the art drives it, not a guess. */
 export const markHeight = (size) => size / CLAUDE_MARK_ASPECT;
 
 const HEAD = 'M264 126 C263 101 246 72 214 68 C184 64 149 85 133 112 '
@@ -81,6 +101,12 @@ export default function ClaudeTurtleMark({
    * leak across the gap — and nothing passes behind the head anyway.
    */
   handFill = 'none',
+  /**
+   * Degrees clockwise to turn the whole drawing about its own centre. 0 — as
+   * drawn — everywhere it floats free; CLAUDE_MARK_LEVEL where it hangs over
+   * a straight edge and the hands have to sit level on it.
+   */
+  tilt = 0,
   testID = 'claude-turtle-mark',
 }) {
   const pen = penFor(size, weight);
@@ -94,20 +120,28 @@ export default function ClaudeTurtleMark({
       viewBox={`${BOX.x} ${BOX.y} ${BOX.w} ${BOX.h}`}
       accessible={false}
     >
-      {[HEAD, LEFT_HAND, RIGHT_HAND].map((d) => (
-        <Path
-          key={d}
-          d={d}
-          fill={d === HEAD ? 'none' : handFill}
-          stroke={color}
-          strokeWidth={pen}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      ))}
-      {EYES.map((e) => (
-        <Circle key={e.cx} cx={e.cx} cy={e.cy} r={e.r > eyeFloor ? e.r : eyeFloor} fill={color} />
-      ))}
+      {/* One group, so a tilt turns the head, hands and eyes together about
+          the middle of the art. The box has room for it: at a few degrees
+          nothing reaches the edge. */}
+      <G
+        testID={`${testID}-art`}
+        transform={tilt ? `rotate(${tilt} ${BOX.x + BOX.w / 2} ${BOX.y + BOX.h / 2})` : undefined}
+      >
+        {[HEAD, LEFT_HAND, RIGHT_HAND].map((d) => (
+          <Path
+            key={d}
+            d={d}
+            fill={d === HEAD ? 'none' : handFill}
+            stroke={color}
+            strokeWidth={pen}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ))}
+        {EYES.map((e) => (
+          <Circle key={e.cx} cx={e.cx} cy={e.cy} r={e.r > eyeFloor ? e.r : eyeFloor} fill={color} />
+        ))}
+      </G>
     </Svg>
   );
 }

@@ -51,7 +51,7 @@ import { inkOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
-import ClaudeTurtleMark, { ledgeOffset, markHeight } from '../../components/ClaudeTurtleMark';
+import ClaudeTurtleMark, { CLAUDE_MARK_LEVEL, ledgeOffset, markHeight } from '../../components/ClaudeTurtleMark';
 import TypingIndicator from '../../components/TypingIndicator';
 import MarkdownText from '../../components/MarkdownText';
 import CopyKey from '../../components/CopyKey';
@@ -2438,6 +2438,9 @@ export default function TurtleScreen() {
             <View pointerEvents="none" style={styles.claudePeek} testID="claude-mark-peek">
               <ClaudeTurtleMark
                 size={CLAUDE_PEEK_WIDTH}
+                // Turned so both hands rest on the ridge. As drawn, the left
+                // one droops below the rule and the right barely reaches it.
+                tilt={CLAUDE_MARK_LEVEL}
                 handFill={theme.colors.background}
               />
             </View>
