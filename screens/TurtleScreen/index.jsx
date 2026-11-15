@@ -155,10 +155,28 @@ const CLAUDE_PEEK_WIDTH = 80;
 
 // The header's own bottom padding — the gap between the identity row and the
 // header's edge rule. Named because the Claude session's ledge has to land on
-// exactly that rule's line (see claudeLedge): out of a session the line under
+// exactly that rule's line (see claudeSeam): out of a session the line under
 // the title IS the header edge, and if the two are worked out from different
 // numbers the line jumps the moment a session starts.
 const HEADER_PAD_BOTTOM = 14;
+
+// THE RIDGE — the rule Claude's mark hangs over in a session. One point, in a
+// text tone: at hairline weight in the accent-tinted `border` colour it was
+// drawn and could not be seen on a phone at all (Mark's screenshot,
+// 2026-11-15, shows a header with no line in it).
+const CLAUDE_RIDGE_WEIGHT = 1;
+// Air between the title and the ridge either side of it. The rule stops short
+// of the words and picks up again after them — it never runs through them.
+const CLAUDE_RIDGE_GAP = 8;
+// The header's gutter and the identity bar's own inset: what the ridge has to
+// undo to reach the screen's edges. Named because three styles depend on them.
+const HEADER_GUTTER = 12;
+const IDENTITY_INSET = 4;
+// One row height, session or not. Out of a session the search key (44pt) set
+// it; in one nothing did, so the row shrank to its text and everything hung
+// off it — the title, the seam under it — sat a few points higher than it
+// does outside a session.
+const HEADER_ROW_MIN_HEIGHT = 44;
 const SWIFT_PULL_MIN_DY = 48;
 const SWIFT_PULL_MIN_SPEED = 1.2;
 // (The chat header's blur bands + fade-out scrim are gone: the header is OPAQUE
@@ -2273,7 +2291,7 @@ export default function TurtleScreen() {
             "Claude x Turtle | Ad…". */}
         <View style={styles.headerTopRow}>
         <TouchableOpacity
-          style={styles.identityBar}
+          style={[styles.identityBar, claudeMarkShown && styles.identityBarOnRidge]}
           activeOpacity={0.7}
           onPress={() => { tapHaptic(); navigation.navigate('Profile'); }}
           delayLongPress={400}
@@ -2331,7 +2349,15 @@ export default function TurtleScreen() {
               warning accent for an elevated session (the two-weight treatment
               the console card used to carry). Outside a session it's you, over
               a subtitle of whatever the chat is doing right now. */}
-          <View style={styles.identityText}>
+          {/* THE RIDGE, in two pieces with the title standing in the gap: a
+              short lead-in from the screen's edge here, and the long run
+              after the title (below) that carries on under Claude's hands
+              to the far edge. The bar centres its children, so the title's
+              middle and the rule are the same line without measuring
+              either. Nothing is painted behind the words to hide a line —
+              there is no line there to hide. */}
+          {claudeMarkShown && <View pointerEvents="none" style={styles.claudeRidgeLead} />}
+          <View style={[styles.identityText, claudeMarkShown && styles.identityTextOnRidge]}>
             {inClaudeSession ? (
               <Text style={styles.identityName} numberOfLines={1}>
                 {claudeUiMode === 'login' ? 'Claude sign-in' : (
@@ -2351,6 +2377,9 @@ export default function TurtleScreen() {
                   : claudeBusy ? 'Claude is working…' : 'Notes to self'}
             </Text>
           </View>
+          {claudeMarkShown && (
+            <View pointerEvents="none" style={styles.claudeRidge} testID="claude-ridge" />
+          )}
 
           {/* Brand mark, trailing. Decorative (the row owns the tap and the
               long-press), it just anchors the header the way the turtle
@@ -2389,21 +2418,22 @@ export default function TurtleScreen() {
           </TouchableOpacity>
         )}
 
-        {/* Claude's mark, LEVEL WITH THE TITLE rather than hung off the row
-            below it. The row centres them, so the drawing and the name read
-            as one line instead of the name floating above a squiggle.
+        {/* Claude's mark, OVER THE LEDGE. The ridge (inside the identity bar,
+            above) is the row's centre line; the mark is hung from that line
+            by its own ledge — the height the sketch was drawn to hang over —
+            so the face is above the rule and the fingers come down across
+            it. It is AFTER the ridge in the tree and its hands are filled
+            with the header's own colour, so the rule passes UNDER them: he
+            is holding on to the ledge, not drawn on top of a line.
 
-            The ridge is drawn at the mark's own ledge — the line the sketch
-            was drawn to hang over — so it passes through the middle of the
-            hands. It is behind the mark in the tree, and the hands are
-            filled with the header's own colour, so they sit ON the line
-            rather than having it run through them. Takes no touches. */}
+            The title is centred on the same line, so the name and the
+            drawing are level by construction. Takes no touches — the
+            identity bar underneath still owns the tap and the long-press. */}
         {claudeMarkShown && (
           <>
-            <View pointerEvents="none" style={styles.claudeLedge} />
             {/* …and the header's own line, held at the distance below the
                 title it has when there is NO session, so starting one does
-                not move it. The fingers hang between the two. */}
+                not move it. */}
             <View pointerEvents="none" style={styles.claudeSeam} />
             <View pointerEvents="none" style={styles.claudePeek} testID="claude-mark-peek">
               <ClaudeTurtleMark
@@ -3626,7 +3656,7 @@ const createStyles = (theme, insets) =>
       // expand cluster without truncating the title.
       flexDirection: 'column',
       alignItems: 'stretch',
-      paddingHorizontal: 12,
+      paddingHorizontal: HEADER_GUTTER,
       // The bar reaches DOWN to meet its content rather than stopping short and
       // leaving black-on-black dead space above the Claude console. With the
       // height now measured, this padding is the header's real bottom edge, so
@@ -3676,6 +3706,10 @@ const createStyles = (theme, insets) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
+      // The same height in and out of a session (see the constant): the
+      // title, and the seam hung off this row's bottom, do not shift when a
+      // session starts.
+      minHeight: HEADER_ROW_MIN_HEIGHT,
     },
     // The header's second row, session only: the Claude controls. A hairline
     // above it separates the controls from the identity without the weight of
@@ -3688,12 +3722,13 @@ const createStyles = (theme, insets) =>
     // the whole thing — and this seam takes its place, at exactly the same
     // distance from the title. Same number, same position, both states.
     //
-    // The fingers hang between the two lines: resting on the ledge above,
-    // ending just short of this one.
+    // The ridge the mark hangs over is a different line, higher up: it runs
+    // through the row's middle (see claudeRidge). The fingers end well short
+    // of this one.
     claudeSeam: {
       position: 'absolute',
-      left: -12,
-      right: -12,
+      left: -HEADER_GUTTER,
+      right: -HEADER_GUTTER,
       // Anchored to the IDENTITY ROW, like the ledge above it, so both are
       // one offset from the title rather than one from the title and one
       // from a wrapper whose own margin is derived from them.
@@ -3701,54 +3736,68 @@ const createStyles = (theme, insets) =>
       height: StyleSheet.hairlineWidth,
       backgroundColor: theme.colors.border,
     },
-    // Clears the seam, the fingers hanging past it, and the row's own breath
-    // — all measured rather than guessed, so moving any one of them cannot
-    // leave the controls sitting on the drawing.
+    // Clears the seam, plus the row's own breath. The fingers no longer hang
+    // past the identity row — the ledge is its centre line, so they end
+    // inside it — and nothing here has to make room for them.
     headerClaudeWrap: {
-      marginTop:
-        HEADER_PAD_BOTTOM
-        + (markHeight(CLAUDE_PEEK_WIDTH) - ledgeOffset(CLAUDE_PEEK_WIDTH))
-        + 8,
+      marginTop: HEADER_PAD_BOTTOM + 8,
     },
-    // ONE GROUND LINE. The mark sits in the identity row with its LEDGE —
-    // the line the sketch was drawn to hang over — on the row's bottom edge,
-    // which is where the rule is. So the title stands on that line and the
-    // fingers drape over it, and the two read as one row rather than as a
-    // name floating above a squiggle.
+    // OVER THE LEDGE. Out of the flow, so the identity bar (and the ridge in
+    // it) runs the full width underneath; hung from the row's centre line by
+    // the mark's own ledge, so that line passes just under the chin and
+    // through the hands. Both numbers come from the art.
     //
-    // Not centre-aligned, though that is the obvious reading of "centred
-    // with the icon": the title block is ~35pt and the face above the ledge
-    // is 24, so centring the two puts the rule straight through "Admin
-    // session". Sharing the ground line is what actually looks level.
+    // The face stands a couple of points above the row — the header keeps
+    // its overflow visible, and there is nothing up there but the status
+    // bar's margin.
     claudePeek: {
-      alignSelf: 'flex-end',
-      // Hang the part BELOW the ledge past the row's edge, so the ledge
-      // itself lands on the row's bottom — which is the line the title
-      // stands on, and therefore the line the mark is level with.
-      marginBottom: ledgeOffset(CLAUDE_PEEK_WIDTH) - markHeight(CLAUDE_PEEK_WIDTH),
-      // Half the gutter it had: the mark is the last thing on the row, and a
-      // full one left it looking parked rather than placed.
-      marginRight: theme.spacing.lg / 2,
-    },
-    // The rule itself, EDGE TO EDGE — `left`/`right` undo the header's 12pt
-    // gutter. One that stopped at the text would read as an underline for
-    // the title instead of as the ground the mark stands on. Behind the mark
-    // in the tree, and the hands are filled, so it passes under them.
-    claudeLedge: {
       position: 'absolute',
-      left: -12,
-      right: -12,
-      // The mark's OWN line, on the row's bottom edge: the title stands on
-      // it and the fingers drape over it, which is what puts the two on one
-      // line. The header's own rule is a separate thing and stays exactly
-      // where it is in both states — see claudeSeam.
-      bottom: 0,
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: theme.colors.border,
+      top: '50%',
+      marginTop: -ledgeOffset(CLAUDE_PEEK_WIDTH),
+      // Half a gutter in from the row: the mark is the last thing on it, and
+      // a full one left it looking parked rather than placed.
+      right: theme.spacing.lg / 2,
     },
-    // No border of its own any more: the ledge rule above IS the line
-    // between the identity row and this one, and two hairlines eight points
-    // apart read as a mistake.
+    // THE RIDGE, long run: from just after the title to the far edge of the
+    // SCREEN — the negative margin undoes the bar's inset and the header's
+    // gutter — passing under the mark on the way. It is a flex child of the
+    // identity bar, which centres it, so it is the line the title is centred
+    // on without anything being measured.
+    //
+    // minWidth is the room the mark needs plus one gap of visible rule
+    // before it: a long title gives way (it ellipsizes) rather than running
+    // under the drawing.
+    claudeRidge: {
+      flexGrow: 1,
+      flexShrink: 0,
+      flexBasis: 0,
+      minWidth: HEADER_GUTTER + theme.spacing.lg / 2 + CLAUDE_PEEK_WIDTH + CLAUDE_RIDGE_GAP,
+      marginRight: -(HEADER_GUTTER + IDENTITY_INSET),
+      height: CLAUDE_RIDGE_WEIGHT,
+      backgroundColor: theme.colors.textTertiary,
+      opacity: 0.7,
+    },
+    // …and its lead-in: from the screen's left edge to one gap short of the
+    // title. Absolute, so the title does not move over to make room for it.
+    claudeRidgeLead: {
+      position: 'absolute',
+      left: -HEADER_GUTTER,
+      width: HEADER_GUTTER + IDENTITY_INSET - CLAUDE_RIDGE_GAP,
+      top: '50%',
+      marginTop: -CLAUDE_RIDGE_WEIGHT / 2,
+      height: CLAUDE_RIDGE_WEIGHT,
+      backgroundColor: theme.colors.textTertiary,
+      opacity: 0.7,
+    },
+    // While the ridge is up the bar holds only the title and the rule, and
+    // the space between them is the ridge's gap, the same as the lead-in's.
+    identityBarOnRidge: { gap: CLAUDE_RIDGE_GAP },
+    // …and the title takes only the width of its words, so the rule can
+    // start where they end. (Outside a session it fills the row.)
+    identityTextOnRidge: { flexGrow: 0, flexShrink: 1, flexBasis: 'auto' },
+    // No border of its own: the seam above IS the line between the identity
+    // row and this one, and two hairlines eight points apart read as a
+    // mistake.
     headerClaudeRow: {
       paddingTop: 8,
     },
@@ -3758,7 +3807,7 @@ const createStyles = (theme, insets) =>
       alignItems: 'center',
       gap: 10,
       paddingVertical: 2,
-      paddingHorizontal: 4,
+      paddingHorizontal: IDENTITY_INSET,
     },
     identityAvatarWrap: { width: 34, height: 34 },
     headerSearchButton: {

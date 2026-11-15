@@ -23,6 +23,7 @@ import ClaudeTurtleMark, {
   CLAUDE_MARK_COLOR,
   CLAUDE_MARK_LEDGE,
   ledgeOffset,
+  markHeight,
   penFor,
 } from '../ClaudeTurtleMark';
 
@@ -109,25 +110,59 @@ describe('ClaudeTurtleMark', () => {
     expect(ring).toMatch(/login-variant/);
     // The ring itself stands down for a live session.
     expect(src).toMatch(/\{!claudeMarkShown && \(\s*<View style=\{styles\.identityAvatarWrap\}>/);
-    // Touch-transparent, and level with the title rather than hung off the
-    // row below — the row centres the two so they read as one line.
+    // Touch-transparent: the identity bar underneath keeps the tap.
     expect(src).toMatch(/<View pointerEvents="none" style=\{styles\.claudePeek\} testID="claude-mark-peek">/);
-    // The RULE goes to the mark, not the mark to the rule: it is drawn at the
-    // ledge so it passes through the middle of the hands, and both numbers
-    // come from the art rather than from a measurement of it.
-    expect(src).toMatch(/marginBottom: ledgeOffset\(CLAUDE_PEEK_WIDTH\) - markHeight\(CLAUDE_PEEK_WIDTH\),/);
-    // Full width: the header's own gutter undone, so the rule is the ground
-    // the mark stands on rather than an underline for the title.
-    const ledge = src.slice(src.indexOf('    claudeLedge: {'));
-    expect(ledge.slice(0, 400)).toMatch(/left: -12/);
-    expect(ledge.slice(0, 400)).toMatch(/right: -12/);
-    expect(ledge.slice(0, 600)).toMatch(/bottom: 0,/);
-    // …and the controls row must not draw a SECOND one eight points under it.
+    // Hung from the row's CENTRE line by its own ledge, so that line runs
+    // under the chin and through the hands. Both numbers come from the art.
+    const peek = src.slice(src.indexOf('    claudePeek: {'), src.indexOf('    claudeRidge: {'));
+    expect(peek).toMatch(/position: 'absolute',/);
+    expect(peek).toMatch(/top: '50%',/);
+    expect(peek).toMatch(/marginTop: -ledgeOffset\(CLAUDE_PEEK_WIDTH\),/);
+    // No circle and no plate: the style positions it and nothing else.
+    expect(peek).not.toMatch(/border|backgroundColor/);
+    // …and the controls row must not draw a rule of its own under it.
     const controls = src.slice(src.indexOf('    headerClaudeRow: {'), src.indexOf('    identityBar: {'));
     expect(controls).not.toMatch(/borderTopWidth/);
-    // No circle and no plate: the peek's style positions it and nothing else.
-    const peek = src.slice(src.indexOf('    claudePeek: {'), src.indexOf('    claudeLedge: {'));
-    expect(peek).not.toMatch(/border|backgroundColor/);
+  });
+
+  test('THE TITLE AND THE MARK SHARE THE RIDGE — centred on it, not stood on it', () => {
+    // Mark's mock-up (2026-11-15): the title block centred on the line the
+    // hands hold, the rule running edge to edge but never through the words.
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    // The ridge is a flex child of the identity bar, which centres its
+    // children: so the rule IS the title's middle, with nothing measured.
+    const from = src.indexOf('styles.identityBar, claudeMarkShown && styles.identityBarOnRidge');
+    const bar = src.slice(from, src.indexOf('</TouchableOpacity>', from));
+    const lead = bar.indexOf('style={styles.claudeRidgeLead}');
+    const title = bar.indexOf('styles.identityText, claudeMarkShown && styles.identityTextOnRidge');
+    const ridge = bar.indexOf('style={styles.claudeRidge} testID="claude-ridge"');
+    expect(lead).toBeGreaterThan(-1);
+    expect(title).toBeGreaterThan(lead);
+    expect(ridge).toBeGreaterThan(title);
+    const barStyle = src.slice(src.indexOf('    identityBar: {'), src.indexOf('    identityAvatarWrap: {'));
+    expect(barStyle).toMatch(/alignItems: 'center',/);
+    // The title is as wide as its words, so the rule starts where they end…
+    expect(src).toMatch(/identityTextOnRidge: \{ flexGrow: 0, flexShrink: 1, flexBasis: 'auto' \},/);
+    // …and nothing is painted behind the words to hide a line under them.
+    const titleStyles = src.slice(src.indexOf('    identityBarOnRidge: {'), src.indexOf('    headerClaudeRow: {'));
+    expect(titleStyles).not.toMatch(/backgroundColor/);
+    // Edge to edge: the long run undoes the inset and the gutter on the
+    // right, the lead-in starts at the gutter on the left.
+    const run = src.slice(src.indexOf('    claudeRidge: {'), src.indexOf('    claudeRidgeLead: {'));
+    expect(run).toMatch(/marginRight: -\(HEADER_GUTTER \+ IDENTITY_INSET\),/);
+    // A long title gives way before it runs under the drawing.
+    expect(run).toMatch(/minWidth: HEADER_GUTTER \+ theme\.spacing\.lg \/ 2 \+ CLAUDE_PEEK_WIDTH \+ CLAUDE_RIDGE_GAP,/);
+    const leadStyle = src.slice(src.indexOf('    claudeRidgeLead: {'), src.indexOf('    identityBarOnRidge: {'));
+    expect(leadStyle).toMatch(/left: -HEADER_GUTTER,/);
+    expect(leadStyle).toMatch(/top: '50%',/);
+    // UNDER the hands: the ridge comes before the mark in the tree, and the
+    // hands are filled, so the rule passes behind them.
+    expect(src.indexOf('style={styles.claudeRidge}')).toBeLessThan(src.indexOf('style={styles.claudePeek}'));
+    // Visible: a point of a text tone, not a hairline of the border colour
+    // (which was drawn and could not be seen).
+    expect(src).toMatch(/const CLAUDE_RIDGE_WEIGHT = 1;/);
+    expect(run).toMatch(/backgroundColor: theme\.colors\.textTertiary,/);
+    expect(run).not.toMatch(/hairlineWidth|colors\.border/);
   });
 
   test('ONE MARK PER CORNER — the brand turtle stands down for it', () => {
@@ -166,10 +201,15 @@ describe('ClaudeTurtleMark', () => {
     // where the edge rule does when there is no session.
     const seam = src.slice(src.indexOf('    claudeSeam: {'));
     expect(seam.slice(0, 600)).toMatch(/bottom: -HEADER_PAD_BOTTOM,/);
-    // Two lines, and they are not the same one: the ledge is on the hands,
-    // the seam is one padding below it.
+    // Two lines, and they are not the same one: the ridge is on the hands,
+    // the seam is one padding below the row.
     expect(src).toMatch(/style=\{styles\.claudeSeam\}/);
-    expect(src).toMatch(/style=\{styles\.claudeLedge\}/);
+    expect(src).toMatch(/style=\{styles\.claudeRidge\}/);
+    // The row is one height in both states, or "the same distance below the
+    // row" is not the same place: out of a session the search key set it,
+    // in one nothing did.
+    const row = src.slice(src.indexOf('    headerTopRow: {'), src.indexOf('    claudeSeam: {'));
+    expect(row).toMatch(/minHeight: HEADER_ROW_MIN_HEIGHT,/);
   });
 
   test('…and takes the corner it is now alone in', () => {
@@ -179,9 +219,12 @@ describe('ClaudeTurtleMark', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
     const width = Number(/const CLAUDE_PEEK_WIDTH = (\d+);/.exec(src)[1]);
     expect(width).toBeGreaterThanOrEqual(72);
-    // …and still inside the header: what hangs ABOVE the ridge has to fit in
-    // the identity row, whose content is 34pt tall. Clipping the face would
-    // be the same bug with a bigger number.
-    expect(ledgeOffset(width)).toBeLessThanOrEqual(34);
+    // …and still inside the header: the ridge is the row's centre line, so
+    // the face stands half a row plus a little above it. More than a few
+    // points over the row's top and it is in the status bar.
+    const rowHeight = Number(/const HEADER_ROW_MIN_HEIGHT = (\d+);/.exec(src)[1]);
+    expect(ledgeOffset(width) - rowHeight / 2).toBeLessThanOrEqual(4);
+    // And the fingers end inside the row, clear of the seam under it.
+    expect(markHeight(width) - ledgeOffset(width)).toBeLessThan(rowHeight / 2);
   });
 });
