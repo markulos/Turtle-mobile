@@ -562,6 +562,68 @@ Photos page were not, and were brought over on 2026-11-14.
 - **A card is still right for a single thing**: one summary panel, one hero,
   one callout. The rule is about COLUMNS of peers.
 
+## 9. A neumorphic surface: one plane, deformed by light
+
+**Where it applies.** The Planner's **Focus** tab and its **Inbox** tab (and
+everything those two push: a board's page, a tile's list, the tag picker).
+Added 2026-11-15 at Mark's request — "add the neomorph with the silver grainy
+background in the design style for the app and incorporate it in the inbox tab
+as well" — so this is the style a NEW surface of that kind should reach for,
+not a one-off on one page.
+
+**The one rule it is:** an element is the **same colour as its page**, and the
+only thing separating them is a light source. A highlight above-left, a shadow
+below-right, and the eye reads a bump. Swap the two and it reads as a dent.
+There is no fill change, no tint and no border — **if you can see an edge, it
+is not this style.**
+
+**The parts, all of them already written:**
+
+- **`neuRaised(surface, mode)` / `neuPressed(surface, mode)`** —
+  `utils/neumorph.js`. One view, one style: RN 0.81 on Fabric takes a
+  `boxShadow` LIST with real `inset`, so neither needs a wrapper. Both tones
+  are derived from the surface's own colour in HSL, so the style follows the
+  theme with no second palette to keep in step.
+- **`focusSkin(theme)`** — `screens/TasksScreen/utils/focusSkin.js`. The
+  palette: the app's cream in light mode, the warm charcoal in dark, and the
+  **ink flips with it**. NOT `insetCardPalette`, whose text is white in BOTH
+  modes because its card is a charcoal recess — that palette's ink on this
+  surface is invisible in light mode, and it has happened twice.
+- **`<Grain level={grain} radius={N} />`** — `components/Grain.jsx`. The
+  silver tooth. A flat fill under soft shadows reads as plastic; the speckle is
+  what makes it a material. **`level` is a prop, never a `useTheme()` read** —
+  Grain must not import ThemeContext (it pulls AsyncStorage into every suite
+  that mounts the component). The screen reads `grain` from `useTheme()` and
+  threads it down. `radius` must match the panel's, because a repeating fill is
+  not clipped by the panel's own corner.
+- **The grain is the USER'S** — Settings → Appearance → Surface grain, off
+  through strong. Junk or a missing value means "as designed", never "none".
+
+**The geometry, and why it is small:**
+
+- **Reach ≤ gap.** `NEU_OFFSET + NEU_BLUR` must not exceed `NEU_GAP`, and
+  `neumorph.test` holds it. At 6 + 14 against a 10pt gutter a panel's shadow
+  crossed the gap and landed on its neighbour's highlight, and what pooled in
+  between was a smudge belonging to nothing. Mark circled exactly that.
+- **`NEU_GAP` between two panels, `NEU_PAGE_TOP` (twice it) above the first
+  one.** A panel in the middle of a page has a neighbour's gutter above it and
+  its own below; the top one has only its own, against chrome that is a hard
+  edge rather than another soft surface, so at one gap it reads as jammed under
+  the header with its highlight clipped by it.
+
+**What stays out of it:**
+
+- **Ink.** §1 still governs text and a control's own fill. This style is
+  famously bad for contrast — its own reference sheet lists "MINIMAL UI" as a
+  principle and shows controls nobody can find. A neumorphic panel keeps the
+  ink it had.
+- **Identity colour.** A board's tile is a coloured outline on this ground, not
+  a raised panel: it is identifying a board, which is a claim a shadow cannot
+  make.
+- **The app's ordinary depth.** `surfaceDepth.depth()` is a card ON a page —
+  two planes. This is the opposite claim, one plane deformed, so a surface
+  takes one or the other and never both.
+
 ## Checklist before shipping any UI change
 
 1. Which surface is it — white-on-black or black-on-white — and does every element on it contrast?
@@ -574,4 +636,7 @@ Photos page were not, and were brought over on 2026-11-14.
 5. Motion on the UI thread only; swift curve for shared-element moves.
 6. A column of tappable rows is a list: `insetRule` between them, no per-row card, glyphs in
    `listGlyphInk` (§8).
-7. Ran `turtle-mobile-verify` (parse, jest, undef-audit, bundle) and listed the on-device checks.
+7. On a neumorphic surface (Focus, Inbox): the panel is the page's colour with no border, the
+   shading's reach stays inside the gutter, and `<Grain level={grain}>` carries the panel's own
+   radius (§9).
+8. Ran `turtle-mobile-verify` (parse, jest, undef-audit, bundle) and listed the on-device checks.

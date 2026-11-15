@@ -43,7 +43,7 @@ const DROP_MS = 260;
  * else renders at rest, which matters more than it sounds — animating the whole
  * list on every add would re-play a dozen rows for one new line.
  */
-const Line = memo(function Line({ task, fresh, last, c, ridge, onPress }) {
+const Line = memo(function Line({ task, fresh, last, c, surface, ridge, onPress }) {
   const drop = useRef(new Animated.Value(fresh ? 0 : 1)).current;
   useEffect(() => {
     if (!fresh) return undefined;
@@ -77,7 +77,7 @@ const Line = memo(function Line({ task, fresh, last, c, ridge, onPress }) {
         style={({ pressed }) => [styles.row, pressed && styles.pressed]}
       >
         {/* The bead, centred on the thread behind it. */}
-        <View style={[styles.bead, { backgroundColor: c.background, borderColor: c.textTertiary }]} />
+        <View style={[styles.bead, { backgroundColor: surface, borderColor: c.textTertiary }]} />
         <Text style={[styles.title, { color: c.textPrimary }]} numberOfLines={2}>{task.title}</Text>
         {!!task.dueDate && (
           <Icon name="calendar-blank-outline" size={14} color={c.textTertiary} />
@@ -91,7 +91,14 @@ const Line = memo(function Line({ task, fresh, last, c, ridge, onPress }) {
   );
 });
 
-function InboxList({ items, total, freshId, c, theme, onOpenTask, onOpenAll, destinationLabel }) {
+function InboxList({
+  items, total, freshId, c, theme, onOpenTask, onOpenAll, destinationLabel,
+  // THE PAGE'S OWN COLOUR, for the bead to be filled with. Not `c.background`:
+  // this tab's ground is the neumorphic surface (STYLE-RULES §9), so the token
+  // is the wrong colour here and a bead in it has the thread showing either
+  // side of a disc that does not match the page.
+  surface,
+}) {
   // Built once for the whole list rather than per row: it is the same two
   // hairlines twelve times over.
   const ridge = ridgeRule(theme || { mode: 'light', colors: c });
@@ -113,6 +120,7 @@ function InboxList({ items, total, freshId, c, theme, onOpenTask, onOpenAll, des
           fresh={t.id === freshId}
           last={i === items.length - 1}
           c={c}
+          surface={surface}
           ridge={ridge}
           onPress={onOpenTask}
         />

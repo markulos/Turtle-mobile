@@ -36,12 +36,25 @@ import React, { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AppTextInput from '../../../components/AppTextInput';
+import Grain from '../../../components/Grain';
 import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
+import { neuPressed } from '../../../utils/neumorph';
+import { focusSkin } from '../utils/focusSkin';
 
-export default function InboxCapture({ destinationLabel = 'Unsorted', onAdd, theme, trailing = null }) {
+export default function InboxCapture({
+  destinationLabel = 'Unsorted', onAdd, theme, trailing = null,
+  // Settings → Appearance → Surface grain. A prop for the reason every other
+  // caller of Grain takes one: the component must not reach for ThemeContext.
+  grain = 1,
+}) {
   const [text, setText] = useState('');
   const clean = text.trim();
   const c = theme.colors;
+  // A WELL, not a bordered box. The tab is neumorphic now (STYLE-RULES §9) and
+  // the one state this style has for "put something in here" is pressed: the
+  // field is the page's own colour, dented. Which is also why the hairline
+  // goes — an edge is the thing this style replaces.
+  const well = neuPressed(focusSkin(theme).card, theme?.mode);
 
   const submit = useCallback(() => {
     const title = text.trim();
@@ -71,7 +84,8 @@ export default function InboxCapture({ destinationLabel = 'Unsorted', onAdd, the
         {trailing}
       </View>
 
-      <View style={[styles.field, { backgroundColor: c.surface, borderColor: c.border }]}>
+      <View style={[styles.field, well]}>
+        <Grain level={grain} radius={14} />
         <AppTextInput
           style={[styles.input, { color: c.textPrimary }]}
           placeholder="What needs doing?"
@@ -144,7 +158,7 @@ const styles = StyleSheet.create({
   headingStrong: { fontWeight: '700' },
   field: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    height: 52, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth,
+    height: 52, borderRadius: 14,
     paddingLeft: 14, paddingRight: 7,
   },
   // The single-line field metrics this app uses everywhere

@@ -47,7 +47,7 @@ import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import { playFocusComplete } from '../../../services/focusChime';
 import { focusSkin } from '../utils/focusSkin';
-import { neuRaised } from '../../../utils/neumorph';
+import { NEU_GAP, NEU_PAGE_TOP, neuRaised } from '../../../utils/neumorph';
 import Grain from '../../../components/Grain';
 import { boardLabel } from '../utils/taskHelpers';
 import { focusStats, formatMinutes } from '../utils/focusStats';
@@ -1031,10 +1031,14 @@ function FocusPage({
 const styles = StyleSheet.create({
   root: { flex: 1 },
   page: { flex: 1 },
-  body: { paddingHorizontal: 16, paddingTop: 4, gap: 10 },
+  // The gutter is NEU_GAP on every other side of these panels, and the top had
+  // 10pt of it split across two styles — so the deck started hard under the
+  // header with its highlight clipped by it. One number, the same as the gap
+  // between the panels below, and the top of the page reads as a margin.
+  body: { paddingHorizontal: 16, paddingTop: NEU_PAGE_TOP, gap: NEU_GAP },
   // The deck. The same inset card as the tiles below it, one size up: this is
   // the page's subject, so it gets the top of the screen and the big reading.
-  deck: { marginTop: 6, borderRadius: 24, borderCurve: 'continuous', padding: 16, gap: 10 },
+  deck: { borderRadius: 24, borderCurve: 'continuous', padding: 16, gap: 10 },
   deckHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   badge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
   badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6 },

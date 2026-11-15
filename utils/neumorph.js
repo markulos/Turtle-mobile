@@ -81,6 +81,17 @@ export const NEU_BLUR = 7;
  * may not.
  */
 export const NEU_GAP = 10;
+/**
+ * The gutter above the FIRST panel on a page — twice the gap between two.
+ *
+ * A panel between two others has a neighbour's gutter above it and its own
+ * below, so the space reads as even. The top one has only its own, against a
+ * header that is a hard edge rather than another soft surface, so at NEU_GAP
+ * it reads as jammed under the chrome with its highlight clipped by it. Mark
+ * asked for the margin twice — on the focus timer and on the planner header —
+ * which is the tell that one number belongs here rather than in each page.
+ */
+export const NEU_PAGE_TOP = NEU_GAP * 2;
 
 /**
  * How far the two tones move from the surface, in HSL lightness points.
@@ -158,4 +169,6 @@ export function neuPressed(surface, mode, { offset = NEU_OFFSET, blur = NEU_BLUR
   };
 }
 
-export default { neuRaised, neuPressed, neuTones, NEU_OFFSET, NEU_BLUR, NEU_GAP };
+export default {
+  neuRaised, neuPressed, neuTones, NEU_OFFSET, NEU_BLUR, NEU_GAP, NEU_PAGE_TOP,
+};

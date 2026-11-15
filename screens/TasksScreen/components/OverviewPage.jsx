@@ -30,7 +30,9 @@ import { tapHaptic } from '../../../utils/haptics';
 import {
   THREAD_X, BEAD, BEAD_SMALL, ROW_PAD_LEFT, REVEAL_MS, REVEAL_OUT_MS, REVEAL_RISE,
 } from '../utils/threadGeometry';
-import { insetCardPalette } from '../utils/cardPalette';
+import { focusSkin } from '../utils/focusSkin';
+import { NEU_GAP, NEU_PAGE_TOP, neuRaised } from '../../../utils/neumorph';
+import Grain from '../../../components/Grain';
 import { RULE_HIGHLIGHT, RULE_W } from '../../../utils/surfaceDepth';
 import { insetRule } from '../../../utils/surfaceDepth';
 import { boardLabel, isTaskDoneNow, itemTypeOf, localTodayStr } from '../utils/taskHelpers';
@@ -99,9 +101,10 @@ const FINDER_HEIGHT = 46;
  * number — a figure you cannot open is a dead end, and "3 late" is exactly the
  * moment you want to know WHICH three.
  */
-function Tile({ icon, label, value, caption, pal, accent, testID, onPress }) {
+function Tile({ icon, label, value, caption, pal, neu, grain, accent, testID, onPress }) {
   const body = (
     <>
+      <Grain level={grain} radius={16} />
       <View style={styles.tileTop}>
         <View style={[styles.iconTile, { backgroundColor: pal.tile }]}>
           <Icon name={icon} size={15} color={accent || pal.text} />
@@ -113,7 +116,10 @@ function Tile({ icon, label, value, caption, pal, accent, testID, onPress }) {
       <Text style={[styles.caption, { color: pal.muted }]} numberOfLines={1}>{caption}</Text>
     </>
   );
-  const box = [styles.tile, { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop }];
+  // RAISED, not outlined: the tile is the page's own colour and only the light
+  // separates them (utils/neumorph, STYLE-RULES §9). The rim it used to carry
+  // is gone with the fill change — an edge you can see is the other style.
+  const box = [styles.tile, neu];
   if (!onPress) return <View style={box} testID={testID}>{body}</View>;
   return (
     <Pressable
@@ -261,6 +267,10 @@ function Collapsible({ open, children }) {
  */
 function BoardTile({
   row, dot, sharedBy, selected, expanded, tasks, todayStr, c,
+  // THE PAGE'S OWN COLOUR. The thread runs behind the bead, so the bead has to
+  // be filled with whatever is behind it — and on this tab that is the
+  // neumorphic surface, not `c.background` (STYLE-RULES §9).
+  surface,
   adding, addQuery, onAddQueryChange, onStartAdd, onCancelAdd, onSubmitAdd,
   // onManage — (name) => the ALL-boards manager (add one, see them all), on a
   // long press. The tap and the pencil both belong to THIS board now, and the
@@ -313,7 +323,7 @@ function BoardTile({
         testID={`overview-board-${row.name}`}
         style={({ pressed }) => [styles.bdHead, pressed && styles.pressed]}
       >
-        <View style={[styles.bdBead, { backgroundColor: c.background, borderColor: dot }]} />
+        <View style={[styles.bdBead, { backgroundColor: surface, borderColor: dot }]} />
         <View style={styles.bdTileText}>
           <View style={styles.bdNameRow}>
             <Text style={[styles.bdTileName, { color: c.textPrimary }]} numberOfLines={1}>
@@ -577,9 +587,10 @@ function TaskList({ tasks, isDone, todayStr, theme, onOpenTask, showBoard }) {
  * The placeholder is our own <Text>, not the TextInput's `placeholder` prop —
  * see components/AppTextInput, which owns that rule for every field in the app.
  */
-function BoardFinder({ query, onChangeQuery, onCreate, boardName, pal, canCreate }) {
+function BoardFinder({ query, onChangeQuery, onCreate, boardName, pal, neu, grain, canCreate }) {
   return (
-    <View style={[styles.finder, { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop }]}>
+    <View style={[styles.finder, neu]}>
+      <Grain level={grain} radius={14} />
       <View style={styles.finderField}>
         <Icon name="magnify" size={18} color={pal.muted} />
         <AppTextInput
@@ -651,12 +662,13 @@ export function scopeTasks(tasks, scope, todayStr) {
   return items.filter((t) => !isDone(t)).sort(byDue);   // 'todo'
 }
 
-function ScopePage({ scope, tasks, todayStr, pal, theme, onBack, onOpenTask }) {
+function ScopePage({ scope, tasks, todayStr, pal, grain, theme, onBack, onOpenTask }) {
   const c = theme.colors;
   const copy = SCOPES[scope] || SCOPES.todo;
   const rows = useMemo(() => scopeTasks(tasks, scope, todayStr), [tasks, scope, todayStr]);
   return (
-    <View style={[styles.page, { backgroundColor: c.background }]}>
+    <View style={[styles.page, { backgroundColor: pal.card }]}>
+      <Grain level={grain} />
       <PageHeader title={`${copy.title} · ${rows.length}`} onBack={onBack} theme={theme} />
       <ScrollView
         contentContainerStyle={styles.body}
@@ -763,12 +775,12 @@ function PageHeader({ title, onBack, right, theme, onRename }) {
  * page instead of simply being read. "All tags" leads, because getting back
  * out of a filter has to be at least as easy as getting into one.
  */
-function BoardTagsPage({ rows, selected, pal, theme, onBack, onPick }) {
-  const c = theme.colors;
+function BoardTagsPage({ rows, selected, pal, neu, grain, theme, onBack, onPick }) {
   const total = rows.reduce((n, r) => n + r.total, 0);
   const totalDone = rows.reduce((n, r) => n + r.done, 0);
   return (
-    <View style={[styles.page, { backgroundColor: c.background }]}>
+    <View style={[styles.page, { backgroundColor: pal.card }]}>
+      <Grain level={grain} />
       <PageHeader title={`Tags · ${rows.length}`} onBack={onBack} theme={theme} />
       <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator {...SCROLL_INDICATOR} indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}>
         <TagPick
@@ -777,6 +789,8 @@ function BoardTagsPage({ rows, selected, pal, theme, onBack, onPick }) {
           total={total}
           active={!selected}
           pal={pal}
+          neu={neu}
+          grain={grain}
           onPress={() => onPick(null)}
           testID="board-tag-pick-all"
         />
@@ -788,6 +802,8 @@ function BoardTagsPage({ rows, selected, pal, theme, onBack, onPick }) {
             total={r.total}
             active={selected === r.tag}
             pal={pal}
+            neu={neu}
+            grain={grain}
             // A second tap on the lit one clears it — the same gesture in and
             // out, so you never have to find "All tags" to undo a mis-tap.
             onPress={() => onPick(selected === r.tag ? null : r.tag)}
@@ -799,7 +815,7 @@ function BoardTagsPage({ rows, selected, pal, theme, onBack, onPick }) {
   );
 }
 
-function TagPick({ label, done, total, active, pal, onPress, testID }) {
+function TagPick({ label, done, total, active, pal, neu, grain, onPress, testID }) {
   return (
     <Pressable
       onPressIn={() => tapHaptic()}
@@ -810,10 +826,15 @@ function TagPick({ label, done, total, active, pal, onPress, testID }) {
       testID={testID}
       style={({ pressed }) => [
         styles.tagRow,
-        { backgroundColor: pal.card, borderColor: active ? pal.text : pal.edge, borderTopColor: active ? pal.text : pal.edgeTop },
+        neu,
+        // SELECTED is a rim, and only when selected. On a neumorphic surface
+        // the unlit state has no edge at all — the light is what draws it —
+        // so the border can go back to meaning one thing: this is the one.
+        active && { borderWidth: 1, borderColor: pal.text },
         pressed && styles.pressed,
       ]}
     >
+      <Grain level={grain} radius={14} />
       <View style={styles.rowTop}>
         <Text style={[styles.rowName, { color: pal.text }]} numberOfLines={1}>{label}</Text>
         {active && <Icon name="check" size={16} color={pal.text} />}
@@ -824,9 +845,10 @@ function TagPick({ label, done, total, active, pal, onPress, testID }) {
   );
 }
 
-function TagRows({ rows, pal }) {
+function TagRows({ rows, pal, neu, grain }) {
   return rows.map((r) => (
-    <View key={r.tag} style={[styles.tagRow, { backgroundColor: pal.card, borderColor: pal.edge, borderTopColor: pal.edgeTop }]}>
+    <View key={r.tag} style={[styles.tagRow, neu]}>
+      <Grain level={grain} radius={14} />
       <View style={styles.rowTop}>
         <Text style={[styles.rowName, { color: pal.text }]} numberOfLines={1}>{r.tag}</Text>
         <Text style={[styles.rowFigure, { color: pal.text }]}>{r.done}<Text style={[styles.rowFigureTotal, { color: pal.sub }]}>/{r.total}</Text></Text>
@@ -837,7 +859,7 @@ function TagRows({ rows, pal }) {
 }
 
 function BoardDetail({
-  row, tasks, todayStr, pal, theme, onBack, onShow, isShown, onOpenTask, onAddTask,
+  row, tasks, todayStr, pal, neu, grain, theme, onBack, onShow, isShown, onOpenTask, onAddTask,
   // (next) => void and () => void. Absent on a board that cannot be either:
   // NO_BOARD is a display sentinel with no row to rename, and a board shared
   // BY someone else is theirs — the server refuses both, so the page must not
@@ -875,7 +897,8 @@ function BoardDetail({
   };
   const c = theme.colors;
   return (
-    <View style={[styles.page, { backgroundColor: c.background }]}>
+    <View style={[styles.page, { backgroundColor: pal.card }]}>
+      <Grain level={grain} />
       <PageHeader
         title={boardLabel(row.name)}
         onBack={onBack}
@@ -924,10 +947,10 @@ function BoardDetail({
       />
       <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator {...SCROLL_INDICATOR} indicatorStyle={theme.mode === 'dark' ? 'white' : 'black'}>
         <View style={styles.tiles}>
-          <Tile icon="checkbox-blank-circle-outline" label="To do" value={row.total - row.done} caption={`of ${row.total}`} pal={pal} testID="board-tile-todo" />
-          <Tile icon="check" label="Done" value={row.done} caption={`${pct(row.done, row.total)}% complete`} pal={pal} testID="board-tile-done" />
-          <Tile icon="alert-circle-outline" label="Late" value={row.overdue} caption={row.overdue ? 'past due' : 'nothing late'} pal={pal} accent={row.overdue ? '#F87171' : null} testID="board-tile-late" />
-          <Tile icon="calendar-today" label="Today" value={row.today} caption={row.today ? `${row.todayDone} done` : 'nothing due'} pal={pal} testID="board-tile-today" />
+          <Tile icon="checkbox-blank-circle-outline" label="To do" value={row.total - row.done} caption={`of ${row.total}`} pal={pal} neu={neu} grain={grain} testID="board-tile-todo" />
+          <Tile icon="check" label="Done" value={row.done} caption={`${pct(row.done, row.total)}% complete`} pal={pal} neu={neu} grain={grain} testID="board-tile-done" />
+          <Tile icon="alert-circle-outline" label="Late" value={row.overdue} caption={row.overdue ? 'past due' : 'nothing late'} pal={pal} neu={neu} grain={grain} accent={row.overdue ? '#F87171' : null} testID="board-tile-late" />
+          <Tile icon="calendar-today" label="Today" value={row.today} caption={row.today ? `${row.todayDone} done` : 'nothing due'} pal={pal} neu={neu} grain={grain} testID="board-tile-today" />
         </View>
         {/* A filter you cannot see is a list that is quietly lying about how
             much is on this board, so the scope says itself — and the line IS
@@ -956,6 +979,8 @@ function BoardDetail({
           canCreate={canCreate}
           boardName={row.name}
           pal={pal}
+          neu={neu}
+          grain={grain}
         />
 
         <Text style={[styles.section, { color: c.textTertiary }]}>To do · {pendingShown.length}</Text>
@@ -1020,6 +1045,10 @@ function OverviewPage({
   // caller's: it is the one that knows what deleting takes with it.
   onDeleteBoard,
   filterCount = 0, bottomInset = 0, theme,
+  // Settings → Appearance → Surface grain, as a multiplier. A PROP, not a
+  // useTheme() read: components/Grain must not import ThemeContext (it pulls
+  // AsyncStorage into every test that mounts it), so the screen threads it.
+  grain = 1,
   // (task) => void — a tap on a task in a board's list opens it for editing.
   onOpenTask,
   // (title, boardName) => void — the finder's create row, which is the point
@@ -1053,7 +1082,12 @@ function OverviewPage({
   // that is already clear. Applies to the drill-downs too: they fill the tab,
   // not the screen.
   const pageTopInset = embedded ? 0 : insets.top;
-  const pal = useMemo(() => insetCardPalette(theme), [theme]);
+  // NEUMORPHIC, like the Focus tab (STYLE-RULES §9): the panels on this page
+  // are the page's own colour, raised out of it by light rather than by a fill
+  // change. `insetCardPalette` is the other claim — a charcoal recess on a
+  // page it stands off — and the two cannot share a surface.
+  const pal = useMemo(() => focusSkin(theme), [theme]);
+  const neu = useMemo(() => neuRaised(pal.card, theme?.mode), [pal.card, theme?.mode]);
   const c = theme.colors;
   const todayStr = localTodayStr();
   const { all, rows: allRows, tagRows } = useMemo(() => overviewStats(tasks, boards, todayStr), [tasks, boards, todayStr]);
@@ -1216,7 +1250,10 @@ function OverviewPage({
       <View
         style={[
           styles.page,
-          { backgroundColor: c.background },
+          // The tab's ground IS the panels' colour — the whole of neumorphism
+          // is that figure and ground share one, so there is no page colour
+          // left to use here (STYLE-RULES §9).
+          { backgroundColor: pal.card },
           // Embedded, the safe area is the screen's business and has already
           // been paid for by the header above us — paying it twice is a band
           // of dead page under a header that is already clear of the notch.
@@ -1288,6 +1325,7 @@ function OverviewPage({
                 key={row.name}
                 row={row}
                 dot={row.name === NO_BOARD ? c.textTertiary : colorOf(row.name)}
+                surface={pal.card}
                 sharedBy={sharedIn?.[row.name]}
                 selected={selectedProject === row.name}
                 expanded={openBoards.has(row.name)}
@@ -1320,7 +1358,7 @@ function OverviewPage({
           {tagRows.length > 0 && (
             <>
               <Text style={[styles.section, { color: c.textTertiary }]}>Tags · {tagRows.length}</Text>
-              <TagRows rows={tagRows} pal={pal} />
+              <TagRows rows={tagRows} pal={pal} neu={neu} grain={grain} />
             </>
           )}
         </ScrollView>
@@ -1332,14 +1370,15 @@ function OverviewPage({
           READ one tap away. Each still drills into its own list. */}
       <EdgeSwipePage overlay visible={overviewOpen} onClose={() => setOverviewOpen(false)}>
         {overviewOpen && (
-          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: c.background }}>
+          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: pal.card }}>
+            <Grain level={grain} />
             <PageHeader title="Overview" onBack={() => setOverviewOpen(false)} theme={theme} />
             <ScrollView {...SCROLL_INDICATOR} contentContainerStyle={[styles.body, { paddingBottom: 32 + Math.max(insets.bottom, bottomInset) }]}>
               <View style={styles.tiles}>
-                <Tile icon="checkbox-blank-circle-outline" label="To do" value={all.total - all.done} caption={`of ${all.total} tasks`} pal={pal} testID="overview-tile-todo" onPress={() => setScope('todo')} />
-                <Tile icon="check" label="Done" value={all.done} caption={`${pct(all.done, all.total)}% complete`} pal={pal} testID="overview-tile-done" onPress={() => setScope('done')} />
-                <Tile icon="alert-circle-outline" label="Late" value={all.overdue} caption={all.overdue ? 'past due' : 'nothing late'} pal={pal} accent={all.overdue ? '#F87171' : null} testID="overview-tile-late" onPress={() => setScope('late')} />
-                <Tile icon="calendar-today" label="Today" value={all.today} caption={all.today ? `${dayLabel} · ${all.todayDone} done` : dayLabel} pal={pal} testID="overview-tile-today" onPress={() => setScope('today')} />
+                <Tile icon="checkbox-blank-circle-outline" label="To do" value={all.total - all.done} caption={`of ${all.total} tasks`} pal={pal} neu={neu} grain={grain} testID="overview-tile-todo" onPress={() => setScope('todo')} />
+                <Tile icon="check" label="Done" value={all.done} caption={`${pct(all.done, all.total)}% complete`} pal={pal} neu={neu} grain={grain} testID="overview-tile-done" onPress={() => setScope('done')} />
+                <Tile icon="alert-circle-outline" label="Late" value={all.overdue} caption={all.overdue ? 'past due' : 'nothing late'} pal={pal} neu={neu} grain={grain} accent={all.overdue ? '#F87171' : null} testID="overview-tile-late" onPress={() => setScope('late')} />
+                <Tile icon="calendar-today" label="Today" value={all.today} caption={all.today ? `${dayLabel} · ${all.todayDone} done` : dayLabel} pal={pal} neu={neu} grain={grain} testID="overview-tile-today" onPress={() => setScope('today')} />
               </View>
             </ScrollView>
           </View>
@@ -1349,7 +1388,7 @@ function OverviewPage({
       {/* A tile's list: every task in that bucket, across every board. */}
       <EdgeSwipePage overlay visible={!!scope} onClose={() => setScope(null)}>
         {!!scope && (
-          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: c.background }}>
+          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: pal.card }}>
             <ScopePage
               scope={scope}
               tasks={tasks}
@@ -1383,7 +1422,7 @@ function OverviewPage({
           holds (overview → board → back). */}
       <EdgeSwipePage overlay visible={!!detailRow} onClose={closeBoardPage}>
         {detailRow && (
-          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: c.background }}>
+          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: pal.card }}>
             <BoardDetail
               row={detailRow}
               tasks={detailTasks}
@@ -1418,9 +1457,11 @@ function OverviewPage({
           reads boards → board → tags → back. */}
       <EdgeSwipePage overlay visible={tagsOpen && !!detailRow} onClose={() => setTagsOpen(false)}>
         {tagsOpen && !!detailRow && (
-          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: c.background }}>
+          <View style={{ flex: 1, paddingTop: pageTopInset, backgroundColor: pal.card }}>
             <BoardTagsPage
               rows={detailTagRows}
+              neu={neu}
+              grain={grain}
               selected={tagFilter}
               pal={pal}
               theme={theme}
@@ -1475,7 +1516,9 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 9, fontWeight: '800' },
   pill: { height: 32, paddingHorizontal: 12, borderRadius: 9, borderWidth: 1, alignItems: 'center', justifyContent: 'center', maxWidth: 120 },
   pillText: { fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9, textTransform: 'uppercase' },
-  body: { paddingHorizontal: 16, paddingTop: 14 },
+  // The page's top gutter, the same number the Focus tab uses — the first
+  // panel is held off the chrome by twice the gap between two (NEU_PAGE_TOP).
+  body: { paddingHorizontal: 16, paddingTop: NEU_PAGE_TOP },
   // The "you are filtered" line, which is also the way out of it.
   scopeLine: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
@@ -1490,12 +1533,11 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   deleteText: { fontSize: 14, fontWeight: '700', color: '#F87171' },
-  tiles: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  tiles: { flexDirection: 'row', flexWrap: 'wrap', gap: NEU_GAP },
   tile: {
     width: '48%',
     flexGrow: 1,
     borderRadius: 16,
-    borderWidth: 1,
     paddingHorizontal: 14,
     paddingTop: 12,
     paddingBottom: 12,
@@ -1685,7 +1727,6 @@ const styles = StyleSheet.create({
   },
   tagRow: {
     borderRadius: 14,
-    borderWidth: 1,
     paddingHorizontal: 14,
     paddingTop: 9,
     paddingBottom: 12,
@@ -1723,7 +1764,6 @@ const styles = StyleSheet.create({
   taskMeta: { fontSize: 12, fontWeight: '600', flexShrink: 0, fontVariant: ['tabular-nums'] },
   finder: {
     borderRadius: 14,
-    borderWidth: 1,
     marginTop: 18,
     overflow: 'hidden',
   },

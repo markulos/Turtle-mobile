@@ -18,6 +18,8 @@ import {
   AppState,
 } from 'react-native';
 import { depth, insetRule } from '../../utils/surfaceDepth';
+import { NEU_PAGE_TOP } from '../../utils/neumorph';
+import { focusSkin } from './utils/focusSkin';
 import { panelBottomInset } from '../../components/tabBarLayout';
 import { PAGE_WASH_COLORS, PAGE_WASH_LOCATIONS, PAGE_WASH_START, PAGE_WASH_END, pageColor } from '../../utils/pageWash';
 import { SCREEN_TITLE, SCREEN_TITLE_ROW_H } from '../../utils/headerType';
@@ -4128,6 +4130,7 @@ export default function TasksScreen() {
               it: the header already says which board you are on. */}
           <OverviewPage
             embedded
+            grain={grain}
             // The capture field and its list go INSIDE the page's scroller (see
             // OverviewPage's `header`). As siblings above it they were outside
             // the only scroll view here and took their height off it, so a few
@@ -4146,6 +4149,7 @@ export default function TasksScreen() {
                     handleSaveTask(task);
                   }}
                   theme={theme}
+                  grain={grain}
                 />
                 <InboxList
                   items={inbox.items}
@@ -4153,6 +4157,7 @@ export default function TasksScreen() {
                   freshId={freshInboxId}
                   destinationLabel={inboxLabel}
                   c={theme.colors}
+                  surface={focusSkin(theme).card}
                   theme={theme}
                   onOpenTask={openDetail}
                   onOpenAll={() => setSelectedProject(inboxDestination(projects, selectedProject) || 'No Project')}
@@ -4811,6 +4816,12 @@ const createStyles = (theme) => StyleSheet.create({
   // to hide behind an opaque fill.
   headerChrome: {
     backgroundColor: 'transparent',
+    // A MARGIN off the notch. The title row started at the safe-area edge
+    // exactly, which on a device with a hood puts the board name hard against
+    // the curve of it — the one place on the page where nothing can sit. The
+    // page's own top gutter (NEU_PAGE_TOP), so the header is held off the top
+    // of the screen by the same amount the first panel is held off the header.
+    paddingTop: NEU_PAGE_TOP,
   },
   // The groove under the header. Its own element rather than the chrome's
   // border, because it is TWO hairlines — see `insetRule`: a shadow line with a
