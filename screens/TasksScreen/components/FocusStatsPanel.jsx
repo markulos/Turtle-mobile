@@ -49,6 +49,7 @@ import { focusRangeStats, focusRecords } from '../utils/focusRanges';
 import { RAMP, rampStep } from './StatsPanel';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 import { neuRaised } from '../../../utils/neumorph';
+import Grain from '../../../components/Grain';
 
 const RANGE_KEYS = [
   { value: 'week', label: 'Week' },
@@ -142,6 +143,9 @@ function Chart({ title, note, children, pal, neu, testID }) {
       style={[styles.card, neu]}
       testID={testID}
     >
+      {/* The card's own radius: a square of speckle hanging off a rounded
+          panel's corners is worse than no texture at all. */}
+      <Grain radius={24} />
       <Text style={[styles.cardTitle, { color: pal.text }]} numberOfLines={1}>{title}</Text>
       {!!note && <Text style={[styles.cardNote, { color: pal.muted }]} numberOfLines={2}>{note}</Text>}
       {children}
@@ -357,6 +361,7 @@ function FocusStatsPanel({
 
   return (
     <View style={[styles.page, { backgroundColor: pal.card, paddingTop: insetTop }]}>
+      <Grain />
       <View style={[styles.topBar, { borderBottomColor: c.border }]}>
         <Pressable
           onPress={onClose}

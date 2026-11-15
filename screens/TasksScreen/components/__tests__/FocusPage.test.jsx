@@ -24,7 +24,8 @@ jest.mock('react-native-safe-area-context', () => ({
 }));
 
 import FocusPage from '../FocusPage';
-import { insetCardPalette } from '../../utils/cardPalette';
+import { focusSkin } from '../../utils/focusSkin';
+import { contrastRatio, mixHex } from '../../../../utils/accentColor';
 import { playFocusComplete } from '../../../../services/focusChime';
 import { notifyHaptic } from '../../../../utils/haptics';
 
@@ -372,46 +373,73 @@ describe('the task the session is for', () => {
 describe('the deck is legible on the light page', () => {
   const styleOf = (testID) => StyleSheet.flatten(screen.getByTestId(testID).props.style);
   const light = { ...theme, mode: 'light', colors: { ...theme.colors, background: '#fff', textPrimary: '#111' } };
-  // Taken from the palette, not written as a hex: the claim here is "a dark
-  // CARD rather than the white page", and the card's exact charcoal is a
-  // taste call that has already been retuned once (2026-11-13, warmer and
-  // with the rim faded). A test that pins the hex fails on a repaint and
-  // says nothing about legibility.
-  const PAL = insetCardPalette(light);
+  // The page is NEUMORPHIC now (2026-11-15): every panel is the ground's own
+  // colour, raised by light alone, and in light mode that colour is the app's
+  // cream with dark ink rather than a charcoal card with white.
+  //
+  // So these no longer pin "a dark card" — that was the old answer to the
+  // question, not the question. What they pin is the question: CAN YOU READ
+  // IT. Measured rather than compared to a hex, so the next repaint is free
+  // and an illegible one still fails.
+  const PAL = focusSkin(light);
+  const READABLE = 4.5;
+  /**
+   * A translucent ink, as the opaque colour the eye actually sees.
+   *
+   * The quiet tones are `rgba(...)` over the surface, and a contrast ratio
+   * means nothing until they are composited — measuring the raw string is
+   * how a check like this passes on something invisible.
+   */
+  const over = (rgba, surface) => {
+    const m = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)$/.exec(rgba);
+    if (!m) return rgba;
+    const hex = `#${[1, 2, 3].map((i) => Number(m[i]).toString(16).padStart(2, '0')).join('')}`;
+    return mixHex(surface, hex, Number(m[4]));
+  };
 
-  test('the clock and the key sit on a dark card, not on the white page', async () => {
+  test('the clock reads on the surface it is drawn on', async () => {
     await render(<FocusPage {...props({ theme: light, active: running(60000) })} />);
     const deck = styleOf('focus-deck');
-    // The inset card's charcoal, which is what makes the white ink legal.
+    // Neumorphism's own rule: the panel IS the ground. If these ever differ,
+    // the style has quietly become an ordinary card again.
     expect(deck.backgroundColor).toBe(PAL.card);
-    expect(deck.backgroundColor).not.toBe(light.colors.background);
-    expect(styleOf('focus-clock').color).toBe('#FFFFFF');
+    expect(contrastRatio(styleOf('focus-clock').color, deck.backgroundColor))
+      .toBeGreaterThanOrEqual(READABLE);
   });
 
   test('the running key is readable too — it was transparent ink on the page', async () => {
     await render(<FocusPage {...props({ theme: light, active: running(60000) })} />);
-    // Stop is an outline key ON the dark deck, so white ink reads. The bug was
-    // the same key drawn transparent on a white page: invisible.
+    // Stop is an OUTLINE key, so it has no fill of its own and its ink has to
+    // clear the deck underneath it. The original bug was this key drawn
+    // transparent on a white page: invisible.
     expect(styleOf('focus-toggle').backgroundColor).toBe('transparent');
     expect(screen.getByText('Stop')).toBeTruthy();
-    expect(styleOf('focus-deck').backgroundColor).toBe(PAL.card);
+    const ink = StyleSheet.flatten(screen.getByText('Stop').props.style).color;
+    expect(contrastRatio(ink, styleOf('focus-deck').backgroundColor))
+      .toBeGreaterThanOrEqual(READABLE);
   });
 
-  test('the idle key uses the palette’s own on-ink, not the card colour', async () => {
+  test('the idle key is the ink, and its label is the surface', async () => {
+    // A filled key: the two swap, so the label has to clear the key rather
+    // than the deck.
     await render(<FocusPage {...props({ theme: light })} />);
     const key = styleOf('focus-toggle');
     expect(key.backgroundColor).toBe(PAL.text);
-    expect(StyleSheet.flatten(screen.getByText('Start session').props.style).color).toBe(PAL.onText);
+    const label = StyleSheet.flatten(screen.getByText('Start session').props.style).color;
+    expect(label).toBe(PAL.onText);
+    expect(contrastRatio(label, key.backgroundColor)).toBeGreaterThanOrEqual(READABLE);
   });
 
   // The same bug, one section further down: the recent rows were laid straight
   // onto the page while taking their ink from the card palette, so the whole
-  // list was white type on cream. Nothing on this page may draw onto the page.
-  test('the recent blocks sit on a card too', async () => {
+  // list was white type on cream.
+  test('the recent blocks are a surface of their own, and read', async () => {
     await render(<FocusPage {...props({ theme: light })} />);
     const panel = styleOf('focus-recent-panel');
     expect(panel.backgroundColor).toBe(PAL.card);
-    expect(panel.backgroundColor).not.toBe(light.colors.background);
+    expect(contrastRatio(PAL.text, panel.backgroundColor)).toBeGreaterThanOrEqual(READABLE);
+    expect(contrastRatio(over(PAL.muted, panel.backgroundColor), panel.backgroundColor))
+      .toBeGreaterThanOrEqual(3);
   });
 });
 

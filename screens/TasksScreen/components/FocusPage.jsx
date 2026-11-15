@@ -46,8 +46,9 @@ import AppTextInput from '../../../components/AppTextInput';
 import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import { playFocusComplete } from '../../../services/focusChime';
-import { insetCardPalette } from '../utils/cardPalette';
+import { focusSkin } from '../utils/focusSkin';
 import { neuRaised } from '../../../utils/neumorph';
+import Grain from '../../../components/Grain';
 import { boardLabel } from '../utils/taskHelpers';
 import { focusStats, formatMinutes } from '../utils/focusStats';
 import { rangeSummaries } from '../utils/focusRanges';
@@ -146,6 +147,7 @@ function FocusDeck({
         { transform: [{ scale: pulse }] },
       ]}
     >
+        <Grain radius={24} />
       <View style={styles.deckHead}>
         <View style={[styles.badge, { backgroundColor: pal.tile }]}>
           <Icon name={isBreak ? 'coffee' : 'brain'} size={12} color={tint} />
@@ -388,6 +390,8 @@ function Tile({ icon, label, count, format, value, caption, pal, neu, accent, en
   const skin = neu;
   const body = (
     <>
+      {/* tileCard's radius — the tooth is clipped to the panel it dresses. */}
+      <Grain radius={22} />
       <View style={styles.tileTop}>
         <View style={[styles.iconTile, { backgroundColor: pal.tile }]}>
           <Icon name={icon} size={15} color={accent || pal.text} />
@@ -553,7 +557,10 @@ function FocusPage({
   // Every surface on this page is an inset CARD, so the card palette is the
   // whole palette — nothing here draws its ink straight onto the page, which is
   // the mistake that made the old ring's readout white on white in light mode.
-  const pal = useMemo(() => insetCardPalette(theme), [theme]);
+  // NOT insetCardPalette: this page is neumorphic, so the panels and the
+  // ground share a colour — cream in light mode, charcoal in dark — and the
+  // ink flips with the surface. See focusSkin.
+  const pal = useMemo(() => focusSkin(theme), [theme]);
   // NEUMORPHISM (utils/neumorph). Every panel on this page is the page's own
   // colour, raised out of it by light alone — so the page's ground becomes
   // the card tone and the panels stop being a different colour from it. One
@@ -713,6 +720,9 @@ function FocusPage({
 
   return (
     <View style={[styles.root, { backgroundColor: pal.card }]}>
+      {/* The surface's tooth. Over the ground, under everything else: a flat
+          fill beneath soft shadows reads as plastic. */}
+      <Grain />
     <ScrollView
       style={styles.page}
       contentContainerStyle={[styles.body, { paddingBottom: 32 + bottomInset }]}
@@ -793,6 +803,7 @@ function FocusPage({
       <Animated.View
         style={[styles.panel, neu, enterAt(0.3, 0.7)]}
       >
+        <Grain radius={24} />
         <WeekBars
           week={stats.week}
           pal={pal}
@@ -823,6 +834,7 @@ function FocusPage({
               pressed && styles.pressed,
             ]}
           >
+        <Grain radius={22} />
             <View style={styles.statKeyTop}>
               <Text style={[styles.label, { color: pal.muted }]} numberOfLines={1}>{r.title}</Text>
               <Icon name="chevron-right" size={15} color={pal.muted} />
@@ -847,6 +859,7 @@ function FocusPage({
       <Animated.View
         style={[styles.panel, neu, enterAt(0.38, 0.78)]}
       >
+        <Grain radius={24} />
         <HourStrip byHour={stats.byHour} pal={pal} accent={accent} />
       </Animated.View>
 
@@ -879,6 +892,7 @@ function FocusPage({
             ]}
             testID="focus-recent-panel"
           >
+        <Grain radius={24} />
             {stats.recent.map((r, i) => {
               const task = r.taskId ? (taskOfId?.(r.taskId) || null) : null;
               // What the block was: its task if we can still name one, otherwise
@@ -942,6 +956,7 @@ function FocusPage({
             style={[styles.row, neu]}
             testID={`focus-board-${b.name}`}
           >
+        <Grain radius={20} />
             <View style={styles.rowTop}>
               <Text style={[styles.rowName, { color: pal.text }]} numberOfLines={1}>{boardLabel(b.name)}</Text>
               <Text style={[styles.rowFigure, { color: pal.text }]} numberOfLines={1}>{formatMinutes(b.minutes)}</Text>
