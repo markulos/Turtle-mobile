@@ -48,6 +48,7 @@ import { focusRangeStats, focusRecords } from '../utils/focusRanges';
 // One ramp for the whole app's charts — see the note above.
 import { RAMP, rampStep } from './StatsPanel';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
+import { neuRaised } from '../../../utils/neumorph';
 
 const RANGE_KEYS = [
   { value: 'week', label: 'Week' },
@@ -135,10 +136,10 @@ function RangeSegment({ value, onChange, theme }) {
 }
 
 /** A section: a title, an optional one-line note, and the plot under them. */
-function Chart({ title, note, children, pal, testID }) {
+function Chart({ title, note, children, pal, neu, testID }) {
   return (
     <View
-      style={[styles.card, { backgroundColor: pal.card }]}
+      style={[styles.card, neu]}
       testID={testID}
     >
       <Text style={[styles.cardTitle, { color: pal.text }]} numberOfLines={1}>{title}</Text>
@@ -330,6 +331,10 @@ function FocusStatsPanel({
   nowMs,
 }) {
   const c = theme.colors;
+  // NEUMORPHISM (utils/neumorph): the cards are the page's own colour, lifted
+  // out of it by light alone — so the page takes the card tone too, and the
+  // only thing separating a chart from the ground is its shadow.
+  const neu = useMemo(() => neuRaised(pal.card, theme.mode), [pal.card, theme.mode]);
   const now = nowMs ?? Date.now();
   const [range, setRange] = useState(initialRange);
   // The column the user tapped, so a chart is something you can interrogate
@@ -351,7 +356,7 @@ function FocusStatsPanel({
       : 'Nothing in this period yet');
 
   return (
-    <View style={[styles.page, { backgroundColor: c.background, paddingTop: insetTop }]}>
+    <View style={[styles.page, { backgroundColor: pal.card, paddingTop: insetTop }]}>
       <View style={[styles.topBar, { borderBottomColor: c.border }]}>
         <Pressable
           onPress={onClose}
@@ -384,7 +389,7 @@ function FocusStatsPanel({
         <Chart
           title={s.label}
           note={deltaLine(s.prev)}
-          pal={pal}
+          pal={pal} neu={neu}
           testID="focus-stats-total"
         >
           <Text style={[styles.hero, { color: pal.text }]} numberOfLines={1} testID="focus-stats-hero">
@@ -420,7 +425,7 @@ function FocusStatsPanel({
           )}
         </Chart>
 
-        <Chart title={seriesTitle} note={seriesNote} pal={pal} testID="focus-stats-series">
+        <Chart title={seriesTitle} note={seriesNote} pal={pal} neu={neu} testID="focus-stats-series">
           <Series
             series={s.series}
             pal={pal}
@@ -445,7 +450,7 @@ function FocusStatsPanel({
               ? `${s.activeDays} day${s.activeDays === 1 ? '' : 's'} with focus on them`
               : `Focus on ${s.activeDays} of the ${s.elapsedDays} day${s.elapsedDays === 1 ? '' : 's'} so far`
           }
-          pal={pal}
+          pal={pal} neu={neu}
           testID="focus-stats-rhythm"
         >
           {s.range !== 'all' && (
@@ -483,7 +488,7 @@ function FocusStatsPanel({
         <Chart
           title="When you focus"
           note={s.peakBand ? `Most of it in the ${s.peakBand.label.toLowerCase()}` : 'Nothing to place yet'}
-          pal={pal}
+          pal={pal} neu={neu}
           testID="focus-stats-when"
         >
           <Bars
@@ -498,7 +503,7 @@ function FocusStatsPanel({
         <Chart
           title="By weekday"
           note={s.bestWeekday ? `${s.bestWeekday} is your day` : 'Nothing to place yet'}
-          pal={pal}
+          pal={pal} neu={neu}
           testID="focus-stats-weekday"
         >
           <View style={styles.columns} testID="focus-stats-weekday-cols">
@@ -537,7 +542,7 @@ function FocusStatsPanel({
         <Chart
           title="Where it went"
           note={s.boards.length ? `${s.boards.length} board${s.boards.length === 1 ? '' : 's'} · share of the period` : null}
-          pal={pal}
+          pal={pal} neu={neu}
           testID="focus-stats-boards"
         >
           {s.boards.length === 0 ? (
@@ -562,7 +567,7 @@ function FocusStatsPanel({
         <Chart
           title="Records · all time"
           note={records.firstBlockAt ? `Focusing since ${dayLabel(records.firstBlockAt)}` : null}
-          pal={pal}
+          pal={pal} neu={neu}
           testID="focus-stats-records"
         >
           <View style={styles.figureRow}>

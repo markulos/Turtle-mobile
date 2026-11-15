@@ -47,6 +47,7 @@ import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import { playFocusComplete } from '../../../services/focusChime';
 import { insetCardPalette } from '../utils/cardPalette';
+import { neuRaised } from '../../../utils/neumorph';
 import { boardLabel } from '../utils/taskHelpers';
 import { focusStats, formatMinutes } from '../utils/focusStats';
 import { rangeSummaries } from '../utils/focusRanges';
@@ -110,7 +111,7 @@ export function clockFromMs(ms) {
  */
 function FocusDeck({
   running, remaining, focusMinutes, block, todaySessions,
-  progress, pulse, pal, accent, breakAccent,
+  progress, pulse, pal, neu, accent, breakAccent,
   task, onPickTask, onClearTask, onJot,
   onStartFocus, onStartBreak, onStop,
 }) {
@@ -141,7 +142,7 @@ function FocusDeck({
       testID="focus-deck"
       style={[
         styles.deck,
-        { backgroundColor: pal.card },
+        neu,
         { transform: [{ scale: pulse }] },
       ]}
     >
@@ -381,10 +382,10 @@ function useCountUp(value, ms = 520) {
  * counts up to it and `format` turns each step into what you read, so "1h 05m"
  * climbs as honestly as "65" would.
  */
-function Tile({ icon, label, count, format, value, caption, pal, accent, enter, onPress, testID }) {
+function Tile({ icon, label, count, format, value, caption, pal, neu, accent, enter, onPress, testID }) {
   const shown = useCountUp(count ?? 0);
   const text = count == null ? value : (format ? format(shown) : String(shown));
-  const skin = { backgroundColor: pal.card };
+  const skin = neu;
   const body = (
     <>
       <View style={styles.tileTop}>
@@ -553,6 +554,11 @@ function FocusPage({
   // whole palette — nothing here draws its ink straight onto the page, which is
   // the mistake that made the old ring's readout white on white in light mode.
   const pal = useMemo(() => insetCardPalette(theme), [theme]);
+  // NEUMORPHISM (utils/neumorph). Every panel on this page is the page's own
+  // colour, raised out of it by light alone — so the page's ground becomes
+  // the card tone and the panels stop being a different colour from it. One
+  // object, reused: the shadow list is the same for all of them.
+  const neu = useMemo(() => neuRaised(pal.card, theme.mode), [pal.card, theme.mode]);
   const accent = theme.colors.accentInfo || theme.colors.textPrimary;
   // The break's own colour, and the chat timer card's exactly (TimerMessage):
   // the same two modes wearing the same two colours wherever they are shown.
@@ -706,7 +712,7 @@ function FocusPage({
   });
 
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { backgroundColor: pal.card }]}>
     <ScrollView
       style={styles.page}
       contentContainerStyle={[styles.body, { paddingBottom: 32 + bottomInset }]}
@@ -715,6 +721,7 @@ function FocusPage({
     >
       {/* The countdown, the bar, and the one control that matters. */}
       <FocusDeck
+        neu={neu}
         running={running}
         remaining={remaining}
         focusMinutes={focusMinutes}
@@ -741,7 +748,7 @@ function FocusPage({
           count={stats.todayMinutes}
           format={formatMinutes}
           caption={stats.todaySessions === 1 ? '1 block' : `${stats.todaySessions} blocks`}
-          pal={pal}
+          pal={pal} neu={neu}
           enter={enterAt(0, 0.35)}
           // The only tile that opens: "50m · 2 blocks" is a number with
           // nothing beside it, and whether 50 minutes is good depends on what
@@ -755,7 +762,7 @@ function FocusPage({
           count={stats.weekMinutes}
           format={formatMinutes}
           caption="last 7 days"
-          pal={pal}
+          pal={pal} neu={neu}
           enter={enterAt(0.08, 0.45)}
           testID="focus-tile-week"
         />
@@ -764,7 +771,7 @@ function FocusPage({
           label="Streak"
           value={stats.streak ? `${stats.streak}d` : '—'}
           caption={stats.streak ? 'days running' : 'start one today'}
-          pal={pal}
+          pal={pal} neu={neu}
           accent={stats.streak >= 3 ? '#F59E0B' : null}
           enter={enterAt(0.16, 0.55)}
           testID="focus-tile-streak"
@@ -774,7 +781,7 @@ function FocusPage({
           label="Average"
           value={stats.averageMinutes ? `${stats.averageMinutes}m` : '—'}
           caption={stats.totalSessions === 1 ? 'over 1 block' : `over ${stats.totalSessions} blocks`}
-          pal={pal}
+          pal={pal} neu={neu}
           enter={enterAt(0.24, 0.65)}
           testID="focus-tile-average"
         />
@@ -784,7 +791,7 @@ function FocusPage({
         The week{picked ? ` · ${new Date(picked.ms).toLocaleDateString('en-US', { weekday: 'long' })}, ${formatMinutes(picked.minutes)}` : ''}
       </Text>
       <Animated.View
-        style={[styles.panel, { backgroundColor: pal.card }, enterAt(0.3, 0.7)]}
+        style={[styles.panel, neu, enterAt(0.3, 0.7)]}
       >
         <WeekBars
           week={stats.week}
@@ -812,7 +819,7 @@ function FocusPage({
             testID={`focus-stats-key-${r.range}`}
             style={({ pressed }) => [
               styles.statKey,
-              { backgroundColor: pal.card },
+              neu,
               pressed && styles.pressed,
             ]}
           >
@@ -838,7 +845,7 @@ function FocusPage({
         When you focus{stats.best ? ` · best ${formatMinutes(stats.best.minutes)}` : ''}
       </Text>
       <Animated.View
-        style={[styles.panel, { backgroundColor: pal.card }, enterAt(0.38, 0.78)]}
+        style={[styles.panel, neu, enterAt(0.38, 0.78)]}
       >
         <HourStrip byHour={stats.byHour} pal={pal} accent={accent} />
       </Animated.View>
@@ -867,7 +874,7 @@ function FocusPage({
             style={[
               styles.panel,
               styles.recentPanel,
-              { backgroundColor: pal.card },
+              neu,
               enterAt(0.46, 0.86),
             ]}
             testID="focus-recent-panel"
@@ -932,7 +939,7 @@ function FocusPage({
         return (
           <View
             key={b.name}
-            style={[styles.row, { backgroundColor: pal.card }]}
+            style={[styles.row, neu]}
             testID={`focus-board-${b.name}`}
           >
             <View style={styles.rowTop}>
