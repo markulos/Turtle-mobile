@@ -487,6 +487,14 @@ export default function ProfileScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.textSecondary} />
         }
       >
+        {/* …and the rule that says where it STARTS. The block has no backdrop
+            of its own, so a rule under it alone left it open at the top —
+            hanging off the status bar rather than sitting in a band of its
+            own. Full-bleed, like the one below it: both divide two REGIONS
+            of the page rather than two items (STYLE-RULES §8). Mark,
+            2026-11-16. */}
+        <View pointerEvents="none" style={insetRule(theme)} />
+
         {/* Identity card — a HERO block, not a settings row: an accent wash
             behind a ringed picture on the LEFT, with the name, handle, role and
             number stacked to its right, then the stats as a divided strip

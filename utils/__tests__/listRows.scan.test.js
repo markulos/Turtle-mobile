@@ -85,6 +85,29 @@ describe('STYLE-RULES §8 — rows are a list, not a stack of cards', () => {
     expect(read(file)).toMatch(/listGlyphInk\(theme\)/);
   });
 
+  test('the PROFILE block is closed too — a rule above it and below', () => {
+    // Same shape as the doors below, and for the same reason. The identity
+    // block has no backdrop of its own (that was the point of de-carding it),
+    // so a rule under it alone left it open at the top — hanging off the
+    // status bar rather than sitting in a band of its own. Mark asked for the
+    // second one by name: "put a full width ridge line above profile panel as
+    // well."
+    const src = read('screens/ProfileScreen/index.jsx');
+    const scroll = src.slice(src.indexOf('refreshControl='), src.indexOf('{/* The options, as a LIST'));
+    // Two full-bleed rules, one each side of the block…
+    const bare = scroll.match(/style=\{insetRule\(theme\)\}/g) || [];
+    expect(bare).toHaveLength(2);
+    // …and the first of them comes BEFORE the block, not after it.
+    expect(scroll.indexOf('style={insetRule(theme)}')).toBeLessThan(scroll.indexOf('styles.identityCard'));
+    // FULL-BLEED, not the inset the option rows use between themselves: these
+    // divide two REGIONS of the page, which is §8's other case.
+    expect(scroll).not.toMatch(/insetRule\(theme\), styles\.cardSep/);
+    // And the block still has no backdrop of its own — a rule above AND below
+    // a panel that also has a fill is three claims about one edge.
+    const card = styleBlock(src, 'identityCard', 'const makeStyles');
+    expect(card).not.toMatch(/backgroundColor|borderRadius|borderWidth/);
+  });
+
   test('the New album / Canvases group is CLOSED — a rule above it and below', () => {
     // Mark, 2026-11-15: "add a ridge line on the top and bottom of new album
     // and canvases". With only the score between them the pair read as two
