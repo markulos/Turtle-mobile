@@ -4,6 +4,9 @@ import {
   RefreshControl, AppState,
 } from 'react-native';
 import { depth, insetRule, listGlyphInk } from '../../utils/surfaceDepth';
+import DockGlow from '../../components/DockGlow';
+import { SPOT_H, SPOT_PEAK, SPOT_W } from '../../components/dockLight';
+import { navBlockSurface, navGlow } from '../../components/navSurface';
 import AppTextInput from '../../components/AppTextInput';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useKeyboardHeight from '../../utils/useKeyboardHeight';
@@ -11,7 +14,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../context/ThemeContext';
-import { inkOn } from '../../utils/accentColor';
+import { inkOn, readableOn } from '../../utils/accentColor';
 import { useServer } from '../../context/ServerContext';
 import { useSyncSignals } from '../../context/DownloadsContext';
 import { useAuth } from '../../context/AuthContext';
@@ -75,7 +78,33 @@ import { SCROLL_INDICATOR } from '../../utils/scrollIndicator';
 const nameKey = (identity) => `profileName:${identity || 'anon'}`;
 
 export default function ProfileScreen() {
-  const { theme, isDark } = useTheme();
+  const {
+    theme, isDark,
+    // The dock's own three, so the identity block lands on whatever the nav
+    // bar landed on and keeps tracking it (components/navSurface).
+    dockTheme: dockThemeKey, dockStyle, dockColor, dockGlow, dockGlowColor,
+  } = useTheme();
+  /**
+   * THE IDENTITY BLOCK WEARS THE NAV BAR (Mark, 2026-11-16): "a slightly
+   * darker backdrop, matching the backdrop of the NAV bar, and the glow
+   * effect on each of the various sub panels within it … same style as the
+   * NAV glow."
+   *
+   * The ink comes with the surface. The block was drawn in the page's ink
+   * because it was ON the page; a dark band under that ink is invisible,
+   * which is §1 and a mistake this app has shipped twice.
+   */
+  const navSkin = useMemo(
+    () => navBlockSurface(
+      { dockTheme: dockThemeKey, dockStyle, dockColor },
+      theme.colors.background,
+    ),
+    [dockThemeKey, dockStyle, dockColor, theme.colors.background],
+  );
+  const statGlow = useMemo(
+    () => navGlow({ dockGlow, dockGlowColor, accent: theme.colors.accent }),
+    [dockGlow, dockGlowColor, theme.colors.accent],
+  );
   const c = theme.colors;
   const insets = useSafeAreaInsets();
   // Name edit keyboard: pad the page so the field can scroll clear of it.
@@ -464,7 +493,7 @@ export default function ProfileScreen() {
       sub: 'Appearance, server, account', onPress: () => { tapHaptic(); setSettingsOpen(true); } },
   ];
 
-  const styles = makeStyles(theme);
+  const styles = makeStyles(theme, navSkin);
 
   return (
     <View style={styles.page}>
@@ -499,7 +528,13 @@ export default function ProfileScreen() {
             behind a ringed picture on the LEFT, with the name, handle, role and
             number stacked to its right, then the stats as a divided strip
             across the card's full width. */}
-        <View style={styles.identityCard}>
+        <View
+          style={[
+            styles.identityCard,
+            navSkin && { backgroundColor: navSkin.fill },
+          ]}
+          testID="profile-identity"
+        >
           {/* Settings, pinned to the card's top-right. The Settings CARD lower
               down still works — this is the conventional place to reach for it
               on a profile, so it's a second door to the same page, not a move. */}
@@ -510,7 +545,7 @@ export default function ProfileScreen() {
             accessibilityRole="button"
             accessibilityLabel="Settings"
           >
-            <Icon name="cog-outline" size={20} color={c.textSecondary} />
+            <Icon name="cog-outline" size={20} color={navSkin ? navSkin.sub : c.textSecondary} />
           </TouchableOpacity>
 
           {/* Top block: picture on the LEFT, everything else stacked to its
@@ -636,7 +671,27 @@ export default function ProfileScreen() {
                       : `${s.value} ${s.label}${s.hint ? `, ${s.hint}` : ''}`
                   }
                 >
-                  <Icon name={s.icon} size={13} color={c.textMuted} style={{ marginBottom: 3 }} />
+                  {/* ITS OWN GLOW, the dock's exactly — same ellipse, same
+                      falloff, same two settings (components/DockGlow,
+                      navSurface). One per cell and independent of the others:
+                      the dock has one because only one tab is active, and
+                      these four are four things rather than a choice between
+                      them. Pinned to the bottom of the cell so the four pools
+                      line up on one horizon. */}
+                  {statGlow.strength > 0 && (
+                    <View pointerEvents="none" style={styles.statGlow}>
+                      <DockGlow
+                        id={`profile-stat-glow-${s.key}`}
+                        width={SPOT_W}
+                        height={SPOT_H}
+                        color={statGlow.color}
+                        peak={SPOT_PEAK * statGlow.strength}
+                        cy={1}
+                        ry={1}
+                      />
+                    </View>
+                  )}
+                  <Icon name={s.icon} size={13} color={navSkin ? navSkin.muted : c.textMuted} style={{ marginBottom: 3 }} />
                   {/* An em dash while the first load is in flight, rather than
                       hiding the strip: a card that grows a row once the network
                       answers shifts everything under it. */}
@@ -1875,8 +1930,30 @@ const statStyles = StyleSheet.create({
   ledgerTotal: { fontSize: 18, fontWeight: '800' },
 });
 
-const makeStyles = (theme) => {
+const makeStyles = (theme, nav) => {
   const c = theme.colors;
+  /**
+   * THE IDENTITY BLOCK'S INK, which is the nav bar's when it is wearing the
+   * nav bar's colour and the page's otherwise.
+   *
+   * One place, because the alternative is twenty call sites that have to be
+   * found again the next time the block changes colour — and the one that
+   * gets missed is invisible rather than wrong-looking (§1).
+   */
+  const ink = nav ? nav.ink : c.textPrimary;
+  const inkSub = nav ? nav.sub : c.textSecondary;
+  const inkMuted = nav ? nav.muted : c.textTertiary;
+  const hair = nav ? nav.edge : c.border;
+  /**
+   * The accent as ink ON THIS BAND.
+   *
+   * `c.accentInk` is the accent conditioned for the light PAGE (§10). On a
+   * dark nav band that is a deep olive nobody can read, so it is measured
+   * against the surface it is actually drawn on — which is what §10's table
+   * says to do for a tinted surface, and `readableOn` moves in either
+   * direction where neutralInk only darkens.
+   */
+  const accentInk = nav ? readableOn(c.accent, nav.fill, 4.5) : c.accentInk;
   return StyleSheet.create({
     page: { flex: 1, backgroundColor: c.background },
     // STYLE-RULES §8 — the shared ink, not a copy of it.
@@ -1949,7 +2026,7 @@ const makeStyles = (theme) => {
       flexDirection: 'row', alignItems: 'center',
       gap: 6, alignSelf: 'stretch',
     },
-    name: { fontSize: 22, fontWeight: '700', color: c.textPrimary, flexShrink: 1 },
+    name: { fontSize: 22, fontWeight: '700', color: ink, flexShrink: 1 },
     nameInput: {
       fontSize: 22, fontWeight: '700', color: c.textPrimary,
       alignSelf: 'stretch',
@@ -1970,34 +2047,53 @@ const makeStyles = (theme) => {
       flexShrink: 1, maxWidth: '100%',
       ...depth(theme, 'control'),
     },
-    handleText: { fontSize: 12, fontWeight: '600', color: c.textTertiary, flexShrink: 1 },
+    handleText: { fontSize: 12, fontWeight: '600', color: inkMuted, flexShrink: 1 },
     roleChip: {
       paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999,
       backgroundColor: (c.accent || c.accentInfo) + '26',
     },
-    roleText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6, color: c.accentInk },
+    roleText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6, color: accentInk },
     phoneRow: {
       flexDirection: 'row', alignItems: 'center',
       gap: 5, marginTop: 8, alignSelf: 'stretch',
     },
-    phoneText: { fontSize: 13, color: c.textMuted, flexShrink: 1 },
+    phoneText: { fontSize: 13, color: inkMuted, flexShrink: 1 },
     // Full-width divided strip across the bottom of the card.
     statStrip: {
       flexDirection: 'row', alignItems: 'stretch', alignSelf: 'stretch',
       marginTop: 18, paddingTop: 14,
-      borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border,
+      borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: hair,
     },
-    statDivider: { width: StyleSheet.hairlineWidth, backgroundColor: c.border, marginVertical: 2 },
+    /**
+     * The cell's pool of light. Absolutely placed and CENTRED on the cell's
+     * bottom edge, which is what puts the four on one horizon however wide
+     * the cells are — the dock does the same with its single spot, and a
+     * glow laid out in flow would move with the text above it instead.
+     */
+    statGlow: {
+      position: 'absolute',
+      left: '50%',
+      marginLeft: -SPOT_W / 2,
+      bottom: -SPOT_H / 2,
+      width: SPOT_W,
+      height: SPOT_H,
+    },
+    statDivider: { width: StyleSheet.hairlineWidth, backgroundColor: hair, marginVertical: 2 },
     // paddingHorizontal is 4, not 6: the cells now carry a hint line ("12h 30m
     // total") that needs every point of width it can get before it ellipsises.
-    stat: { flex: 1, alignItems: 'center', paddingVertical: 4, paddingHorizontal: 4 },
-    statNum: { fontSize: 19, fontWeight: '800', color: c.textPrimary },
-    statLabel: { fontSize: 11, color: c.textTertiary, marginTop: 1 },
+    stat: {
+      flex: 1, alignItems: 'center', paddingVertical: 4, paddingHorizontal: 4,
+      // Clipped: the pool is centred on the cell's bottom edge, so half of it
+      // is below the block and would spill onto the list of doors underneath.
+      overflow: 'hidden',
+    },
+    statNum: { fontSize: 19, fontWeight: '800', color: ink },
+    statLabel: { fontSize: 11, color: inkMuted, marginTop: 1 },
     // Reserved height, so a cell whose hint hasn't loaded (or has none) keeps
     // the same footprint as its neighbours and the strip can't jump.
     statHintSlot: { height: 14, justifyContent: 'center', alignSelf: 'stretch' },
     statHint: {
-      fontSize: 9, fontWeight: '700', color: c.accentInk,
+      fontSize: 9, fontWeight: '700', color: accentInk,
       textAlign: 'center',
     },
     // A LIST, not a stack of cards — the Files tab's treatment, which Mark
