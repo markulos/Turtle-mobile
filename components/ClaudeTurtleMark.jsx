@@ -155,19 +155,28 @@ export function penFor(size, weight) {
  * Not part of the still mark: only the animated one asks for it.
  */
 // From the tip of the index: over the tip, down its top edge into the web,
-// up the thumb and over it, down round the fist, the knuckle, and back along
-// the index's underside.
+// up the thumb and over it, down the outside of the fist, then THREE
+// KNUCKLES — the curled fingers — along its base, round the corner and up
+// its side, and back along the index's underside.
+//
+// The knuckles are the same scallop as the fingers of the resting hands:
+// three of them, each about as long as the last, each a full round bump
+// with a notch between. The first drawing had one small pinched bump
+// there; Mark, 2026-11-16: "fix those finger knuckle spacings to be more
+// smooth and spaced each like in the other" (the resting hand).
 const POINT_HAND = 'M-32.2 -6.4 C-38.6 -9.2 -38.6 -19.3 -32.2 -20.2 '
   + 'C-25.8 -20.2 -20.2 -15.6 -13.8 -11 C-9.2 -7.4 -4.6 -2.8 0 0 '
   + 'C5.5 -2.8 10.1 -8.3 13.8 -13.8 C16.6 -19.3 23.9 -21.2 27.6 -16.6 '
   + 'C30.4 -12 29.4 -3.7 27.6 1.8 C30.4 7.4 31.3 14.7 29.4 20.2 '
-  + 'C26.7 27.6 16.6 31.3 5.5 31.3 C-3.7 31.3 -11 29.4 -14.7 23.9 '
-  + 'C-17.5 20.2 -17.5 17.5 -16.6 15.6 C-23 14.7 -23.9 8.3 -17.5 7.4 '
-  + 'C-17.5 5.5 -18.4 4.6 -19.3 3.7 C-23 0 -27.6 -3.7 -32.2 -6.4 Z';
+  + 'C27.1 26.7 17.5 30.8 7.4 30.4 C5 35.5 -7.4 32.8 -7.4 27.1 '
+  + 'C-14.3 31.8 -22 23.4 -16.6 17 C-24.8 17.6 -27.2 6.4 -19.3 3.7 '
+  + 'C-23 0 -27.6 -3.7 -32.2 -6.4 Z';
+/** Where one knuckle ends and the next begins, about the web — see the tests. */
+export const CLAUDE_POINT_KNUCKLES = [{ x: 7.4, y: 30.4 }, { x: -7.4, y: 27.1 }, { x: -16.6, y: 17 }, { x: -19.3, y: 3.7 }];
 /** The tips of the two fingers that are out, about the web — see the tests. */
 export const CLAUDE_POINT_TIPS = { index: { x: -37.7, y: -14.7 }, thumb: { x: 22.1, y: -19.3 } };
 /** How far the fist hangs below the web. */
-export const CLAUDE_POINT_DROP = 31.3;
+export const CLAUDE_POINT_DROP = 32.8;
 /** Where the web of the thinking hand sits — under the chin — and its turn. */
 export const CLAUDE_POINT_AT = { x: 197, y: 153 };
 export const CLAUDE_POINT_TURN = 0;
