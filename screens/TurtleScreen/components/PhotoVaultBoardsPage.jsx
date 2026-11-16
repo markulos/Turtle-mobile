@@ -312,6 +312,14 @@ const PhotoVaultBoardsPage = forwardRef(({
         </View>
       ) : null}
 
+      {/* The group's own top edge. FULL-BLEED, not inset: §8 says a rule
+          between two REGIONS runs the width, and this one divides the All
+          Photos card above from the two doors below it. The inset one
+          between the doors separates two ITEMS, which is the other case. */}
+      {(onNewAlbum || onOpenCanvases) && !displayQuery ? (
+        <View pointerEvents="none" style={[insetRule(theme), styles.canvasEdge]} />
+      ) : null}
+
       {/* New album. First of the fixed entries, because making one is the
           thing you came to this page to do that the grid below cannot offer.
 
@@ -377,6 +385,13 @@ const PhotoVaultBoardsPage = forwardRef(({
           </View>
           <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
         </TouchableOpacity>
+      ) : null}
+
+      {/* …and the group's bottom edge, the same full-bleed rule. The two
+          doors read as one block now rather than as two lines that happen to
+          have a score between them. */}
+      {(onNewAlbum || onOpenCanvases) && !displayQuery ? (
+        <View pointerEvents="none" style={[insetRule(theme), styles.canvasEdge]} />
       ) : null}
 
       {/* Boards other people gave me. Hidden while SEARCHING for the same
@@ -546,6 +561,11 @@ const styles = StyleSheet.create({
   // Inset past the glyph (20) and its gap (12), plus the row's own padding,
   // so the rule separates the TEXT and the glyphs read as a column.
   canvasSep: { marginLeft: 46 },
+  // The group's top and bottom edges. FULL-BLEED past the page's own gutter —
+  // §8: a rule dividing two regions runs the width, where one dividing two
+  // items is inset. The negative margins undo `content`'s padding, which is
+  // what makes it reach the screen rather than stopping at the text.
+  canvasEdge: { marginHorizontal: -EDGE_PAD },
   canvasRowBody: { flex: 1, minWidth: 0 },
   canvasRowTitle: { fontSize: 15, fontWeight: '600' },
   canvasRowMeta: { fontSize: 12, marginTop: 1 },
@@ -565,7 +585,10 @@ const styles = StyleSheet.create({
   // hangs off the end of it is here.
   rowSharedDot: { width: 7, height: 7, borderRadius: 3.5 },
   sortScroller: { marginTop: 14 },
-  allPhotosSlot: { marginTop: 16 },
+  // Air under the card as well as over it: the doors' top rule sits directly
+  // beneath this, and a ridge flush against a photo reads as the card's own
+  // bottom edge rather than as the start of something else.
+  allPhotosSlot: { marginTop: 16, marginBottom: 14 },
   sorts: { flexDirection: 'row', gap: 8, paddingRight: EDGE_PAD },
   // Filled grey pills, no border, ~32pt tall as in the reference. The 44pt
   // accessible target comes from hitSlop rather than the visible height.

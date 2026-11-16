@@ -7,6 +7,7 @@
  * heading promising a feature.
  */
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { render, fireEvent } from '@testing-library/react-native';
 import SharedWithYouStrip from '../SharedWithYouStrip';
 
@@ -94,5 +95,31 @@ describe('SharedWithYouStrip', () => {
     expect(view.getByTestId('shared-board-share_1')).toBeTruthy();
     expect(view.getByTestId('shared-board-share_2')).toBeTruthy();
     expect(view.getAllByText('Trip')).toHaveLength(2);
+  });
+
+  /**
+   * IT IS A REGION, and it has to look like one.
+   *
+   * Mark, 2026-11-15: "create a margin between shared with you and rest of
+   * albums and add a line on the right side of shared with you." Somebody
+   * else's boards sat directly on top of his own with nothing between them,
+   * so the first row of the grid read as part of the shared strip — which is
+   * the one confusion this strip exists to prevent.
+   */
+  test('the heading carries a rule out to the edge, and the strip closes with a gutter', async () => {
+    const view = await draw();
+    const flat = (n) => StyleSheet.flatten(n.props.style) || {};
+    const wrap = flat(view.getByTestId('shared-with-you'));
+    // A gutter big enough to read as a break rather than as a row gap.
+    expect(wrap.marginBottom).toBeGreaterThanOrEqual(24);
+
+    // The rule takes the rest of the heading's line…
+    const rule = flat(view.getByTestId('shared-with-you-rule'));
+    expect(rule.flex).toBe(1);
+    // …and it is the app's rule, not a border invented here: a hairline with
+    // a colour on it, which is what insetRule returns in either mode.
+    const drawn = (rule.borderBottomWidth || 0) + (rule.borderTopWidth || 0);
+    expect(drawn).toBeGreaterThan(0);
+    expect(rule.borderBottomColor || rule.borderTopColor).toBeTruthy();
   });
 });

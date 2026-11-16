@@ -85,6 +85,26 @@ describe('STYLE-RULES §8 — rows are a list, not a stack of cards', () => {
     expect(read(file)).toMatch(/listGlyphInk\(theme\)/);
   });
 
+  test('the New album / Canvases group is CLOSED — a rule above it and below', () => {
+    // Mark, 2026-11-15: "add a ridge line on the top and bottom of new album
+    // and canvases". With only the score between them the pair read as two
+    // loose lines of text between a card and a strip; bounded, they are a
+    // block of doors.
+    //
+    // And the two edges are FULL-BLEED while the one between the rows is
+    // inset — §8's own distinction: a rule dividing two REGIONS runs the
+    // width, a rule dividing two ITEMS starts where their text does. Getting
+    // that backwards is what makes a page look like it was ruled at random.
+    const file = 'screens/TurtleScreen/components/PhotoVaultBoardsPage.jsx';
+    const src = read(file);
+    expect(src.match(/styles\.canvasEdge/g)).toHaveLength(2);
+    const edge = styleBlock(src, 'canvasEdge');
+    expect(edge).toMatch(/marginHorizontal:\s*-EDGE_PAD/);
+    // …and the item rule is still the inset one, unchanged.
+    expect(styleBlock(src, 'canvasSep')).toMatch(/marginLeft:\s*\d+/);
+    expect(src.match(/styles\.canvasSep/g)).toHaveLength(1);
+  });
+
   test('the ink is never copied — there is one of it', () => {
     // A hex pasted into a screen is a rule that holds until somebody retunes
     // the original and misses the copy.

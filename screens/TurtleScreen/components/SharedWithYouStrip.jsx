@@ -22,6 +22,7 @@ import { Image } from 'expo-image';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AnimalAvatar from '../../../components/AnimalAvatar';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
+import { insetRule } from '../../../utils/surfaceDepth';
 
 export const CARD_W = 132;
 const COVER_H = 96;
@@ -76,6 +77,12 @@ function SharedWithYouStrip({ boards, theme, resolveCoverUrl, baseUrl, onOpen, w
       <View style={styles.head}>
         <MaterialCommunityIcons name="account-multiple-outline" size={13} color={c.textSecondary} />
         <Text style={[styles.headText, { color: c.textSecondary }]}>SHARED WITH YOU</Text>
+        {/* The rule runs on from the label to the edge of the page. The strip
+            is a REGION — somebody else's boards, in among your own — and §8's
+            region rule is a full-bleed line; here it starts after the heading
+            instead of above it, so the heading reads as the line's label
+            rather than as another row of the grid. */}
+        <View pointerEvents="none" testID="shared-with-you-rule" style={[styles.headRule, insetRule(theme)]} />
       </View>
       <ScrollView
         horizontal
@@ -125,8 +132,15 @@ function SharedWithYouStrip({ boards, theme, resolveCoverUrl, baseUrl, onOpen, w
 }
 
 const styles = StyleSheet.create({
-  wrap: { marginBottom: 18 },
+  // A clear gutter under the strip. At 18 somebody else's albums and your own
+  // ran together — the first row of the grid read as part of the shared
+  // region, which is the one thing this strip exists to prevent.
+  // And air above it, so the heading does not sit on the rule that closes the
+  // New album / Canvases group immediately above.
+  wrap: { marginTop: 16, marginBottom: 30 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  // Takes whatever is left of the row after the glyph and the label.
+  headRule: { flex: 1, marginLeft: 4 },
   headText: { fontSize: 10.5, fontWeight: '700', letterSpacing: 0.9 },
   row: { gap: 10, paddingRight: 8 },
   card: {},
