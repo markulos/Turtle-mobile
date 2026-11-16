@@ -28,6 +28,7 @@ import ClaudeTurtleMark, {
   CLAUDE_POINT_KNUCKLES,
   CLAUDE_POINT_TIPS,
   CLAUDE_POINT_TURN,
+  CLAUDE_POINT_WAIST,
   artPoint,
   facePath,
   CLAUDE_MARK_LEDGE,
@@ -233,16 +234,15 @@ describe('ClaudeTurtleMark', () => {
     expect(CLAUDE_POINT_AT.y + CLAUDE_POINT_DROP + 3.5).toBeLessThanOrEqual(190);
   });
 
-  test('THREE EVEN KNUCKLES, like the fingers of the resting hand', () => {
-    // Mark, 2026-11-16: "fix those finger knuckle spacings to be more smooth
-    // and spaced each like in the other". One small pinched bump became
-    // three full scallops.
-    expect(CLAUDE_POINT_KNUCKLES).toHaveLength(4); // three knuckles, four joints
+  test('TWO ROUND KNUCKLES, even, like the fingers of the resting hand', () => {
+    // Mark's corrected drawing (2026-11-16) has two down the side of the fist.
+    // Before it: one small pinched bump, then three.
+    expect(CLAUDE_POINT_KNUCKLES).toHaveLength(3); // two knuckles, three joints
     const spans = CLAUDE_POINT_KNUCKLES.slice(1).map((b, i) => {
       const a = CLAUDE_POINT_KNUCKLES[i];
       return Math.hypot(b.x - a.x, b.y - a.y);
     });
-    // EVEN: no knuckle more than a fifth longer than another…
+    // EVEN: neither more than a fifth longer than the other…
     expect(Math.max(...spans) / Math.min(...spans)).toBeLessThan(1.2);
     // …and ROOMY: the fingers of the resting hand are about 14–16 units
     // across, and a bump much smaller than the pen (7) closes up into a lump.
@@ -250,12 +250,17 @@ describe('ClaudeTurtleMark', () => {
       expect(span).toBeGreaterThan(12);
       expect(span).toBeLessThan(17);
     }
-    // They run from the base of the fist round to the underside of the index.
-    const first = CLAUDE_POINT_KNUCKLES[0];
-    const last = CLAUDE_POINT_KNUCKLES[3];
-    expect(first.y).toBeGreaterThan(25);
-    expect(last.x).toBeLessThan(-15);
-    expect(last.y).toBeLessThan(8);
+    // They run from the base of the fist up to the underside of the index.
+    expect(CLAUDE_POINT_KNUCKLES[0].y).toBeGreaterThan(25);
+    expect(CLAUDE_POINT_KNUCKLES[2].x).toBeLessThan(-15);
+    expect(CLAUDE_POINT_KNUCKLES[2].y).toBeLessThan(8);
+  });
+
+  test('the thumb has a WAIST where it joins the hand', () => {
+    // In his drawing the outside of the hand dips in at the base of the
+    // thumb and swells again below — a thumb on a fist, not a mitten.
+    expect(CLAUDE_POINT_WAIST.waist).toBeLessThan(CLAUDE_POINT_WAIST.above - 1);
+    expect(CLAUDE_POINT_WAIST.waist).toBeLessThan(CLAUDE_POINT_WAIST.below - 1);
   });
 
   test('there is no raised finger in the drawing', () => {

@@ -154,29 +154,43 @@ export function penFor(size, weight) {
  *
  * Not part of the still mark: only the animated one asks for it.
  */
-// From the tip of the index: over the tip, down its top edge into the web,
-// up the thumb and over it, down the outside of the fist, then THREE
-// KNUCKLES — the curled fingers — along its base, round the corner and up
-// its side, and back along the index's underside.
+// TRACED A SECOND TIME, from Mark's own correction of the drawing
+// (2026-11-16, "make the hand design a little closer to this" — he had
+// redrawn the hand over a render of it). What his has that the first tracing
+// did not:
+//   • an index that WIDENS toward its base, with a round, blunt tip;
+//   • a thumb with a round cap and a WAIST where it joins the hand;
+//   • a base that SLANTS — low under the knuckles, rising to the thumb side;
+//   • TWO round knuckles down the side, each a single arc, about as long
+//     as each other and as the fingers of the resting hands.
 //
-// The knuckles are the same scallop as the fingers of the resting hands:
-// three of them, each about as long as the last, each a full round bump
-// with a notch between. The first drawing had one small pinched bump
-// there; Mark, 2026-11-16: "fix those finger knuckle spacings to be more
-// smooth and spaced each like in the other" (the resting hand).
-const POINT_HAND = 'M-32.2 -6.4 C-38.6 -9.2 -38.6 -19.3 -32.2 -20.2 '
-  + 'C-25.8 -20.2 -20.2 -15.6 -13.8 -11 C-9.2 -7.4 -4.6 -2.8 0 0 '
-  + 'C5.5 -2.8 10.1 -8.3 13.8 -13.8 C16.6 -19.3 23.9 -21.2 27.6 -16.6 '
-  + 'C30.4 -12 29.4 -3.7 27.6 1.8 C30.4 7.4 31.3 14.7 29.4 20.2 '
-  + 'C27.1 26.7 17.5 30.8 7.4 30.4 C5 35.5 -7.4 32.8 -7.4 27.1 '
-  + 'C-14.3 31.8 -22 23.4 -16.6 17 C-24.8 17.6 -27.2 6.4 -19.3 3.7 '
-  + 'C-23 0 -27.6 -3.7 -32.2 -6.4 Z';
+// The index and the thumb-side-and-base runs are smooth curves through his
+// points; they meet at corners — the web, and the notches either side of the
+// knuckles. Order: index (underside, tip, top) → web → thumb → side → base
+// → lower knuckle → upper knuckle.
+const POINT_HAND = 'M-19.8 3.8 C-20.8 3 -23.7 0.7 -25.8 -1 C-27.9 -2.6 -30.6 -4.6 -32.1 -6 '
+  + 'C-33.6 -7.4 -34.3 -8.1 -34.9 -9.2 C-35.6 -10.4 -35.9 -11.8 -36 -13 '
+  + 'C-36 -14.2 -35.9 -15.7 -35.2 -16.7 C-34.5 -17.7 -33.3 -18.8 -32 -19.1 '
+  + 'C-30.7 -19.4 -29.5 -19.5 -27.3 -18.5 C-25.1 -17.6 -21.6 -15.2 -18.8 -13.4 '
+  + 'C-16 -11.5 -13.4 -9.6 -10.3 -7.4 C-7.1 -5.1 -1.7 -1.2 0 0 '
+  + 'C1.1 -0.9 4.1 -3.3 6.4 -5.5 C8.7 -7.7 11.6 -11.3 13.6 -13.3 '
+  + 'C15.6 -15.3 17.1 -16.5 18.4 -17.4 C19.8 -18.2 20.6 -18.3 21.8 -18.3 '
+  + 'C23 -18.4 24.5 -18.2 25.5 -17.7 C26.5 -17.1 27.4 -16.3 27.9 -15.2 '
+  + 'C28.5 -14.2 28.6 -12.9 28.6 -11.4 C28.7 -10 28.6 -8.7 28.3 -6.4 '
+  + 'C28 -4.1 26.9 -0.7 27 2.2 C27.1 5.1 28.6 8.5 29 11 '
+  + 'C29.4 13.4 30 14.7 29.5 17 C29 19.3 27.6 22.9 26.2 24.6 '
+  + 'C24.8 26.4 22.8 26.5 20.9 27.4 C18.9 28.2 17.3 28.6 14.5 29.5 '
+  + 'C11.6 30.3 6.7 32.1 3.8 32.5 C0.9 32.9 -0.9 32.8 -2.8 32.1 '
+  + 'C-4.8 31.4 -7.1 28.9 -8 28.2 C-13.7 32.3 -21.7 23.4 -17.1 18.1 '
+  + 'C-24.4 18.6 -26.7 6 -19.8 3.8 Z';
 /** Where one knuckle ends and the next begins, about the web — see the tests. */
-export const CLAUDE_POINT_KNUCKLES = [{ x: 7.4, y: 30.4 }, { x: -7.4, y: 27.1 }, { x: -16.6, y: 17 }, { x: -19.3, y: 3.7 }];
+export const CLAUDE_POINT_KNUCKLES = [{ x: -8, y: 28.2 }, { x: -17.1, y: 18.1 }, { x: -19.8, y: 3.8 }];
 /** The tips of the two fingers that are out, about the web — see the tests. */
-export const CLAUDE_POINT_TIPS = { index: { x: -37.7, y: -14.7 }, thumb: { x: 22.1, y: -19.3 } };
+export const CLAUDE_POINT_TIPS = { index: { x: -36, y: -13 }, thumb: { x: 21.8, y: -18.3 } };
+/** The thumb's waist, and the side of the fist below it — the dent between. */
+export const CLAUDE_POINT_WAIST = { waist: 27, above: 28.6, below: 29.3 };
 /** How far the fist hangs below the web. */
-export const CLAUDE_POINT_DROP = 32.8;
+export const CLAUDE_POINT_DROP = 32.5;
 /** Where the web of the thinking hand sits — under the chin — and its turn. */
 export const CLAUDE_POINT_AT = { x: 197, y: 153 };
 export const CLAUDE_POINT_TURN = 0;
