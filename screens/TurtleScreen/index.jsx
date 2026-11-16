@@ -3455,9 +3455,11 @@ export default function TurtleScreen() {
                 />
               )}
               {claudeImages.length > 0 && (
-                // A RAIL, not a row: eight 64pt thumbs do not fit a phone, and
-                // the composer must not grow a second line or start squeezing
-                // the bot slot. It scrolls; the slot keeps its place.
+                // A RAIL ON ITS OWN ROW, under the keys. Eight 64pt thumbs do
+                // not fit a phone, so it scrolls — and `alignSelf: stretch`
+                // (composerThumbRail) is what guarantees it takes the whole
+                // line rather than coming to rest beside the controls, which
+                // is the arrangement Mark called out.
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
@@ -3467,24 +3469,27 @@ export default function TurtleScreen() {
                 >
                   {claudeImages.map((img, index) => (
                     <View key={img.uri} style={{ position: 'relative' }}>
-                      {/* Hold to open it in the full-screen viewer. A tap is
-                          left alone: the thumb sits next to the X, and a stray
-                          tap taking over the screen mid-sentence would be
-                          worse than no preview at all. */}
+                      {/* ONE TAP opens it full screen (Mark, 2026-11-16).
+                          It was a long press, on the theory that a stray tap
+                          taking over the screen mid-sentence was worse than
+                          no preview — but the thumb is 64pt of picture with
+                          its own X in the corner for removing it, so there
+                          is nothing else a tap on it could have meant, and a
+                          hidden gesture on the only control that shows you
+                          what you attached is a preview nobody finds. */}
                       <TouchableOpacity
-                        onLongPress={() => {
-                          impactHaptic('light');
+                        onPress={() => {
+                          tapHaptic();
                           // The keyboard floats ABOVE any in-app overlay, so it
                           // has to go before a full-screen view means anything.
                           // The draft text is untouched — only focus is dropped.
                           Keyboard.dismiss();
                           setComposerPreviewUri(img.uri);
                         }}
-                        delayLongPress={300}
                         activeOpacity={0.85}
                         accessibilityRole="imagebutton"
                         accessibilityLabel={`Attached image ${index + 1} of ${claudeImages.length}`}
-                        accessibilityHint="Press and hold to view it full screen"
+                        accessibilityHint="Opens it full screen"
                       >
                         <Image source={{ uri: img.uri }} style={styles.composerThumb} contentFit="cover" />
                       </TouchableOpacity>
@@ -4437,10 +4442,15 @@ const createStyles = (theme, insets) =>
     // padding is the room the X badges need to hang outside their thumbs
     // without being clipped by the scroll view.
     composerThumbRail: {
-      // On a line of its own now (see composerTopStack). A horizontal
-      // ScrollView defaults to flexGrow 1, which in a column is HEIGHT.
+      // On a line of its own under the keys (see composerTopStack). A
+      // horizontal ScrollView defaults to flexGrow 1, which in a column is
+      // HEIGHT — hence flexGrow 0.
       flexGrow: 0,
       flexShrink: 1,
+      // …and the full width of that line, explicitly. Without it the rail is
+      // only as wide as its content and reads as another thing on the keys'
+      // row rather than as a row of its own.
+      alignSelf: 'stretch',
       marginVertical: -8,
     },
     composerThumbRailContent: {

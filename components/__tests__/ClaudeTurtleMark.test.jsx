@@ -516,6 +516,36 @@ describe('ClaudeTurtleMark', () => {
     expect(row).toMatch(/minHeight: HEADER_ROW_MIN_HEIGHT,/);
   });
 
+  test('THE THUMBS ARE THEIR OWN ROW, and one tap opens one', () => {
+    // Mark, 2026-11-16: "make the top header with the claude button, live and
+    // stop be on a separate header row than the photos uploaded and make it
+    // only one click to view them."
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    const top = src.slice(src.indexOf('topSlot={'), src.indexOf('actions={'));
+
+    // A row of its own, under the keys — and the FULL WIDTH of it. Without
+    // the stretch the rail is only as wide as its content and comes to rest
+    // beside the controls, which is the arrangement that was called out.
+    expect(top.indexOf('styles.composerThumbRail')).toBeGreaterThan(top.indexOf('styles.composerTopRow'));
+    const rail = src.slice(src.indexOf('    composerThumbRail: {'), src.indexOf('    composerThumbRailContent: {'));
+    expect(rail).toMatch(/alignSelf: 'stretch'/);
+    expect(rail).toMatch(/flexGrow: 0/);
+
+    // ONE TAP. It was a long press, which is a hidden gesture on the only
+    // control that shows you what you attached.
+    const thumb = top.slice(top.indexOf('accessibilityRole="imagebutton"') - 900,
+      top.indexOf('accessibilityRole="imagebutton"') + 200);
+    expect(thumb).toMatch(/onPress=\{\(\) => \{/);
+    expect(thumb).not.toMatch(/onLongPress|delayLongPress/);
+    // …and the keyboard goes first, because it floats ABOVE any in-app
+    // overlay and a full-screen view under it is half a screen.
+    expect(thumb).toMatch(/Keyboard\.dismiss\(\)/);
+    expect(thumb).toMatch(/accessibilityHint="Opens it full screen"/);
+    // The rail keeps taps alive through the keyboard, or the first one only
+    // dismisses it and the preview takes two.
+    expect(top).toMatch(/keyboardShouldPersistTaps="handled"/);
+  });
+
   test('…and takes the corner it is now alone in', () => {
     // 44 was what fitted BESIDE something else. Sized to the corner, the
     // drawing is legible: about 35pt tall, a touch over half above the
