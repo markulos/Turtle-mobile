@@ -224,6 +224,47 @@ describe('ClaudeTurtleBuddy', () => {
     spy.mockRestore();
   });
 
+  test('UP IS A PROP — he waits behind the ledge until he is wanted', async () => {
+    // Mark, 2026-11-16: on the Notes to self header he is not there at all
+    // until you type, and then he jumps up over the ledge. Same jump the
+    // session start has always used, on a switch instead of on mount.
+    //
+    // Down, nothing of him shows and nothing is unmounted: the face is
+    // pushed past the clip and the hands are at zero opacity, which is a
+    // transform and an opacity — the two things the native driver can do.
+    const { unmount } = await render(<ClaudeTurtleBuddy size={80} up={false} />);
+    await act(async () => { jest.advanceTimersByTime(600); });
+    expect(screen.getByTestId('claude-turtle-buddy-face')).toBeTruthy();
+    await unmount();
+
+    // The travel he is pushed through is the whole ledge and then some, so
+    // there is no sliver of chin left on the line.
+    expect(CODE).toMatch(/const travel = ledge \+ 3;/);
+    expect(CODE).toMatch(/rise\.setValue\(up \? 0 : 1\); grab\.setValue\(up \? 1 : 0\);/);
+    // Going DOWN is its own move, and it does not bounce: an overshoot on
+    // the way out would read as him being thrown rather than ducking.
+    expect(CODE).toMatch(/if \(!up\) \{/);
+    const sink = CODE.slice(CODE.indexOf('if (!up) {'), CODE.indexOf('const jump ='));
+    expect(sink).not.toMatch(/JUMP_OVERSHOOT/);
+    // …and the hands leave before the head does.
+    expect(sink).toMatch(/grab.*duration: 140[\s\S]*rise.*duration: 260/);
+  });
+
+  test('the NOTES header wears him too, and he is up only when there is cause', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    // One header in both states: the mark and its ridge are there unless we
+    // are on the sign-in step, where there is nobody yet.
+    expect(src).toMatch(/const markShown = claudeUiMode !== 'login';/);
+    expect(src).toMatch(/\{markShown && \(\s*<View pointerEvents="none" style=\{styles\.claudeRidge\}/);
+    expect(src).toMatch(/\{markShown && \(\s*<>\s*<View pointerEvents="none" style=\{styles\.claudePeek\}/);
+    // A session has him up throughout; the notes header only while typing.
+    expect(src).toMatch(/const markUp = claudeMarkShown \|\| claudeTyping;/);
+    // DECLARED BEFORE IT IS READ. `markUp` is a const in the same body, so a
+    // typing state declared further down is a temporal-dead-zone throw on
+    // the first render — and nothing in this suite mounts the screen.
+    expect(src.indexOf('const [claudeTyping')).toBeLessThan(src.indexOf('const markUp ='));
+  });
+
   test('NATIVE DRIVER throughout, and no Reanimated', () => {
     // A worklet that calls a plain function passes every test and crashes a
     // release build. Nothing here needs one, so nothing here has one.
@@ -243,7 +284,7 @@ describe('ClaudeTurtleBuddy', () => {
 
   test('the session header wears him, and he thinks while a turn is in flight', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
-    expect(src).toMatch(/<ClaudeTurtleBuddy\s+size=\{CLAUDE_PEEK_WIDTH\}\s+thinking=\{claudeBusy\}/);
+    expect(src).toMatch(/<ClaudeTurtleBuddy\s+size=\{CLAUDE_PEEK_WIDTH\}\s+up=\{markUp\}\s+thinking=\{claudeBusy\}/);
     expect(src).toMatch(/typing=\{claudeTyping\}/);
   });
 });

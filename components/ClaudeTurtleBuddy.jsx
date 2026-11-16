@@ -3,8 +3,12 @@
  * ClaudeTurtleMark, taken apart into the pieces that move.
  *
  * WHAT HE DOES
- *   • JUMPS UP from behind the ledge when a session starts — the face rises
- *     past its resting place and settles, then the hands come down on the edge.
+ *   • JUMPS UP from behind the ledge when he is wanted — the face rises past
+ *     its resting place and settles, then the hands come down on the edge. In
+ *     a Claude session that is the moment it starts and he stays up for the
+ *     whole of it. On the NOTES TO SELF header he is down until you type, and
+ *     pops up over the ledge to see what you are writing (Mark, 2026-11-16).
+ *     Same jump either way: `up`.
  *   • BREATHES: a slow half-point rise and fall, always.
  *   • BLINKS at random, sometimes twice.
  *   • LOOKS AROUND: every few seconds his eyes go somewhere — left, right, up
@@ -156,6 +160,11 @@ export default function ClaudeTurtleBuddy({
   handFill = 'none',
   faceFill = 'none',
   tilt = 0,
+  // IS HE UP? Down, he is behind the ledge and out of sight — the clip does
+  // the hiding, so this costs a transform and not a mount. The notes header
+  // leaves him down until somebody types; a Claude session has him up for
+  // the whole of it.
+  up = true,
   thinking = false,
   // Somebody is typing into the composer right now. THINKING WINS: a turn in
   // flight is the bigger thing, and he cannot hold both poses — his head
@@ -209,9 +218,19 @@ export default function ClaudeTurtleBuddy({
     return () => { alive = false; };
   }, []);
 
-  // ── the jump ──────────────────────────────────────────────────────────
+  // ── the jump, and the drop back down ─────────────────────────────────
   useEffect(() => {
-    if (still) { rise.setValue(0); grab.setValue(1); return undefined; }
+    if (still) { rise.setValue(up ? 0 : 1); grab.setValue(up ? 1 : 0); return undefined; }
+    // DOWN: he sinks out of sight, hands first. No overshoot — an object
+    // dropping behind a ledge does not bounce on the way out.
+    if (!up) {
+      const sink = Animated.parallel([
+        Animated.timing(grab, { toValue: 0, duration: 140, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+        Animated.timing(rise, { toValue: 1, duration: 260, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+      ]);
+      sink.start();
+      return () => sink.stop();
+    }
     const jump = Animated.parallel([
       Animated.sequence([
         Animated.timing(rise, { toValue: -JUMP_OVERSHOOT, duration: 300, easing: OUT, useNativeDriver: true }),
@@ -224,7 +243,7 @@ export default function ClaudeTurtleBuddy({
     ]);
     jump.start();
     return () => jump.stop();
-  }, [still, rise, grab]);
+  }, [up, still, rise, grab]);
 
   // ── breathing, and blinking ───────────────────────────────────────────
   useEffect(() => {

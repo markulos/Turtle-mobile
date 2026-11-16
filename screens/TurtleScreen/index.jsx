@@ -587,8 +587,47 @@ export default function TurtleScreen() {
   // True whenever the Claude console is on screen (a live session OR the login
   // flow).
   const inClaudeSession = !!claudeUiMode;
+  /**
+   * IS SOMEBODY TYPING RIGHT NOW — which is what the mark in the corner reads
+   * to drop his head to the line — and, on the notes header, to jump up
+   * over the ledge at all (ClaudeTurtleBuddy).
+   *
+   * A keystroke sets it and a quiet `TYPING_LINGER_MS` clears it, rather than
+   * "the box is not empty": a draft left on screen would hold him head-down
+   * for ever, and clearing on every keystroke would bob him between words.
+   * The timer is a ref so re-renders mid-sentence do not restart it.
+   */
+  const [claudeTyping, setClaudeTyping] = useState(false);
+  const typingTimer = useRef(null);
+  useEffect(() => () => { if (typingTimer.current) clearTimeout(typingTimer.current); }, []);
+  const markTyping = useCallback(() => {
+    setClaudeTyping(true);
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(() => setClaudeTyping(false), TYPING_LINGER_MS);
+  }, []);
+
   // A live session wears Claude's mark; the sign-in step is not Claude yet.
   const claudeMarkShown = inClaudeSession && claudeUiMode !== 'login';
+  /**
+   * THE MARK AND ITS RIDGE ARE THE HEADER — in a session and out of one.
+   *
+   * Notes to self used to wear a 22pt turtle logo in this corner and no rule
+   * at all, so starting a session swapped one corner for another and drew a
+   * line across the header. Mark, 2026-11-16: put the drawing in Notes to
+   * self "instead of the logo and also have the line there too". One header,
+   * one mark, in both states — which is also the strongest possible form of
+   * the thing he has asked for three times: the ridge does not move.
+   *
+   * Only the SIGN-IN step goes without. There is nobody there yet.
+   */
+  const markShown = claudeUiMode !== 'login';
+  /**
+   * …but he is only UP when there is something to be up for. In a session he
+   * is up throughout. On the notes header he waits behind the ledge and jumps
+   * when you start typing — which is the whole of the idea: an empty corner,
+   * and then somebody looking over the edge at what you are writing.
+   */
+  const markUp = claudeMarkShown || claudeTyping;
   // ── Claude console room ───────────────────────────────────────────────────
   // The tallest the console may be with the keyboard DOWN: everything from just
   // under the chat header down to the top of the composer group, minus one
@@ -1273,24 +1312,6 @@ export default function TurtleScreen() {
       setShowAutocomplete(false);
     }
   }, [inputText]);
-
-  /**
-   * IS SOMEBODY TYPING RIGHT NOW — which is what the mark in the corner reads
-   * to drop his head to the line (ClaudeTurtleBuddy).
-   *
-   * A keystroke sets it and a quiet `TYPING_LINGER_MS` clears it, rather than
-   * "the box is not empty": a draft left on screen would hold him head-down
-   * for ever, and clearing on every keystroke would bob him between words.
-   * The timer is a ref so re-renders mid-sentence do not restart it.
-   */
-  const [claudeTyping, setClaudeTyping] = useState(false);
-  const typingTimer = useRef(null);
-  useEffect(() => () => { if (typingTimer.current) clearTimeout(typingTimer.current); }, []);
-  const markTyping = useCallback(() => {
-    setClaudeTyping(true);
-    if (typingTimer.current) clearTimeout(typingTimer.current);
-    typingTimer.current = setTimeout(() => setClaudeTyping(false), TYPING_LINGER_MS);
-  }, []);
 
   // Handle input changes for autocomplete
   const handleInputChange = (text) => {
@@ -2380,6 +2401,11 @@ export default function TurtleScreen() {
               middle and the rule are the same line without measuring
               either. Nothing is painted behind the words to hide a line —
               there is no line there to hide. */}
+          {/* Only in a session: this short stub runs from the screen's edge to
+              the title, through the space the avatar vacates. On the notes
+              header the avatar is still there and the ridge starts after the
+              name — the line that matters is the long run below, which is the
+              ledge the hands hold. */}
           {claudeMarkShown && <View pointerEvents="none" style={styles.claudeRidgeLead} />}
           {/* One style OR the other — never the ridge style layered over
               identityText. That one carries `flex: 1`, and in Yoga a
@@ -2387,7 +2413,7 @@ export default function TurtleScreen() {
               into a basis of ZERO: the title was laid out 0pt wide and the
               header shipped with no name in it (a browser does the
               opposite, which is why the mock-up looked right). */}
-          <View style={claudeMarkShown ? styles.identityTextOnRidge : styles.identityText}>
+          <View style={markShown ? styles.identityTextOnRidge : styles.identityText}>
             {inClaudeSession ? (
               <Text style={styles.identityName} numberOfLines={1}>
                 {claudeUiMode === 'login' ? 'Claude sign-in' : (
@@ -2407,27 +2433,13 @@ export default function TurtleScreen() {
                   : claudeBusy ? 'Claude is working…' : 'Notes to self'}
             </Text>
           </View>
-          {claudeMarkShown && (
+          {markShown && (
             <View pointerEvents="none" style={styles.claudeRidge} testID="claude-ridge" />
           )}
 
-          {/* Brand mark, trailing. Decorative (the row owns the tap and the
-              long-press), it just anchors the header the way the turtle
-              anchors the dock.
-
-              GONE during a Claude session, on the same condition that drops
-              the leading avatar ring: Claude's own mark hangs over the ridge
-              in this corner, and two marks stacked in one corner left neither
-              of them room — the drawing was reduced to a squiggle under a
-              turtle. One corner, one mark. */}
-          {!claudeMarkShown && (
-            <Image
-              source={turtleLogo}
-              style={styles.identityBrand}
-              contentFit="contain"
-              tintColor={theme.colors.textTertiary}
-            />
-          )}
+          {/* The 22pt turtle logo that used to sit here is gone: the drawing
+              over the ridge IS the brand mark now, in both states, and two
+              marks in one corner left neither of them room. See `markShown`. */}
         </TouchableOpacity>
         {/* Search everything — a sibling of the identity bar in the same
             60pt row, so the header's height is untouched. Stood down during a
@@ -2459,15 +2471,21 @@ export default function TurtleScreen() {
             The title is centred on the same line, so the name and the
             drawing are level by construction. Takes no touches — the
             identity bar underneath still owns the tap and the long-press. */}
-        {claudeMarkShown && (
+        {markShown && (
           <>
             <View pointerEvents="none" style={styles.claudePeek} testID="claude-mark-peek">
-              {/* ALIVE: he jumps up from behind the ridge when the session
-                  starts, breathes, blinks and looks about — and for as long
-                  as a turn is in flight he THINKS: one finger at the corner
-                  of his mouth, eyes rolled up and away. */}
+              {/* ALIVE: he breathes, blinks and looks about; for as long as a
+                  turn is in flight he THINKS, with one finger at the corner
+                  of his mouth and his eyes rolled up and away.
+
+                  WHEN HE IS UP depends on whose header it is. A Claude
+                  session: the moment it starts, and for the whole of it. The
+                  NOTES TO SELF header: not at all, until you type — and then
+                  he jumps up over the ledge to see what you are writing, and
+                  sinks back when you stop. */}
               <ClaudeTurtleBuddy
                 size={CLAUDE_PEEK_WIDTH}
+                up={markUp}
                 thinking={claudeBusy}
                 // …and while you are writing to him he reads the line
                 // instead: eyes down, head dipped after them.
@@ -3894,7 +3912,6 @@ const createStyles = (theme, insets) =>
     },
     // Trailing brand mark — small and muted, so it anchors the row without
     // competing with the name.
-    identityBrand: { width: 22, height: 22, opacity: 0.7 },
     // Equal-width side clusters flanking the flex:1 title, so the brand stays
     // dead-centre even though the left holds two icons and the right one.
     headerSideWrap: {

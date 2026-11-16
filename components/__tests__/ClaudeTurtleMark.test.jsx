@@ -264,7 +264,7 @@ describe('ClaudeTurtleMark', () => {
     const from = src.indexOf('styles.identityBar, claudeMarkShown && styles.identityBarOnRidge');
     const bar = src.slice(from, src.indexOf('</TouchableOpacity>', from));
     const lead = bar.indexOf('style={styles.claudeRidgeLead}');
-    const title = bar.indexOf('style={claudeMarkShown ? styles.identityTextOnRidge : styles.identityText}');
+    const title = bar.indexOf('style={markShown ? styles.identityTextOnRidge : styles.identityText}');
     const ridge = bar.indexOf('style={styles.claudeRidge} testID="claude-ridge"');
     expect(lead).toBeGreaterThan(-1);
     expect(title).toBeGreaterThan(lead);
@@ -306,14 +306,20 @@ describe('ClaudeTurtleMark', () => {
     expect(run).not.toMatch(/hairlineWidth|colors\.border/);
   });
 
-  test('ONE MARK PER CORNER — the brand turtle stands down for it', () => {
+  test('ONE MARK PER CORNER — and it is the drawing, not the logo', () => {
     // Both marks were drawn in the same corner, so neither had room: the
     // sketch came out as a squiggle tucked under a 22pt turtle (Mark's
-    // screenshot, 2026-11-14). The turtle leaves on exactly the condition
-    // that brings the mark in, the same one that drops the leading avatar
-    // ring — if those two ever disagree the corner is crowded again.
+    // screenshot, 2026-11-14). The logo is gone outright now — the drawing
+    // is the header's mark in a session AND on the notes header (Mark,
+    // 2026-11-16: "instead of the logo"), so there is no second one left to
+    // crowd it in either state.
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
-    expect(src).toMatch(/\{!claudeMarkShown && \(\s*<Image\s+source=\{turtleLogo\}/);
+    expect(src).not.toMatch(/styles\.identityBrand/);
+    // …and the style went with it, rather than sitting in the sheet for
+    // somebody to wire back up.
+    expect(src).not.toMatch(/identityBrand:/);
+    // turtleLogo itself stays: it is still the chat's watermark.
+    expect(src).toMatch(/styles\.chatWatermark/);
   });
 
   test('the hands are filled with what is BEHIND them, so they sit on the rule', () => {
