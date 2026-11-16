@@ -192,7 +192,7 @@ export const DatePickerModal = ({
           
           {/* Today Button */}
           <TouchableOpacity style={styles.todayButton} onPress={goToToday}>
-            <Icon name="calendar-today" size={16} color={theme.colors.accent} />
+            <Icon name="calendar-today" size={16} color={theme.colors.accentInk} />
             <Text style={styles.todayText}>Today</Text>
           </TouchableOpacity>
           

@@ -169,7 +169,7 @@ function QuestionCard({ q, onRespond, theme, styles }) {
   return (
     <View style={styles.qCard}>
       <View style={styles.permHeaderRow}>
-        <Icon name="comment-question-outline" size={15} color={theme.colors.accentInfo} />
+        <Icon name="comment-question-outline" size={15} color={theme.colors.accentInk} />
         <Text style={styles.permTitle} numberOfLines={1}>
           {list.length === 1 ? 'Claude is asking' : `Claude has ${list.length} questions`}
         </Text>

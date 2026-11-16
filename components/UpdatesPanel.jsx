@@ -223,7 +223,7 @@ export default function UpdatesPanel() {
   return (
     <View style={styles.wrap} accessibilityLabel="App version and updates">
       <View style={styles.header}>
-        <Icon name="update" size={18} color={c.accentInfo} />
+        <Icon name="update" size={18} color={c.accentInk} />
         <Text style={styles.title} numberOfLines={1}>App version & updates</Text>
         <View style={{ flex: 1 }} />
         {pill.text ? (

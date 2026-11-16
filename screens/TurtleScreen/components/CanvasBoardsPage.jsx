@@ -139,7 +139,7 @@ export default function CanvasBoardsPage({ visible, onClose }) {
       style={styles.row}
     >
       <View style={[styles.rowArt, { backgroundColor: c.surfaceElevated, borderColor: c.border }]}>
-        <Icon name="shape-outline" size={22} color={c.accentInfo || c.textSecondary} />
+        <Icon name="shape-outline" size={22} color={c.accentInk || c.textSecondary} />
       </View>
       <View style={styles.rowBody}>
         <Text style={[styles.rowTitle, { color: c.textPrimary }]} numberOfLines={1}>{item.name}</Text>

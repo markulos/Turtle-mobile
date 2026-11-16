@@ -62,7 +62,7 @@ export default function NoteLinkPicker({ value, onClear, onRequestOpen, theme, i
   if (value) {
     return (
       <View style={styles.chip}>
-        <Icon name="link-variant" size={16} color={theme.colors.accentInfo} />
+        <Icon name="link-variant" size={16} color={theme.colors.accentInk} />
         <Text style={styles.chipText} numberOfLines={1}>
           Linked to note: {value.title}
         </Text>
@@ -86,7 +86,7 @@ export default function NoteLinkPicker({ value, onClear, onRequestOpen, theme, i
       accessibilityRole="button"
       accessibilityLabel="Link a note"
     >
-      <Icon name="link-plus" size={18} color={theme.colors.accentInfo} />
+      <Icon name="link-plus" size={18} color={theme.colors.accentInk} />
       <Text style={styles.openBtnText}>Link a note</Text>
     </TouchableOpacity>
   );
@@ -223,7 +223,7 @@ export function NoteSearchPanel({ visible, onPick, onClose, theme, isDark }) {
         trailing={(
           <View style={styles.rowTrailing}>
             <Text style={styles.rowAge}>{noteAgeLabel(n)}</Text>
-            <Icon name="link-variant" size={16} color={theme.colors.accentInfo} />
+            <Icon name="link-variant" size={16} color={theme.colors.accentInk} />
           </View>
         )}
       />

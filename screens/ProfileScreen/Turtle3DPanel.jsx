@@ -274,7 +274,7 @@ export default function Turtle3DPanel({ onClose }) {
         {/* What this is */}
         <View style={styles.card}>
           <View style={styles.cardHead}>
-            <View style={styles.cardIcon}><Icon name="cube-outline" size={18} color={c.accent || c.accentInfo} /></View>
+            <View style={styles.cardIcon}><Icon name="cube-outline" size={18} color={c.accentInk} /></View>
             <Text style={styles.cardTitle}>Collab bridges</Text>
           </View>
           <Text style={styles.body}>
@@ -319,7 +319,7 @@ export default function Turtle3DPanel({ onClose }) {
 
             <View style={styles.card}>
               <View style={styles.cardHead}>
-                <View style={styles.cardIcon}><Icon name="server" size={18} color={c.accent || c.accentInfo} /></View>
+                <View style={styles.cardIcon}><Icon name="server" size={18} color={c.accentInk} /></View>
                 <Text style={styles.cardTitle}>Registered bridges</Text>
               </View>
 
@@ -383,7 +383,7 @@ export default function Turtle3DPanel({ onClose }) {
         {/* Your account */}
         <View style={styles.card}>
           <View style={styles.cardHead}>
-            <View style={styles.cardIcon}><Icon name="account-outline" size={18} color={c.accent || c.accentInfo} /></View>
+            <View style={styles.cardIcon}><Icon name="account-outline" size={18} color={c.accentInk} /></View>
             <Text style={styles.cardTitle}>Your account</Text>
           </View>
           <InfoRow theme={theme} label="Name" value={me?.displayName || '—'} />
@@ -410,7 +410,7 @@ export default function Turtle3DPanel({ onClose }) {
           <View style={styles.card}>
             <View style={styles.cardHead}>
               <View style={styles.cardIcon}>
-                <Icon name="server-network" size={18} color={c.accent || c.accentInfo} />
+                <Icon name="server-network" size={18} color={c.accentInk} />
               </View>
               <Text style={styles.cardTitle}>Bridge on the pond</Text>
               <View
@@ -462,7 +462,7 @@ export default function Turtle3DPanel({ onClose }) {
                 build runs (first build on a fresh toolchain can take 20+ min). */}
             {updJob?.running ? (
               <View style={styles.updBox}>
-                <ActivityIndicator size="small" color={c.accent || c.accentInfo} />
+                <ActivityIndicator size="small" color={c.accentInk} />
                 <Text style={styles.updLine} numberOfLines={2}>
                   {updJob.lines?.length ? updJob.lines[updJob.lines.length - 1] : 'Updating…'}
                 </Text>
@@ -497,7 +497,7 @@ export default function Turtle3DPanel({ onClose }) {
                   <Icon
                     name={fresh && fresh !== 'checking' && fresh.upToDate === false ? 'download-circle-outline' : 'refresh'}
                     size={17}
-                    color={c.accent || c.accentInfo}
+                    color={c.accentInk}
                   />
                   <Text style={styles.btnText}>
                     {fresh && fresh !== 'checking' && fresh.upToDate === false ? 'Update now' : 'Check updates'}
@@ -529,7 +529,7 @@ export default function Turtle3DPanel({ onClose }) {
         <View style={styles.card}>
           <View style={styles.cardHead}>
             <View style={styles.cardIcon}>
-              <Icon name="cube-outline" size={18} color={c.accent || c.accentInfo} />
+              <Icon name="cube-outline" size={18} color={c.accentInk} />
             </View>
             <Text style={styles.cardTitle}>Collab bridge</Text>
           </View>
@@ -571,7 +571,7 @@ export default function Turtle3DPanel({ onClose }) {
           <View style={styles.card}>
             <View style={styles.cardHead}>
               <View style={styles.cardIcon}>
-                <Icon name="account-clock-outline" size={18} color={c.accent || c.accentInfo} />
+                <Icon name="account-clock-outline" size={18} color={c.accentInk} />
               </View>
               <Text style={styles.cardTitle}>Who's been on</Text>
             </View>

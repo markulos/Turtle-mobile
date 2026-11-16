@@ -144,7 +144,7 @@ export default function FriendCard({
             <Icon
               name={friendIsOwner ? 'crown' : 'account-outline'}
               size={13}
-              color={friendIsOwner ? '#f5a623' : theme.colors.accentInfo}
+              color={friendIsOwner ? '#f5a623' : theme.colors.accentInk}
             />
             <Text style={[styles.roleText, { color: friendIsOwner ? '#f5a623' : theme.colors.accentInk }]}>
               {friendIsOwner ? 'Owner' : 'Member'}
@@ -177,7 +177,7 @@ export default function FriendCard({
             </View>
             {isDevAccount ? (
               <View style={[styles.detailRow, styles.detailRowDivided]}>
-                <Icon name="account-cog" size={18} color={theme.colors.accentInfo} />
+                <Icon name="account-cog" size={18} color={theme.colors.accentInk} />
                 <Text style={[styles.detailText, { color: theme.colors.accentInk }]}>
                   Developer account · signs in with code {devCode}
                 </Text>
@@ -237,7 +237,7 @@ export default function FriendCard({
           <View style={styles.statsRow}>
             {statTiles.map((t) => (
               <View key={t.key} style={styles.statTile}>
-                <Icon name={t.icon} size={20} color={theme.colors.accentInfo} />
+                <Icon name={t.icon} size={20} color={theme.colors.accentInk} />
                 <Text style={styles.statValue}>
                   {typeof t.value === 'number' ? t.value : '—'}
                 </Text>

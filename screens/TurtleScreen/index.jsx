@@ -2365,7 +2365,7 @@ export default function TurtleScreen() {
                   <Icon
                     name="login-variant"
                     size={20}
-                    color={theme.colors.accent || theme.colors.accentInfo}
+                    color={theme.colors.accentInk}
                   />
                 ) : null
               ) : selfAvatarUrl ? (
@@ -2541,7 +2541,7 @@ export default function TurtleScreen() {
             {/* Prominent search — bigger, accent-ringed, with a clearer
                 placeholder so looking someone up is the obvious first action. */}
             <View style={styles.friendSearchBox}>
-              <Icon name="magnify" size={20} color={theme.colors.accentInfo} />
+              <Icon name="magnify" size={20} color={theme.colors.accentInk} />
               <AppTextInput
                 style={styles.friendSearchInput}
                 placeholder="Search friends by name or number"
@@ -2719,7 +2719,7 @@ export default function TurtleScreen() {
                 {knockRequests.map((r) => (
                   <View key={`knock-${r.id}`} style={styles.friendRow}>
                     <View style={styles.friendAvatar}>
-                      <Icon name="hand-wave-outline" size={18} color={theme.colors.accentInfo} />
+                      <Icon name="hand-wave-outline" size={18} color={theme.colors.accentInk} />
                     </View>
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <Text style={styles.friendName} numberOfLines={1}>{r.phone}</Text>
@@ -2829,7 +2829,7 @@ export default function TurtleScreen() {
                   devAccounts.map((d) => (
                     <View key={`dev-${d.phone}`} style={styles.friendRow}>
                       <View style={styles.friendAvatar}>
-                        <Icon name="account-cog" size={18} color={theme.colors.accentInfo} />
+                        <Icon name="account-cog" size={18} color={theme.colors.accentInk} />
                       </View>
                       <View style={{ flex: 1, minWidth: 0 }}>
                         <Text style={styles.friendName} numberOfLines={1}>{d.label || d.phone}</Text>
@@ -3626,7 +3626,7 @@ export default function TurtleScreen() {
                     <Text style={styles.modelRowLabel}>{m.label}</Text>
                     <Text style={styles.modelRowSub}>{m.sub}</Text>
                   </View>
-                  {selected && <Icon name="check" size={18} color={theme.colors.accentInfo} />}
+                  {selected && <Icon name="check" size={18} color={theme.colors.accentInk} />}
                 </TouchableOpacity>
               );
             })}

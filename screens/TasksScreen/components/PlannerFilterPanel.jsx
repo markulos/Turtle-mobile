@@ -72,10 +72,10 @@ function Chip({ label, active, onPress, icon, swatch, theme, testID, accessibili
     >
       {!!swatch && <View style={[s.swatch, { backgroundColor: swatch }]} />}
       {!!icon && !swatch && (
-        <Icon name={icon} size={14} color={active ? theme.colors.accentInfo : theme.colors.textTertiary} />
+        <Icon name={icon} size={14} color={active ? theme.colors.accentInk : theme.colors.textTertiary} />
       )}
       <Text style={[s.chipText, active && s.chipTextOn]} numberOfLines={1}>{label}</Text>
-      {active && <Icon name="check" size={14} color={theme.colors.accentInfo} />}
+      {active && <Icon name="check" size={14} color={theme.colors.accentInk} />}
     </Pressable>
   );
 }
@@ -121,7 +121,7 @@ function SearchKey({ label, onPress, theme, testID }) {
       testID={testID}
       style={({ pressed }) => [s.sectionKey, pressed && s.pressed]}
     >
-      <Icon name="magnify" size={16} color={theme.colors.accentInfo} />
+      <Icon name="magnify" size={16} color={theme.colors.accentInk} />
     </Pressable>
   );
 }
@@ -507,7 +507,7 @@ export default function PlannerFilterPanel({
                     color={theme.colors.textTertiary}
                   />
                 )}
-                trailing={picked ? <Icon name="check" size={18} color={theme.colors.accentInfo} /> : null}
+                trailing={picked ? <Icon name="check" size={18} color={theme.colors.accentInk} /> : null}
                 onPress={() => {
                   tapHaptic();
                   if (searchFor === 'tag') {

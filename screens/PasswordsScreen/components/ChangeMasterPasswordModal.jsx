@@ -170,7 +170,7 @@ export const ChangeMasterPasswordModal = ({ visible, onClose, onChangePassword, 
                   </TouchableOpacity>
                   {biometricAvailable && (
                     <TouchableOpacity style={styles.linkBtn} onPressIn={() => impactHaptic('medium')} onPress={runBiometric}>
-                      <Icon name="face-recognition" size={18} color={theme.colors.accentInfo} />
+                      <Icon name="face-recognition" size={18} color={theme.colors.accentInk} />
                       <Text style={styles.linkText}>Use biometrics instead</Text>
                     </TouchableOpacity>
                   )}

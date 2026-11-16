@@ -191,7 +191,7 @@ function Tile({ label, selected, onPress, theme, children, testID, style }) {
           {label}
         </Text>
         {selected && (
-          <Icon name="check-circle" size={15} color={theme.colors.accent} />
+          <Icon name="check-circle" size={15} color={theme.colors.accentInk} />
         )}
       </View>
     </TouchableOpacity>

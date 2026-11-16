@@ -30,8 +30,15 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..', '..');
 const DIRS = ['screens', 'components'];
 
-/** `color:` with a non-letter before it — never backgroundColor/borderColor. */
+/**
+ * Both ways a colour is spelled: a style property `color: x` and a JSX prop
+ * `color={x}` — which is how an ICON takes one. A non-letter is required
+ * before each, so backgroundColor / borderColor / tintColor / shadowColor
+ * (all capital-C) are never matched: those are FILLS, and a fill is supposed
+ * to be the bright colour.
+ */
 const COLOR_PROP = /(?<![A-Za-z])color:\s*([^,;\n}]*)/g;
+const COLOR_ATTR = /(?<![A-Za-z])color=\{([^}]*)\}?/g;
 
 function sources() {
   const out = [];
@@ -48,7 +55,10 @@ function sources() {
 }
 
 describe('the accent as INK', () => {
-  test('no screen draws text in the RAW accent', () => {
+  test('no screen draws TEXT OR AN ICON in the raw accent', () => {
+    // Mark asked for the text first (2026-11-16) and then for the glyphs:
+    // "change to a more tame fade with fluorescent/pale highlight colours for
+    // icons on a light backdrop as well". Same page, same problem, same ink.
     const offenders = [];
     for (const file of sources()) {
       const src = fs.readFileSync(file, 'utf8');
@@ -56,11 +66,13 @@ describe('the accent as INK', () => {
       for (const [i, line] of lines.entries()) {
         // Comments explain the rule; they are not the rule being broken.
         if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
-        for (const m of line.matchAll(COLOR_PROP)) {
-          const value = m[1];
-          if (!/\.accent(Info)?\b/.test(value)) continue;
-          if (/inkOn\(|readableOn\(|neutralInk\(|accentFrostInk\(/.test(value)) continue;
-          offenders.push(`${path.relative(ROOT, file)}:${i + 1}  ${line.trim()}`);
+        for (const re of [COLOR_PROP, COLOR_ATTR]) {
+          for (const m of line.matchAll(re)) {
+            const value = m[1];
+            if (!/\.accent(Info)?\b/.test(value)) continue;
+            if (/inkOn\(|readableOn\(|neutralInk\(|accentFrostInk\(/.test(value)) continue;
+            offenders.push(`${path.relative(ROOT, file)}:${i + 1}  ${line.trim()}`);
+          }
         }
       }
     }
@@ -89,10 +101,10 @@ describe('the accent as INK', () => {
   });
 
   test('the ink is used widely enough to be the convention, not an exception', () => {
-    // A rule one screen follows is a special case. The sweep that introduced
-    // this touched 29 files; if that number collapses, somebody has reverted
-    // the convention rather than improved it.
+    // A rule one screen follows is a special case. The two sweeps that
+    // introduced this touched ~45 files between them; if that number
+    // collapses, somebody has reverted the convention rather than improved it.
     const users = sources().filter((f) => /accentInk/.test(fs.readFileSync(f, 'utf8')));
-    expect(users.length).toBeGreaterThanOrEqual(20);
+    expect(users.length).toBeGreaterThanOrEqual(40);
   });
 });

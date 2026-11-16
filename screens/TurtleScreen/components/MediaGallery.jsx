@@ -4794,7 +4794,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                     activeOpacity={0.7}
                     onPress={() => { const m = shareChooser; setShareChooser(null); doShare(m, 'regular'); }}
                   >
-                    <Icon name="image-outline" size={22} color={theme.colors.accentInfo} />
+                    <Icon name="image-outline" size={22} color={theme.colors.accentInk} />
                     <View style={styles.shareSheetOptionText}>
                       <Text style={styles.shareSheetOptionTitle}>Regular</Text>
                       <Text style={styles.shareSheetOptionSub}>Smaller file · sends instantly</Text>
@@ -5450,7 +5450,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                           <Icon
                             name="web"
                             size={14}
-                            color={theme.colors.accentSuccess || theme.colors.accentInfo}
+                            color={theme.colors.accentSuccess || theme.colors.accentInk}
                           />
                         </TouchableOpacity>
                       )}

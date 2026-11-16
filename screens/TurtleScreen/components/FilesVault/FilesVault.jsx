@@ -278,7 +278,7 @@ export default function FilesVault({ topInset = 0, bottomInset = 0, searchTopIns
               testID={`files-share-${f.id}`}
               style={({ pressed }) => [styles.shareMark, { opacity: pressed ? 0.6 : 1 }]}
             >
-              <Icon name="account-multiple" size={13} color={c.accentInfo} />
+              <Icon name="account-multiple" size={13} color={c.accentInk} />
               <Text style={[styles.shareCount, { color: c.accentInk }]} numberOfLines={1}>{shared}</Text>
             </Pressable>
           ) : null}

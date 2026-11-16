@@ -119,7 +119,7 @@ export default function GlobalSearchPage({ visible, initialQuery = '', onClose, 
         {/* Search field on TOP — the page's one job. */}
         <View style={styles.topRow}>
           <View style={styles.field}>
-            <Icon name="magnify" size={18} color={c.accentInfo} />
+            <Icon name="magnify" size={18} color={c.accentInk} />
             <AppTextInput
               ref={inputRef}
               style={styles.input}

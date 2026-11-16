@@ -244,10 +244,10 @@ export default function PlannerSearchPanel({
           accessibilityLabel={`Create task ${item.createTitle}`}
           testID="planner-search-create"
           onPress={createTask}
-          leading={<Icon name="plus" size={20} color={theme.colors.accentInfo} />}
+          leading={<Icon name="plus" size={20} color={theme.colors.accentInk} />}
           trailing={(
             <View style={styles.playKey}>
-              <Icon name="target" size={16} color={theme.colors.accentInfo} />
+              <Icon name="target" size={16} color={theme.colors.accentInk} />
             </View>
           )}
         />
@@ -275,10 +275,10 @@ export default function PlannerSearchPanel({
               // A board's own colour, so the row and the cards it scopes to
               // agree at a glance. Only where it HAS one — "All boards" is not
               // a board and must not borrow a hue that means one.
-              color={tint || (active ? theme.colors.accentInfo : theme.colors.textMuted)}
+              color={tint || (active ? theme.colors.accentInk : theme.colors.textMuted)}
             />
           )}
-          trailing={active ? <Icon name="check" size={18} color={theme.colors.accentInfo} /> : null}
+          trailing={active ? <Icon name="check" size={18} color={theme.colors.accentInk} /> : null}
         />
       );
     }
@@ -296,7 +296,7 @@ export default function PlannerSearchPanel({
           <Icon
             name={done ? 'check-circle' : (t.itemType === 'event' ? 'calendar' : 'checkbox-blank-circle-outline')}
             size={20}
-            color={done ? theme.colors.accentSuccess || theme.colors.accentInfo : theme.colors.textMuted}
+            color={done ? theme.colors.accentSuccess || theme.colors.accentInk : theme.colors.textMuted}
           />
         )}
         // A row that STARTS something and a row that merely names it are the
@@ -305,7 +305,7 @@ export default function PlannerSearchPanel({
         // list that nobody reads twice.
         trailing={isAssign ? (
           <View style={styles.playKey}>
-            <Icon name="target" size={16} color={theme.colors.accentInfo} />
+            <Icon name="target" size={16} color={theme.colors.accentInk} />
           </View>
         ) : null}
       />

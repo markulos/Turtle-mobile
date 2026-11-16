@@ -69,13 +69,13 @@ function Chip({ label, count, active, onPress, icon, theme, isDark, testID, acce
       style={({ pressed }) => [s.chip, active && s.chipOn, pressed && s.pressed]}
     >
       {!!icon && (
-        <Icon name={icon} size={14} color={active ? theme.colors.accentInfo : theme.colors.textTertiary} />
+        <Icon name={icon} size={14} color={active ? theme.colors.accentInk : theme.colors.textTertiary} />
       )}
       <Text style={[s.chipText, active && s.chipTextOn]} numberOfLines={1}>{label}</Text>
       {typeof count === 'number' && (
         <Text style={[s.chipCount, active && s.chipCountOn]}>{count}</Text>
       )}
-      {active && <Icon name="check" size={14} color={theme.colors.accentInfo} />}
+      {active && <Icon name="check" size={14} color={theme.colors.accentInk} />}
     </Pressable>
   );
 }
@@ -258,7 +258,7 @@ export default function NotesFilterPanel({
                 testID="notes-filter-topic-search"
                 style={({ pressed }) => [s.sectionKey, pressed && s.pressed]}
               >
-                <Icon name="magnify" size={16} color={theme.colors.accentInfo} />
+                <Icon name="magnify" size={16} color={theme.colors.accentInk} />
               </Pressable>
             )}
           >

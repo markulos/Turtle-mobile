@@ -1007,7 +1007,7 @@ export const TaskForm = ({
                 <Icon
                   name={remindAtTime ? 'bell-ring-outline' : 'bell-off-outline'}
                   size={18}
-                  color={remindAtTime ? theme.colors.accentInfo : theme.colors.textMuted}
+                  color={remindAtTime ? theme.colors.accentInk : theme.colors.textMuted}
                 />
                 <Text style={styles.qReminderText}>Remind me at the due time</Text>
                 <View style={{ flex: 1 }} />
@@ -1041,7 +1041,7 @@ export const TaskForm = ({
                 accessibilityLabel="Add an option to this item"
                 testID="task-form-add-option"
               >
-                <Icon name="plus" size={16} color={theme.colors.accentInfo} />
+                <Icon name="plus" size={16} color={theme.colors.accentInk} />
                 <Text style={styles.addOptionText}>Add</Text>
               </TouchableOpacity>
             )}
@@ -1196,7 +1196,7 @@ export const TaskForm = ({
                   style={styles.datePickerButton}
                   onPress={() => setShowEndTimePicker(true)}
                 >
-                  <Icon name="clock-check-outline" size={20} color={formData.duration > 0 ? theme.colors.accentInfo : theme.colors.textSecondary} />
+                  <Icon name="clock-check-outline" size={20} color={formData.duration > 0 ? theme.colors.accentInk : theme.colors.textSecondary} />
                   <Text style={[
                     styles.datePickerText,
                     !(formData.duration > 0) && styles.datePickerPlaceholder
@@ -1284,7 +1284,7 @@ export const TaskForm = ({
                         style={[styles.remPill, styles.remPillActive]}
                       >
                         <Text style={[styles.remPillText, styles.remPillTextActive]}>{formatLead(m)}</Text>
-                        <Icon name="close" size={13} color={theme.colors.accentInfo} />
+                        <Icon name="close" size={13} color={theme.colors.accentInk} />
                       </TouchableOpacity>
                     ))}
                   {/* + Custom — reveal the value + unit entry row. */}
@@ -1292,7 +1292,7 @@ export const TaskForm = ({
                     onPress={() => setCustomReminderOpen((o) => !o)}
                     style={[styles.remPill, { borderStyle: 'dashed' }, customReminderOpen && styles.remPillActive]}
                   >
-                    <Icon name="plus" size={14} color={customReminderOpen ? theme.colors.accentInfo : theme.colors.textSecondary} />
+                    <Icon name="plus" size={14} color={customReminderOpen ? theme.colors.accentInk : theme.colors.textSecondary} />
                     <Text style={[styles.remPillText, customReminderOpen && styles.remPillTextActive]}>Custom</Text>
                   </TouchableOpacity>
                 </View>
@@ -1393,7 +1393,7 @@ export const TaskForm = ({
                     <Icon
                       name="calendar-refresh"
                       size={16}
-                      color={formData.yearly ? theme.colors.accent : theme.colors.textTertiary}
+                      color={formData.yearly ? theme.colors.accentInk : theme.colors.textTertiary}
                       style={styles.appointmentIcon}
                     />
                   </TouchableOpacity>
@@ -1449,7 +1449,7 @@ export const TaskForm = ({
                   <Icon
                     name="calendar-clock"
                     size={16}
-                    color={formData.isAppointment ? theme.colors.accent : theme.colors.textTertiary}
+                    color={formData.isAppointment ? theme.colors.accentInk : theme.colors.textTertiary}
                     style={styles.appointmentIcon}
                   />
                 </TouchableOpacity>

@@ -1589,9 +1589,9 @@ function ActiveFilterChip({ label, icon, onClear, theme, isDark, testID, accessi
       accessibilityLabel={accessibilityLabel || `Clear ${label}`}
       testID={testID}
     >
-      {!!icon && <Icon name={icon} size={13} color={theme.colors.accentInfo} />}
+      {!!icon && <Icon name={icon} size={13} color={theme.colors.accentInk} />}
       <Text style={s.label} numberOfLines={1}>{label}</Text>
-      <Icon name="close" size={14} color={theme.colors.accentInfo} />
+      <Icon name="close" size={14} color={theme.colors.accentInk} />
     </TouchableOpacity>
   );
 }
@@ -1674,7 +1674,7 @@ function TopicSearchSheet({ visible, entries, totalNotes, untagged, selectedTopi
       <View style={s.root}>
         <View style={[s.searchRow, { paddingTop: Platform.OS === 'android' ? insets.top + 14 : 14 }]}>
           <View style={s.searchBox}>
-            <Icon name="magnify" size={20} color={theme.colors.accentInfo} />
+            <Icon name="magnify" size={20} color={theme.colors.accentInk} />
             <AppTextInput
               style={s.searchInput}
               placeholder="Search boards & topics"
@@ -1723,7 +1723,7 @@ function TopicSearchSheet({ visible, entries, totalNotes, untagged, selectedTopi
                     <Icon
                       name={item.icon}
                       size={16}
-                      color={item.create ? theme.colors.accentInfo : active ? theme.colors.accentInfo : theme.colors.textSecondary}
+                      color={item.create ? theme.colors.accentInk : active ? theme.colors.accentInk : theme.colors.textSecondary}
                     />
                   </View>
                   <Text
@@ -1733,7 +1733,7 @@ function TopicSearchSheet({ visible, entries, totalNotes, untagged, selectedTopi
                     {item.label}
                   </Text>
                   <Text style={s.rowCount}>{item.count}</Text>
-                  {active && <Icon name="check" size={18} color={theme.colors.accentInfo} />}
+                  {active && <Icon name="check" size={18} color={theme.colors.accentInk} />}
                 </TouchableOpacity>
               );
             }}
@@ -1999,7 +1999,7 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
             style={styles.sendBtn}
             accessibilityLabel="Send to Claude"
           >
-            <Icon name="robot-outline" size={18} color={theme.colors.accentInfo} />
+            <Icon name="robot-outline" size={18} color={theme.colors.accentInk} />
           </TouchableOpacity>
         )}
       </View>
@@ -2460,7 +2460,7 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
               style={styles.actionBtn}
               accessibilityLabel="Open original"
             >
-              <Icon name="open-in-new" size={17} color={theme.colors.accentInfo} />
+              <Icon name="open-in-new" size={17} color={theme.colors.accentInk} />
             </TouchableOpacity>
           </View>
         </View>
@@ -3075,7 +3075,7 @@ function ComposerModal({
       style={[styles.suggestChip, styles.createChip]}
       accessibilityLabel={`Create new tag ${tagDraft.trim()}`}
     >
-      <Icon name="tag-plus" size={12} color={theme.colors.accent || theme.colors.accentInfo} />
+      <Icon name="tag-plus" size={12} color={theme.colors.accentInk} />
       <Text style={[styles.suggestChipText, styles.createChipText]} numberOfLines={1}>
         New tag “{tagDraft.trim()}”
       </Text>
@@ -3136,7 +3136,7 @@ function ComposerModal({
             accessibilityRole="button"
             accessibilityLabel="Back to notes"
           >
-            <Icon name="chevron-left" size={30} color={theme.colors.accent || theme.colors.accentInfo} />
+            <Icon name="chevron-left" size={30} color={theme.colors.accentInk} />
           </TouchableOpacity>
           <View style={{ flex: 1 }} />
           {/* The pin, where the note itself is — pinning used to live only in
@@ -3160,7 +3160,7 @@ function ComposerModal({
               <Icon
                 name={pinned ? 'pin' : 'pin-outline'}
                 size={20}
-                color={pinned ? (theme.colors.accent || theme.colors.accentInfo) : theme.colors.textSecondary}
+                color={pinned ? (theme.colors.accentInk) : theme.colors.textSecondary}
               />
             </TouchableOpacity>
           ) : null}
@@ -3182,7 +3182,7 @@ function ComposerModal({
             accessibilityLabel="Save note"
           >
             {busy
-              ? <ActivityIndicator color={theme.colors.accent || theme.colors.accentInfo} />
+              ? <ActivityIndicator color={theme.colors.accentInk} />
               : <Text style={[styles.navDoneText, !content.trim() && styles.navDoneDisabled]}>Done</Text>}
           </TouchableOpacity>
         </View>
@@ -3484,7 +3484,7 @@ function ComposerModal({
                   <Icon
                     name={readOnly ? 'lock-outline' : 'lock-open-variant-outline'}
                     size={16}
-                    color={readOnly ? theme.colors.accent : theme.colors.textTertiary}
+                    color={readOnly ? theme.colors.accentInk : theme.colors.textTertiary}
                   />
                   <Text style={styles.lockText} numberOfLines={2}>
                     {readOnly

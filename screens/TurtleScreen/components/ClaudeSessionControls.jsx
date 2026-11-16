@@ -70,7 +70,7 @@ export default function ClaudeSessionControls({
   const pill = (
     <>
       {busy && !isLogin && !paused
-        ? <ActivityIndicator size="small" color={theme.colors.accentInfo} />
+        ? <ActivityIndicator size="small" color={theme.colors.accentInk} />
         : <View style={[styles.dot, { backgroundColor: dotColor }]} />}
       <Text
         style={[

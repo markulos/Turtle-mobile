@@ -69,7 +69,7 @@ export default function BoardSearchPanel({
           accessibilityLabel={`Create board ${q}`}
           testID="board-option-create"
           onPress={() => pick(q)}
-          leading={<Icon name="plus" size={20} color={theme.colors.accentInfo} />}
+          leading={<Icon name="plus" size={20} color={theme.colors.accentInk} />}
         />
       );
     }
@@ -87,10 +87,10 @@ export default function BoardSearchPanel({
             <Icon
               name="folder-off-outline"
               size={20}
-              color={active ? theme.colors.accentInfo : theme.colors.textMuted}
+              color={active ? theme.colors.accentInk : theme.colors.textMuted}
             />
           )}
-          trailing={active ? <Icon name="check" size={18} color={theme.colors.accentInfo} /> : null}
+          trailing={active ? <Icon name="check" size={18} color={theme.colors.accentInk} /> : null}
         />
       );
     }
@@ -107,10 +107,10 @@ export default function BoardSearchPanel({
           <Icon
             name={active ? 'folder' : 'folder-outline'}
             size={20}
-            color={active ? theme.colors.accentInfo : theme.colors.textMuted}
+            color={active ? theme.colors.accentInk : theme.colors.textMuted}
           />
         )}
-        trailing={active ? <Icon name="check" size={18} color={theme.colors.accentInfo} /> : null}
+        trailing={active ? <Icon name="check" size={18} color={theme.colors.accentInk} /> : null}
       />
     );
   }, [theme, q, selected, pick]);

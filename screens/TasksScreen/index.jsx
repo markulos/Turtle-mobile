@@ -461,7 +461,7 @@ function UpcomingSkeleton({ theme, rows = 6 }) {
     <View style={{ overflow: 'hidden' }}>
       {/* Real header — continuity: only the count + rows are "loading". */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}>
-        <Icon name="clock-fast" size={16} color={theme.colors.accentInfo} />
+        <Icon name="clock-fast" size={16} color={theme.colors.accentInk} />
         <Text style={{ fontSize: theme.typography.body, fontWeight: '800', color: theme.colors.textPrimary, letterSpacing: 0.3, flex: 1 }}>
           Upcoming
         </Text>
@@ -3826,7 +3826,7 @@ export default function TasksScreen() {
               if (item.__agendaHeader === 'upcoming') {
                 return (
                   <View style={styles.upcomingHeader}>
-                    <Icon name="clock-fast" size={16} color={theme.colors.accentInfo} />
+                    <Icon name="clock-fast" size={16} color={theme.colors.accentInk} />
                     <Text style={styles.upcomingHeaderText}>Upcoming</Text>
                     <View style={styles.upcomingCountBadge}>
                       <Text style={styles.upcomingCountText}>{upcomingTasks.length}</Text>
@@ -4018,7 +4018,7 @@ export default function TasksScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Scroll to today"
               >
-                <Icon name="arrow-down" size={16} color={theme.colors.accentInfo} />
+                <Icon name="arrow-down" size={16} color={theme.colors.accentInk} />
                 <Text style={styles.goToLatestText}>Scroll to today</Text>
               </TouchableOpacity>
             </View>

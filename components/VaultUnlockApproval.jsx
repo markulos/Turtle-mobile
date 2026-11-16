@@ -134,7 +134,7 @@ export default function VaultUnlockApproval() {
     <Modal visible transparent animationType="fade" onRequestClose={deny}>
       <View style={styles.backdrop}>
         <View style={[styles.card, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
-          <Icon name="shield-key" size={34} color={theme.colors.accentInfo || theme.colors.primary} style={{ alignSelf: 'center' }} />
+          <Icon name="shield-key" size={34} color={theme.colors.accentInk || theme.colors.primary} style={{ alignSelf: 'center' }} />
           <Text style={[styles.title, { color: theme.colors.textPrimary }]}>Approve vault unlock?</Text>
           <Text style={[styles.sub, { color: theme.colors.textSecondary }]}>
             A browser is asking to open your password vault.

@@ -158,7 +158,7 @@ const TaskItemImpl = ({
                 )}
                 {shownDue && (
                   <View style={[styles.dueBadge, dueOverdue && styles.dueBadgeOverdue]}>
-                    <Icon name="calendar" size={11} color={dueOverdue ? theme.colors.accentError : theme.colors.accentInfo} />
+                    <Icon name="calendar" size={11} color={dueOverdue ? theme.colors.accentError : theme.colors.accentInk} />
                     <Text
                       style={[styles.dueText, dueOverdue && { color: theme.colors.accentError }]}
                       numberOfLines={1}
@@ -265,7 +265,7 @@ const TaskItemImpl = ({
                       <Icon name="check" size={18} color={theme.colors.accentSuccess} />
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => setShowSubtaskTimePicker(true)}>
-                      <Icon name="clock" size={18} color={editSubtaskTime ? theme.colors.accentInfo : inv.muted} />
+                      <Icon name="clock" size={18} color={editSubtaskTime ? theme.colors.accentInk : inv.muted} />
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => { setEditingSubtaskId(null); setEditSubtaskTitle(''); setEditSubtaskTime(''); }}>
                       <Icon name="close" size={18} color={theme.colors.accentError} />
@@ -292,7 +292,7 @@ const TaskItemImpl = ({
                       </Text>
                       {subtask.time && (
                         <View style={styles.subtaskTimeBadge}>
-                          <Icon name="clock" size={8} color={theme.colors.accentInfo} />
+                          <Icon name="clock" size={8} color={theme.colors.accentInk} />
                           <Text style={styles.subtaskTimeText}>
                             {formatTime12h(subtask.time, { meridiem: false, timeFormat })}
                           </Text>

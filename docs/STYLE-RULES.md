@@ -639,8 +639,16 @@ cream/white/off white background in light mode."
   whole job there.
 - **`theme.colors.accentInk`** is the same colour conditioned to be **read**.
   On the light page a pale or fluorescent highlight is darkened *and its
-  chroma pulled back* until it clears 4.5:1. `utils/__tests__/accentInk.scan`
-  fails the build on `color: theme.colors.accentInfo`.
+  chroma pulled back* until it clears 4.5:1.
+
+**ICONS TOO, not only text** (Mark, 2026-11-16: "a more tame fade … for
+icons on a light backdrop as well"). A glyph on the page is the same problem
+as a label on the page — a row of fluorescent checkmarks and robots on cream
+is a row of nothing — so an `<Icon color={…}>` on a page or a card takes
+`accentInk` exactly as a `<Text>` does. The scan reads both spellings, the
+style property `color:` and the JSX prop `color={}`, and
+`utils/__tests__/accentInk.scan` fails the build on either in the raw
+accent.
 
 **Why chroma and not just lightness.** Darkening alone does not de-fluoresce.
 `#E8FF00` taken down by lightness is `#6C7500` — a 100 %-saturated acid

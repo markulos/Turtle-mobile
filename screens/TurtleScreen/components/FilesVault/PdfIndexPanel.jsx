@@ -144,7 +144,7 @@ export default function PdfIndexPanel({ visible, rows, pageCount, page, mode, on
         <Text style={[styles.rowTitle, { color: on ? (c.accentInk || c.primary) : c.textPrimary, fontWeight: on ? '700' : '500' }]} numberOfLines={1}>
           {`Page ${item}`}
         </Text>
-        {on ? <Icon name="check" size={18} color={c.accentInfo || c.primary} /> : null}
+        {on ? <Icon name="check" size={18} color={c.accentInk || c.primary} /> : null}
       </Pressable>
     );
   };

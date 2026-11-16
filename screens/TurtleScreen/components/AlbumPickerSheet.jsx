@@ -136,7 +136,7 @@ export default function AlbumPickerSheet({
               accessibilityLabel="Edit tags instead"
               testID="album-picker-tags"
             >
-              <Icon name="tag-multiple" size={15} color={c.accentInfo || c.textSecondary} />
+              <Icon name="tag-multiple" size={15} color={c.accentInk || c.textSecondary} />
               <Text style={[styles.tagsKeyText, { color: c.accentInk || c.textSecondary }]} numberOfLines={1}>
                 Tags
               </Text>
@@ -188,7 +188,7 @@ export default function AlbumPickerSheet({
             testID="album-picker-new"
           >
             <View style={[styles.art, { backgroundColor: c.surface, borderColor: c.border }]}>
-              <Icon name="plus" size={20} color={c.accentInfo || c.textSecondary} />
+              <Icon name="plus" size={20} color={c.accentInk || c.textSecondary} />
             </View>
             <View style={styles.body}>
               <Text style={[styles.name, { color: c.textPrimary }]} numberOfLines={1}>
@@ -238,7 +238,7 @@ export default function AlbumPickerSheet({
                 </View>
                 {/* Already in it: said, not hidden. A photo missing from the
                     list because it is already filed reads as a bug. */}
-                {has ? <Icon name="check" size={20} color={c.accentSuccess || c.accentInfo} /> : null}
+                {has ? <Icon name="check" size={20} color={c.accentSuccess || c.accentInk} /> : null}
               </TouchableOpacity>
             );
           }}

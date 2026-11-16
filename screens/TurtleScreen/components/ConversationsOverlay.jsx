@@ -327,7 +327,7 @@ export default function ConversationsOverlay({ visible, onClose, onOpenClaude, i
             backgroundColor: c.surfaceElevated,
             borderWidth: 1.5, borderColor: c.accentInfo + '55',
           }}>
-            <Icon name="magnify" size={20} color={c.accentInfo} />
+            <Icon name="magnify" size={20} color={c.accentInk} />
             <AppTextInput
               style={{ flex: 1, fontSize: 16, color: c.textPrimary, paddingVertical: 0 }}
               placeholder="Search boards"

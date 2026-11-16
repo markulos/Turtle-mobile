@@ -323,7 +323,7 @@ export default function ChatBlocks({ blocks, theme, api, onAsk, onNavigate }) {
                   >
                     <View style={[styles.box, isChecked && { backgroundColor: c.accent || c.accentInfo, borderColor: c.accent || c.accentInfo }]}>
                       {busy
-                        ? <ActivityIndicator size="small" color={c.accent || c.accentInfo} />
+                        ? <ActivityIndicator size="small" color={c.accentInk} />
                         : isChecked
                           ? <Icon name="check" size={12} color={inkOn(c.accent || c.accentInfo)} />
                           : null}

@@ -162,7 +162,7 @@ function CanvasItemViewImpl({ item, centre, origin, theme, tier }) {
       <Icon
         name={isTask ? 'checkbox-marked-circle-outline' : 'text'}
         size={18}
-        color={isTask ? (c.accentSuccess || c.accentInfo) : c.textMuted}
+        color={isTask ? (c.accentSuccess || c.accentInk) : c.textMuted}
       />
       <Text style={[styles.cardLabel, { color: c.textPrimary }]} numberOfLines={6}>
         {item.label || (isTask ? 'Task' : 'Note')}

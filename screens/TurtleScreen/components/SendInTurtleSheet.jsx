@@ -78,7 +78,7 @@ function PersonRow({ person, busy, onPress, theme }) {
       </Text>
       {busy
         ? <ActivityIndicator size="small" color={c.textMuted} />
-        : <DirectMessageIcon size={18} color={c.accentInfo || c.primary} />}
+        : <DirectMessageIcon size={18} color={c.accentInk || c.primary} />}
     </Pressable>
   );
 }

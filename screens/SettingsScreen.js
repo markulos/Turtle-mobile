@@ -931,7 +931,7 @@ export default function SettingsScreen({ active = true }) {
                     { key: 'pomodoros', label: 'Pomodoros', icon: 'timer-outline', value: profile.stats.pomodoros },
                   ].map((s) => (
                     <View key={s.key} style={styles.profileStatTile}>
-                      <Icon name={s.icon} size={16} color={theme.colors.accentInfo} />
+                      <Icon name={s.icon} size={16} color={theme.colors.accentInk} />
                       <Text style={styles.profileStatValue}>
                         {typeof s.value === 'number' ? s.value.toLocaleString() : '—'}
                       </Text>
