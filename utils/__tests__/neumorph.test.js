@@ -1,6 +1,6 @@
 import { hexToHsl } from '../accentColor';
 import {
-  NEU_BLUR, NEU_GAP, NEU_OFFSET, neuPressed, neuRaised, neuTones,
+  NEU_BLUR, NEU_GAP, NEU_OFFSET, NEU_SECTION_GAP, neuPressed, neuRaised, neuTones,
 } from '../neumorph';
 
 /**
@@ -28,6 +28,17 @@ describe('neumorphic surfaces', () => {
     expect(NEU_BLUR).toBeGreaterThan(NEU_OFFSET);
   });
 
+  test('A SECTION GAP IS TWICE A PEER GAP — and never smaller', () => {
+    // The eye reads a run of evenly spaced panels as one group, so the only
+    // way to say 'this is the subject and those are a footnote to it' is to
+    // break the rhythm. Mark asked for it under the focus timer.
+    expect(NEU_SECTION_GAP).toBe(NEU_GAP * 2);
+    expect(NEU_SECTION_GAP).toBeGreaterThan(NEU_GAP);
+    // Widening a gap can never put a shadow on a neighbour — the rule is
+    // reach ≤ gap — so the section gap needs no check of its own beyond
+    // being the larger of the two.
+    expect(NEU_OFFSET + NEU_BLUR).toBeLessThanOrEqual(NEU_SECTION_GAP);
+  });
   test('the surface keeps its own colour — there is no fill change', () => {
     // If the element is a different colour from its page, the light is
     // decoration on a card rather than the thing that makes the shape.

@@ -92,6 +92,19 @@ export const NEU_GAP = 10;
  * which is the tell that one number belongs here rather than in each page.
  */
 export const NEU_PAGE_TOP = NEU_GAP * 2;
+/**
+ * The gap between two SECTIONS, as opposed to two peers.
+ *
+ * Twice the gap between panels — the same number as the page's top gutter,
+ * and the same reasoning: the eye reads a run of evenly spaced panels as one
+ * group, so the only way to say "this is the subject and those are a
+ * footnote to it" is to break the rhythm. Mark asked for it between the
+ * focus timer and the stats below it (2026-11-16).
+ *
+ * A LARGER gap is always safe for the shading — the rule is reach ≤ gap, so
+ * widening one can never put a shadow on a neighbour.
+ */
+export const NEU_SECTION_GAP = NEU_GAP * 2;
 
 /**
  * How far the two tones move from the surface, in HSL lightness points.
@@ -170,5 +183,6 @@ export function neuPressed(surface, mode, { offset = NEU_OFFSET, blur = NEU_BLUR
 }
 
 export default {
-  neuRaised, neuPressed, neuTones, NEU_OFFSET, NEU_BLUR, NEU_GAP, NEU_PAGE_TOP,
+  neuRaised, neuPressed, neuTones,
+  NEU_OFFSET, NEU_BLUR, NEU_GAP, NEU_PAGE_TOP, NEU_SECTION_GAP,
 };

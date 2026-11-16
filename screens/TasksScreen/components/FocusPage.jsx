@@ -47,7 +47,7 @@ import EdgeSwipePage from '../../TurtleScreen/components/EdgeSwipePage';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
 import { playFocusComplete } from '../../../services/focusChime';
 import { focusSkin } from '../utils/focusSkin';
-import { NEU_GAP, NEU_PAGE_TOP, neuRaised } from '../../../utils/neumorph';
+import { NEU_GAP, NEU_PAGE_TOP, NEU_SECTION_GAP, neuRaised } from '../../../utils/neumorph';
 import Grain from '../../../components/Grain';
 import { boardLabel } from '../utils/taskHelpers';
 import { focusStats, formatMinutes } from '../utils/focusStats';
@@ -1208,7 +1208,18 @@ const styles = StyleSheet.create({
   body: { paddingHorizontal: 16, paddingTop: NEU_PAGE_TOP, gap: NEU_GAP },
   // The deck. The same inset card as the tiles below it, one size up: this is
   // the page's subject, so it gets the top of the screen and the big reading.
-  deck: { borderRadius: 24, borderCurve: 'continuous', padding: 16, gap: 10 },
+  deck: {
+    borderRadius: 24,
+    borderCurve: 'continuous',
+    padding: 16,
+    gap: 10,
+    // AIR UNDER THE SUBJECT. The body already puts NEU_GAP between every
+    // panel, which read as one evenly spaced run — the clock and the four
+    // figures looked like five peers. The difference makes it a section
+    // gap (NEU_SECTION_GAP); subtracting the body's own gap means the two
+    // cannot drift if either constant moves.
+    marginBottom: NEU_SECTION_GAP - NEU_GAP,
+  },
   // The line between the clock and the tasks it will run on — two REGIONS
   // of one panel, so it runs the panel's full width (STYLE-RULES §8).
   deckSplit: { height: StyleSheet.hairlineWidth, marginHorizontal: -16, marginTop: 4 },
