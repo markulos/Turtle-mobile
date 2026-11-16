@@ -106,6 +106,26 @@ const RIGHT_HAND = 'M338 128 C331 113 300 111 285 122 C272 131 264 142 268 150 '
   + 'C272 159 284 155 286 146 C290 158 304 155 304 144 C312 153 326 147 322 136 '
   + 'C332 139 339 135 338 128 Z';
 
+/**
+ * HOW FAR THE RESTING HANDS SIT BELOW WHERE THEY WERE DRAWN — in the drawing's
+ * own units, so it scales with the mark rather than with the screen.
+ *
+ * As drawn, the ledge rule crosses the hands through their MIDDLE, and a hand
+ * cut in half by a line reads as drawn on it. Perched, the line wants to cross
+ * nearer their tops with the fingers draped over the front of the edge. Mark,
+ * 2026-11-16: "bring the hands down like 5 pixels so it looks more like they
+ * are perched over the line edge."
+ *
+ * 5 device pixels at @3x is 1.7pt, and the mark is 80pt wide in the header —
+ * so 1.7 × 316/80 ≈ 6.7 units. Rendered against the rule at 0 / 1.2 / 1.7 /
+ * 2.4 / 3.4 / 5pt before picking: past about 2.5pt the hands come away from
+ * the chin and read as floating under the line rather than holding it.
+ *
+ * The LEDGE DOES NOT MOVE — only the hands. The rule is the header's centre
+ * line and everything else is measured from it.
+ */
+export const HAND_PERCH = 6.7;
+
 // As drawn: the pen was about 7 units wide and the eyes 5.5 and 6.
 const DRAWN_PEN = 7;
 const EYES = [{ cx: 176, cy: 103, r: 5.5 }, { cx: 215, cy: 92, r: 6 }];
@@ -242,21 +262,37 @@ export default function ClaudeTurtleMark({
         {parts.includes('face') && faceFill !== 'none' && (
           <Path testID={`${testID}-face`} d={facePath(tilt, faceDrop)} fill={faceFill} stroke="none" />
         )}
-        {[
-          parts.includes('face') && HEAD,
-          (parts.includes('hands') || parts.includes('leftHand')) && LEFT_HAND,
-          (parts.includes('hands') || parts.includes('rightHand')) && RIGHT_HAND,
-        ].filter(Boolean).map((d) => (
+        {parts.includes('face') && (
           <Path
-            key={d}
-            d={d}
-            fill={d === HEAD ? 'none' : handFill}
+            d={HEAD}
+            fill="none"
             stroke={color}
             strokeWidth={pen}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-        ))}
+        )}
+        {/* THE RESTING HANDS, dropped so the rule crosses them near their tops
+            and the fingers hang over the front of the edge (HAND_PERCH). Their
+            own group: the head and the pointing hand stay where they were
+            drawn — the pointing one is placed at the MOUTH, which has not
+            moved. */}
+        <G testID={`${testID}-hands`} transform={`translate(0 ${HAND_PERCH})`}>
+          {[
+            (parts.includes('hands') || parts.includes('leftHand')) && LEFT_HAND,
+            (parts.includes('hands') || parts.includes('rightHand')) && RIGHT_HAND,
+          ].filter(Boolean).map((d) => (
+            <Path
+              key={d}
+              d={d}
+              fill={handFill}
+              stroke={color}
+              strokeWidth={pen}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ))}
+        </G>
         {parts.includes('pointHand') && (
           <G transform={`translate(${CLAUDE_POINT_AT.x} ${CLAUDE_POINT_AT.y}) rotate(${CLAUDE_POINT_TURN})`}>
             <Path

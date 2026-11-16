@@ -29,6 +29,7 @@ import ClaudeTurtleMark, {
   artPoint,
   facePath,
   CLAUDE_MARK_LEDGE,
+  HAND_PERCH,
   ledgeOffset,
   markHeight,
   penFor,
@@ -342,6 +343,35 @@ describe('ClaudeTurtleMark', () => {
     expect(src).not.toMatch(/identityBrand:/);
     // turtleLogo itself stays: it is still the chat's watermark.
     expect(src).toMatch(/styles\.chatWatermark/);
+  });
+
+  test('THE HANDS ARE PERCHED — dropped so the rule crosses near their tops', async () => {
+    // As drawn, the ledge cut them through the middle, and a hand halved by a
+    // line reads as drawn on it. Mark, 2026-11-16: "bring the hands down like
+    // 5 pixels so it looks more like they are perched over the line edge."
+    //
+    // 5 device pixels at @3x on an 80pt mark is about 6.7 drawing units — and
+    // it is in DRAWING units, not points, so the relationship holds at any
+    // size the mark is drawn.
+    expect(HAND_PERCH).toBeCloseTo((5 / 3) * (316 / 80), 0);
+    await render(<ClaudeTurtleMark />);
+    expect(screen.getByTestId('claude-turtle-mark-hands').props.transform)
+      .toBe(`translate(0 ${HAND_PERCH})`);
+
+    // THE LEDGE DID NOT MOVE. It is the header's centre line and everything
+    // else is measured off it — dropping the hands must not drag it down.
+    expect(CLAUDE_MARK_LEDGE).toBeCloseTo((150 - 54) / 136, 6);
+    // Nor did the head: only the hands are in the dropped group.
+    expect(facePath(0)).toContain('M264 126');
+  });
+
+  test('…and the trip to the mouth starts from where the hand actually IS', () => {
+    // The pointing hand is placed at the MOUTH, which has not moved — so it
+    // is NOT in the dropped group. But the resting hand it replaces is, and
+    // the travel between them is measured in the buddy: miss the perch there
+    // and the hand arrives at the mouth short by exactly that much.
+    const buddy = fs.readFileSync(path.resolve(__dirname, '..', 'ClaudeTurtleBuddy.jsx'), 'utf8');
+    expect(buddy).toMatch(/const RIGHT_HAND_AT = \{ x: 301, y: 135 \+ HAND_PERCH \};/);
   });
 
   test('the hands are filled with what is BEHIND them, so they sit on the rule', () => {

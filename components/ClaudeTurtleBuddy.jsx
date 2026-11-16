@@ -60,7 +60,8 @@ import {
   AccessibilityInfo, Animated, Easing, StyleSheet, View,
 } from 'react-native';
 import ClaudeTurtleMark, {
-  CLAUDE_MARK_COLOR, CLAUDE_POINT_AT, artPoint, artUnit, eyeDots, ledgeOffset, markHeight,
+  CLAUDE_MARK_COLOR, CLAUDE_POINT_AT, HAND_PERCH,
+  artPoint, artUnit, eyeDots, ledgeOffset, markHeight,
 } from './ClaudeTurtleMark';
 
 /** Blink timing, in ms. A blink is fast to shut and a touch slower to open. */
@@ -129,8 +130,10 @@ export const TYPING_LINGER_MS = 2200;
 // An idle head tilt, either way.
 const NOD_DEG = 3;
 // The middle of the right hand at rest, in the drawing's units — where the
-// pointing hand's trip starts from.
-const RIGHT_HAND_AT = { x: 301, y: 135 };
+// pointing hand's trip starts from. Carries HAND_PERCH, because the resting
+// hands are drawn that far below where the path puts them: measure the trip
+// from where the hand IS or it arrives at the mouth short.
+const RIGHT_HAND_AT = { x: 301, y: 135 + HAND_PERCH };
 
 // How far he overshoots the ledge on the way up, as a fraction of the trip.
 const JUMP_OVERSHOOT = 0.16;
