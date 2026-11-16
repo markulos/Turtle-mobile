@@ -137,33 +137,40 @@ export function penFor(size, weight) {
 }
 
 /**
- * THE THINKING HAND — a fist with the INDEX FINGER and the THUMB out, the
- * other fingers curled: the hand people actually put to their face when
- * they think. Drawn about the middle of its own fist; the index rises from
- * the upper-left, the thumb goes out sideways below it, and the two make an
- * L with the web of the hand in its corner.
+ * THE THINKING HAND — CHIN IN HAND. The index finger and the thumb are out
+ * and apart, making a V; the chin sits in the V, the index lying up along
+ * the jaw on one side, the thumb standing up on the other, and the fist
+ * hangs below with the knuckle of the curled fingers showing on its side.
+ * The tail of the smile shows above the V, between the two.
  *
- * Placed by CLAUDE_POINT_AT / CLAUDE_POINT_TURN so that the fingertip rests beside
- * the corner of his mouth (the end of the smile, about 198,130) and the
- * thumb lies out under his chin. The lower edge is scalloped the way the
- * resting hands are, so it is plainly the same hand, closed.
+ * TRACED FROM MARK'S OWN SKETCH of the pose (2026-11-16) — the fourth go at
+ * it, and the first drawn by him rather than guessed at: a lone finger, a
+ * flat hand, a fist with a finger at the mouth, and that fist with a thumb
+ * stuck out sideways all came before it.
  *
- * (It was first a fist with the index alone. Mark, 2026-11-16: "the hand
- * needs an index and thumb out".)
+ * Drawn about the WEB of the hand — the bottom of the V, where the chin
+ * rests — so CLAUDE_POINT_AT is simply where the chin is. The fist hangs
+ * below the ledge, as the resting hands do.
  *
  * Not part of the still mark: only the animated one asks for it.
  */
-// Thumb: out to the left from the bottom of the fist, round the tip, back to
-// the web. Index: up from the web, round the tip, down into the knuckles.
-const POINT_HAND = 'M-18 11 C-27 14 -40 14 -49 11 C-56 9 -58 1 -52 -1 C-45 -3 -36 0 -27 -4 '
-  + 'C-27 -14 -27 -18 -28 -23 C-29 -32 -24 -37 -18 -36 C-12 -35 -10 -28 -10 -20 '
-  + 'C-9 -17 -6 -15 0 -16 C12 -18 24 -12 25 -2 C26 4 20 8 16 7 C18 14 10 18 4 13 '
-  + 'C2 20 -10 20 -12 13 C-14 15 -17 13 -18 10 Z';
-/** The tips of the two fingers that are out, about the fist — see the tests. */
-export const CLAUDE_POINT_TIPS = { index: { x: -22, y: -37 }, thumb: { x: -56, y: 5 } };
-/** Where the thinking hand's fist sits, in the drawing's units, and its turn. */
-export const CLAUDE_POINT_AT = { x: 236, y: 150 };
-export const CLAUDE_POINT_TURN = -4;
+// From the tip of the index: over the tip, down its top edge into the web,
+// up the thumb and over it, down round the fist, the knuckle, and back along
+// the index's underside.
+const POINT_HAND = 'M-32.2 -6.4 C-38.6 -9.2 -38.6 -19.3 -32.2 -20.2 '
+  + 'C-25.8 -20.2 -20.2 -15.6 -13.8 -11 C-9.2 -7.4 -4.6 -2.8 0 0 '
+  + 'C5.5 -2.8 10.1 -8.3 13.8 -13.8 C16.6 -19.3 23.9 -21.2 27.6 -16.6 '
+  + 'C30.4 -12 29.4 -3.7 27.6 1.8 C30.4 7.4 31.3 14.7 29.4 20.2 '
+  + 'C26.7 27.6 16.6 31.3 5.5 31.3 C-3.7 31.3 -11 29.4 -14.7 23.9 '
+  + 'C-17.5 20.2 -17.5 17.5 -16.6 15.6 C-23 14.7 -23.9 8.3 -17.5 7.4 '
+  + 'C-17.5 5.5 -18.4 4.6 -19.3 3.7 C-23 0 -27.6 -3.7 -32.2 -6.4 Z';
+/** The tips of the two fingers that are out, about the web — see the tests. */
+export const CLAUDE_POINT_TIPS = { index: { x: -37.7, y: -14.7 }, thumb: { x: 22.1, y: -19.3 } };
+/** How far the fist hangs below the web. */
+export const CLAUDE_POINT_DROP = 31.3;
+/** Where the web of the thinking hand sits — under the chin — and its turn. */
+export const CLAUDE_POINT_AT = { x: 197, y: 153 };
+export const CLAUDE_POINT_TURN = 0;
 
 /** One unit of the drawing, in points, on a mark `size` wide. */
 export const artUnit = (size) => size / BOX.w;

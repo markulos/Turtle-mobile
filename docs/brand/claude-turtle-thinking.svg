@@ -1,19 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="30 40 316 150" width="632" height="300" fill="none" stroke="#F5821F" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
   <title>Claude x Turtle mark, thinking</title>
   <!-- The thinking pose of the animated mark (components/ClaudeTurtleBuddy):
-       head leaning toward the hand, eyes up and away, the right hand raised
-       with the INDEX at the corner of the mouth and the THUMB out under the
-       chin. Same art as claude-turtle-mark.svg; the hand is POINT_HAND from
-       components/ClaudeTurtleMark.jsx, placed at (236,150) turned -4. -->
+       CHIN IN HAND. The chin sits in the V between the index finger (lying up
+       along the jaw) and the thumb; the fist hangs below. Traced from the
+       owner's sketch, 2026-11-16. Same art as claude-turtle-mark.svg; the hand
+       is POINT_HAND from components/ClaudeTurtleMark.jsx, its web at (197,153). -->
   <g transform="rotate(2.3 188 122)">
-    <g transform="translate(0 -3) rotate(4 188 122)">
-      <path d="M264 126 C263 101 246 72 214 68 C184 64 149 85 133 112 C124 127 124 141 138 147 C156 154 186 150 198 130"/>
-      <circle cx="171" cy="98" r="5.5" fill="#F5821F" stroke="none"/>
-      <circle cx="210" cy="87" r="6" fill="#F5821F" stroke="none"/>
+    <path d="M264 126 C263 101 246 72 214 68 C184 64 149 85 133 112 C124 127 124 141 138 147 C156 154 186 150 198 130"/>
+    <circle cx="176" cy="103" r="5.5" fill="#F5821F" stroke="none"/>
+    <circle cx="215" cy="92" r="6" fill="#F5821F" stroke="none"/>
+    <g transform="translate(0 6.7)">
+      <path fill="#FFFFFF" d="M44 160 C46 142 62 128 84 126 C97 124 110 128 111 138 C112 146 101 150 92 152 C95 160 85 167 78 158 C79 170 65 175 62 163 C60 178 44 177 44 160 Z"/>
     </g>
-    <path fill="#FFFFFF" d="M44 160 C46 142 62 128 84 126 C97 124 110 128 111 138 C112 146 101 150 92 152 C95 160 85 167 78 158 C79 170 65 175 62 163 C60 178 44 177 44 160 Z"/>
-    <g transform="translate(236 150) rotate(-4)">
-      <path fill="#FFFFFF" d="M-18 11 C-27 14 -40 14 -49 11 C-56 9 -58 1 -52 -1 C-45 -3 -36 0 -27 -4 C-27 -14 -27 -18 -28 -23 C-29 -32 -24 -37 -18 -36 C-12 -35 -10 -28 -10 -20 C-9 -17 -6 -15 0 -16 C12 -18 24 -12 25 -2 C26 4 20 8 16 7 C18 14 10 18 4 13 C2 20 -10 20 -12 13 C-14 15 -17 13 -18 10 Z"/>
+    <g transform="translate(197 153)">
+      <path fill="#FFFFFF" d="M-32.2 -6.4 C-38.6 -9.2 -38.6 -19.3 -32.2 -20.2 C-25.8 -20.2 -20.2 -15.6 -13.8 -11 C-9.2 -7.4 -4.6 -2.8 0 0 C5.5 -2.8 10.1 -8.3 13.8 -13.8 C16.6 -19.3 23.9 -21.2 27.6 -16.6 C30.4 -12 29.4 -3.7 27.6 1.8 C30.4 7.4 31.3 14.7 29.4 20.2 C26.7 27.6 16.6 31.3 5.5 31.3 C-3.7 31.3 -11 29.4 -14.7 23.9 C-17.5 20.2 -17.5 17.5 -16.6 15.6 C-23 14.7 -23.9 8.3 -17.5 7.4 C-17.5 5.5 -18.4 4.6 -19.3 3.7 C-23 0 -27.6 -3.7 -32.2 -6.4 Z"/>
     </g>
   </g>
 </svg>

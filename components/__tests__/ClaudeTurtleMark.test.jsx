@@ -24,6 +24,7 @@ import ClaudeTurtleMark, {
   CLAUDE_MARK_LEVEL,
   CLAUDE_MARK_NIGHT,
   CLAUDE_POINT_AT,
+  CLAUDE_POINT_DROP,
   CLAUDE_POINT_TIPS,
   CLAUDE_POINT_TURN,
   artPoint,
@@ -193,8 +194,8 @@ describe('ClaudeTurtleMark', () => {
     expect(hand.props.d).toMatch(/ Z$/);
   });
 
-  test('INDEX AND THUMB are both out: a finger by the mouth, a thumb under the chin', () => {
-    // Mark, 2026-11-16: "the hand needs an index and thumb out".
+  test('CHIN IN HAND: the chin sits in the V between index and thumb', () => {
+    // Traced from Mark's own sketch of the pose, 2026-11-16.
     const a = (CLAUDE_POINT_TURN * Math.PI) / 180;
     const placed = ({ x, y }) => ({
       x: CLAUDE_POINT_AT.x + (x * Math.cos(a) - y * Math.sin(a)),
@@ -202,27 +203,33 @@ describe('ClaudeTurtleMark', () => {
     });
     const index = placed(CLAUDE_POINT_TIPS.index);
     const thumb = placed(CLAUDE_POINT_TIPS.thumb);
-    // The fingertip is beside the end of the smile (198,130) — at the corner
-    // of his mouth, not in his eye (215,92) and not out in the air.
-    expect(Math.hypot(index.x - 198, index.y - 130)).toBeLessThan(24);
-    expect(Math.hypot(index.x - 215, index.y - 92)).toBeGreaterThan(18);
-    // The thumb goes the other way: out to the side, well clear of the
-    // index, and LOW — under the chin (the ledge is at 150), not up the face.
-    expect(thumb.x).toBeLessThan(index.x - 20);
-    expect(thumb.y).toBeGreaterThan(index.y + 30);
-    expect(thumb.y).toBeGreaterThan(145);
-    expect(thumb.x).toBeGreaterThan(150);
-    // An L, near enough: the index runs mostly UP from the fist, the thumb
-    // mostly SIDEWAYS.
-    const { index: i, thumb: th } = CLAUDE_POINT_TIPS;
-    expect(Math.abs(i.y)).toBeGreaterThan(Math.abs(i.x));
-    expect(Math.abs(th.x)).toBeGreaterThan(Math.abs(th.y) * 3);
-    // And both tips are really on the drawn outline.
-    const mark = fs.readFileSync(path.resolve(__dirname, '..', 'ClaudeTurtleMark.jsx'), 'utf8');
-    expect(mark).toMatch(/C-29 -32 -24 -37 -18 -36/);
-    expect(mark).toMatch(/C-56 9 -58 1 -52 -1/);
-    // …and the fist is below them, down at the ledge.
-    expect(CLAUDE_POINT_AT.y).toBeGreaterThan(140);
+    // The web — the bottom of the V — is UNDER THE CHIN: below the smile
+    // (which runs 138,147 → 198,130) and at about the ledge (150).
+    expect(CLAUDE_POINT_AT.x).toBeGreaterThan(170);
+    expect(CLAUDE_POINT_AT.x).toBeLessThan(215);
+    expect(CLAUDE_POINT_AT.y).toBeGreaterThan(146);
+    expect(CLAUDE_POINT_AT.y).toBeLessThan(160);
+    // A V: one tip each side of the web, both ABOVE it.
+    expect(index.x).toBeLessThan(CLAUDE_POINT_AT.x - 25);
+    expect(thumb.x).toBeGreaterThan(CLAUDE_POINT_AT.x + 12);
+    expect(index.y).toBeLessThan(CLAUDE_POINT_AT.y - 8);
+    expect(thumb.y).toBeLessThan(CLAUDE_POINT_AT.y - 8);
+    // The index is the long one, lying up along the jaw; the thumb is short.
+    expect(Math.abs(CLAUDE_POINT_TIPS.index.x)).toBeGreaterThan(Math.abs(CLAUDE_POINT_TIPS.thumb.x) * 1.4);
+    // Neither is in an eye (176,103 and 215,92).
+    for (const tip of [index, thumb]) {
+      expect(Math.hypot(tip.x - 176, tip.y - 103)).toBeGreaterThan(25);
+      expect(Math.hypot(tip.x - 215, tip.y - 92)).toBeGreaterThan(25);
+    }
+    // The tail of the smile (198,130) shows ABOVE the V, between the tips.
+    expect(198).toBeGreaterThan(index.x);
+    expect(198).toBeLessThan(thumb.x + 4);
+    expect(130).toBeLessThan(Math.min(index.y, thumb.y) + 12);
+    // The fist hangs below the ledge, as the resting hands do — and still
+    // inside the drawing's box (it ends at 190), pen included, or the SVG
+    // would cut it off.
+    expect(CLAUDE_POINT_AT.y + CLAUDE_POINT_DROP).toBeGreaterThan(170);
+    expect(CLAUDE_POINT_AT.y + CLAUDE_POINT_DROP + 3.5).toBeLessThanOrEqual(190);
   });
 
   test('there is no raised finger in the drawing', () => {
