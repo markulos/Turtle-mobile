@@ -51,13 +51,4 @@ export function nextPoke(state, now) {
   return { count: run, lastAt: now, flee: false };
 }
 
-/**
- * Which way he rocks. Alternating, so a run of pokes knocks him side to side
- * rather than nudging him the same way five times — which would read as a
- * glitch repeating rather than as him being jostled.
- */
-export function pokeWay(count) {
-  return count % 2 === 1 ? 1 : -1;
-}
-
-export default { nextPoke, pokeWay, POKE_LIMIT, POKE_WINDOW_MS, SULK_MS };
+export default { nextPoke, POKE_LIMIT, POKE_WINDOW_MS, SULK_MS };

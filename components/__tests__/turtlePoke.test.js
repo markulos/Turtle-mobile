@@ -1,5 +1,5 @@
 import {
-  POKE_LIMIT, POKE_WINDOW_MS, SULK_MS, nextPoke, pokeWay,
+  POKE_LIMIT, POKE_WINDOW_MS, SULK_MS, nextPoke,
 } from '../turtlePoke';
 
 /**
@@ -67,16 +67,5 @@ describe('nextPoke', () => {
     expect(SULK_MS).toBeLessThan(10000);
     // And he puts up with a few — one or two would be sulky rather than cute.
     expect(POKE_LIMIT).toBeGreaterThanOrEqual(3);
-  });
-});
-
-describe('pokeWay', () => {
-  test('he rocks side to side, not the same way five times', () => {
-    // One repeated twitch reads as a glitch looping; alternating reads as
-    // something being jostled.
-    expect(pokeWay(1)).toBe(1);
-    expect(pokeWay(2)).toBe(-1);
-    expect(pokeWay(3)).toBe(1);
-    expect(pokeWay(4)).toBe(-1);
   });
 });

@@ -18,11 +18,10 @@
  *     index and thumb apart and rests his chin in the V between them, his head leans toward the
  *     hand, and his eyes roll up and away — the cartoon "hmm". While he holds
  *     it the finger taps and the eyes wander about up there.
- *   • TAKES A POKE: tapped, he rocks — a quick knock one way and a spring
- *     back, alternating side to side so a run of them jostles him rather
- *     than repeating one twitch. Poked once too often he DIVES off the
- *     ledge, and climbs back a few seconds later (turtlePoke, and Mark's
- *     ask of 2026-11-16).
+ *   • TAKES A POKE: pressed, he gives — down under the finger and a spring
+ *     back that rebounds a little past rest before settling. Poked once too
+ *     often he DIVES off the ledge, and climbs back a few seconds later
+ *     (turtlePoke, and Mark's asks of 2026-11-16).
  *   • READS WHAT YOU ARE WRITING: the moment you type in the composer his eyes
  *     drop to it and his head dips after them, and he holds it — no glancing
  *     about — until you stop. He is in the top corner and the line you are
@@ -68,8 +67,8 @@ import ClaudeTurtleMark, {
   CLAUDE_MARK_COLOR, CLAUDE_POINT_AT, HAND_PERCH,
   artPoint, artUnit, eyeDots, ledgeOffset, markHeight,
 } from './ClaudeTurtleMark';
-import { SULK_MS, nextPoke, pokeWay } from './turtlePoke';
-import { impactHaptic, tapHaptic } from '../utils/haptics';
+import { SULK_MS, nextPoke } from './turtlePoke';
+import { impactHaptic } from '../utils/haptics';
 
 /** Blink timing, in ms. A blink is fast to shut and a touch slower to open. */
 export const BLINK = {
@@ -137,15 +136,20 @@ export const TYPING_LINGER_MS = 2200;
 // An idle head tilt, either way.
 const NOD_DEG = 3;
 /**
- * A POKE: how far he rocks, and how far he gives.
+ * A POKE: how far he gives, straight down.
  *
- * Bigger than the idle tilt — it has to read as something that happened TO
- * him rather than as something he did — and small enough not to leave the
- * clip. The dip is what sells it as a knock rather than a lean: a thing
- * jostled on a ledge sinks a little as it rocks.
+ * It was a rock side to side and Mark asked for something more natural
+ * (2026-11-16): "a move down and up getting slightly pushed animation". A
+ * finger pressing on something does not twist it — it pushes it down, and
+ * what comes back is the thing rebounding. So: down fast, and a spring
+ * home that OVERSHOOTS slightly upward before it settles, which is the
+ * rebound and the whole of why it reads as physical.
+ *
+ * 3pt on a mark 34pt tall — about a tenth of him, enough to see the chin
+ * sink behind the ledge, nowhere near enough to lose him. Bigger than the
+ * reading dip (1.1) and the breath (0.5), which it has to out-read.
  */
-const POKE_DEG = 9;
-const POKE_DIP = 1.6;
+const POKE_PUSH = 3;
 // The middle of the right hand at rest, in the drawing's units — where the
 // pointing hand's trip starts from. Carries HAND_PERCH, because the resting
 // hands are drawn that far below where the path puts them: measure the trip
@@ -227,7 +231,7 @@ export default function ClaudeTurtleBuddy({
   // screen's — the header keeps its ridge and its title while he is gone.
   const [sulking, setSulking] = useState(false);
   const pokeRun = useRef({ count: 0, lastAt: 0 });
-  const poke = useRef(new Animated.Value(0)).current;   // −1 … 1, a knock
+  const poke = useRef(new Animated.Value(0)).current;   // 0 → 1 → 0, a push down
   const pokeAnim = useRef(null);
   const sulkTimer = useRef(null);
 
@@ -425,15 +429,17 @@ export default function ClaudeTurtleBuddy({
       sulkTimer.current = setTimeout(() => setSulking(false), SULK_MS);
       return;
     }
-    tapHaptic();
+    // A light knock, not a tap tick: this is a thing being pressed.
+    impactHaptic('light');
     if (still) return;
-    // Knocked one way, springs back. Alternating, so a run jostles him side
-    // to side instead of repeating one twitch.
+    // DOWN fast, then a spring home that overshoots a little upward before
+    // it settles — he gives under the finger and rebounds. The spring is
+    // what makes the "up" half; a timing curve back to rest just undoes the
+    // push and reads as a slider returning.
     pokeAnim.current?.stop();
-    const way = pokeWay(next.count);
     pokeAnim.current = Animated.sequence([
-      Animated.timing(poke, { toValue: way, duration: 90, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-      Animated.spring(poke, { toValue: 0, friction: 4, tension: 150, useNativeDriver: true }),
+      Animated.timing(poke, { toValue: 1, duration: 70, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.spring(poke, { toValue: 0, friction: 4.2, tension: 150, useNativeDriver: true }),
     ]);
     pokeAnim.current.start();
   }, [sulking, still, poke]);
@@ -453,9 +459,10 @@ export default function ClaudeTurtleBuddy({
         Animated.add(
           read.interpolate({ inputRange: [0, 1], outputRange: [0, TYPE_DIP] }),
           Animated.add(
-            // A knock sinks him a little whichever way it came from — which
-            // is what makes it read as a jostle rather than as a lean.
-            poke.interpolate({ inputRange: [-1, 0, 1], outputRange: [POKE_DIP, 0, POKE_DIP] }),
+            // The push. Extrapolated on purpose: the spring home overshoots
+            // past 0, and that negative is him rebounding ABOVE rest — the
+            // "up" half of the move, which a clamp would throw away.
+            poke.interpolate({ inputRange: [0, 1], outputRange: [0, POKE_PUSH] }),
             Animated.add(
               think.interpolate({ inputRange: [0, 1], outputRange: [0, -0.8] }),
               breath.interpolate({ inputRange: [0, 1], outputRange: [0, -0.5] }),
@@ -466,7 +473,6 @@ export default function ClaudeTurtleBuddy({
       { rotate: think.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${THINK_TILT_DEG}deg`] }) },
       { rotate: read.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${TYPE_TILT_DEG}deg`] }) },
       { rotate: nod.interpolate({ inputRange: [-1, 1], outputRange: [`${-NOD_DEG}deg`, `${NOD_DEG}deg`] }) },
-      { rotate: poke.interpolate({ inputRange: [-1, 1], outputRange: [`${-POKE_DEG}deg`, `${POKE_DEG}deg`] }) },
     ],
   };
   // Both hands arrive the same way: down onto the ledge, just after the face.

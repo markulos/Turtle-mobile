@@ -301,6 +301,32 @@ describe('ClaudeTurtleBuddy', () => {
     await view.unmount();
   });
 
+  test('THE POKE IS A PUSH — down, then a rebound, and no twist at all', () => {
+    // It was a rock side to side; Mark asked for something more natural
+    // (2026-11-16): "a move down and up getting slightly pushed animation".
+    // A finger pressing on a thing does not twist it.
+    expect(CODE).not.toMatch(/POKE_DEG|pokeWay/);
+    // Down on the only axis a press has…
+    expect(CODE).toMatch(/poke\.interpolate\(\{ inputRange: \[0, 1\], outputRange: \[0, POKE_PUSH\] \}\)/);
+    // …fast going down, and a SPRING coming back. The spring is the whole
+    // "up" half: it overshoots past rest and settles, which is the rebound.
+    // A timing curve home would merely undo the push and read as a slider
+    // returning.
+    const move = CODE.slice(CODE.indexOf('pokeAnim.current = Animated.sequence'), CODE.indexOf('pokeAnim.current.start()'));
+    expect(move).toMatch(/Animated\.timing\(poke, \{ toValue: 1, duration: 70/);
+    expect(move).toMatch(/Animated\.spring\(poke, \{ toValue: 0/);
+    // NOT clamped, or the overshoot — the rebound — is thrown away.
+    expect(CODE).not.toMatch(/outputRange: \[0, POKE_PUSH\], extrapolate/);
+    // And it out-reads the two quiet things on the same axis, or a press
+    // looks like a breath.
+    // Read off the source rather than imported: POKE_PUSH is private to the
+    // component, and a number only this file knows is a number only this
+    // file can hold.
+    const push = Number(/const POKE_PUSH = ([\d.]+)/.exec(CODE)[1]);
+    expect(push).toBeGreaterThan(TYPE_DIP);
+    expect(push).toBeLessThan(6);
+  });
+
   test('…and he is NOT a touch target where he is decoration', async () => {
     // Every other place the mark appears it is paint. A stray press target
     // over a header is a tap that silently does nothing.
