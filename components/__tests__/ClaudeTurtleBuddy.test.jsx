@@ -21,7 +21,8 @@ jest.mock('react-native-svg', () => {
 }, { virtual: true });
 
 import ClaudeTurtleBuddy, {
-  BLINK, GLANCES, IDLE_GAP, THINK_DRIFT, THINK_GAP, THINK_GAZE, THINK_TILT_DEG, nextActGap, nextBlinkGap,
+  BLINK, GLANCES, IDLE_GAP, THINK_DRIFT, THINK_GAP, THINK_GAZE, THINK_TILT_DEG,
+  TYPE_DIP, TYPE_GAZE, TYPE_TILT_DEG, TYPING_LINGER_MS, nextActGap, nextBlinkGap,
 } from '../ClaudeTurtleBuddy';
 import { CLAUDE_POINT_AT, eyeDots, ledgeOffset } from '../ClaudeTurtleMark';
 
@@ -101,10 +102,54 @@ describe('ClaudeTurtleBuddy', () => {
     expect(CODE).not.toMatch(/CHIN_HAND|FINGER\b|-finger/);
   });
 
+  test('READING: eyes down to the line, and the head dips after them', () => {
+    // Mark, 2026-11-16: "look down slightly and tilt his head down when I
+    // start typing". He is in the top-right corner and the composer is below
+    // him, so down is where the line is.
+    expect(TYPE_GAZE[1]).toBeGreaterThan(0);
+    // The head goes down WITH them. The eyes alone read as a glance; the dip
+    // is what makes it attention — and it is a dip, not a nod off the page.
+    expect(TYPE_DIP).toBeGreaterThan(0.5);
+    expect(TYPE_DIP).toBeLessThanOrEqual(2);
+    // "Slightly": a few degrees on a mark this size, no more.
+    expect(Math.abs(TYPE_TILT_DEG)).toBeLessThanOrEqual(4);
+    // And it leans the OTHER WAY from thinking, so the two poses can never be
+    // read as the same one.
+    expect(Math.sign(TYPE_TILT_DEG)).toBe(-Math.sign(THINK_TILT_DEG));
+
+    // THINKING WINS. He cannot lean two ways at once, and a turn in flight is
+    // the bigger thing to be saying.
+    expect(CODE).toMatch(/const reading = typing && !thinking;/);
+    // While reading he HOLDS it — glancing round the room while you write is
+    // the opposite of what the pose says.
+    expect(CODE).toMatch(/if \(reading\) return;/);
+    // The dip and the lean both ride the same value, on the face layer.
+    expect(CODE).toMatch(/read\.interpolate\(\{ inputRange: \[0, 1\], outputRange: \[0, TYPE_DIP\] \}\)/);
+    expect(CODE).toMatch(/read\.interpolate\(\{ inputRange: \[0, 1\], outputRange: \['0deg', `\$\{TYPE_TILT_DEG\}deg`\] \}\)/);
+  });
+
+  test('…and he comes back up when you STOP, not when the box empties', () => {
+    // A draft left on screen would hold him head-down for ever; clearing on
+    // every keystroke would bob him between words. So: a quiet period longer
+    // than any gap inside a sentence and shorter than a pause for thought.
+    expect(TYPING_LINGER_MS).toBeGreaterThan(1200);
+    expect(TYPING_LINGER_MS).toBeLessThan(4000);
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    // The screen owns the timer, and it is a REF — a re-render mid-sentence
+    // must not restart it.
+    expect(src).toMatch(/const typingTimer = useRef\(null\);/);
+    expect(src).toMatch(/setTimeout\(\(\) => setClaudeTyping\(false\), TYPING_LINGER_MS\)/);
+    // Hung off the keystroke itself, not off the text being non-empty.
+    const handler = src.slice(src.indexOf('const handleInputChange'), src.indexOf('const handleInputChange') + 200);
+    expect(handler).toMatch(/markTyping\(\)/);
+    // …and cleared on the way out, or a timer fires into an unmounted screen.
+    expect(src).toMatch(/clearTimeout\(typingTimer\.current\)/);
+  });
+
   test('HE LOOKS AROUND — a glance, not a stare', () => {
     // The eyes are about 6 units across; a glance moves them about that far.
     expect(GLANCES.length).toBeGreaterThanOrEqual(5);
-    for (const [x, y] of [...GLANCES, ...THINK_DRIFT, THINK_GAZE]) {
+    for (const [x, y] of [...GLANCES, ...THINK_DRIFT, THINK_GAZE, TYPE_GAZE]) {
       expect(Math.abs(x)).toBeLessThanOrEqual(7);
       expect(Math.abs(y)).toBeLessThanOrEqual(7);
     }
@@ -199,5 +244,6 @@ describe('ClaudeTurtleBuddy', () => {
   test('the session header wears him, and he thinks while a turn is in flight', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
     expect(src).toMatch(/<ClaudeTurtleBuddy\s+size=\{CLAUDE_PEEK_WIDTH\}\s+thinking=\{claudeBusy\}/);
+    expect(src).toMatch(/typing=\{claudeTyping\}/);
   });
 });

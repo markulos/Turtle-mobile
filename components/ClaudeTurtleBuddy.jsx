@@ -14,6 +14,12 @@
  *     a single finger resting at the corner of it, his head leans toward the
  *     hand, and his eyes roll up and away — the cartoon "hmm". While he holds
  *     it the finger taps and the eyes wander about up there.
+ *   • READS WHAT YOU ARE WRITING: the moment you type in the composer his eyes
+ *     drop to it and his head dips after them, and he holds it — no glancing
+ *     about — until you stop. He is in the top corner and the line you are
+ *     typing is below him, so down is where it is. (Mark, 2026-11-16: "make
+ *     the svg of turtle look down slightly and tilt his head down when I start
+ *     typing".)
  *
  * (The thinking pose took three goes. A lone raised finger read "like a tail";
  * a flat hand to the chin was not it either. Mark sent a reference drawing,
@@ -87,6 +93,35 @@ export function nextActGap(gap, rand = Math.random) {
 
 // The head leans TOWARD the hand while he thinks (the hand is on his right).
 export const THINK_TILT_DEG = 4;
+
+/**
+ * READING WHAT YOU TYPE. Three small things at once, because any one of them
+ * alone is ambiguous:
+ *
+ *  · the eyes go DOWN — the composer is below him, so that is where to look;
+ *  · the head DIPS, which also sinks the chin a little further behind the
+ *    ledge. On a flat drawing that dip is what "lowered his head" looks like;
+ *    the eyes alone read as a glance, not as attention.
+ *  · and it leans the OTHER WAY from the thinking tilt, so the two poses can
+ *    never be mistaken for one another at a glance.
+ *
+ * Small numbers on purpose: Mark asked for "slightly", the mark is about 34pt
+ * tall, and the breath beside it is half a point. A 5° lean on a head this
+ * size is a bird listening to something, not a person reading.
+ */
+export const TYPE_TILT_DEG = -2.6;
+/** How far the head sinks, in points. Twice the breath, so it reads over it. */
+export const TYPE_DIP = 1.1;
+/** Where the eyes go, in the drawing's units: down, and a touch toward it. */
+export const TYPE_GAZE = [-1, 5];
+/**
+ * How long he keeps reading after the last keystroke.
+ *
+ * Longer than any gap inside a typed sentence and shorter than a pause for
+ * thought — so he stays down while you write and looks back up when you stop,
+ * rather than bobbing between words.
+ */
+export const TYPING_LINGER_MS = 2200;
 // An idle head tilt, either way.
 const NOD_DEG = 3;
 // The middle of the right hand at rest, in the drawing's units — where the
@@ -122,8 +157,13 @@ export default function ClaudeTurtleBuddy({
   faceFill = 'none',
   tilt = 0,
   thinking = false,
+  // Somebody is typing into the composer right now. THINKING WINS: a turn in
+  // flight is the bigger thing, and he cannot hold both poses — his head
+  // would have to lean two ways at once.
+  typing = false,
   testID = 'claude-turtle-buddy',
 }) {
+  const reading = typing && !thinking;
   const height = markHeight(size);
   const ledge = ledgeOffset(size);
   // From fully below the ledge (1) to his resting place (0).
@@ -140,6 +180,7 @@ export default function ClaudeTurtleBuddy({
   const gazeY = useRef(new Animated.Value(0)).current;
   const breath = useRef(new Animated.Value(0)).current;  // 0 → 1 → 0, for ever
   const nod = useRef(new Animated.Value(0)).current;     // −1 … 1, an idle head tilt
+  const read = useRef(new Animated.Value(0)).current;    // 0 rest → 1 head down, reading
   const tap = useRef(new Animated.Value(0)).current;     // the pointing finger, tapping
   const drum = useRef(new Animated.Value(0)).current;    // the left hand, drumming
   // Reduce Motion. State, not a ref: every loop below has to stand down when
@@ -236,9 +277,24 @@ export default function ClaudeTurtleBuddy({
     return () => move.stop();
   }, [thinking, still, think]);
 
+  // ── the head goes down to read, and comes back up ─────────────────────
+  useEffect(() => {
+    if (still) { read.setValue(reading ? 1 : 0); return undefined; }
+    const move = Animated.timing(read, {
+      toValue: reading ? 1 : 0,
+      // Down a little quicker than up: dropping your eyes to something is a
+      // reflex and lifting them is a decision.
+      duration: reading ? 220 : 300,
+      easing: OUT,
+      useNativeDriver: true,
+    });
+    move.start();
+    return () => move.stop();
+  }, [reading, still, read]);
+
   // ── the small things he does, one at a time ───────────────────────────
   useEffect(() => {
-    const home = thinking ? THINK_GAZE : [0, 0];
+    const home = thinking ? THINK_GAZE : reading ? TYPE_GAZE : [0, 0];
     if (still) {
       gazeX.setValue(home[0] * unit);
       gazeY.setValue(home[1] * unit);
@@ -282,6 +338,10 @@ export default function ClaudeTurtleBuddy({
     let running = Animated.parallel([look(home, 260), to(nod, 0, 260, SOFT), to(tap, 0, 120), to(drum, 0, 120)]);
     const next = () => {
       if (!alive) return;
+      // READING: he holds it. Glancing round the room while you write is the
+      // opposite of the thing this pose says. He still breathes and blinks —
+      // those are their own loop.
+      if (reading) return;
       timer = setTimeout(() => {
         if (!alive) return;
         running = thinking ? thinkingAct() : idleAct();
@@ -295,7 +355,7 @@ export default function ClaudeTurtleBuddy({
       if (timer) clearTimeout(timer);
       if (running) running.stop();
     };
-  }, [thinking, still, unit, gazeX, gazeY, nod, tap, drum]);
+  }, [thinking, reading, still, unit, gazeX, gazeY, nod, tap, drum]);
 
   // ── what each layer does with all that ────────────────────────────────
   const faceStyle = {
@@ -303,11 +363,15 @@ export default function ClaudeTurtleBuddy({
       { translateY: Animated.add(
         Animated.multiply(rise, travel),
         Animated.add(
-          think.interpolate({ inputRange: [0, 1], outputRange: [0, -0.8] }),
-          breath.interpolate({ inputRange: [0, 1], outputRange: [0, -0.5] }),
+          read.interpolate({ inputRange: [0, 1], outputRange: [0, TYPE_DIP] }),
+          Animated.add(
+            think.interpolate({ inputRange: [0, 1], outputRange: [0, -0.8] }),
+            breath.interpolate({ inputRange: [0, 1], outputRange: [0, -0.5] }),
+          ),
         ),
       ) },
       { rotate: think.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${THINK_TILT_DEG}deg`] }) },
+      { rotate: read.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${TYPE_TILT_DEG}deg`] }) },
       { rotate: nod.interpolate({ inputRange: [-1, 1], outputRange: [`${-NOD_DEG}deg`, `${NOD_DEG}deg`] }) },
     ],
   };

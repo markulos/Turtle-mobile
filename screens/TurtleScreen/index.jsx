@@ -52,7 +52,7 @@ import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
 import { CLAUDE_MARK_LEVEL, CLAUDE_MARK_NIGHT, ledgeOffset } from '../../components/ClaudeTurtleMark';
-import ClaudeTurtleBuddy from '../../components/ClaudeTurtleBuddy';
+import ClaudeTurtleBuddy, { TYPING_LINGER_MS } from '../../components/ClaudeTurtleBuddy';
 import TypingIndicator from '../../components/TypingIndicator';
 import MarkdownText from '../../components/MarkdownText';
 import CopyKey from '../../components/CopyKey';
@@ -1274,9 +1274,28 @@ export default function TurtleScreen() {
     }
   }, [inputText]);
 
+  /**
+   * IS SOMEBODY TYPING RIGHT NOW — which is what the mark in the corner reads
+   * to drop his head to the line (ClaudeTurtleBuddy).
+   *
+   * A keystroke sets it and a quiet `TYPING_LINGER_MS` clears it, rather than
+   * "the box is not empty": a draft left on screen would hold him head-down
+   * for ever, and clearing on every keystroke would bob him between words.
+   * The timer is a ref so re-renders mid-sentence do not restart it.
+   */
+  const [claudeTyping, setClaudeTyping] = useState(false);
+  const typingTimer = useRef(null);
+  useEffect(() => () => { if (typingTimer.current) clearTimeout(typingTimer.current); }, []);
+  const markTyping = useCallback(() => {
+    setClaudeTyping(true);
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(() => setClaudeTyping(false), TYPING_LINGER_MS);
+  }, []);
+
   // Handle input changes for autocomplete
   const handleInputChange = (text) => {
     setInputText(text);
+    markTyping();
     
     // Show autocomplete when typing /
     if (text.startsWith('/')) {
@@ -2450,6 +2469,9 @@ export default function TurtleScreen() {
               <ClaudeTurtleBuddy
                 size={CLAUDE_PEEK_WIDTH}
                 thinking={claudeBusy}
+                // …and while you are writing to him he reads the line
+                // instead: eyes down, head dipped after them.
+                typing={claudeTyping}
                 // Turned so both hands rest on the ridge. As drawn, the left
                 // one droops below the rule and the right barely reaches it.
                 tilt={CLAUDE_MARK_LEVEL}
