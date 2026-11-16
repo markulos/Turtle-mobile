@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { normalizeHex } from '../utils/accentColor';
+import { neutralInk, normalizeHex } from '../utils/accentColor';
 import {
   DOCK_STYLES, DEFAULT_DOCK_STYLE, DEFAULT_DOCK_COLOR, DOCK_INKS, DEFAULT_DOCK_INK, DEFAULT_DOCK_INK_COLOR, DEFAULT_DOCK_GLOW,
 } from '../components/dockSkins';
@@ -848,6 +848,24 @@ export const ThemeProvider = ({ children }) => {
       // Existing screens already reach for accentInfo as "the highlight";
       // repointing it is what carries the choice across the app.
       accentInfo: accentColor,
+      /**
+       * THE ACCENT AS INK, on this page.
+       *
+       * `accent` is the colour itself and belongs on FILLS — a chip, a dot,
+       * a bar, the dock's indicator — where being bright is the whole job.
+       * This is the same colour conditioned to be READ: on the light page a
+       * pale or fluorescent highlight is darkened and its chroma pulled
+       * back until it clears 4.5:1 (see neutralInk). Mark, 2026-11-16.
+       *
+       * ONLY IN LIGHT MODE. On the black page a bright accent is already
+       * the legible one and darkening it would be the exact wrong move —
+       * there is nothing fluorescent about neon yellow on black, it is just
+       * yellow.
+       *
+       * A colour that already reads is returned untouched, so a navy or a
+       * deep teal theme is not quietly restyled.
+       */
+      accentInk: isDark ? accentColor : neutralInk(accentColor, baseTheme.colors.background),
       // Every RULE in the app takes a wash of the accent: the hairline over the
       // tab bar, card and input outlines, list separators, section dividers.
       // These two tokens are what the whole app already draws lines with, so

@@ -146,7 +146,7 @@ export default function FriendCard({
               size={13}
               color={friendIsOwner ? '#f5a623' : theme.colors.accentInfo}
             />
-            <Text style={[styles.roleText, { color: friendIsOwner ? '#f5a623' : theme.colors.accentInfo }]}>
+            <Text style={[styles.roleText, { color: friendIsOwner ? '#f5a623' : theme.colors.accentInk }]}>
               {friendIsOwner ? 'Owner' : 'Member'}
             </Text>
           </View>
@@ -178,7 +178,7 @@ export default function FriendCard({
             {isDevAccount ? (
               <View style={[styles.detailRow, styles.detailRowDivided]}>
                 <Icon name="account-cog" size={18} color={theme.colors.accentInfo} />
-                <Text style={[styles.detailText, { color: theme.colors.accentInfo }]}>
+                <Text style={[styles.detailText, { color: theme.colors.accentInk }]}>
                   Developer account · signs in with code {devCode}
                 </Text>
               </View>

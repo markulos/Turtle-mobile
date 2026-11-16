@@ -114,7 +114,7 @@ export default function PdfIndexPanel({ visible, rows, pageCount, page, mode, on
           style={[
             styles.rowTitle,
             {
-              color: on ? (c.accentInfo || c.primary) : c.textPrimary,
+              color: on ? (c.accentInk || c.primary) : c.textPrimary,
               // Nesting reads as indentation, capped so a deeply nested entry
               // still has room for its own words.
               paddingLeft: Math.min(item.depth, 4) * 14,
@@ -141,7 +141,7 @@ export default function PdfIndexPanel({ visible, rows, pageCount, page, mode, on
         style={({ pressed }) => [styles.row, { borderBottomColor: c.border, opacity: pressed ? 0.6 : 1 }]}
         testID={`pdf-page-${item}`}
       >
-        <Text style={[styles.rowTitle, { color: on ? (c.accentInfo || c.primary) : c.textPrimary, fontWeight: on ? '700' : '500' }]} numberOfLines={1}>
+        <Text style={[styles.rowTitle, { color: on ? (c.accentInk || c.primary) : c.textPrimary, fontWeight: on ? '700' : '500' }]} numberOfLines={1}>
           {`Page ${item}`}
         </Text>
         {on ? <Icon name="check" size={18} color={c.accentInfo || c.primary} /> : null}

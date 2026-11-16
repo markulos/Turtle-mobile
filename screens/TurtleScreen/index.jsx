@@ -4170,7 +4170,7 @@ const createStyles = (theme, insets) =>
       ...depth(theme, 'card'),
     },
     historyErrorText: { flex: 1, fontSize: 13, color: theme.colors.textSecondary },
-    historyErrorRetry: { fontSize: 13, fontWeight: '700', color: theme.colors.accentInfo },
+    historyErrorRetry: { fontSize: 13, fontWeight: '700', color: theme.colors.accentInk },
     messagesContainer: {
       flex: 1,
     },
@@ -4783,7 +4783,7 @@ const createStatsStyles = (theme) =>
       fontWeight: '700',
       fontVariant: ['tabular-nums'],
       // mobile theme has no accentPrimary — use accentInfo (see memory)
-      color: theme.colors.accentInfo || '#7dd3fc',
+      color: theme.colors.accentInk || '#7dd3fc',
     },
     bucketTomato: { fontSize: 11, fontWeight: '400', color: theme.colors.textMuted },
     bucketSubline: { fontSize: 11, color: theme.colors.textPrimary, opacity: 0.85 },

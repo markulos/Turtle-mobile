@@ -5467,7 +5467,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
                           : ''}
                         {selectedAlbumIsLive ? ' · ' : ''}
                         {selectedAlbumIsLive ? (
-                          <Text style={{ color: theme.colors.accentSuccess || theme.colors.accentInfo }}>
+                          <Text style={{ color: theme.colors.accentSuccess || theme.colors.accentInk }}>
                             on the web
                           </Text>
                         ) : null}

@@ -7,9 +7,13 @@
  * and a luminance that averages the channels calls a saturated yellow "dark"
  * and paints black text on it.
  */
+import fs from 'fs';
+import path from 'path';
 import {
   accentFrostInk,
   contrastRatio,
+  INK_SAT_CAP,
+  neutralInk,
   frostSurface,
   mixHex,
   hexToHsl,
@@ -254,6 +258,109 @@ describe('accentFrostInk', () => {
   test('a non-colour falls back to white rather than to nothing', () => {
     expect(accentFrostInk('nope', { page: LIGHT_PAGE })).toBe(INK_LIGHT);
     expect(accentFrostInk(undefined)).toBe(INK_LIGHT);
+  });
+});
+
+describe('neutralInk — the accent as ink on a pale page', () => {
+  const PAGE = '#F5F3F0';   // the light theme's own page colour
+  const THEME_SRC = fs.readFileSync(path.resolve(__dirname, '..', '..', 'context', 'ThemeContext.js'), 'utf8');
+  /**
+   * The preset swatches, READ OFF the source rather than imported.
+   *
+   * ThemeContext reaches AsyncStorage at import time, which is the whole
+   * reason this colour maths lives outside it — importing it here to get one
+   * array would drag the native module into a pure-maths suite. Parsed, the
+   * list also cannot drift from the one the app ships.
+   */
+  const PRESETS = THEME_SRC
+    .slice(THEME_SRC.indexOf('export const ACCENTS'), THEME_SRC.indexOf('export const DEFAULT_ACCENT'))
+    .match(/#[0-9A-Fa-f]{6}/g) || [];
+
+  test('a colour that already reads is returned UNTOUCHED', () => {
+    // The point is to rescue a bad choice, not to restyle a good one. A navy
+    // or a deep teal theme must come out exactly as the owner set it.
+    for (const ok of ['#1E3A8A', '#0F766E', '#7C2D12']) {
+      expect(neutralInk(ok, PAGE)).toBe(ok);
+      expect(contrastRatio(ok, PAGE)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  test('a FLUORESCENT colour loses its chroma as well as its lightness', () => {
+    // Mark, 2026-11-16: "turn down the fluorescent and make the tone more
+    // neutral and dark within the same palette." Darkening alone does not do
+    // that — #E8FF00 taken down by lightness is a 100%-saturated acid olive.
+    const neon = '#E8FF00';
+    const ink = neutralInk(neon, PAGE);
+    expect(contrastRatio(ink, PAGE)).toBeGreaterThanOrEqual(4.5);
+    expect(hexToHsl(ink).s).toBeLessThanOrEqual(INK_SAT_CAP);
+    expect(hexToHsl(ink).s).toBeLessThan(hexToHsl(neon).s);
+    expect(hexToHsl(ink).l).toBeLessThan(hexToHsl(neon).l);
+  });
+
+  test('a PALE colour does not come back MORE fluorescent than it went in', () => {
+    // The failure that makes the cap necessary: lightness-only on the pastel
+    // #F9A8D4 lands on #D20F7A — a hot magenta, further from what was picked
+    // than the pastel was. Saturation must not be allowed to rise.
+    const pale = '#F9A8D4';
+    const ink = neutralInk(pale, PAGE);
+    expect(contrastRatio(ink, PAGE)).toBeGreaterThanOrEqual(4.5);
+    expect(hexToHsl(ink).s).toBeLessThanOrEqual(hexToHsl(pale).s);
+  });
+
+  test('…but it is still RECOGNISABLY the colour that was picked', () => {
+    // "Within the same palette": the hue is what carries that, and it is held
+    // exactly. Only chroma and lightness move.
+    for (const c of ['#E8FF00', '#F9A8D4', '#F97316', '#3B82F6', '#14B8A6', '#EF4444']) {
+      const ink = neutralInk(c, PAGE);
+      // Within a couple of degrees: 8-bit hex cannot hold an HSL triple
+      // exactly, so a round trip moves the hue a point on its own. That is
+      // quantisation, not the maths (the same allowance neumorph.test makes).
+      expect(Math.abs(hexToHsl(ink).h - hexToHsl(c).h)).toBeLessThanOrEqual(2);
+    }
+  });
+
+  test('EVERY preset, and three neon extremes, clear the bar on the light page', () => {
+    // A sweep rather than a handful of cases: the owner can pick any of these
+    // and the labels drawn in it have to be readable in all of them.
+    expect(PRESETS.length).toBeGreaterThanOrEqual(9);
+    const all = [...PRESETS, '#E8FF00', '#39FF14', '#00FFF0'];
+    for (const c of all) {
+      expect(contrastRatio(neutralInk(c, PAGE), PAGE)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  test('it is the LEAST change that works, not the first rung of a ladder', () => {
+    // A colour that barely fails is barely moved — same discipline readableOn
+    // has. A fixed step ladder would drag it much darker than it needs.
+    const near = '#D23F3F';                       // fails 4.5 by a little
+    expect(contrastRatio(near, PAGE)).toBeLessThan(4.5);
+    const ink = neutralInk(near, PAGE);
+    expect(Math.abs(hexToHsl(ink).l - hexToHsl(near).l)).toBeLessThanOrEqual(12);
+  });
+
+  test('the SURFACE is the one the ink sits on, and junk changes nothing', () => {
+    // The same accent is a different problem on each surface, so there is no
+    // answer without one — and inventing a page is how an ink ends up tuned
+    // for a background it is never drawn on.
+    const neon = '#E8FF00';
+    expect(neutralInk(neon, '#000000')).toBe(neon);     // already fine on black
+    expect(neutralInk(neon, null)).toBe(neon);
+    expect(neutralInk(neon, 'nonsense')).toBe(neon);
+    expect(neutralInk('nonsense', PAGE)).toBe('nonsense');
+  });
+
+  test('a mid-grey surface nothing clears returns the MOST legible thing', () => {
+    // Neither end of the scale reaches 4.5 against #777777. Returning the raw
+    // colour there would be returning something known to be unreadable.
+    const out = neutralInk('#808080', '#777777');
+    expect(contrastRatio(out, '#777777')).toBeGreaterThan(contrastRatio('#808080', '#777777'));
+  });
+
+  test('DARK MODE keeps the accent — there is nothing fluorescent about it there', () => {
+    // On the black page a bright accent is the legible one; darkening it is
+    // the exact wrong move, which is why the token is gated on the mode.
+    const ctx = fs.readFileSync(path.resolve(__dirname, '..', '..', 'context', 'ThemeContext.js'), 'utf8');
+    expect(ctx).toMatch(/accentInk: isDark \? accentColor : neutralInk\(accentColor, baseTheme\.colors\.background\)/);
   });
 });
 

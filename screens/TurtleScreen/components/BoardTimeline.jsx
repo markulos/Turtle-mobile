@@ -517,7 +517,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
             <Icon name="cloud-off-outline" size={40} color={c.textTertiary} />
             <Text style={{ color: c.textSecondary, marginTop: 12, textAlign: 'center' }}>{error}</Text>
             <TouchableOpacity onPress={() => load(null)} style={{ marginTop: 16 }}>
-              <Text style={{ color: c.accentInfo, fontWeight: '600' }}>Try again</Text>
+              <Text style={{ color: c.accentInk, fontWeight: '600' }}>Try again</Text>
             </TouchableOpacity>
           </View>
         ) : items.length === 0 ? (

@@ -4599,7 +4599,7 @@ const createStyles = (theme) => StyleSheet.create({
   },
   calendarHint: {
     fontSize: 11,
-    color: theme.colors.accent,
+    color: theme.colors.accentInk,
     marginTop: 2,
     fontStyle: 'italic',
   },

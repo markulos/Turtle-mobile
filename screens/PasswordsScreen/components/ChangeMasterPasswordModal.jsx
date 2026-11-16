@@ -316,7 +316,7 @@ const createStyles = (theme) =>
       paddingVertical: 6,
     },
     linkText: {
-      color: theme.colors.accentInfo,
+      color: theme.colors.accentInk,
       fontSize: 14,
       fontWeight: '500',
     },

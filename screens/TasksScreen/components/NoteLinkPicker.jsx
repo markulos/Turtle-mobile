@@ -304,7 +304,7 @@ const pickerStyles = (theme, isDark) => StyleSheet.create({
   openBtnText: {
     fontSize: theme.typography.body,
     fontWeight: '600',
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
   },
   // The field, the chips and the row shape come from VaultSearchPanel /
   // VaultResultRow now; only what is specific to a NOTE result is left here.

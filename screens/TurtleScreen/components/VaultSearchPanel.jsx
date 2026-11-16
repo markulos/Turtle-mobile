@@ -259,7 +259,7 @@ const panelStyles = (theme, isDark) => StyleSheet.create({
     borderColor: theme.colors.accentInfo + '66',
   },
   filterText: { fontSize: 13, fontWeight: '600', color: theme.colors.textSecondary },
-  filterTextActive: { color: theme.colors.accentInfo },
+  filterTextActive: { color: theme.colors.accentInk },
   listContent: { paddingHorizontal: 16 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
   emptyText: { fontSize: 14, color: theme.colors.textTertiary, textAlign: 'center' },

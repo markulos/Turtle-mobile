@@ -1327,7 +1327,7 @@ export const TaskForm = ({
                               backgroundColor: active ? theme.colors.accentInfo + '22' : theme.colors.surfaceElevated,
                             }}
                           >
-                            <Text style={{ fontSize: 13, color: active ? theme.colors.accentInfo : theme.colors.textSecondary }}>
+                            <Text style={{ fontSize: 13, color: active ? theme.colors.accentInk : theme.colors.textSecondary }}>
                               {u === 'min' ? 'min' : u === 'hour' ? 'hr' : 'day'}
                             </Text>
                           </TouchableOpacity>
@@ -1857,7 +1857,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
   addOptionText: {
     fontSize: 13,
     fontWeight: '600',
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
   },
   addSheetScrim: {
     ...StyleSheet.absoluteFillObject,
@@ -2045,7 +2045,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
   linkNoteBtnText: {
     fontSize: theme.typography.body,
     fontWeight: '600',
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
   },
   // Chip shown once a note is linked.
   linkedNoteChip: {
@@ -2188,7 +2188,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
   moreToggleText: {
     fontSize: 14,
     fontWeight: '600',
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
   },
   // Section header for the "More options" groups (Details / When / People) —
   // stronger + tracked, with a hairline rule under it to separate groups.
@@ -2227,7 +2227,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     color: theme.colors.textSecondary,
   },
   remPillTextActive: {
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
   },
   // End-of-scroll actions: stacked full-width Save → Cancel → Delete. Part of
   // the scroll content (NOT pinned) — reach the bottom to commit, iOS-form style.
@@ -2282,7 +2282,7 @@ const createStyles = (theme, insets) => StyleSheet.create({
     color: theme.colors.textSecondary,
   },
   boardChipTextActive: {
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
     fontWeight: '600',
   },
   // --- Chip primitives for the Essentials chip row (date/time/priority/

@@ -239,7 +239,7 @@ const createStyles = (theme, insets, isDark) =>
     title: { fontSize: 24, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'center', marginBottom: 8 },
     subtitle: { fontSize: 14, color: theme.colors.textSecondary, textAlign: 'center', marginBottom: 24, paddingHorizontal: 12 },
     errorText: { fontSize: 14, color: theme.colors.accentError, textAlign: 'center', marginBottom: 16, paddingHorizontal: 24 },
-    devCode: { fontSize: 13, color: theme.colors.accentInfo, textAlign: 'center', marginBottom: 12, fontWeight: '600' },
+    devCode: { fontSize: 13, color: theme.colors.accentInk, textAlign: 'center', marginBottom: 12, fontWeight: '600' },
     bioButton: {
       flexDirection: 'row',
       alignItems: 'center',

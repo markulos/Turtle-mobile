@@ -74,7 +74,7 @@ function ShareMark({ count, theme, testID }) {
       importantForAccessibility="no-hide-descendants"
     >
       <Icon name="account-multiple" size={11} color={theme.colors.accentInfo} />
-      <Text style={[styles.shareCount, { color: theme.colors.accentInfo }]} numberOfLines={1}>{count}</Text>
+      <Text style={[styles.shareCount, { color: theme.colors.accentInk }]} numberOfLines={1}>{count}</Text>
     </View>
   );
 }

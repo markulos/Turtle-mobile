@@ -354,7 +354,7 @@ const createStyles = (theme) =>
     headerSide: { minWidth: 64 },
     headerSideRight: { alignItems: 'flex-end' },
     cancelText: { fontSize: 16, color: theme.colors.textSecondary, fontWeight: '500' },
-    setText: { fontSize: 16, color: theme.colors.accentInfo, fontWeight: '700' },
+    setText: { fontSize: 16, color: theme.colors.accentInk, fontWeight: '700' },
     preview: {
       fontSize: 17,
       color: theme.colors.textPrimary,

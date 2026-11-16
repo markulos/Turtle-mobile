@@ -624,6 +624,55 @@ is not this style.**
   two planes. This is the opposite claim, one plane deformed, so a surface
   takes one or the other and never both.
 
+## 10. The accent is a FILL; `accentInk` is the ink
+
+**Added 2026-11-16**, after Mark's profile page shipped with four unreadable
+labels on a fluorescent-yellow theme: "if the highlight colour is too pale or
+fluorescent, turn down the fluorescent and make the tone more neutral and
+dark within the same palette for items like text and others that are on a
+cream/white/off white background in light mode."
+
+**The two tokens, and which is which:**
+
+- **`theme.colors.accent`** is the colour itself and belongs on **fills** —
+  a chip, a dot, a bar, the dock's indicator, a ring. Being bright is the
+  whole job there.
+- **`theme.colors.accentInk`** is the same colour conditioned to be **read**.
+  On the light page a pale or fluorescent highlight is darkened *and its
+  chroma pulled back* until it clears 4.5:1. `utils/__tests__/accentInk.scan`
+  fails the build on `color: theme.colors.accentInfo`.
+
+**Why chroma and not just lightness.** Darkening alone does not de-fluoresce.
+`#E8FF00` taken down by lightness is `#6C7500` — a 100 %-saturated acid
+olive. Worse, a *pale* colour darkened by lightness comes back **more**
+fluorescent: the pastel `#F9A8D4` lands on `#D20F7A`, a hot magenta nobody
+chose. What reads as neon is chroma, so chroma is what comes down —
+`INK_SAT_CAP` (55), a cap rather than a reduction, so a muted colour keeps
+what it had.
+
+**Hue is held exactly.** "Within the same palette" is what the hue carries;
+only chroma and lightness move. `#E8FF00` → `#6C7321`, `#F9A8D4` → `#C23884`:
+a deep olive and a dusty rose, each plainly the colour that was picked.
+
+**Light mode only.** On the black page a bright accent is the legible one and
+darkening it is the exact wrong move — there is nothing fluorescent about
+neon yellow on black, it is just yellow. The token is gated on the mode.
+
+**A colour that already reads is returned untouched**, so a navy or a deep
+teal theme is never quietly restyled.
+
+**Three functions, three surfaces — do not mix them up:**
+
+| the ink sits on… | use | bar |
+|---|---|---|
+| the page / a card | `accentInk` (`neutralInk`) | 4.5:1 |
+| a tinted tile or chip | `readableOn(accent, composite)` | 3:1, hue **and chroma** held |
+| a solid accent fill | `inkOn(accent)` | picks black or white |
+
+The middle one deliberately does *not* desaturate: a glyph nudged toward grey
+on a coloured chip looks disabled (§1, and the Media Vault work). Measure
+against the **composited** surface, never the raw accent.
+
 ## Checklist before shipping any UI change
 
 1. Which surface is it — white-on-black or black-on-white — and does every element on it contrast?
@@ -639,4 +688,5 @@ is not this style.**
 7. On a neumorphic surface (Focus, Inbox): the panel is the page's colour with no border, the
    shading's reach stays inside the gutter, and `<Grain level={grain}>` carries the panel's own
    radius (§9).
-8. Ran `turtle-mobile-verify` (parse, jest, undef-audit, bundle) and listed the on-device checks.
+8. Accent TEXT is `accentInk`, never the raw accent — fills keep `accent` (§10).
+9. Ran `turtle-mobile-verify` (parse, jest, undef-audit, bundle) and listed the on-device checks.

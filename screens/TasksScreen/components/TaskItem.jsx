@@ -509,7 +509,7 @@ const createStyles = (theme) => {
   },
   dueText: {
     fontSize: 11,
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
     fontWeight: '700',
   },
   subtaskTitleRow: {
@@ -529,7 +529,7 @@ const createStyles = (theme) => {
   },
   subtaskTimeText: {
     fontSize: 9,
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
     fontWeight: '600',
   },
   description: {
@@ -654,7 +654,7 @@ const createStyles = (theme) => {
   },
   editSubtaskTimeText: {
     fontSize: 11,
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
     fontWeight: '600',
   },
 

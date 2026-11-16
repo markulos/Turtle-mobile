@@ -289,6 +289,81 @@ export function readableOn(color, surface, min = GLYPH_MIN) {
   return closest || best;
 }
 
+/**
+ * HOW MUCH COLOUR AN INK MAY CARRY — the fluorescence knob.
+ *
+ * `readableOn` above holds saturation and moves only lightness, and on a
+ * tinted tile that is right: a glyph nudged toward grey on a coloured chip
+ * looks disabled. On the PAGE it is wrong, and Mark named the failure
+ * (2026-11-16): "if the highlight colour is too pale or fluorescent, turn
+ * down the fluorescent and make the tone more neutral and dark within the
+ * same palette."
+ *
+ * Darkening alone does not do that. A neon yellow taken down by lightness is
+ * #6C7500 — a 100%-saturated acid olive. Worse, a PALE colour darkened by
+ * lightness gets MORE fluorescent, not less: the pastel #F9A8D4 lands on
+ * #D20F7A, a hot magenta nobody asked for. The thing that reads as neon is
+ * chroma, so chroma is what has to come down.
+ *
+ * 55 was chosen off the whole preset row plus three neon extremes rendered
+ * as numbers: it turns #E8FF00 into #6C7321 and #F9A8D4 into #C23884 — a
+ * deep olive and a dusty rose, each plainly the colour that was picked.
+ * Below about 45 the hue stops being recognisable; above about 70 the acid
+ * is still there.
+ *
+ * It is a CAP, not a reduction: a muted colour keeps the saturation it had.
+ * And it only ever applies to a colour that already failed — a navy or a
+ * deep teal is returned untouched, because nothing was wrong with it.
+ */
+export const INK_SAT_CAP = 55;
+
+/**
+ * THE ACCENT AS INK ON A PALE PAGE — same hue, less fluorescence, dark
+ * enough to read.
+ *
+ * Differs from `readableOn` in exactly two ways, both because the surface is
+ * different: saturation is capped (see INK_SAT_CAP), and the bar is 4.5:1
+ * rather than 3 — these are small labels, not icons, and 4.5 is WCAG's floor
+ * for resolving letterforms.
+ *
+ * Pass the surface the ink ACTUALLY sits on. For a chip that is a wash of
+ * the accent over the page, that is the composite (`mixHex`), not the page:
+ * the same accent is a different problem on each.
+ *
+ * Returns the colour untouched when it already clears the bar, so a theme
+ * nobody has trouble with is not quietly restyled.
+ */
+export function neutralInk(color, surface, min = 4.5) {
+  const hsl = hexToHsl(color);
+  const base = normalizeHex(color);
+  const against = normalizeHex(surface);
+  if (!hsl || !base) return color;
+  // No surface to measure against is not a licence to invent one.
+  if (!against) return base;
+  if (contrastRatio(base, against) >= min) return base;
+
+  const s = hsl.s > INK_SAT_CAP ? INK_SAT_CAP : hsl.s;
+  let closest = null;
+  let closestGap = Infinity;
+  let best = base;
+  let bestRatio = contrastRatio(base, against) || 0;
+  // Exhaustive, like readableOn: no step size to tune, and the answer is the
+  // LEAST change that works rather than the first rung of a ladder.
+  for (let l = 0; l <= 100; l += 1) {
+    const candidate = hslToHex({ h: hsl.h, s, l });
+    const ratio = contrastRatio(candidate, against);
+    if (ratio == null) continue;
+    if (ratio > bestRatio) { bestRatio = ratio; best = candidate; }
+    if (ratio >= min) {
+      const gap = Math.abs(l - hsl.l);
+      if (gap < closestGap) { closestGap = gap; closest = candidate; }
+    }
+  }
+  // Nothing clears it only on a mid-grey surface; the most legible thing
+  // available beats something known to be unreadable.
+  return closest || best;
+}
+
 export function legibilityNote(color, background) {
   const ratio = contrastRatio(color, background);
   if (ratio == null || ratio >= LEGIBLE_MIN) return null;

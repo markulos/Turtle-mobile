@@ -1615,7 +1615,7 @@ const activeChipStyles = (theme, isDark) => StyleSheet.create({
   label: {
     fontSize: 13,
     fontWeight: '600',
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
     maxWidth: 200,
   },
 });
@@ -1779,7 +1779,7 @@ const topicSearchStyles = (theme, isDark) => StyleSheet.create({
   cancel: {
     fontSize: 15,
     fontWeight: '500',
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
   },
   row: {
     flexDirection: 'row',
@@ -1810,7 +1810,7 @@ const topicSearchStyles = (theme, isDark) => StyleSheet.create({
     color: theme.colors.textPrimary,
   },
   rowLabelActive: {
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
     fontWeight: '600',
   },
   rowCount: {
@@ -3616,7 +3616,7 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
   navBack: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   navIconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   navDone: { paddingHorizontal: 10, paddingVertical: 6, minWidth: 56, alignItems: 'flex-end' },
-  navDoneText: { fontSize: 16, fontWeight: '700', color: theme.colors.accent || theme.colors.accentInfo },
+  navDoneText: { fontSize: 16, fontWeight: '700', color: theme.colors.accentInk },
   navDoneDisabled: { color: theme.colors.textMuted },
   // The paper. Generous side margins and no field chrome — the inputs ARE the
   // page, the way a note looks in iOS Notes.
@@ -3872,7 +3872,7 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     maxWidth: 200,
   },
   createChipText: {
-    color: theme.colors.accent || theme.colors.accentInfo,
+    color: theme.colors.accentInk,
     fontWeight: '600',
   },
   submitRow: { marginTop: 6, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 8 },

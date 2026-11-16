@@ -211,9 +211,9 @@ export default function UpdatesPanel() {
     switch (phase) {
       case 'checking': return { text: 'CHECKING…', color: c.textSecondary };
       case 'current': return { text: 'UP TO DATE', color: c.accentSuccess };
-      case 'available': return { text: 'UPDATE AVAILABLE', color: c.accentInfo };
-      case 'downloading': return { text: 'DOWNLOADING…', color: c.accentInfo };
-      case 'restarting': return { text: 'RESTARTING…', color: c.accentInfo };
+      case 'available': return { text: 'UPDATE AVAILABLE', color: c.accentInk };
+      case 'downloading': return { text: 'DOWNLOADING…', color: c.accentInk };
+      case 'restarting': return { text: 'RESTARTING…', color: c.accentInk };
       case 'error': return { text: 'CHECK FAILED', color: c.accentWarning };
       default: return { text: '', color: c.textSecondary };
     }
@@ -420,7 +420,7 @@ const makeStyles = (theme) => {
     buildDetail: { fontSize: 12, color: c.textSecondary, lineHeight: 17 },
     facts: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 4 },
     fact: { fontSize: 12, color: c.textTertiary || c.textSecondary, fontVariant: ['tabular-nums'] },
-    availableLine: { fontSize: 12, color: c.accentInfo, marginTop: 4 },
+    availableLine: { fontSize: 12, color: c.accentInk, marginTop: 4 },
     // The publish message: the primary ink, because it is the sentence you
     // read, while the id/date line above it is the reference.
     availableNote: { fontSize: 13, color: c.textPrimary, marginTop: 2, lineHeight: 18 },

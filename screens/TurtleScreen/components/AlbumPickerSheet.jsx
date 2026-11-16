@@ -137,7 +137,7 @@ export default function AlbumPickerSheet({
               testID="album-picker-tags"
             >
               <Icon name="tag-multiple" size={15} color={c.accentInfo || c.textSecondary} />
-              <Text style={[styles.tagsKeyText, { color: c.accentInfo || c.textSecondary }]} numberOfLines={1}>
+              <Text style={[styles.tagsKeyText, { color: c.accentInk || c.textSecondary }]} numberOfLines={1}>
                 Tags
               </Text>
             </TouchableOpacity>

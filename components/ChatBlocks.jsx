@@ -370,7 +370,7 @@ export default function ChatBlocks({ blocks, theme, api, onAsk, onNavigate }) {
                             accessibilityState={{ selected: active }}
                             style={[styles.option, active && { borderColor: c.accent || c.accentInfo }]}
                           >
-                            <Text style={[styles.optionText, active && { color: c.accent || c.accentInfo }]}>
+                            <Text style={[styles.optionText, active && { color: c.accentInk }]}>
                               {option.label}
                             </Text>
                           </TouchableOpacity>

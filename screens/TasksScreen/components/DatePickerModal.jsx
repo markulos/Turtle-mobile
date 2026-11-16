@@ -318,7 +318,7 @@ const createStyles = (theme) => StyleSheet.create({
   },
   todayText: {
     fontSize: 14,
-    color: theme.colors.accent,
+    color: theme.colors.accentInk,
     marginLeft: 6,
     fontWeight: '600',
   },
@@ -365,7 +365,7 @@ const createStyles = (theme) => StyleSheet.create({
   },
   todayText: {
     fontWeight: 'bold',
-    color: theme.colors.accent,
+    color: theme.colors.accentInk,
   },
   // The date you picked sits on a solid fill of the highlight colour, so its ink
   // is derived from that colour — a fixed white vanished the moment the accent

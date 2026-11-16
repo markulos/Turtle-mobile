@@ -5176,7 +5176,7 @@ const createStyles = (theme) => StyleSheet.create({
   upcomingCountText: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.colors.accentInfo,
+    color: theme.colors.accentInk,
     fontVariant: ['tabular-nums'],
   },
   // Floating "Latest" jump pill — centred near the bottom of the list while the

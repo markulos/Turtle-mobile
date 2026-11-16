@@ -1967,7 +1967,7 @@ const makeStyles = (theme) => {
       paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999,
       backgroundColor: (c.accent || c.accentInfo) + '26',
     },
-    roleText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6, color: c.accent || c.accentInfo },
+    roleText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6, color: c.accentInk },
     phoneRow: {
       flexDirection: 'row', alignItems: 'center',
       gap: 5, marginTop: 8, alignSelf: 'stretch',
@@ -1989,7 +1989,7 @@ const makeStyles = (theme) => {
     // the same footprint as its neighbours and the strip can't jump.
     statHintSlot: { height: 14, justifyContent: 'center', alignSelf: 'stretch' },
     statHint: {
-      fontSize: 9, fontWeight: '700', color: c.accent || c.accentInfo,
+      fontSize: 9, fontWeight: '700', color: c.accentInk,
       textAlign: 'center',
     },
     // A LIST, not a stack of cards — the Files tab's treatment, which Mark

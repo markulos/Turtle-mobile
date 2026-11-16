@@ -537,7 +537,7 @@ const chipStyles = (theme) => StyleSheet.create({
   backKey: { width: 44, height: 38, alignItems: 'center', justifyContent: 'center' },
   title: { flex: 1, fontSize: 18, fontWeight: '700', color: theme.colors.textPrimary },
   clearKey: { paddingHorizontal: 8, height: 38, justifyContent: 'center' },
-  clearText: { fontSize: 14, fontWeight: '700', color: theme.colors.accentInfo },
+  clearText: { fontSize: 14, fontWeight: '700', color: theme.colors.accentInk },
   clearTextOff: { color: theme.colors.textMuted, opacity: 0.6 },
 
   body: { paddingHorizontal: 16, gap: 18, paddingTop: 4 },
@@ -577,7 +577,7 @@ const chipStyles = (theme) => StyleSheet.create({
     backgroundColor: (theme.colors.accentInfo || '#5598e7') + (theme.mode === 'dark' ? '2E' : '1F'),
   },
   chipText: { flexShrink: 1, fontSize: 13, fontWeight: '600', color: theme.colors.textSecondary },
-  chipTextOn: { color: theme.colors.accentInfo },
+  chipTextOn: { color: theme.colors.accentInk },
   // "N more" is a chip in shape only. No fill and a dashed-quiet edge, so a
   // row of filters never looks like it has one more filter in it than it has.
   moreChip: { backgroundColor: 'transparent', borderColor: theme.colors.borderStrong || theme.colors.border },

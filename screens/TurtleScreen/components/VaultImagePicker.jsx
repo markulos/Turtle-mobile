@@ -191,7 +191,7 @@ export default function VaultImagePicker({ visible, onClose, onPick, theme, api,
           testID="vault-picker-add"
         >
           <Text
-            style={[styles.headerAddText, { color: picked.length ? (c.accentInfo || c.primary || c.textPrimary) : c.textMuted }]}
+            style={[styles.headerAddText, { color: picked.length ? (c.accentInk || c.primary || c.textPrimary) : c.textMuted }]}
             numberOfLines={1}
           >
             {picked.length ? `Add ${picked.length}` : 'Add'}

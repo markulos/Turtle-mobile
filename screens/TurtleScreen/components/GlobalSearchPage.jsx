@@ -320,7 +320,7 @@ const makeStyles = (c) => StyleSheet.create({
   cancelText: {
     fontSize: 16,
     fontWeight: '600',
-    color: c.accentInfo,
+    color: c.accentInk,
   },
   body: {
     flex: 1,

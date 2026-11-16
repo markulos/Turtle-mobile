@@ -954,7 +954,7 @@ const makeStyles = (theme) => {
     // A link in prose. On THEIR bubble it takes the accent; on the sender's own
     // the fill is already the accent, so it keeps the bubble's ink and is told
     // apart by the underline alone.
-    link: { color: c.accentInfo, textDecorationLine: 'underline' },
+    link: { color: c.accentInk, textDecorationLine: 'underline' },
     linkMine: { color: inkOn(c.accentInfo), textDecorationLine: 'underline' },
 
     // The composer's own layer, over the conversation rather than beside it.
