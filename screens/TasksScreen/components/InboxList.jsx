@@ -27,9 +27,8 @@
 import React, { memo, useEffect, useRef } from 'react';
 import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import Grain from '../../../components/Grain';
 import { tapHaptic } from '../../../utils/haptics';
-import { neuRaised, neuTones } from '../../../utils/neumorph';
+import { neuTones } from '../../../utils/neumorph';
 import { focusSkin } from '../utils/focusSkin';
 // Shared with the board rows and with the tasks they reveal: every bead on this
 // page sits on ONE string, so the geometry cannot live in any one of them.
@@ -37,8 +36,6 @@ import { THREAD_X, BEAD, ROW_PAD_LEFT } from '../utils/threadGeometry';
 
 /** Long enough to read as an arrival, short enough not to be in the way. */
 const DROP_MS = 260;
-/** The panel's radius — the capture block's, because they are a pair. */
-const PANEL_RADIUS = 24;
 
 /**
  * One line on the string.
@@ -105,12 +102,9 @@ const Line = memo(function Line({ task, fresh, last, c, surface, rule, onPress }
 
 function InboxList({
   items, total, freshId, c, theme, onOpenTask, onOpenAll, destinationLabel,
-  // Settings → Appearance → Surface grain (see InboxCapture).
-  grain = 1,
 }) {
   const mode = theme?.mode;
   const pal = focusSkin(theme || { mode: 'light' });
-  const neu = neuRaised(pal.card, mode);
   // Built once for the whole list rather than per row: one colour, twelve rows.
   const rule = neuTones(pal.card, mode)?.cast || pal.edge;
   if (!items || items.length === 0) {
@@ -121,9 +115,7 @@ function InboxList({
     );
   }
   return (
-    <View style={[styles.wrap, neu]} testID="inbox-list">
-      {/* The panel's tooth, clipped to its radius. */}
-      <Grain level={grain} radius={PANEL_RADIUS} />
+    <View style={styles.wrap} testID="inbox-list">
       {/* One thread, behind everything, rather than a segment per row. */}
       <View style={[styles.thread, { backgroundColor: rule }]} pointerEvents="none" />
       {items.map((t, i) => (
@@ -158,21 +150,12 @@ function InboxList({
 }
 
 const styles = StyleSheet.create({
-  // A PANEL, like the capture block above it and the Focus tab's tiles — the
-  // list used to sit bare on the page under a block that was also bare, and
-  // the two read as one undifferentiated column of text.
-  wrap: {
-    position: 'relative',
-    borderRadius: PANEL_RADIUS,
-    borderCurve: 'continuous',
-    paddingVertical: 4,
-    // NO horizontal padding, deliberately. `THREAD_X` is measured from the
-    // CONTENT EDGE and three surfaces draw on that one string — this list, the
-    // board rows below it and the tasks a board reveals. Padding here would
-    // move only this one of the three inward, and a string with a kink in it
-    // does not read as a near miss, it reads as a bug (threadGeometry).
-    paddingHorizontal: 0,
-  },
+  // NOT a panel of its own any more: it is the lower half of the capture
+  // panel (InboxCapture's `deck`), which is where the box that builds it
+  // lives. No horizontal padding here either — `THREAD_X` is measured from
+  // the CONTENT EDGE and three surfaces draw beads on that one string, so an
+  // inset here would put a kink in it (threadGeometry).
+  wrap: { position: 'relative' },
   // Stops short at both ends so the string does not run out of the list into
   // the field above or the boards below.
   thread: {
@@ -210,7 +193,9 @@ const styles = StyleSheet.create({
     paddingLeft: ROW_PAD_LEFT, paddingRight: 14, paddingVertical: 10,
   },
   moreText: { fontSize: 13, fontWeight: '600' },
-  empty: { fontSize: 13.5, lineHeight: 19, paddingVertical: 10 },
+  // The empty line is prose, not a strung row, so it takes the PANEL's own
+  // inset rather than the thread's — it has no bead to line up with.
+  empty: { fontSize: 13.5, lineHeight: 19, paddingVertical: 10, paddingHorizontal: 14 },
   pressed: { opacity: 0.6 },
 });
 

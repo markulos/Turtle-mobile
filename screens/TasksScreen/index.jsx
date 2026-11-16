@@ -4149,18 +4149,21 @@ export default function TasksScreen() {
                   }}
                   theme={theme}
                   grain={grain}
-                />
-                <InboxList
-                  items={inbox.items}
-                  total={inbox.total}
-                  freshId={freshInboxId}
-                  destinationLabel={inboxLabel}
-                  c={theme.colors}
-                  grain={grain}
-                  theme={theme}
-                  onOpenTask={openDetail}
-                  onOpenAll={() => setSelectedProject(inboxDestination(projects, selectedProject) || 'No Project')}
-                />
+                >
+                  {/* INSIDE the capture panel, not under it: the box and the
+                      list it builds are one thing (Mark, 2026-11-16), and the
+                      key's arrow points from one into the other. */}
+                  <InboxList
+                    items={inbox.items}
+                    total={inbox.total}
+                    freshId={freshInboxId}
+                    destinationLabel={inboxLabel}
+                    c={theme.colors}
+                    theme={theme}
+                    onOpenTask={openDetail}
+                    onOpenAll={() => setSelectedProject(inboxDestination(projects, selectedProject) || 'No Project')}
+                  />
+                </InboxCapture>
               </View>
             )}
             visible={viewMode === 'boards'}

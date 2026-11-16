@@ -38,17 +38,29 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AppTextInput from '../../../components/AppTextInput';
 import Grain from '../../../components/Grain';
 import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
-import { neuRaised } from '../../../utils/neumorph';
+import { neuRaised, neuTones } from '../../../utils/neumorph';
 import { focusSkin } from '../utils/focusSkin';
 
 /** The deck's radius on the Focus tab, which this is the Inbox tab's copy of. */
 const DECK_RADIUS = 24;
+/** Its inset — on the CONTENTS, not on the panel. See the `deck` style. */
+const DECK_PAD = 14;
 
 export default function InboxCapture({
   destinationLabel = 'Unsorted', onAdd, theme, trailing = null,
   // Settings → Appearance → Surface grain. A prop for the reason every other
   // caller of Grain takes one: the component must not reach for ThemeContext.
   grain = 1,
+  /**
+   * WHAT YOU HAVE WRITTEN SO FAR — the list, inside this same panel.
+   *
+   * Mark, 2026-11-16: "combine the panel for user input to add to inbox list
+   * and the list of things to do in the inbox." They were two panels a
+   * gutter apart, which said they were two things; the box and the list it
+   * builds are one thing, and the arrow on the key points from one into the
+   * other.
+   */
+  children = null,
 }) {
   const [text, setText] = useState('');
   const clean = text.trim();
@@ -58,6 +70,9 @@ export default function InboxCapture({
   // what Mark asked for: "match the focus tab styling more".
   const pal = focusSkin(theme);
   const neu = neuRaised(pal.card, theme?.mode);
+  // The panel's own shadow tone, which is what every line drawn on it is
+  // made of — see InboxList, whose row rules take the same colour.
+  const rule = neuTones(pal.card, theme?.mode)?.cast || pal.edge;
 
   const submit = useCallback(() => {
     const title = text.trim();
@@ -152,6 +167,15 @@ export default function InboxCapture({
         >
           {`Goes to ${destinationLabel}. Give it a date or a board whenever you like.`}
         </Text>
+        {/* …and the list it builds, under a rule across the panel. The rule
+            divides two REGIONS of one surface, so it runs the panel's full
+            width rather than being inset past anything (STYLE-RULES §8). */}
+        {children ? (
+          <>
+            <View pointerEvents="none" style={[styles.split, { backgroundColor: rule }]} />
+            {children}
+          </>
+        ) : null}
       </View>
     </View>
   );
@@ -171,17 +195,26 @@ const styles = StyleSheet.create({
   headingStrong: { fontWeight: '700' },
   // The panel itself: the deck's radius and padding, so the Inbox tab's first
   // block and the Focus tab's first block are the same object.
+  // The panel itself. NO horizontal padding: the list lives in here now, and
+  // `THREAD_X` is measured from the CONTENT EDGE — three surfaces draw beads
+  // on that one string (this list, the board rows, a board's tasks) and
+  // padding here would move only this one inward (threadGeometry). The field
+  // and its note carry their own inset instead.
   deck: {
     borderRadius: DECK_RADIUS,
     borderCurve: 'continuous',
-    padding: 14,
+    paddingVertical: 14,
     gap: 10,
   },
   field: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     height: 48, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth,
     paddingLeft: 14, paddingRight: 7,
+    marginHorizontal: DECK_PAD,
   },
+  // One hairline across the whole panel, between the box and what it has
+  // made. Same tone as the rules between the rows below it.
+  split: { height: StyleSheet.hairlineWidth, marginTop: 2 },
   // The single-line field metrics this app uses everywhere
   // (TaskInspectorSheet's subAddInput is the reference): NO height of its own
   // inside a fixed-height row — two layout systems arguing over one baseline is
@@ -196,5 +229,5 @@ const styles = StyleSheet.create({
   },
   addKey: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
   pressed: { opacity: 0.75 },
-  note: { fontSize: 13, lineHeight: 18 },
+  note: { fontSize: 13, lineHeight: 18, marginHorizontal: DECK_PAD },
 });

@@ -49,6 +49,17 @@ const SURFACES = [
  * page it came from about what colour the surface is.
  */
 const OWNS_PALETTE = SURFACES.filter((rel) => !rel.endsWith('FocusStatsPanel.jsx'));
+/**
+ * …and the ones that are a PANEL, as opposed to a panel's contents.
+ *
+ * InboxList stopped being its own panel on 2026-11-16: Mark asked for the
+ * capture box and the list it builds to be one object, so the list is now the
+ * lower half of InboxCapture's deck. It still reads the §9 palette for the
+ * colour of its rules, so the palette checks still apply to it — but it has
+ * no ground to paint and no tooth to lay, because the panel it sits in
+ * already did both.
+ */
+const PANELS = SURFACES.filter((rel) => !rel.endsWith('InboxList.jsx'));
 
 describe('STYLE-RULES §9 — the neumorphic surfaces', () => {
   test('the rule is WRITTEN DOWN, which is the half that outlives the code', () => {
@@ -88,7 +99,7 @@ describe('STYLE-RULES §9 — the neumorphic surfaces', () => {
     // The whole illusion is figure and ground sharing one colour. A page that
     // keeps `theme.colors.background` under panels painted `focusSkin().card`
     // turns every panel back into a card, which is the other style.
-    for (const rel of OWNS_PALETTE) {
+    for (const rel of OWNS_PALETTE.filter((r) => PANELS.includes(r))) {
       const src = code(rel);
       // The colour comes from the §9 palette — painted onto the ground, or
       // handed to neuRaised/neuPressed, which returns it as the panel's fill.
@@ -107,7 +118,7 @@ describe('STYLE-RULES §9 — the neumorphic surfaces', () => {
     // (components/Grain owns that clip). A rounded panel whose grain has no
     // radius gets square corners of speckle over its own curve — which is the
     // first thing that shipped, and is invisible in jest.
-    for (const rel of SURFACES) {
+    for (const rel of PANELS) {
       const src = code(rel);
       const tags = src.match(/<Grain\b[^/]*\/>/g) || [];
       expect(tags.length).toBeGreaterThan(0);
