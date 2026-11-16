@@ -20,12 +20,17 @@ jest.mock('react-native-svg', () => {
   return { __esModule: true, default: make('Svg'), Path: make('Path'), G: make('G'), Circle: make('Circle') };
 }, { virtual: true });
 
-import ClaudeTurtleBuddy, { BLINK, CHIN_HAND, nextBlinkGap, THINK_TILT_DEG } from '../ClaudeTurtleBuddy';
-import { eyeDots, ledgeOffset } from '../ClaudeTurtleMark';
+import ClaudeTurtleBuddy, {
+  BLINK, GLANCES, IDLE_GAP, THINK_DRIFT, THINK_GAP, THINK_GAZE, THINK_TILT_DEG, nextActGap, nextBlinkGap,
+} from '../ClaudeTurtleBuddy';
+import { CLAUDE_POINT_AT, eyeDots, ledgeOffset } from '../ClaudeTurtleMark';
 
 const SRC = fs.readFileSync(path.resolve(__dirname, '..', 'ClaudeTurtleBuddy.jsx'), 'utf8');
 const CODE = SRC.slice(SRC.indexOf('import React'));
 const flat = (id) => StyleSheet.flatten(screen.getByTestId(id).props.style);
+
+// Under the whole suite's load an animated render can outlast jest's 5s default.
+jest.setTimeout(30000);
 
 describe('ClaudeTurtleBuddy', () => {
   beforeEach(() => { jest.useFakeTimers(); });
@@ -60,39 +65,70 @@ describe('ClaudeTurtleBuddy', () => {
     await filled.unmount();
   });
 
-  test('three layers, back to front: face, the hand that stays, the hand that thinks', async () => {
+  test('layers, back to front: face, left hand, right hand at rest, right hand pointing', async () => {
     const { unmount } = await render(<ClaudeTurtleBuddy size={80} />);
     const kids = screen.getByTestId('claude-turtle-buddy').children.map((c) => c.props.testID);
-    expect(kids).toEqual(['claude-turtle-buddy-clip', 'claude-turtle-buddy-hand-right', 'claude-turtle-buddy-hand-left']);
-    // The LEFT hand is last — it goes to the chin, so it has to be in front
-    // of the face when it gets there.
+    expect(kids).toEqual([
+      'claude-turtle-buddy-clip',
+      'claude-turtle-buddy-hand-left',
+      'claude-turtle-buddy-hand-right',
+      'claude-turtle-buddy-hand-point',
+    ]);
+    // The pointing hand is its own drawing, last — in front of the face.
+    expect(screen.getByTestId('claude-turtle-buddy-hand-point-art-point')).toBeTruthy();
     await unmount();
   });
 
-  test('THINKING IS A HAND ON THE CHIN, not a finger in the air', () => {
-    // Mark, 2026-11-15: "thinking should have his hand on his chin not a
-    // finger up … that finger looks like a tail".
-    expect(CODE).not.toMatch(/FINGER|-finger/);
-    // The hand travels right and UP, toward the chin (which is at about
-    // x 138–156, y 147–154 in the drawing), and turns as it goes.
-    expect(CHIN_HAND.dx).toBeGreaterThan(40);
-    expect(CHIN_HAND.dy).toBeLessThan(0);
-    const arrives = { x: CHIN_HAND.cx + CHIN_HAND.dx, y: CHIN_HAND.cy + CHIN_HAND.dy };
-    expect(arrives.x).toBeGreaterThan(120);
-    expect(arrives.x).toBeLessThan(160);
-    expect(arrives.y).toBeGreaterThan(120);
-    expect(arrives.y).toBeLessThan(150);
-    expect(Math.abs(CHIN_HAND.turn)).toBeGreaterThan(10);
-    // It turns about ITSELF: the pivot is put at the layer's middle, turned,
-    // and put back, before the trip is made.
-    const at = (needle) => { const i = CODE.indexOf(needle); expect([needle, i >= 0]).toEqual([needle, true]); return i; };
-    const toMiddle = at('{ translateX: chin.pivotX }');
-    const turn = at("CHIN_HAND.turn}deg`] }) },");
-    const back = at('{ translateX: -chin.pivotX }');
-    expect(turn).toBeGreaterThan(toMiddle);
-    expect(back).toBeGreaterThan(turn);
-    // …and the trip itself comes FIRST in the list (so it is applied last).
-    expect(at('outputRange: [0, chin.moveX]')).toBeLessThan(toMiddle);
+  test('THINKING: one finger at the corner of his mouth, eyes up and away', () => {
+    // Mark's reference (2026-11-15): hand up, one finger touching below the
+    // mouth, eyes rolled up and off to the side. The gesture, on our turtle.
+    //
+    // The hand is on his RIGHT (the fist sits right of the middle of the
+    // drawing, x 188)…
+    expect(CLAUDE_POINT_AT.x).toBeGreaterThan(188);
+    // …so the eyes go UP and to the LEFT — away from it — and wander nearby.
+    expect(THINK_GAZE[0]).toBeLessThan(0);
+    expect(THINK_GAZE[1]).toBeLessThan(0);
+    for (const [x, y] of THINK_DRIFT) { expect(x).toBeLessThan(0); expect(y).toBeLessThan(0); }
+    // …and the head leans toward the hand, a little.
+    expect(THINK_TILT_DEG).toBeGreaterThan(0);
+    expect(THINK_TILT_DEG).toBeLessThanOrEqual(8);
+    // A hand cannot change shape under a transform: the resting hand fades
+    // out as the pointing one fades in, both on the move.
+    expect(CODE).toMatch(/opacity: Animated\.multiply\(\s*grabOpacity,\s*think\.interpolate\(\{ inputRange: \[0, 0\.55\], outputRange: \[1, 0\]/);
+    expect(CODE).toMatch(/opacity: think\.interpolate\(\{ inputRange: \[0\.3, 0\.8\], outputRange: \[0, 1\]/);
+    // No lone finger, no flat hand to the chin.
+    expect(CODE).not.toMatch(/CHIN_HAND|FINGER\b|-finger/);
+  });
+
+  test('HE LOOKS AROUND — a glance, not a stare', () => {
+    // The eyes are about 6 units across; a glance moves them about that far.
+    expect(GLANCES.length).toBeGreaterThanOrEqual(5);
+    for (const [x, y] of [...GLANCES, ...THINK_DRIFT, THINK_GAZE]) {
+      expect(Math.abs(x)).toBeLessThanOrEqual(7);
+      expect(Math.abs(y)).toBeLessThanOrEqual(7);
+    }
+    // Both ways, and up — not only one corner.
+    expect(GLANCES.some(([x]) => x < 0)).toBe(true);
+    expect(GLANCES.some(([x]) => x > 0)).toBe(true);
+    expect(GLANCES.some(([, y]) => y < 0)).toBe(true);
+    // The eyes SLIDE to look and then close about their own middle to blink:
+    // the order matters, a scale first would scale the slide.
+    expect(CODE).toMatch(/transform: \[\{ translateX: gazeX \}, \{ translateY: gazeY \}, \{ scaleY: lid \}\]/);
+  });
+
+  test('the small things he does are seconds apart — lively, not twitchy', () => {
+    expect(nextActGap(IDLE_GAP, () => 0)).toBe(IDLE_GAP.min);
+    expect(nextActGap(IDLE_GAP, () => 1)).toBe(IDLE_GAP.max);
+    expect(IDLE_GAP.min).toBeGreaterThanOrEqual(1500);
+    expect(THINK_GAP.min).toBeGreaterThanOrEqual(1000);
+    // …and there is more than one of them: a glance, a tilt of the head,
+    // drumming on the ledge; while thinking, a tapping finger and wandering eyes.
+    for (const what of [/look\(pick\(GLANCES\)/, /to\(nod, way/, /beat\(drum/, /beat\(tap/, /look\(pick\(THINK_DRIFT\)/]) {
+      expect(CODE).toMatch(what);
+    }
+    // Breathing never stops.
+    expect(CODE).toMatch(/Animated\.loop\(Animated\.sequence\(\[\s*Animated\.timing\(breath/);
   });
 
   test('the eyes are two Views on the face, each closing about its own middle', async () => {
@@ -149,16 +185,11 @@ describe('ClaudeTurtleBuddy', () => {
     expect(CODE).not.toMatch(/react-native-reanimated/);
     const moves = CODE.match(/Animated\.(timing|spring)\(/g) || [];
     const native = CODE.match(/useNativeDriver: true/g) || [];
-    expect(moves.length).toBeGreaterThan(4);
+    expect(moves.length).toBeGreaterThan(6);
     expect(native).toHaveLength(moves.length);
     expect(CODE).not.toMatch(/useNativeDriver: false/);
     // …which also means only transforms and opacity are ever animated.
-    expect(CODE).not.toMatch(/(height|width|top|left): (rise|grab|lid|think)\b/);
-  });
-
-  test('thinking tips the head BACK, a little', () => {
-    expect(THINK_TILT_DEG).toBeLessThan(0);
-    expect(THINK_TILT_DEG).toBeGreaterThanOrEqual(-12);
+    expect(CODE).not.toMatch(/(height|width|top|left): (rise|grab|lid|think|gazeX|gazeY|breath|nod|tap|drum)\b/);
   });
 
   test('Reduce Motion is asked for', () => {

@@ -23,6 +23,7 @@ import ClaudeTurtleMark, {
   CLAUDE_MARK_COLOR,
   CLAUDE_MARK_LEVEL,
   CLAUDE_MARK_NIGHT,
+  CLAUDE_POINT_AT,
   artPoint,
   facePath,
   CLAUDE_MARK_LEDGE,
@@ -178,8 +179,33 @@ describe('ClaudeTurtleMark', () => {
     expect(parts('Path')[0].props.d).toMatch(/^M338 128/);
   });
 
+  test('the POINTING hand is a layer of its own, and not in the still mark', async () => {
+    const still = await render(<ClaudeTurtleMark />);
+    expect(screen.queryByTestId('claude-turtle-mark-point')).toBeNull();
+    await still.unmount();
+    await render(<ClaudeTurtleMark parts={['pointHand']} handFill="#FFFFFF" />);
+    const hand = screen.getByTestId('claude-turtle-mark-point');
+    expect(hand.props.fill).toBe('#FFFFFF');
+    // One closed shape — fist and finger together.
+    expect(hand.props.d).toMatch(/ Z$/);
+    // The fingertip (drawn at about −22,−41 from the fist, turned −12°) lands
+    // beside the end of the smile at (198,130): a finger at the corner of
+    // his mouth, not in his eye (215,92) and not out in the air.
+    const a = (-12 * Math.PI) / 180;
+    const tip = {
+      x: CLAUDE_POINT_AT.x + (-22 * Math.cos(a) - -41 * Math.sin(a)),
+      y: CLAUDE_POINT_AT.y + (-22 * Math.sin(a) + -41 * Math.cos(a)),
+    };
+    expect(Math.hypot(tip.x - 198, tip.y - 130)).toBeLessThan(24);
+    expect(Math.hypot(tip.x - 215, tip.y - 92)).toBeGreaterThan(18);
+    // …and the fist is below it, down at the ledge (150).
+    expect(CLAUDE_POINT_AT.y).toBeGreaterThan(140);
+  });
+
   test('there is no raised finger in the drawing', () => {
-    // It was the first thinking pose, and it read as a tail (Mark, 2026-11-15).
+
+    // A LONE finger sticking up was the first thinking pose, and it read as a
+    // tail (Mark, 2026-11-15). The pointing hand is a hand with a finger on it.
     const mark = fs.readFileSync(path.resolve(__dirname, '..', 'ClaudeTurtleMark.jsx'), 'utf8');
     expect(mark).not.toMatch(/FINGER_UP|includes..finger/);
   });

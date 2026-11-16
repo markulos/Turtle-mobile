@@ -2444,8 +2444,9 @@ export default function TurtleScreen() {
           <>
             <View pointerEvents="none" style={styles.claudePeek} testID="claude-mark-peek">
               {/* ALIVE: he jumps up from behind the ridge when the session
-                  starts, blinks, and thinks — a hand to his chin, head
-                  back — for as long as a turn is in flight. */}
+                  starts, breathes, blinks and looks about — and for as long
+                  as a turn is in flight he THINKS: one finger at the corner
+                  of his mouth, eyes rolled up and away. */}
               <ClaudeTurtleBuddy
                 size={CLAUDE_PEEK_WIDTH}
                 thinking={claudeBusy}

@@ -116,6 +116,26 @@ export function penFor(size, weight) {
   return units > DRAWN_PEN ? units : DRAWN_PEN;
 }
 
+/**
+ * THE POINTING HAND — a fist with one finger out, for the thinking pose. Drawn
+ * about the middle of its own fist, the finger rising from the upper-left; it
+ * is placed and turned by CLAUDE_POINT_AT / POINT_TURN so that the fingertip
+ * rests at the corner of his mouth (the end of the smile, about 198,130) with
+ * the fist below it on the ledge. Its lower edge is scalloped the way the
+ * resting hands are, so it is plainly the same hand, closed.
+ *
+ * Not part of the still mark: only the animated one asks for it.
+ */
+const POINT_HAND = 'M-20 8 C-26 -2 -26 -14 -28 -26 C-29 -36 -24 -42 -18 -41 '
+  + 'C-12 -40 -10 -32 -10 -22 C-9 -18 -6 -15 0 -16 C12 -18 24 -12 25 -2 '
+  + 'C26 4 20 8 16 7 C18 14 10 18 4 13 C2 20 -10 20 -12 13 C-16 16 -19 13 -20 8 Z';
+/** Where the pointing hand's fist sits, in the drawing's units. */
+export const CLAUDE_POINT_AT = { x: 236, y: 148 };
+const POINT_TURN = -12;
+
+/** One unit of the drawing, in points, on a mark `size` wide. */
+export const artUnit = (size) => size / BOX.w;
+
 /** The layers of the still mark. A caller may also ask for one hand alone. */
 export const CLAUDE_MARK_PARTS = ['face', 'eyes', 'hands'];
 
@@ -182,8 +202,9 @@ export default function ClaudeTurtleMark({
   /**
    * Which layers to draw: any of 'face' (the head line, and the face shape
    * when `faceFill` is set), 'eyes', 'hands' — or 'leftHand' / 'rightHand'
-   * for one of them alone. The still mark is the first three. The animated
-   * mark draws them one layer at a time so each can move on its own.
+   * for one of them alone, and 'pointHand' for the thinking pose's hand. The
+   * still mark is the first three. The animated mark draws them one layer at
+   * a time so each can move on its own.
    */
   parts = CLAUDE_MARK_PARTS,
   testID = 'claude-turtle-mark',
@@ -224,6 +245,19 @@ export default function ClaudeTurtleMark({
             strokeLinejoin="round"
           />
         ))}
+        {parts.includes('pointHand') && (
+          <G transform={`translate(${CLAUDE_POINT_AT.x} ${CLAUDE_POINT_AT.y}) rotate(${POINT_TURN})`}>
+            <Path
+              testID={`${testID}-point`}
+              d={POINT_HAND}
+              fill={handFill}
+              stroke={color}
+              strokeWidth={pen}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </G>
+        )}
         {parts.includes('eyes') && EYES.map((e) => (
           <Circle key={e.cx} cx={e.cx} cy={e.cy} r={e.r > eyeFloor ? e.r : eyeFloor} fill={color} />
         ))}
