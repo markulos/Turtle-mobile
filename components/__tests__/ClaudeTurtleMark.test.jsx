@@ -437,6 +437,35 @@ describe('ClaudeTurtleMark', () => {
     expect(ctl).toMatch(/numberOfLines=\{1\}\s*>\{statusText\}/);
   });
 
+  test('THE COMPOSER CORNER IS ONE PLACE — search out of a session, controls in one', () => {
+    // Mark, 2026-11-16: "let the search button be on the top right corner of
+    // the orchestrator in personal notes." Search used to be a sibling of
+    // the identity bar, which in a session belongs to the title, the ridge
+    // and the mark — so out of a session the header held a key that had
+    // nowhere to go in one, and the corner meant two different things.
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    // Gone from the header…
+    const header = src.slice(src.indexOf('<View style={styles.headerTopRow}>'), src.indexOf('styles.claudePeek'));
+    expect(header).not.toMatch(/testID="header-search"/);
+    // …and in the composer's top row, with the bot slot, before the session
+    // controls that take the same corner when there is a session.
+    const top = src.slice(src.indexOf('<View style={styles.composerTopRow}>'), src.indexOf('actions={'));
+    expect(top).toMatch(/testID="header-search"/);
+    expect(top.indexOf('testID="header-search"')).toBeGreaterThan(top.indexOf('styles.botSlot'));
+    // Exactly one of the two is ever up.
+    expect(top).toMatch(/\{!inClaudeSession && \(/);
+    expect(top).toMatch(/\{inClaudeSession && \(\s*<ClaudeSessionControls/);
+    // Packed to the trailing edge the way the controls are, not floating in
+    // the middle of the row.
+    expect(src).toMatch(/composerSearch: \{[^}]*alignItems: 'flex-end'/);
+    // The header style it left behind went with it.
+    expect(src).not.toMatch(/headerSearchButton/);
+    // The row it left keeps its height from the constant, not from the key —
+    // which is the whole reason that constant exists.
+    const row = src.slice(src.indexOf('    headerTopRow: {'), src.indexOf('    claudePeek: {'));
+    expect(row).toMatch(/minHeight: HEADER_ROW_MIN_HEIGHT,/);
+  });
+
   test('…and takes the corner it is now alone in', () => {
     // 44 was what fitted BESIDE something else. Sized to the corner, the
     // drawing is legible: about 35pt tall, a touch over half above the

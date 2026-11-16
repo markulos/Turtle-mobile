@@ -2441,24 +2441,10 @@ export default function TurtleScreen() {
               over the ridge IS the brand mark now, in both states, and two
               marks in one corner left neither of them room. See `markShown`. */}
         </TouchableOpacity>
-        {/* Search everything — a sibling of the identity bar in the same
-            60pt row, so the header's height is untouched. Stood down during a
-            Claude session: the session controls take this slot (their own row
-            below), and search is a tap away once the console is minimized. */}
-        {!inClaudeSession && (
-          <TouchableOpacity
-            onPressIn={() => tapHaptic()}
-            onPress={() => openGlobalSearch('')}
-            activeOpacity={0.6}
-            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            style={styles.headerSearchButton}
-            accessibilityRole="button"
-            accessibilityLabel="Search everything"
-            testID="header-search"
-          >
-            <Icon name="magnify" size={24} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
-        )}
+        {/* Search used to sit here, as a sibling of the identity bar. It is
+            in the composer's top-right corner now (Mark, 2026-11-16) — the
+            same corner a session's controls take, so that corner means the
+            same thing in both states and this row is the mark's alone. */}
 
         {/* Claude's mark, OVER THE LEDGE. The ridge (inside the identity bar,
             above) is the row's centre line; the mark is hung from that line
@@ -3470,6 +3456,29 @@ export default function TurtleScreen() {
                   hide — in the TOP-RIGHT CORNER of the composer, beside
                   the bot slot that opened the session. They were a second
                   row on the chat header. */}
+              {/* NOTES TO SELF: search everything, hard right. It was in the
+                  chat header, which in a session belongs to the title, the
+                  ridge and the mark — so out of a session it held a key that
+                  had nowhere to go in one. Here it takes the corner the
+                  session's controls take, which makes that corner one place
+                  rather than two: whatever this composer can do right now. */}
+              {!inClaudeSession && (
+                <View style={styles.composerSearch}>
+                  <TouchableOpacity
+                    onPressIn={() => tapHaptic()}
+                    onPress={() => openGlobalSearch('')}
+                    activeOpacity={0.6}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Search everything"
+                    testID="header-search"
+                  >
+                    {/* 18, not the header's 24: it sits beside the bot slot's
+                        17pt glyph now, and the hit area is the hitSlop's. */}
+                    <Icon name="magnify" size={18} color={theme.colors.textPrimary} />
+                  </TouchableOpacity>
+                </View>
+              )}
               {inClaudeSession && (
                 <ClaudeSessionControls
                   compact
@@ -3852,6 +3861,10 @@ const createStyles = (theme, insets) =>
     // NOT `flex: 1`: that is a basis of zero, and the cluster must start from
     // the width of its own buttons and only then give way.
     composerControls: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
+    // The search key in that same corner out of a session: takes the rest of
+    // the row and pushes its one glyph to the trailing edge, which is how the
+    // controls pack themselves (ClaudeSessionControls' rowCompact).
+    composerSearch: { flexGrow: 1, flexShrink: 1, minWidth: 0, alignItems: 'flex-end' },
     // The composer's top zone as a stack: the thumb rail (when there are
     // attachments) over the bot-slot row.
     composerTopStack: { flex: 1, minWidth: 0, gap: 10 },
@@ -3865,13 +3878,6 @@ const createStyles = (theme, insets) =>
       paddingHorizontal: IDENTITY_INSET,
     },
     identityAvatarWrap: { width: 34, height: 34 },
-    headerSearchButton: {
-      width: 44,
-      height: 44,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginRight: 4,
-    },
     // Accent ring around the avatar, matching the profile card's treatment.
     identityAvatarRing: {
       width: 34, height: 34, borderRadius: 17,
