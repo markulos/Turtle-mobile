@@ -3460,6 +3460,10 @@ export default function TurtleScreen() {
                   onClose={claudeClose}
                 />
               )}
+              {/* The header's own edge, and the top of the photos band. */}
+              {claudeImages.length > 0 && (
+                <View pointerEvents="none" style={styles.composerTopRule} />
+              )}
               {claudeImages.length > 0 && (
                 // A RAIL ON ITS OWN ROW, under the keys. Eight 64pt thumbs do
                 // not fit a phone, so it scrolls — and `alignSelf: stretch`
@@ -3885,7 +3889,34 @@ const createStyles = (theme, insets) =>
     // The composer's top zone as a stack: the thumb rail (when there are
     // attachments) over the bot-slot row.
     composerTopStack: { flex: 1, minWidth: 0, gap: 10 },
-    composerTopRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+    /**
+     * THE CONTROLS HEADER — a band the full width of the composer.
+     *
+     * `alignSelf: stretch` is explicit rather than inherited: the stack's
+     * default cross-axis alignment is what was giving the rail its own
+     * width, and leaving this row to chance is how the two ended up looking
+     * like one line with things on it. Mark, 2026-11-16: "let this row be
+     * underneath a full orchestrator width of Claude controls header
+     * buttons."
+     */
+    composerTopRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 14,
+      alignSelf: 'stretch',
+    },
+    /**
+     * …and the line under it, so the header and the photos are plainly two
+     * bands rather than one crowded one. Full-bleed across the composer's
+     * own padding — it divides two REGIONS of the panel (STYLE-RULES §8) —
+     * and only drawn when there is something under it to divide.
+     */
+    composerTopRule: {
+      height: StyleSheet.hairlineWidth,
+      marginHorizontal: -16,
+      backgroundColor: theme.colors.borderNeutral,
+      opacity: 0.8,
+    },
     identityBar: {
       flex: 1,
       flexDirection: 'row',

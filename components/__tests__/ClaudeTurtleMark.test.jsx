@@ -526,13 +526,23 @@ describe('ClaudeTurtleMark', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
     const top = src.slice(src.indexOf('topSlot={'), src.indexOf('actions={'));
 
-    // A row of its own, under the keys — and the FULL WIDTH of it. Without
-    // the stretch the rail is only as wide as its content and comes to rest
-    // beside the controls, which is the arrangement that was called out.
+    // THE CONTROLS ARE A BAND, the photos a band under it. Both stretch:
+    // leaving either to the stack's default cross-axis alignment is how the
+    // two ended up reading as one line with things on it.
     expect(top.indexOf('styles.composerThumbRail')).toBeGreaterThan(top.indexOf('styles.composerTopRow'));
+    const headerRow = src.slice(src.indexOf('    composerTopRow: {'), src.indexOf('    composerTopRule: {'));
+    expect(headerRow).toMatch(/alignSelf: 'stretch'/);
     const rail = src.slice(src.indexOf('    composerThumbRail: {'), src.indexOf('    composerThumbRailContent: {'));
     expect(rail).toMatch(/alignSelf: 'stretch'/);
     expect(rail).toMatch(/flexGrow: 0/);
+    // A rule between them, full-bleed across the composer's padding — it
+    // divides two REGIONS of the panel, not two items (§8) — and only when
+    // there is a photos band to divide.
+    expect(top.indexOf('styles.composerTopRule')).toBeGreaterThan(top.indexOf('styles.composerTopRow'));
+    expect(top.indexOf('styles.composerTopRule')).toBeLessThan(top.indexOf('styles.composerThumbRail'));
+    expect(top).toMatch(/\{claudeImages\.length > 0 && \(\s*<View pointerEvents="none" style=\{styles\.composerTopRule\}/);
+    expect(src.slice(src.indexOf('    composerTopRule: {'), src.indexOf('    identityBar: {')))
+      .toMatch(/marginHorizontal: -16/);
 
     // ONE TAP. It was a long press, which is a hidden gesture on the only
     // control that shows you what you attached.
