@@ -347,7 +347,10 @@ describe('ClaudeTurtleMark', () => {
     expect(top.indexOf('<ClaudeSessionControls')).toBeGreaterThan(top.indexOf('styles.botSlot'));
     // The pill shrinks; the buttons do not (they carry the labels you tap).
     expect(ctl).toMatch(/statusPillCompact: \{ flexShrink: 1, minWidth: 0 \},/);
-    expect(ctl).toMatch(/numberOfLines=\{1\}>\{statusText\}/);
+    // One line, whatever the state word is — a two-line pill would grow the
+    // composer's corner. (The pill is also the live toggle now; what it says
+    // and how it behaves is ClaudeSessionControls.test's business.)
+    expect(ctl).toMatch(/numberOfLines=\{1\}\s*>\{statusText\}/);
   });
 
   test('…and takes the corner it is now alone in', () => {

@@ -6,8 +6,20 @@ import { depth } from '../../../utils/surfaceDepth';
 import { notifyHaptic } from '../../../utils/haptics';
 
 /**
- * ClaudeSessionControls — the live-session control cluster (status pill, live
- * toggle, Stop, expand, minimize).
+ * ClaudeSessionControls — the live-session control cluster (status pill, Stop,
+ * expand, minimize).
+ *
+ * THE PILL IS THE TOGGLE. It used to be two controls side by side and they
+ * said the same word: a pill reading "live" and, next to it, a button reading
+ * "Live". Mark, 2026-11-15: "combine the two live buttons in the orchestrator
+ * corner." One of them was the readout and the other was the switch, which is
+ * a distinction that only exists in the code — on screen it was the state
+ * printed twice, in a corner that has four other controls in it.
+ *
+ * So the readout IS the switch now: the dot, the word, and a pause/play glyph
+ * that says what tapping does. The glyph appears only while there is something
+ * to toggle, so "starting…" and "signing in…" stay plain readouts rather than
+ * offering a switch that would do nothing.
  *
  * This used to be the ClaudeConsole card's own header row. It lives in the CHAT
  * HEADER now: the console overlay is pure log output, and the controls ride on
@@ -50,32 +62,57 @@ export default function ClaudeSessionControls({
 
   const HIT = { top: 8, bottom: 8, left: 8, right: 8 };
 
+  // Pausing stops the per-chunk log stream — the session keeps running in the
+  // background, buffered server-side — and going live replays the buffer to
+  // catch up. Only offered once there IS a stream: before the session is up,
+  // the pill is a readout and nothing more.
+  const canToggle = !!(active && !isLogin && onToggleLive);
+  const pill = (
+    <>
+      {busy && !isLogin && !paused
+        ? <ActivityIndicator size="small" color={theme.colors.accentInfo} />
+        : <View style={[styles.dot, { backgroundColor: dotColor }]} />}
+      <Text
+        style={[
+          styles.statusText,
+          compact && styles.statusTextCompact,
+          paused && { color: theme.colors.accentWarning },
+        ]}
+        numberOfLines={1}
+      >{statusText}</Text>
+      {/* What tapping does, not what the state is — the word beside it already
+          says the state. */}
+      {canToggle && (
+        <Icon
+          name={live ? 'pause' : 'play'}
+          size={12}
+          color={paused ? theme.colors.accentWarning : theme.colors.textTertiary}
+        />
+      )}
+    </>
+  );
+
   return (
     <View style={[styles.row, compact && styles.rowCompact, style]}>
-      <View style={[styles.statusPill, compact && styles.statusPillCompact]}>
-        {busy && !isLogin && !paused
-          ? <ActivityIndicator size="small" color={theme.colors.accentInfo} />
-          : <View style={[styles.dot, { backgroundColor: dotColor }]} />}
-        <Text style={[styles.statusText, compact && styles.statusTextCompact]} numberOfLines={1}>{statusText}</Text>
-      </View>
-
-      {/* Live-view toggle. Pausing stops the per-chunk log stream (the session
-          keeps running in the background, buffered server-side); going live
-          replays the buffer to catch up. The off state is tinted so it's
-          obvious the panel isn't updating. */}
-      {active && !isLogin && onToggleLive && (
+      {canToggle ? (
         <TouchableOpacity
           onPress={onToggleLive}
           hitSlop={HIT}
-          style={[styles.liveBtn, !live && styles.liveBtnPaused]}
+          // Tinted while paused, which is the one state worth noticing from
+          // across the room: the panel has stopped updating and the work has
+          // not.
+          style={[styles.statusPill, compact && styles.statusPillCompact, paused && styles.statusPillPaused]}
           accessibilityRole="button"
+          accessibilityState={{ selected: live }}
           accessibilityLabel={live ? 'Pause live log (Claude keeps working in the background)' : 'Resume live log and catch up'}
+          testID="claude-live-pill"
         >
-          <Icon name={live ? 'pause' : 'play'} size={13} color={live ? theme.colors.accentSuccess : theme.colors.accentWarning} />
-          <Text style={[styles.liveBtnText, { color: live ? theme.colors.accentSuccess : theme.colors.accentWarning }]}>
-            {live ? 'Live' : 'Paused'}
-          </Text>
+          {pill}
         </TouchableOpacity>
+      ) : (
+        <View style={[styles.statusPill, compact && styles.statusPillCompact]} testID="claude-live-pill">
+          {pill}
+        </View>
       )}
 
       <TouchableOpacity
@@ -140,19 +177,7 @@ const createStyles = (theme) => StyleSheet.create({
   },
   dot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 11, fontWeight: '600', color: theme.colors.textSecondary },
-  liveBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: `${theme.colors.accentSuccess}1A`,
-  },
-  liveBtnPaused: {
-    backgroundColor: `${theme.colors.accentWarning}26`,
-  },
-  liveBtnText: { fontSize: 11, fontWeight: '700' },
+  statusPillPaused: { backgroundColor: `${theme.colors.accentWarning}26` },
   stopBtn: {
     paddingHorizontal: 10,
     paddingVertical: 4,
