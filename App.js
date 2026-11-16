@@ -922,8 +922,10 @@ export default function App() {
                             counted from here because the Profile tab is lazy and cannot
                             know what is waiting on it until it has been opened. */}
                         <ErrorBoundary label="attention sync" fallback={null}><AttentionSync /></ErrorBoundary>
-                        {/* A newer app update is fetched quietly after launch and applies
-                            on the next open — so a bad update heals without any menus. */}
+                        {/* A newer app update is fetched quietly after launch, and once
+                            it is on the phone this offers it: one button, which
+                            restarts into it. Saying no costs nothing — it still applies
+                            on the next cold start, which is all this did before. */}
                         <ErrorBoundary label="launch update check" fallback={null}><LaunchUpdateCheck /></ErrorBoundary>
                         {/* The iOS Live Activity and the completion confetti,
                             driven from here rather than from inside the lazy

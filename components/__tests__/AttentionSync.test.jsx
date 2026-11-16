@@ -15,7 +15,6 @@ jest.mock('../../context/DownloadsContext', () => ({
 }));
 
 import AttentionSync, { TASK_PING_DEBOUNCE_MS } from '../AttentionSync';
-import LaunchUpdateCheck from '../LaunchUpdateCheck';
 import { __resetAttention, getAttention, requestAttentionRefresh, setAttention } from '../../utils/attention';
 
 /**
@@ -137,19 +136,11 @@ test('whoever changes a count can ask it for the truth', async () => {
   await waitFor(() => expect(getAttention().notifications).toBe(3));
 });
 
-test('the launch update check mounts, schedules, and cleans up after itself', async () => {
-  jest.useFakeTimers();
-  const remove = jest.fn();
-  const spy = jest.spyOn(AppState, 'addEventListener').mockReturnValue({ remove });
-  try {
-    const view = await render(<LaunchUpdateCheck />);
-    expect(spy).toHaveBeenCalledWith('change', expect.any(Function));
-    await view.unmount();
-    expect(remove).toHaveBeenCalledTimes(1);
-    // Unmounted before its delay: the timer must not fire into nothing.
-    expect(() => jest.runOnlyPendingTimers()).not.toThrow();
-  } finally {
-    spy.mockRestore();
-    jest.useRealTimers();
-  }
-});
+/**
+ * The launch update check used to be tested here, because it was the other
+ * render-nothing component mounted at the app root. It has a sheet of its own
+ * now (it offers the update it finds), so it has a theme — and importing it
+ * into this suite dragged ThemeContext, and with it AsyncStorage, into a
+ * file that only wanted to count unread messages. Its tests moved to
+ * components/__tests__/LaunchUpdateCheck.test.jsx.
+ */
