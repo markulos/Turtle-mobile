@@ -40,6 +40,27 @@ import ClaudeTurtleMark, {
 
 const parts = (tag) => screen.getAllByTestId('svg-' + tag);
 
+/**
+ * How deep inside <View>s a marker sits, counted from the start of `jsx`.
+ *
+ * Text order is not nesting: a child and a younger sibling both appear
+ * "after". This counts opening tags that have not been closed yet, which is
+ * the only thing that tells a row's CONTENTS from the row's NEIGHBOUR.
+ */
+function nestingDepth(jsx, marker) {
+  const at = jsx.indexOf(marker);
+  if (at < 0) return -1;
+  // A style marker sits INSIDE its own opening tag, so that tag is already
+  // counted — which is what makes two siblings come out equal.
+  const before = jsx.slice(0, at);
+  // A character class, not a word boundary. A backslash-b typed through a
+  // shell heredoc arrives as a literal BACKSPACE byte: it matches nothing,
+  // every count comes out zero, and the regex stays valid so nothing says so.
+  const opens = (before.match(/<(?:View|ScrollView|Animated\.View)[\s/>](?![^>]*\/>)/g) || []).length;
+  const closes = (before.match(/<\/(?:View|ScrollView|Animated\.View)>/g) || []).length;
+  return opens - closes;
+}
+
 describe('ClaudeTurtleMark', () => {
   test('is the whole drawing: a head, two hands, two eyes', async () => {
     await render(<ClaudeTurtleMark />);
@@ -526,9 +547,18 @@ describe('ClaudeTurtleMark', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
     const top = src.slice(src.indexOf('topSlot={'), src.indexOf('actions={'));
 
-    // THE CONTROLS ARE A BAND, the photos a band under it. Both stretch:
-    // leaving either to the stack's default cross-axis alignment is how the
-    // two ended up reading as one line with things on it.
+    // THE RAIL IS A SIBLING OF THE CONTROLS ROW, not a child of it.
+    //
+    // THE BUG THIS PINS, and it shipped three times: a reorder left the
+    // controls row's `</View>` at the very end of the stack, so the rule and
+    // the rail were children of a `flexDirection: 'row'` — and a row lays
+    // its children SIDE BY SIDE whatever alignSelf says. Text order said
+    // "rail after row" and was true the whole time; the nesting was the
+    // thing that was wrong, so it has to be the thing that is checked.
+    console.log('DBG len', top.length, 'row', nestingDepth(top, 'styles.composerTopRow'), 'rail', nestingDepth(top, 'styles.composerThumbRail'));
+    expect(nestingDepth(top, 'styles.composerThumbRail')).toBe(
+      nestingDepth(top, 'styles.composerTopRow'),
+    );
     expect(top.indexOf('styles.composerThumbRail')).toBeGreaterThan(top.indexOf('styles.composerTopRow'));
     const headerRow = src.slice(src.indexOf('    composerTopRow: {'), src.indexOf('    composerTopRule: {'));
     expect(headerRow).toMatch(/alignSelf: 'stretch'/);

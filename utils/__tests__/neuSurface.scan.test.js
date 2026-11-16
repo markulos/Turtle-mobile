@@ -135,9 +135,9 @@ describe('STYLE-RULES §9 — the neumorphic surfaces', () => {
     expect(FINE_GRAIN).toBeLessThan(1);
     for (const rel of PANELS) {
       const src = code(rel);
-      for (const tag of src.match(/<Grain[^/]*\/>/g) || []) {
-        if (/radius=/.test(tag)) expect(tag).toMatch(/fine/);
-        else expect(tag).not.toMatch(/fine/);
+      for (const tag of src.match(/<Grain\s[^/]*\/>/g) || []) {
+        if (/radius=/.test(tag)) expect(tag).toMatch(/\sfine\s/);
+        else expect(tag).not.toMatch(/\sfine\s/);
       }
     }
   });

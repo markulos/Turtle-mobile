@@ -69,7 +69,7 @@ const OFFENDER = /((?:header|topBar|chatHeader|headerBar)[A-Za-z]*)\s*:\s*\{[^{}
  * catching real offenders too, and a scan that quietly matches nothing is worse
  * than no scan at all.
  */
-const drawsALine = (block) => !/borderBottomWidth\s*:\s*0/.test(block);
+const drawsALine = (block) => !/borderBottomWidth\s*:\s*0(?![.\d])/.test(block);
 
 const files = ROOTS.flatMap((r) => (fs.existsSync(r) ? walk(r) : []));
 

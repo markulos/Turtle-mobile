@@ -3460,6 +3460,8 @@ export default function TurtleScreen() {
                   onClose={claudeClose}
                 />
               )}
+              </View>
+
               {/* The header's own edge, and the top of the photos band. */}
               {claudeImages.length > 0 && (
                 <View pointerEvents="none" style={styles.composerTopRule} />
@@ -3515,7 +3517,6 @@ export default function TurtleScreen() {
                   ))}
                 </ScrollView>
               )}
-              </View>
             </View>
           }
           actions={
