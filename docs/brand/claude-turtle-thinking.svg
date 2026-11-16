@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="30 40 316 150" width="632" height="300" fill="none" stroke="#F5821F" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+  <title>Claude x Turtle mark, thinking</title>
+  <!-- The thinking pose of the animated mark (components/ClaudeTurtleBuddy):
+       head leaning toward the hand, eyes up and away, the right hand raised
+       with the INDEX at the corner of the mouth and the THUMB out under the
+       chin. Same art as claude-turtle-mark.svg; the hand is POINT_HAND from
+       components/ClaudeTurtleMark.jsx, placed at (236,150) turned -4. -->
+  <g transform="rotate(2.3 188 122)">
+    <g transform="translate(0 -3) rotate(4 188 122)">
+      <path d="M264 126 C263 101 246 72 214 68 C184 64 149 85 133 112 C124 127 124 141 138 147 C156 154 186 150 198 130"/>
+      <circle cx="171" cy="98" r="5.5" fill="#F5821F" stroke="none"/>
+      <circle cx="210" cy="87" r="6" fill="#F5821F" stroke="none"/>
+    </g>
+    <path fill="#FFFFFF" d="M44 160 C46 142 62 128 84 126 C97 124 110 128 111 138 C112 146 101 150 92 152 C95 160 85 167 78 158 C79 170 65 175 62 163 C60 178 44 177 44 160 Z"/>
+    <g transform="translate(236 150) rotate(-4)">
+      <path fill="#FFFFFF" d="M-18 11 C-27 14 -40 14 -49 11 C-56 9 -58 1 -52 -1 C-45 -3 -36 0 -27 -4 C-27 -14 -27 -18 -28 -23 C-29 -32 -24 -37 -18 -36 C-12 -35 -10 -28 -10 -20 C-9 -17 -6 -15 0 -16 C12 -18 24 -12 25 -2 C26 4 20 8 16 7 C18 14 10 18 4 13 C2 20 -10 20 -12 13 C-14 15 -17 13 -18 10 Z"/>
+    </g>
+  </g>
+</svg>

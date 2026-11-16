@@ -15,7 +15,7 @@
  *     — rest there a moment and come back. Now and then he tips his head a
  *     little instead, or drums a hand on the ledge.
  *   • THINKS while Claude is working: one hand comes up beside his mouth with
- *     a single finger resting at the corner of it, his head leans toward the
+ *     index finger resting at the corner of it and thumb out under his chin, his head leans toward the
  *     hand, and his eyes roll up and away — the cartoon "hmm". While he holds
  *     it the finger taps and the eyes wander about up there.
  *   • READS WHAT YOU ARE WRITING: the moment you type in the composer his eyes
@@ -467,7 +467,7 @@ export default function ClaudeTurtleBuddy({
       <Animated.View testID={`${testID}-hand-right`} style={[layer, rightStyle]}>
         <ClaudeTurtleMark {...art} parts={RIGHT} handFill={handFill} testID={`${testID}-hand-right-art`} />
       </Animated.View>
-      {/* 4 — …and pointing, one finger at the corner of his mouth. */}
+      {/* 4 — …and thinking: index at the corner of his mouth, thumb under his chin. */}
       <Animated.View testID={`${testID}-hand-point`} style={[layer, pointStyle]}>
         <ClaudeTurtleMark {...art} parts={POINT} handFill={handFill} testID={`${testID}-hand-point-art`} />
       </Animated.View>

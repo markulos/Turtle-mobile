@@ -24,6 +24,8 @@ import ClaudeTurtleMark, {
   CLAUDE_MARK_LEVEL,
   CLAUDE_MARK_NIGHT,
   CLAUDE_POINT_AT,
+  CLAUDE_POINT_TIPS,
+  CLAUDE_POINT_TURN,
   artPoint,
   facePath,
   CLAUDE_MARK_LEDGE,
@@ -179,26 +181,46 @@ describe('ClaudeTurtleMark', () => {
     expect(parts('Path')[0].props.d).toMatch(/^M338 128/);
   });
 
-  test('the POINTING hand is a layer of its own, and not in the still mark', async () => {
+  test('the THINKING hand is a layer of its own, and not in the still mark', async () => {
     const still = await render(<ClaudeTurtleMark />);
     expect(screen.queryByTestId('claude-turtle-mark-point')).toBeNull();
     await still.unmount();
     await render(<ClaudeTurtleMark parts={['pointHand']} handFill="#FFFFFF" />);
     const hand = screen.getByTestId('claude-turtle-mark-point');
     expect(hand.props.fill).toBe('#FFFFFF');
-    // One closed shape — fist and finger together.
+    // One closed shape — fist, index and thumb together.
     expect(hand.props.d).toMatch(/ Z$/);
-    // The fingertip (drawn at about −22,−41 from the fist, turned −12°) lands
-    // beside the end of the smile at (198,130): a finger at the corner of
-    // his mouth, not in his eye (215,92) and not out in the air.
-    const a = (-12 * Math.PI) / 180;
-    const tip = {
-      x: CLAUDE_POINT_AT.x + (-22 * Math.cos(a) - -41 * Math.sin(a)),
-      y: CLAUDE_POINT_AT.y + (-22 * Math.sin(a) + -41 * Math.cos(a)),
-    };
-    expect(Math.hypot(tip.x - 198, tip.y - 130)).toBeLessThan(24);
-    expect(Math.hypot(tip.x - 215, tip.y - 92)).toBeGreaterThan(18);
-    // …and the fist is below it, down at the ledge (150).
+  });
+
+  test('INDEX AND THUMB are both out: a finger by the mouth, a thumb under the chin', () => {
+    // Mark, 2026-11-16: "the hand needs an index and thumb out".
+    const a = (CLAUDE_POINT_TURN * Math.PI) / 180;
+    const placed = ({ x, y }) => ({
+      x: CLAUDE_POINT_AT.x + (x * Math.cos(a) - y * Math.sin(a)),
+      y: CLAUDE_POINT_AT.y + (x * Math.sin(a) + y * Math.cos(a)),
+    });
+    const index = placed(CLAUDE_POINT_TIPS.index);
+    const thumb = placed(CLAUDE_POINT_TIPS.thumb);
+    // The fingertip is beside the end of the smile (198,130) — at the corner
+    // of his mouth, not in his eye (215,92) and not out in the air.
+    expect(Math.hypot(index.x - 198, index.y - 130)).toBeLessThan(24);
+    expect(Math.hypot(index.x - 215, index.y - 92)).toBeGreaterThan(18);
+    // The thumb goes the other way: out to the side, well clear of the
+    // index, and LOW — under the chin (the ledge is at 150), not up the face.
+    expect(thumb.x).toBeLessThan(index.x - 20);
+    expect(thumb.y).toBeGreaterThan(index.y + 30);
+    expect(thumb.y).toBeGreaterThan(145);
+    expect(thumb.x).toBeGreaterThan(150);
+    // An L, near enough: the index runs mostly UP from the fist, the thumb
+    // mostly SIDEWAYS.
+    const { index: i, thumb: th } = CLAUDE_POINT_TIPS;
+    expect(Math.abs(i.y)).toBeGreaterThan(Math.abs(i.x));
+    expect(Math.abs(th.x)).toBeGreaterThan(Math.abs(th.y) * 3);
+    // And both tips are really on the drawn outline.
+    const mark = fs.readFileSync(path.resolve(__dirname, '..', 'ClaudeTurtleMark.jsx'), 'utf8');
+    expect(mark).toMatch(/C-29 -32 -24 -37 -18 -36/);
+    expect(mark).toMatch(/C-56 9 -58 1 -52 -1/);
+    // …and the fist is below them, down at the ledge.
     expect(CLAUDE_POINT_AT.y).toBeGreaterThan(140);
   });
 
