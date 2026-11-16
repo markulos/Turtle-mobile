@@ -70,6 +70,19 @@ export const GRAIN_OPACITY = 0.5;
  * pinning and the one nothing on screen will tell you, since a half-covered
  * panel still renders perfectly happily.
  */
+/**
+ * THE PANEL'S DUSTING, as a fraction of the page's.
+ *
+ * Mark, 2026-11-16: the tiles should be "a lighter colour and finer grain"
+ * than the ground. The speckle is already one device pixel at @3x, so it
+ * cannot be drawn smaller — what makes a surface read as finer-grained is
+ * LESS of it, the same tooth more lightly dusted. Half.
+ *
+ * A multiplier rather than a second opacity, so the person's setting still
+ * moves both surfaces together and Off is still off everywhere.
+ */
+export const FINE_GRAIN = 0.5;
+
 export function grainTiles(width, height, tile = GRAIN_TILE) {
   const cols = width > 0 ? Math.ceil(width / tile) : 0;
   const rows = height > 0 ? Math.ceil(height / tile) : 0;
@@ -85,9 +98,11 @@ export function grainTiles(width, height, tile = GRAIN_TILE) {
  * of them together.
  */
 export default function Grain({
-  level = 1, opacity = GRAIN_OPACITY, radius = 0, style, testID = 'grain',
+  level = 1, fine = false, opacity = GRAIN_OPACITY, radius = 0, style, testID = 'grain',
 }) {
-  const strength = opacity * (Number.isFinite(level) ? Math.max(0, level) : 1);
+  const strength = opacity
+    * (Number.isFinite(level) ? Math.max(0, level) : 1)
+    * (fine ? FINE_GRAIN : 1);
   // Measured rather than assumed: a fixed grid big enough for the largest
   // surface would lay dozens of tiles inside a small one and throw them away.
   const [size, setSize] = useState({ width: 0, height: 0 });

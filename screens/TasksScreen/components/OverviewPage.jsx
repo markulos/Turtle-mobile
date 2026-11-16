@@ -104,7 +104,7 @@ const FINDER_HEIGHT = 46;
 function Tile({ icon, label, value, caption, pal, neu, grain, accent, testID, onPress }) {
   const body = (
     <>
-      <Grain level={grain} radius={16} />
+      <Grain level={grain} fine radius={16} />
       <View style={styles.tileTop}>
         <View style={[styles.iconTile, { backgroundColor: pal.tile }]}>
           <Icon name={icon} size={15} color={accent || pal.text} />
@@ -590,7 +590,7 @@ function TaskList({ tasks, isDone, todayStr, theme, onOpenTask, showBoard }) {
 function BoardFinder({ query, onChangeQuery, onCreate, boardName, pal, neu, grain, canCreate }) {
   return (
     <View style={[styles.finder, neu]}>
-      <Grain level={grain} radius={14} />
+      <Grain level={grain} fine radius={14} />
       <View style={styles.finderField}>
         <Icon name="magnify" size={18} color={pal.muted} />
         <AppTextInput
@@ -834,7 +834,7 @@ function TagPick({ label, done, total, active, pal, neu, grain, onPress, testID 
         pressed && styles.pressed,
       ]}
     >
-      <Grain level={grain} radius={14} />
+      <Grain level={grain} fine radius={14} />
       <View style={styles.rowTop}>
         <Text style={[styles.rowName, { color: pal.text }]} numberOfLines={1}>{label}</Text>
         {active && <Icon name="check" size={16} color={pal.text} />}
@@ -848,7 +848,7 @@ function TagPick({ label, done, total, active, pal, neu, grain, onPress, testID 
 function TagRows({ rows, pal, neu, grain }) {
   return rows.map((r) => (
     <View key={r.tag} style={[styles.tagRow, neu]}>
-      <Grain level={grain} radius={14} />
+      <Grain level={grain} fine radius={14} />
       <View style={styles.rowTop}>
         <Text style={[styles.rowName, { color: pal.text }]} numberOfLines={1}>{r.tag}</Text>
         <Text style={[styles.rowFigure, { color: pal.text }]}>{r.done}<Text style={[styles.rowFigureTotal, { color: pal.sub }]}>/{r.total}</Text></Text>
@@ -1087,7 +1087,7 @@ function OverviewPage({
   // change. `insetCardPalette` is the other claim — a charcoal recess on a
   // page it stands off — and the two cannot share a surface.
   const pal = useMemo(() => focusSkin(theme), [theme]);
-  const neu = useMemo(() => neuRaised(pal.card, theme?.mode), [pal.card, theme?.mode]);
+  const neu = useMemo(() => neuRaised(pal.panel, theme?.mode), [pal.panel, theme?.mode]);
   const c = theme.colors;
   const todayStr = localTodayStr();
   const { all, rows: allRows, tagRows } = useMemo(() => overviewStats(tasks, boards, todayStr), [tasks, boards, todayStr]);

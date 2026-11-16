@@ -571,11 +571,23 @@ background in the design style for the app and incorporate it in the inbox tab
 as well" — so this is the style a NEW surface of that kind should reach for,
 not a one-off on one page.
 
-**The one rule it is:** an element is the **same colour as its page**, and the
-only thing separating them is a light source. A highlight above-left, a shadow
-below-right, and the eye reads a bump. Swap the two and it reads as a dent.
-There is no fill change, no tint and no border — **if you can see an edge, it
-is not this style.**
+**The shape of it:** a panel is raised out of its page by a light source — a
+highlight above-left, a shadow below-right, and the eye reads a bump. Swap
+the two and it reads as a dent. **No border**: if you can see a drawn edge,
+it is not this style.
+
+**Where this departs from textbook neumorphism, and why.** The textbook says
+the panel is *exactly* its page and only the light separates them. That is
+how this shipped and it did not survive the grain — on a speckled ground the
+shading is too quiet to find an edge through, and the tiles went missing in
+the texture. So a panel is **one step lighter than its ground**, and carries
+a **finer dusting** of the same grain (Mark, 2026-11-16: "just for them to be
+a lighter colour and finer grain"). A flat step, not a gradient: a sheen on
+the upper face was tried first and was more than the job needed.
+
+The step is a real pair out of the palette — in light mode the panel is the
+app's PAGE colour over the app's SURFACE colour — so it reads as material
+rather than as a tint somebody mixed.
 
 **The parts, all of them already written:**
 
@@ -585,21 +597,17 @@ is not this style.**
   are derived from the surface's own colour in HSL, so the style follows the
   theme with no second palette to keep in step.
 - **`focusSkin(theme)`** — `screens/TasksScreen/utils/focusSkin.js`. The
-  palette: the app's cream in light mode, the warm charcoal in dark, and the
-  **ink flips with it**. NOT `insetCardPalette`, whose text is white in BOTH
+  palette. `card` is the GROUND and `panel` is the step above it — reach for
+  the right one: a page paints `card`, a panel paints `panel` and takes its
+  shading from it. The app's cream in light mode, the warm charcoal in dark,
+  and the **ink flips with it**. NOT `insetCardPalette`, whose text is white in BOTH
   modes because its card is a charcoal recess — that palette's ink on this
   surface is invisible in light mode, and it has happened twice.
-- **`<NeuSheen colors={sheen} radius={N} />`** — `components/NeuSheen.jsx`.
-  The light on a raised panel's upper face: the panel's **own** `lit` tone,
-  fading to nothing by a third of the way down. Not a contradiction of the
-  one-colour rule — it IS the light, and the panel's body is still exactly
-  the page. Added 2026-11-16 because tiles the same colour as a grained page
-  go missing in it. Laid FIRST, with the grain over it: the tooth belongs to
-  the material, so it sits on the lit face. The **ground gets none** — light
-  the things standing out of the page, not the page.
-- **`<Grain level={grain} radius={N} />`** — `components/Grain.jsx`. The
+- **`<Grain level={grain} fine radius={N} />`** — `components/Grain.jsx`. The
   silver tooth. A flat fill under soft shadows reads as plastic; the speckle is
-  what makes it a material. **`level` is a prop, never a `useTheme()` read** —
+  what makes it a material. **`fine` on a panel, nothing on the ground** — the
+  speckle is already one device pixel at @3x and cannot be drawn smaller, so
+  what reads as finer-grained is less of it (`FINE_GRAIN`, a half). **`level` is a prop, never a `useTheme()` read** —
   Grain must not import ThemeContext (it pulls AsyncStorage into every suite
   that mounts the component). The screen reads `grain` from `useTheme()` and
   threads it down. `radius` must match the panel's, because a repeating fill is

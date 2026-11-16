@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet } from 'react-native';
 import { render } from '@testing-library/react-native';
 
-import Grain, { GRAIN_OPACITY, GRAIN_TILE, grainTiles } from '../Grain';
+import Grain, { FINE_GRAIN, GRAIN_OPACITY, GRAIN_TILE, grainTiles } from '../Grain';
 
 /**
  * What broke on the phone, pinned.
@@ -120,6 +120,29 @@ describe('Grain', () => {
     // Off is off: nothing rendered, not a transparent layer still measuring
     // itself and laying tiles nobody can see.
     const off = await render(<Grain level={0} />);
+    expect(off.queryByTestId('grain-clip', HIDDEN)).toBeNull();
+  });
+
+  test('`fine` is a LIGHTER DUSTING of the same tooth, not a smaller one', async () => {
+    // Mark, 2026-11-16: a panel should be "a lighter colour and finer grain"
+    // than the ground it sits on. The speckle is already one device pixel at
+    // @3x and cannot be drawn smaller, so finer means less of it.
+    const coarse = await render(<Grain />);
+    const fine = await render(<Grain fine />);
+    expect(flat(clipOf(fine)).opacity).toBeCloseTo(GRAIN_OPACITY * FINE_GRAIN);
+    expect(flat(clipOf(fine)).opacity).toBeLessThan(flat(clipOf(coarse)).opacity);
+    // The art is untouched: both lay the same tile at the same size, or the
+    // two surfaces would have visibly different textures rather than the
+    // same one at two weights.
+    expect(grainTiles(390, 900)).toEqual(grainTiles(390, 900));
+  });
+
+  test('…and the setting still moves BOTH, with Off still off everywhere', async () => {
+    // A second opacity would have let a panel keep its speckle after the
+    // ground lost it. It is a multiplier on the same number.
+    const half = await render(<Grain level={0.5} fine />);
+    expect(flat(clipOf(half)).opacity).toBeCloseTo(GRAIN_OPACITY * 0.5 * FINE_GRAIN);
+    const off = await render(<Grain level={0} fine />);
     expect(off.queryByTestId('grain-clip', HIDDEN)).toBeNull();
   });
 

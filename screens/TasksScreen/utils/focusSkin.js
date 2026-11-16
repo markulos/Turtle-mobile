@@ -26,9 +26,28 @@
  * different plane.
  */
 
-/** The app's cream, and the charcoal the dark mode already used. */
+/** The GROUND — the app's cream, and the charcoal the dark mode already used. */
 const LIGHT_BASE = '#EEECE9';
 const DARK_BASE = '#241F1D';
+/**
+ * THE PANEL, one step LIGHTER than the ground.
+ *
+ * Strict neumorphism says a panel is exactly its page and only the light
+ * separates them, and that is how this shipped. On a page covered in grain
+ * it did not work: the tiles went missing in the texture, because the
+ * shading alone is too quiet to find an edge through speckle. Mark, twice —
+ * first "make the top of each panel tile be lighter than the backdrop", then
+ * "you didn't have to make a gradient for them, just for them to be a
+ * lighter colour and finer grain".
+ *
+ * So: a flat step, not a sheen. In light mode the panel is the app's own
+ * PAGE colour over the app's SURFACE colour — a real pair out of the
+ * palette rather than an invented tint, which is why the step reads as
+ * material rather than as a highlight. Dark mode takes the same size of
+ * step in the other palette.
+ */
+const LIGHT_PANEL = '#F5F3F0';
+const DARK_PANEL = '#2E2825';
 /** The ink on cream: the same warm near-black the cards are made of. */
 const LIGHT_INK = '#211C1B';
 
@@ -37,6 +56,7 @@ export function focusSkin(theme) {
   return dark
     ? {
       card: DARK_BASE,
+      panel: DARK_PANEL,
       text: '#F2F2F4',
       sub: 'rgba(255,255,255,0.68)',
       muted: 'rgba(255,255,255,0.48)',
@@ -44,11 +64,14 @@ export function focusSkin(theme) {
       field: 'rgba(255,255,255,0.07)',
       control: 'rgba(255,255,255,0.22)',
       edge: 'rgba(255,255,255,0.04)',
-      tile: '#302A28',
+      // A step DOWN from the panel, not from the ground — the panel moved up
+      // and at #302A28 this had almost nothing left to say against it.
+      tile: '#3A3330',
       onText: DARK_BASE,
     }
     : {
       card: LIGHT_BASE,
+      panel: LIGHT_PANEL,
       // The mirror of the dark mode's ink, at the same weights — so a reading
       // that is quiet in one mode is quiet in the other.
       text: LIGHT_INK,
@@ -59,8 +82,9 @@ export function focusSkin(theme) {
       control: 'rgba(33,28,27,0.22)',
       edge: 'rgba(33,28,27,0.06)',
       // DEEPER, not lighter: at this lightness the highlight is already white,
-      // so down is the only direction that still reads as another plane.
-      tile: '#E2DED6',
+      // so down is the only direction that still reads as another plane. A
+      // step below the PANEL it sits in, which is now the lighter of the two.
+      tile: '#E5E1DA',
       onText: LIGHT_BASE,
     };
 }

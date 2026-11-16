@@ -50,7 +50,6 @@ import { RAMP, rampStep } from './StatsPanel';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 import { neuRaised } from '../../../utils/neumorph';
 import Grain from '../../../components/Grain';
-import NeuSheen from '../../../components/NeuSheen';
 
 const RANGE_KEYS = [
   { value: 'week', label: 'Week' },
@@ -138,7 +137,7 @@ function RangeSegment({ value, onChange, theme }) {
 }
 
 /** A section: a title, an optional one-line note, and the plot under them. */
-function Chart({ title, note, children, pal, neu, sheen, grain, testID }) {
+function Chart({ title, note, children, pal, neu, grain, testID }) {
   return (
     <View
       style={[styles.card, neu]}
@@ -146,8 +145,7 @@ function Chart({ title, note, children, pal, neu, sheen, grain, testID }) {
     >
       {/* The card's own radius: a square of speckle hanging off a rounded
           panel's corners is worse than no texture at all. */}
-      <NeuSheen colors={sheen} radius={24} />
-      <Grain level={grain} radius={24} />
+      <Grain level={grain} fine radius={24} />
       <Text style={[styles.cardTitle, { color: pal.text }]} numberOfLines={1}>{title}</Text>
       {!!note && <Text style={[styles.cardNote, { color: pal.muted }]} numberOfLines={2}>{note}</Text>}
       {children}
@@ -327,9 +325,6 @@ function FocusStatsPanel({
   sessions,
   boardOfTask,
   pal,
-  // The light on each panel's upper face, worked out by the page that pushed
-  // this one so the two cannot disagree about it (components/NeuSheen).
-  sheen,
   theme,
   // Surface grain, from Settings → Appearance (see FocusPage).
   grain = 1,
@@ -345,7 +340,7 @@ function FocusStatsPanel({
   // NEUMORPHISM (utils/neumorph): the cards are the page's own colour, lifted
   // out of it by light alone — so the page takes the card tone too, and the
   // only thing separating a chart from the ground is its shadow.
-  const neu = useMemo(() => neuRaised(pal.card, theme.mode), [pal.card, theme.mode]);
+  const neu = useMemo(() => neuRaised(pal.panel, theme.mode), [pal.panel, theme.mode]);
   const now = nowMs ?? Date.now();
   const [range, setRange] = useState(initialRange);
   // The column the user tapped, so a chart is something you can interrogate
@@ -401,7 +396,7 @@ function FocusStatsPanel({
         <Chart
           title={s.label}
           note={deltaLine(s.prev)}
-          pal={pal} neu={neu} sheen={sheen} grain={grain}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-total"
         >
           <Text style={[styles.hero, { color: pal.text }]} numberOfLines={1} testID="focus-stats-hero">
@@ -437,7 +432,7 @@ function FocusStatsPanel({
           )}
         </Chart>
 
-        <Chart title={seriesTitle} note={seriesNote} pal={pal} neu={neu} sheen={sheen} grain={grain} testID="focus-stats-series">
+        <Chart title={seriesTitle} note={seriesNote} pal={pal} neu={neu} grain={grain} testID="focus-stats-series">
           <Series
             series={s.series}
             pal={pal}
@@ -462,7 +457,7 @@ function FocusStatsPanel({
               ? `${s.activeDays} day${s.activeDays === 1 ? '' : 's'} with focus on them`
               : `Focus on ${s.activeDays} of the ${s.elapsedDays} day${s.elapsedDays === 1 ? '' : 's'} so far`
           }
-          pal={pal} neu={neu} sheen={sheen} grain={grain}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-rhythm"
         >
           {s.range !== 'all' && (
@@ -500,7 +495,7 @@ function FocusStatsPanel({
         <Chart
           title="When you focus"
           note={s.peakBand ? `Most of it in the ${s.peakBand.label.toLowerCase()}` : 'Nothing to place yet'}
-          pal={pal} neu={neu} sheen={sheen} grain={grain}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-when"
         >
           <Bars
@@ -515,7 +510,7 @@ function FocusStatsPanel({
         <Chart
           title="By weekday"
           note={s.bestWeekday ? `${s.bestWeekday} is your day` : 'Nothing to place yet'}
-          pal={pal} neu={neu} sheen={sheen} grain={grain}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-weekday"
         >
           <View style={styles.columns} testID="focus-stats-weekday-cols">
@@ -554,7 +549,7 @@ function FocusStatsPanel({
         <Chart
           title="Where it went"
           note={s.boards.length ? `${s.boards.length} board${s.boards.length === 1 ? '' : 's'} · share of the period` : null}
-          pal={pal} neu={neu} sheen={sheen} grain={grain}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-boards"
         >
           {s.boards.length === 0 ? (
@@ -579,7 +574,7 @@ function FocusStatsPanel({
         <Chart
           title="Records · all time"
           note={records.firstBlockAt ? `Focusing since ${dayLabel(records.firstBlockAt)}` : null}
-          pal={pal} neu={neu} sheen={sheen} grain={grain}
+          pal={pal} neu={neu} grain={grain}
           testID="focus-stats-records"
         >
           <View style={styles.figureRow}>

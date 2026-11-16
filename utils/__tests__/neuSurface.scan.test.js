@@ -95,21 +95,50 @@ describe('STYLE-RULES §9 — the neumorphic surfaces', () => {
     for (const rel of OWNS_PALETTE) expect(code(rel)).toMatch(/focusSkin/);
   });
 
-  test('THE GROUND IS THE PANEL’S COLOUR — there is no page colour left', () => {
-    // The whole illusion is figure and ground sharing one colour. A page that
-    // keeps `theme.colors.background` under panels painted `focusSkin().card`
-    // turns every panel back into a card, which is the other style.
+  test('GROUND AND PANEL ARE BOTH THE §9 PALETTE — and not the same one', () => {
+    // The textbook has the panel exactly its page. That did not survive the
+    // grain — tiles the same colour as a speckled ground go missing in it —
+    // so a panel is a STEP above the ground (Mark, 2026-11-16: "a lighter
+    // colour and finer grain"). Both still come from focusSkin: what must
+    // never come back is `theme.colors.background` under them, which turns
+    // every panel into an ordinary card.
     for (const rel of OWNS_PALETTE.filter((r) => PANELS.includes(r))) {
       const src = code(rel);
-      // The colour comes from the §9 palette — painted onto the ground, or
-      // handed to neuRaised/neuPressed, which returns it as the panel's fill.
-      expect(src).toMatch(/backgroundColor:\s*pal\.card|neu(Raised|Pressed)\(pal\.card/);
+      // The shading derives from the PANEL, not the ground — they differ now,
+      // and tones taken off the ground would light the wrong surface.
+      expect(src).toMatch(/backgroundColor:\s*pal\.card|neu(Raised|Pressed)\(pal\.panel/);
       // …and no page root falls back to the theme's own page colour. Scoped to
       // a ROOT rather than banned outright: `c.background` is still the right
       // ink ON a `textPrimary`-filled key, which is a contrast question and
       // not a ground.
       expect(src).not.toMatch(/styles\.page,\s*\{\s*backgroundColor:\s*c\./);
       expect(src).not.toMatch(/paddingTop:\s*pageTopInset,\s*backgroundColor:\s*c\./);
+    }
+    // …and the two are genuinely different colours, or the step is a comment.
+    const skin = read('screens/TasksScreen/utils/focusSkin.js');
+    const { focusSkin } = require('../../screens/TasksScreen/utils/focusSkin');
+    for (const mode of ['light', 'dark']) {
+      const pal = focusSkin({ mode });
+      expect(pal.panel).toBeTruthy();
+      expect(pal.panel).not.toBe(pal.card);
+    }
+    expect(skin).toMatch(/LIGHT_PANEL|DARK_PANEL/);
+  });
+
+  test('A PANEL IS FINER-GRAINED THAN THE GROUND', () => {
+    // The speckle is already one device pixel at @3x, so "finer" cannot mean
+    // smaller — it means less of the same tooth. Every grain laid inside a
+    // panel (the ones carrying its radius) takes `fine`; the page's own does
+    // not, or there is no difference between them.
+    const { FINE_GRAIN } = require('../../components/Grain');
+    expect(FINE_GRAIN).toBeGreaterThan(0);
+    expect(FINE_GRAIN).toBeLessThan(1);
+    for (const rel of PANELS) {
+      const src = code(rel);
+      for (const tag of src.match(/<Grain[^/]*\/>/g) || []) {
+        if (/radius=/.test(tag)) expect(tag).toMatch(/fine/);
+        else expect(tag).not.toMatch(/fine/);
+      }
     }
   });
 

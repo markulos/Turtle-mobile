@@ -69,10 +69,10 @@ export default function InboxCapture({
   // the same piece of furniture the Focus tab's deck and tiles are — which is
   // what Mark asked for: "match the focus tab styling more".
   const pal = focusSkin(theme);
-  const neu = neuRaised(pal.card, theme?.mode);
+  const neu = neuRaised(pal.panel, theme?.mode);
   // The panel's own shadow tone, which is what every line drawn on it is
   // made of — see InboxList, whose row rules take the same colour.
-  const rule = neuTones(pal.card, theme?.mode)?.cast || pal.edge;
+  const rule = neuTones(pal.panel, theme?.mode)?.cast || pal.edge;
 
   const submit = useCallback(() => {
     const title = text.trim();
@@ -104,7 +104,7 @@ export default function InboxCapture({
 
       <View style={[styles.deck, neu]} testID="inbox-capture-deck">
         {/* The surface's tooth, clipped to the panel it dresses. */}
-        <Grain level={grain} radius={DECK_RADIUS} />
+        <Grain level={grain} fine radius={DECK_RADIUS} />
         {/* A FLAT FIELD on the panel, not a dent in it. The pressed well was the
             first thing tried and it is what Mark called out: at 52pt with the
             grain inside it, a soft inset on a pale surface has no edge to read

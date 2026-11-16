@@ -45,9 +45,10 @@ const DROP_MS = 260;
  * list on every add would re-play a dozen rows for one new line.
  */
 const Line = memo(function Line({ task, fresh, last, c, surface, rule, onPress }) {
-  // `surface` is the PANEL's colour, not `c.background`: the thread runs behind
-  // the bead, so a bead filled with the theme's page token would have a line
-  // through a disc that does not match what is actually behind it.
+  // `surface` is the PANEL's colour — not `c.background`, and not the page's
+  // ground either, now that a panel is a lighter step off it. The thread runs
+  // behind the bead, so a bead filled with anything else has a line through a
+  // disc that does not match what is actually behind it.
   const drop = useRef(new Animated.Value(fresh ? 0 : 1)).current;
   useEffect(() => {
     if (!fresh) return undefined;
@@ -106,7 +107,7 @@ function InboxList({
   const mode = theme?.mode;
   const pal = focusSkin(theme || { mode: 'light' });
   // Built once for the whole list rather than per row: one colour, twelve rows.
-  const rule = neuTones(pal.card, mode)?.cast || pal.edge;
+  const rule = neuTones(pal.panel, mode)?.cast || pal.edge;
   if (!items || items.length === 0) {
     return (
       <Text style={[styles.empty, { color: c.textTertiary }]} testID="inbox-list-empty">
@@ -125,7 +126,7 @@ function InboxList({
           fresh={t.id === freshId}
           last={i === items.length - 1}
           c={c}
-          surface={pal.card}
+          surface={pal.panel}
           rule={rule}
           onPress={onOpenTask}
         />

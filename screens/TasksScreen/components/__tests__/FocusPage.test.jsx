@@ -400,9 +400,14 @@ describe('the deck is legible on the light page', () => {
   test('the clock reads on the surface it is drawn on', async () => {
     await render(<FocusPage {...props({ theme: light, active: running(60000) })} />);
     const deck = styleOf('focus-deck');
-    // Neumorphism's own rule: the panel IS the ground. If these ever differ,
-    // the style has quietly become an ordinary card again.
-    expect(deck.backgroundColor).toBe(PAL.card);
+    // A PANEL, one step above the ground — not the same colour as it, which
+    // is where this started. The textbook rule did not survive the grain:
+    // tiles exactly the page's colour went missing in the speckle, so Mark
+    // asked for "a lighter colour and finer grain" (2026-11-16). What must
+    // still hold is that the step is the PALETTE's, not an invented tint,
+    // and that the clock clears whatever it landed on.
+    expect(deck.backgroundColor).toBe(PAL.panel);
+    expect(PAL.panel).not.toBe(PAL.card);
     expect(contrastRatio(styleOf('focus-clock').color, deck.backgroundColor))
       .toBeGreaterThanOrEqual(READABLE);
   });
@@ -436,7 +441,7 @@ describe('the deck is legible on the light page', () => {
   test('the recent blocks are a surface of their own, and read', async () => {
     await render(<FocusPage {...props({ theme: light })} />);
     const panel = styleOf('focus-recent-panel');
-    expect(panel.backgroundColor).toBe(PAL.card);
+    expect(panel.backgroundColor).toBe(PAL.panel);
     expect(contrastRatio(PAL.text, panel.backgroundColor)).toBeGreaterThanOrEqual(READABLE);
     expect(contrastRatio(over(PAL.muted, panel.backgroundColor), panel.backgroundColor))
       .toBeGreaterThanOrEqual(3);
