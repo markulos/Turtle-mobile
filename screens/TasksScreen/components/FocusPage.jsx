@@ -51,6 +51,7 @@ import { NEU_GAP, NEU_PAGE_TOP, neuRaised } from '../../../utils/neumorph';
 import Grain from '../../../components/Grain';
 import { boardLabel } from '../utils/taskHelpers';
 import { focusStats, formatMinutes } from '../utils/focusStats';
+import { orderWithPins, prunePins, recentFocusTasks, searchTasks } from '../utils/focusList';
 import { rangeSummaries } from '../utils/focusRanges';
 import FocusStatsPanel from './FocusStatsPanel';
 import FocusDayPanel from './FocusDayPanel';
@@ -114,6 +115,9 @@ function FocusDeck({
   running, remaining, focusMinutes, block, todaySessions,
   progress, pulse, pal, neu, grain, accent, breakAccent,
   task, onPickTask, onClearTask, onJot,
+  // The list under the clock: every task (for the search), the log (for
+  // "recent"), the pins and the two things a row can do.
+  allTasks, sessions, taskOfId, pins, onTogglePin, onPickRecent,
   onStartFocus, onStartBreak, onStop,
 }) {
   // The thought being parked. Local: it is a scratch line, not screen state,
@@ -342,7 +346,142 @@ function FocusDeck({
           </Pressable>
         </View>
       )}
+
+      {/* THE TASKS, in the same panel as the clock that will run on them.
+          Mark, 2026-11-16: "a list of the most recent focus tasks underneath
+          it as one panel and have a search to search tasks and pin them to be
+          on top then once the task is completed it gets unpinned."
+
+          One panel, not two, for the reason the Inbox capture box and its
+          list became one: the timer and the thing it is for are one object,
+          and a gutter between them says they are two. */}
+      <View pointerEvents="none" style={[styles.deckSplit, { backgroundColor: pal.edge }]} />
+      <FocusTaskList
+        tasks={allTasks}
+        sessions={sessions}
+        taskOfId={taskOfId}
+        pins={pins}
+        onTogglePin={onTogglePin}
+        current={task}
+        onPick={onPickRecent}
+        pal={pal}
+        accent={accent}
+      />
     </Animated.View>
+  );
+}
+
+/**
+ * The deck's task list: what you last focused on, what you pinned, and a box
+ * to reach everything else.
+ *
+ * The ORDER and the pruning are focusList's — pure, and tested there. This
+ * draws what it is handed and owns one piece of state: what has been typed.
+ *
+ * A TAP IS "make this the session's task", not "start it". Starting is the
+ * key above, where it has always been; a list that silently began a block
+ * would be a list you cannot browse.
+ */
+function FocusTaskList({ tasks, sessions, taskOfId, pins, onTogglePin, current, onPick, pal, accent }) {
+  const [query, setQuery] = useState('');
+  const q = query.trim();
+  const found = useMemo(() => searchTasks(tasks, q), [tasks, q]);
+  const recent = useMemo(() => recentFocusTasks(sessions, taskOfId), [sessions, taskOfId]);
+  // Searching REPLACES the list rather than adding to it: a box with
+  // something typed in it is a question, and answering it with the recent
+  // five as well is answering a different one. Pins stand down with it for
+  // the same reason — while you are searching, the list is the answer.
+  const { pinned, rest } = useMemo(
+    () => orderWithPins(q ? found : recent, q ? [] : pins, taskOfId),
+    [q, found, recent, pins, taskOfId],
+  );
+  const rows = [...pinned, ...rest];
+  const isPinned = (id) => (pins || []).includes(id);
+
+  return (
+    <View style={styles.deckList} testID="focus-task-list">
+      <View style={[styles.deckSearch, { backgroundColor: pal.tile, borderColor: pal.control }]}>
+        <Icon name="magnify" size={15} color={pal.muted} />
+        <AppTextInput
+          style={[styles.deckSearchInput, { color: pal.text }]}
+          placeholder="Search tasks…"
+          placeholderTextColor={pal.muted}
+          placeholderTestID="focus-task-search-placeholder"
+          value={query}
+          onChangeText={setQuery}
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+          accessibilityLabel="Search tasks to focus on"
+          testID="focus-task-search"
+        />
+        {!!q && (
+          <Pressable
+            onPressIn={() => tapHaptic()}
+            onPress={() => setQuery('')}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Clear the search"
+            testID="focus-task-search-clear"
+          >
+            <Icon name="close-circle" size={15} color={pal.muted} />
+          </Pressable>
+        )}
+      </View>
+
+      {rows.length === 0 ? (
+        <Text style={[styles.deckEmpty, { color: pal.muted }]} testID="focus-task-empty">
+          {q ? 'Nothing open matches that.' : 'No focus yet — pick a task above to start one.'}
+        </Text>
+      ) : rows.map((t, i) => {
+        const on = current?.id === t.id;
+        const marked = isPinned(t.id);
+        return (
+          <View key={t.id} style={styles.deckRowWrap}>
+            {i > 0 && <View pointerEvents="none" style={[styles.deckRowRule, { backgroundColor: pal.edge }]} />}
+            <View style={styles.deckRow}>
+              <Pressable
+                onPressIn={() => tapHaptic()}
+                onPress={() => onPick?.(t)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: on }}
+                accessibilityLabel={`Focus on ${t.title}`}
+                testID={`focus-task-${t.id}`}
+                style={({ pressed }) => [styles.deckRowBody, pressed && styles.pressed]}
+              >
+                {/* The one already loaded says so, rather than being offered
+                    again as though it were not. */}
+                <View style={[styles.deckRowDot, { backgroundColor: on ? accent : pal.control }]} />
+                <Text
+                  style={[styles.deckRowText, { color: on ? pal.text : pal.sub }]}
+                  numberOfLines={1}
+                >
+                  {t.title}
+                </Text>
+              </Pressable>
+              {/* PIN is its own target. A long press would hide the only way
+                  to keep something at the top behind a gesture nobody finds. */}
+              <Pressable
+                onPressIn={() => tapHaptic()}
+                onPress={() => onTogglePin?.(t.id)}
+                hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityState={{ selected: marked }}
+                accessibilityLabel={marked ? `Unpin ${t.title}` : `Pin ${t.title} to the top`}
+                testID={`focus-task-pin-${t.id}`}
+                style={({ pressed }) => [styles.deckRowPin, pressed && styles.pressed]}
+              >
+                <Icon
+                  name={marked ? 'pin' : 'pin-outline'}
+                  size={15}
+                  color={marked ? accent : pal.muted}
+                />
+              </Pressable>
+            </View>
+          </View>
+        );
+      })}
+    </View>
   );
 }
 
@@ -535,6 +674,23 @@ function FocusPage({
   taskOfId,
   // (task) => void — start a fresh session on the task a recent block was for.
   onResumeBlock,
+  /**
+   * EVERY task, for the deck list's search — the recent five come out of the
+   * log, but the point of a search is to reach something you have never put
+   * a block on.
+   */
+  allTasks,
+  /**
+   * The pinned task ids, newest pin last, and the toggle. Owned by the
+   * screen because they outlive this page and are written to storage there;
+   * what is pinned is a preference, not a view's state.
+   */
+  pins,
+  onTogglePin,
+  // (task) => void — make this the session's task. NOT start it: starting is
+  // the key above, and a list that silently began a block is one you cannot
+  // browse.
+  onPickRecent,
   // The task the next session is FOR, or null for a loose block. Resolved by
   // the screen so it follows edits and so a block started elsewhere shows the
   // task it was actually started on.
@@ -570,6 +726,13 @@ function FocusPage({
   // the card tone and the panels stop being a different colour from it. One
   // object, reused: the shadow list is the same for all of them.
   const neu = useMemo(() => neuRaised(pal.panel, theme.mode), [pal.panel, theme.mode]);
+  /**
+   * The pins worth drawing. COMPLETING A TASK UNPINS IT and this is where
+   * that happens: nothing fires an event at this page, so the pin is simply
+   * not in the list the next time it is built — which is the render after
+   * the tick lands. The screen prunes its stored copy on the same rule.
+   */
+  const livePins = useMemo(() => prunePins(pins, taskOfId), [pins, taskOfId]);
   const accent = theme.colors.accentInfo || theme.colors.textPrimary;
   // The break's own colour, and the chat timer card's exactly (TimerMessage):
   // the same two modes wearing the same two colours wherever they are shown.
@@ -736,8 +899,13 @@ function FocusPage({
       {/* The countdown, the bar, and the one control that matters. */}
       <FocusDeck
         neu={neu}
-       
         grain={grain}
+        allTasks={allTasks}
+        sessions={sessions}
+        taskOfId={taskOfId}
+        pins={livePins}
+        onTogglePin={onTogglePin}
+        onPickRecent={onPickRecent}
         running={running}
         remaining={remaining}
         focusMinutes={focusMinutes}
@@ -1041,6 +1209,33 @@ const styles = StyleSheet.create({
   // The deck. The same inset card as the tiles below it, one size up: this is
   // the page's subject, so it gets the top of the screen and the big reading.
   deck: { borderRadius: 24, borderCurve: 'continuous', padding: 16, gap: 10 },
+  // The line between the clock and the tasks it will run on — two REGIONS
+  // of one panel, so it runs the panel's full width (STYLE-RULES §8).
+  deckSplit: { height: StyleSheet.hairlineWidth, marginHorizontal: -16, marginTop: 4 },
+  deckList: { gap: 0 },
+  deckSearch: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    height: 34, borderRadius: 17, borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12, marginBottom: 2,
+  },
+  // The single-line field metrics this app uses everywhere — see jotInput.
+  deckSearchInput: {
+    flex: 1,
+    fontSize: 13.5,
+    paddingVertical: 0,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+  },
+  deckEmpty: { fontSize: 12.5, lineHeight: 17, paddingVertical: 10 },
+  deckRowWrap: {},
+  // A LIST, not a stack of cards (§8): the rows meet and a rule separates
+  // them, inset past the dot so the dots read as a column of their own.
+  deckRowRule: { height: StyleSheet.hairlineWidth, marginLeft: 16 },
+  deckRow: { flexDirection: 'row', alignItems: 'center' },
+  deckRowBody: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 9 },
+  deckRowDot: { width: 7, height: 7, borderRadius: 4 },
+  deckRowText: { flex: 1, minWidth: 0, fontSize: 13.5 },
+  deckRowPin: { paddingVertical: 9, paddingLeft: 10 },
   deckHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   badge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
   badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6 },

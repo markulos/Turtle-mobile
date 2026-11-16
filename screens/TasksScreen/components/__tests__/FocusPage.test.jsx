@@ -693,3 +693,104 @@ describe('recent blocks resume', () => {
     expect(screen.getByTestId('focus-resume-p1')).toBeTruthy();
   });
 });
+
+/**
+ * THE DECK'S TASK LIST — recent work, a search, and pins that let go.
+ *
+ * Mark, 2026-11-16: "a list of the most recent focus tasks underneath it as
+ * one panel and have a search to search tasks and pin them to be on top then
+ * once the task is completed it gets unpinned."
+ *
+ * The ordering rules are focusList's and tested there. What is pinned here is
+ * the WIRING — that the list is in the timer's panel, that the search filters
+ * it, that the pin key toggles, and that finishing a task takes it out of
+ * both lists. Every one of those is a prop that can quietly stop being passed.
+ */
+describe('the deck\u2019s task list', () => {
+  const task = (id, over = {}) => ({ id, title: `Task ${id}`, completed: false, ...over });
+  const withList = (over = {}) => props({
+    sessions: [done({ taskId: 'a', startedAt: at(0, 9) }), done({ taskId: 'b', startedAt: at(0, 8) })],
+    allTasks: [task('a'), task('b'), task('c', { title: 'Unvisited thing' })],
+    taskOfId: (id) => [task('a'), task('b'), task('c', { title: 'Unvisited thing' })].find((t) => t.id === id) || null,
+    pins: [],
+    onTogglePin: jest.fn(),
+    onPickRecent: jest.fn(),
+    ...over,
+  });
+
+  test('IT IS IN THE TIMER\u2019S PANEL, not a second one below it', async () => {
+    // "as one panel" — the timer and the thing it will run on are one object.
+    const view = await render(<FocusPage {...withList()} />);
+    const deck = view.getByTestId('focus-deck');
+    const inside = (id) => {
+      const el = view.getByTestId(id);
+      let n = el.parent;
+      while (n) { if (n === deck) return true; n = n.parent; }
+      return false;
+    };
+    expect(inside('focus-task-list')).toBe(true);
+    expect(inside('focus-task-search')).toBe(true);
+  });
+
+  test('the recent tasks are listed, newest first', async () => {
+    const view = await render(<FocusPage {...withList()} />);
+    expect(view.getByTestId('focus-task-a')).toBeTruthy();
+    expect(view.getByTestId('focus-task-b')).toBeTruthy();
+    // Never focused on, so it is not "recent" — the search is how to reach it.
+    expect(view.queryByTestId('focus-task-c')).toBeNull();
+  });
+
+  test('THE SEARCH REACHES WHAT THE LIST DOES NOT, and replaces it', async () => {
+    const view = await render(<FocusPage {...withList()} />);
+    await act(async () => {
+      fireEvent.changeText(view.getByTestId('focus-task-search'), 'unvisited');
+    });
+    expect(view.getByTestId('focus-task-c')).toBeTruthy();
+    // A box with a question in it is answered by the answer, not by the
+    // answer plus the five rows that were there before.
+    expect(view.queryByTestId('focus-task-a')).toBeNull();
+  });
+
+  test('a search that matches nothing says so rather than going blank', async () => {
+    const view = await render(<FocusPage {...withList()} />);
+    await act(async () => {
+      fireEvent.changeText(view.getByTestId('focus-task-search'), 'zzzz');
+    });
+    expect(view.getByTestId('focus-task-empty')).toBeTruthy();
+  });
+
+  test('the pin key toggles, and it is its OWN target', async () => {
+    // Not a long press: that would hide the only way to keep something at
+    // the top behind a gesture nobody finds.
+    const p = withList();
+    const view = await render(<FocusPage {...p} />);
+    await act(async () => { fireEvent.press(view.getByTestId('focus-task-pin-a')); });
+    expect(p.onTogglePin).toHaveBeenCalledWith('a');
+    // …and the row itself loads the task rather than starting a block.
+    await act(async () => { fireEvent.press(view.getByTestId('focus-task-a')); });
+    expect(p.onPickRecent).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }));
+    expect(p.onStart).not.toHaveBeenCalled();
+  });
+
+  test('A PINNED TASK IS FIRST, even one that is not recent', async () => {
+    const view = await render(<FocusPage {...withList({ pins: ['c'] })} />);
+    const ids = ['focus-task-c', 'focus-task-a', 'focus-task-b'];
+    for (const id of ids) expect(view.getByTestId(id)).toBeTruthy();
+    // Pinned from a search, it survives the box being cleared — which is the
+    // whole point of pinning it.
+    expect(view.getByTestId('focus-task-pin-c').props.accessibilityState).toEqual({ selected: true });
+  });
+
+  test('COMPLETING A TASK UNPINS IT, and drops it from the list', async () => {
+    // The thing Mark asked for by name. Nothing fires an event — the pin is
+    // simply gone the next time the list is built.
+    const doneTask = task('c', { title: 'Unvisited thing', completed: true });
+    const view = await render(<FocusPage {...withList({
+      pins: ['c'],
+      allTasks: [task('a'), doneTask],
+      taskOfId: (id) => (id === 'c' ? doneTask : task(id)),
+    })} />);
+    expect(view.queryByTestId('focus-task-c')).toBeNull();
+    expect(view.getByTestId('focus-task-a')).toBeTruthy();
+  });
+});

@@ -38,6 +38,8 @@ import { advanceDueDate, minDate, maxDate, localTodayStr, lastCompletedDate, isT
 // What starting a focus session writes onto the task it is for — a slot on
 // today at the minute the block began, and only where there was no time yet.
 import { startPatch } from './utils/focusStart';
+import { togglePin } from './utils/focusList';
+import { loadPins, savePins } from '../../services/focusPins';
 import { completionChange } from './utils/completionChange';
 import { tapHaptic, impactHaptic, selectionHaptic, markGesture } from '../../utils/haptics';
 import { resolveAvatarUrl } from '../../utils/avatarUrl';
@@ -1138,6 +1140,27 @@ export default function TasksScreen() {
   // deck is open shows through instead of freezing a copy. Null = a loose
   // block, which is a perfectly good block: the deck counts either.
   const [focusTaskId, setFocusTaskId] = useState(null);
+  /**
+   * THE PINNED FOCUS TASKS — the deck list's top rows (focusList, focusPins).
+   *
+   * Owned here, not in the page: a pin outlives the tab and is written to
+   * storage, which makes it a preference rather than a view's state.
+   *
+   * COMPLETING A TASK UNPINS IT. Nothing fires an event for that, so the
+   * stored list is pruned whenever the tasks change — the page prunes what
+   * it DRAWS on the same rule, so a tick is reflected on the next render and
+   * the stored copy catches up a beat later rather than keeping a dead id
+   * for ever.
+   */
+  const [focusPins, setFocusPins] = useState([]);
+  useEffect(() => { loadPins().then(setFocusPins, () => {}); }, []);
+  const toggleFocusPin = useCallback((id) => {
+    setFocusPins((prev) => {
+      const next = togglePin(prev, id);
+      savePins(next);
+      return next;
+    });
+  }, []);
   // Read by startFocusHere, which must not be rebuilt every time the choice
   // changes — it is handed to a memoised page.
   const focusTaskIdRef = useRef(focusTaskId);
@@ -4249,6 +4272,15 @@ export default function TasksScreen() {
           <FocusPage
             grain={grain}
             sessions={pomoLog}
+            // Every task, for the deck list's search: the recent rows come
+            // out of the log, but the search is how you reach one you have
+            // never put a block on.
+            allTasks={tasks}
+            pins={focusPins}
+            onTogglePin={toggleFocusPin}
+            // A tap on a row LOADS the task; the Start key above is still
+            // what begins a block.
+            onPickRecent={(t) => setFocusTaskId(t?.id || null)}
             active={focusBlock}
             focusMinutes={focusMinutes}
             boardOfTask={boardOfTaskId}
