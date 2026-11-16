@@ -185,7 +185,11 @@ const makeStyles = (theme) => StyleSheet.create({
     alignItems: 'center',
     gap: 14,
     paddingHorizontal: 16,
-    paddingTop: 10,
+    // 6, not 10. The session's keys live up here now and they were sitting a
+    // long way off the panel's own top edge — Mark asked for "a smaller top
+    // margin for them" (2026-11-16). Still enough that the row is not
+    // touching the corner radius.
+    paddingTop: 6,
   },
   input: {
     fontSize: 16,

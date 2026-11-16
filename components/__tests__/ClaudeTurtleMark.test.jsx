@@ -465,9 +465,20 @@ describe('ClaudeTurtleMark', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
     expect(src).toMatch(/composerControls: \{ flexGrow: 1, flexShrink: 1, minWidth: 0 \},/);
     const top = src.slice(src.indexOf('topSlot={'), src.indexOf('actions={'));
-    expect(top.indexOf('styles.composerThumbRail')).toBeGreaterThan(top.indexOf('styles.composerTopStack'));
-    expect(top.indexOf('styles.composerTopRow')).toBeGreaterThan(top.indexOf('styles.composerThumbRail'));
+    // THE CONTROLS ROW COMES FIRST in the stack, and the thumb rail under it.
+    // It was the other way round, and attaching an image pushed Live / Stop /
+    // collapse half a panel down the page — the one place they must not move,
+    // since Stop is the key you reach for in a hurry (Mark, 2026-11-16).
+    expect(top.indexOf('styles.composerTopRow')).toBeGreaterThan(top.indexOf('styles.composerTopStack'));
+    expect(top.indexOf('styles.composerThumbRail')).toBeGreaterThan(top.indexOf('styles.composerTopRow'));
     expect(top.indexOf('<ClaudeSessionControls')).toBeGreaterThan(top.indexOf('styles.botSlot'));
+    // …and the row they are in sits at the composer's own top edge, close to
+    // it: the keys are the first thing up here now.
+    const composer = fs.readFileSync(path.resolve(__dirname, '..', 'ChatComposer.jsx'), 'utf8');
+    const zone = composer.slice(composer.indexOf('  topZone: {'), composer.indexOf('  input: {'));
+    const pad = Number(/paddingTop: (\d+)/.exec(zone)[1]);
+    expect(pad).toBeLessThanOrEqual(6);
+    expect(pad).toBeGreaterThan(0);
     // The pill shrinks; the buttons do not (they carry the labels you tap).
     expect(ctl).toMatch(/statusPillCompact: \{ flexShrink: 1, minWidth: 0 \},/);
     // One line, whatever the state word is — a two-line pill would grow the

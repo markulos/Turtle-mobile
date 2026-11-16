@@ -3384,56 +3384,16 @@ export default function TurtleScreen() {
           }}
           topSlot={
             // A STACK, not one row: attached thumbs get a line of their own
-            // above the bot slot and the session controls. One row cannot
+            // UNDER the bot slot and the session controls. One row cannot
             // hold all three — laid out in Yoga at 390pt, three thumbs plus
             // the controls pushed the controls back over the bot slot.
             <View style={styles.composerTopStack}>
-              {claudeImages.length > 0 && (
-                // A RAIL, not a row: eight 64pt thumbs do not fit a phone, and
-                // the composer must not grow a second line or start squeezing
-                // the bot slot. It scrolls; the slot keeps its place.
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  keyboardShouldPersistTaps="handled"
-                  style={styles.composerThumbRail}
-                  contentContainerStyle={styles.composerThumbRailContent}
-                >
-                  {claudeImages.map((img, index) => (
-                    <View key={img.uri} style={{ position: 'relative' }}>
-                      {/* Hold to open it in the full-screen viewer. A tap is
-                          left alone: the thumb sits next to the X, and a stray
-                          tap taking over the screen mid-sentence would be
-                          worse than no preview at all. */}
-                      <TouchableOpacity
-                        onLongPress={() => {
-                          impactHaptic('light');
-                          // The keyboard floats ABOVE any in-app overlay, so it
-                          // has to go before a full-screen view means anything.
-                          // The draft text is untouched — only focus is dropped.
-                          Keyboard.dismiss();
-                          setComposerPreviewUri(img.uri);
-                        }}
-                        delayLongPress={300}
-                        activeOpacity={0.85}
-                        accessibilityRole="imagebutton"
-                        accessibilityLabel={`Attached image ${index + 1} of ${claudeImages.length}`}
-                        accessibilityHint="Press and hold to view it full screen"
-                      >
-                        <Image source={{ uri: img.uri }} style={styles.composerThumb} contentFit="cover" />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => setClaudeImages((prev) => prev.filter((p) => p.uri !== img.uri))}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        style={styles.composerThumbX}
-                        accessibilityLabel={`Remove attached image ${index + 1}`}
-                      >
-                        <Icon name="close" size={14} color={theme.colors.textPrimary} />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </ScrollView>
-              )}
+              {/* THE CONTROLS ROW IS FIRST in the stack, so the bot slot and
+                  the session's keys hold the composer's top corners whatever
+                  else is attached. They used to come after the thumb rail,
+                  which pushed Live/Stop/collapse half a panel down the moment
+                  an image was added — the one place they must not move, since
+                  Stop is what you reach for in a hurry (Mark, 2026-11-16). */}
               <View style={styles.composerTopRow}>
               {/* Bot slot — opens/hides the Claude session; long-press = model picker. */}
               <TouchableOpacity
@@ -3493,6 +3453,52 @@ export default function TurtleScreen() {
                   onToggleExpanded={() => setClaudeExpanded((e) => !e)}
                   onClose={claudeClose}
                 />
+              )}
+              {claudeImages.length > 0 && (
+                // A RAIL, not a row: eight 64pt thumbs do not fit a phone, and
+                // the composer must not grow a second line or start squeezing
+                // the bot slot. It scrolls; the slot keeps its place.
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  style={styles.composerThumbRail}
+                  contentContainerStyle={styles.composerThumbRailContent}
+                >
+                  {claudeImages.map((img, index) => (
+                    <View key={img.uri} style={{ position: 'relative' }}>
+                      {/* Hold to open it in the full-screen viewer. A tap is
+                          left alone: the thumb sits next to the X, and a stray
+                          tap taking over the screen mid-sentence would be
+                          worse than no preview at all. */}
+                      <TouchableOpacity
+                        onLongPress={() => {
+                          impactHaptic('light');
+                          // The keyboard floats ABOVE any in-app overlay, so it
+                          // has to go before a full-screen view means anything.
+                          // The draft text is untouched — only focus is dropped.
+                          Keyboard.dismiss();
+                          setComposerPreviewUri(img.uri);
+                        }}
+                        delayLongPress={300}
+                        activeOpacity={0.85}
+                        accessibilityRole="imagebutton"
+                        accessibilityLabel={`Attached image ${index + 1} of ${claudeImages.length}`}
+                        accessibilityHint="Press and hold to view it full screen"
+                      >
+                        <Image source={{ uri: img.uri }} style={styles.composerThumb} contentFit="cover" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => setClaudeImages((prev) => prev.filter((p) => p.uri !== img.uri))}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        style={styles.composerThumbX}
+                        accessibilityLabel={`Remove attached image ${index + 1}`}
+                      >
+                        <Icon name="close" size={14} color={theme.colors.textPrimary} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
               )}
               </View>
             </View>
