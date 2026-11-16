@@ -18,6 +18,11 @@
  *     index and thumb apart and rests his chin in the V between them, his head leans toward the
  *     hand, and his eyes roll up and away — the cartoon "hmm". While he holds
  *     it the finger taps and the eyes wander about up there.
+ *   • TAKES A POKE: tapped, he rocks — a quick knock one way and a spring
+ *     back, alternating side to side so a run of them jostles him rather
+ *     than repeating one twitch. Poked once too often he DIVES off the
+ *     ledge, and climbs back a few seconds later (turtlePoke, and Mark's
+ *     ask of 2026-11-16).
  *   • READS WHAT YOU ARE WRITING: the moment you type in the composer his eyes
  *     drop to it and his head dips after them, and he holds it — no glancing
  *     about — until you stop. He is in the top corner and the line you are
@@ -55,14 +60,16 @@
  * Reduce Motion: he is simply there. No jump, no blink, no looking about;
  * thinking shows as the pose, without the travel.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AccessibilityInfo, Animated, Easing, StyleSheet, View,
+  AccessibilityInfo, Animated, Easing, Pressable, StyleSheet, View,
 } from 'react-native';
 import ClaudeTurtleMark, {
   CLAUDE_MARK_COLOR, CLAUDE_POINT_AT, HAND_PERCH,
   artPoint, artUnit, eyeDots, ledgeOffset, markHeight,
 } from './ClaudeTurtleMark';
+import { SULK_MS, nextPoke, pokeWay } from './turtlePoke';
+import { impactHaptic, tapHaptic } from '../utils/haptics';
 
 /** Blink timing, in ms. A blink is fast to shut and a touch slower to open. */
 export const BLINK = {
@@ -129,6 +136,16 @@ export const TYPE_GAZE = [-1, 5];
 export const TYPING_LINGER_MS = 2200;
 // An idle head tilt, either way.
 const NOD_DEG = 3;
+/**
+ * A POKE: how far he rocks, and how far he gives.
+ *
+ * Bigger than the idle tilt — it has to read as something that happened TO
+ * him rather than as something he did — and small enough not to leave the
+ * clip. The dip is what sells it as a knock rather than a lean: a thing
+ * jostled on a ledge sinks a little as it rocks.
+ */
+const POKE_DEG = 9;
+const POKE_DIP = 1.6;
 // The middle of the right hand at rest, in the drawing's units — where the
 // pointing hand's trip starts from. Carries HAND_PERCH, because the resting
 // hands are drawn that far below where the path puts them: measure the trip
@@ -168,6 +185,12 @@ export default function ClaudeTurtleBuddy({
   // leaves him down until somebody types; a Claude session has him up for
   // the whole of it.
   up = true,
+  /**
+   * CAN HE BE POKED. Off by default: the mark is decoration in most places
+   * and a touch target in one. When on, the whole drawing takes taps — which
+   * is also what stops them falling through to whatever is underneath.
+   */
+  pokeable = false,
   thinking = false,
   // Somebody is typing into the composer right now. THINKING WINS: a turn in
   // flight is the bigger thing, and he cannot hold both poses — his head
@@ -176,6 +199,8 @@ export default function ClaudeTurtleBuddy({
   testID = 'claude-turtle-buddy',
 }) {
   const reading = typing && !thinking;
+  // Sulking beats everything: he is not up, so there is nothing to be up as.
+  const shown = up && !sulking;
   const height = markHeight(size);
   const ledge = ledgeOffset(size);
   // From fully below the ledge (1) to his resting place (0).
@@ -198,6 +223,13 @@ export default function ClaudeTurtleBuddy({
   // Reduce Motion. State, not a ref: every loop below has to stand down when
   // the answer comes back, and it comes back after they have started.
   const [still, setStill] = useState(false);
+  // Poked once too often. Local, because it is his business and not the
+  // screen's — the header keeps its ridge and its title while he is gone.
+  const [sulking, setSulking] = useState(false);
+  const pokeRun = useRef({ count: 0, lastAt: 0 });
+  const poke = useRef(new Animated.Value(0)).current;   // −1 … 1, a knock
+  const pokeAnim = useRef(null);
+  const sulkTimer = useRef(null);
 
   const eyes = useMemo(() => eyeDots(size, tilt), [size, tilt]);
 
@@ -223,10 +255,10 @@ export default function ClaudeTurtleBuddy({
 
   // ── the jump, and the drop back down ─────────────────────────────────
   useEffect(() => {
-    if (still) { rise.setValue(up ? 0 : 1); grab.setValue(up ? 1 : 0); return undefined; }
+    if (still) { rise.setValue(shown ? 0 : 1); grab.setValue(shown ? 1 : 0); return undefined; }
     // DOWN: he sinks out of sight, hands first. No overshoot — an object
     // dropping behind a ledge does not bounce on the way out.
-    if (!up) {
+    if (!shown) {
       const sink = Animated.parallel([
         Animated.timing(grab, { toValue: 0, duration: 140, easing: Easing.in(Easing.quad), useNativeDriver: true }),
         Animated.timing(rise, { toValue: 1, duration: 260, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
@@ -246,7 +278,7 @@ export default function ClaudeTurtleBuddy({
     ]);
     jump.start();
     return () => jump.stop();
-  }, [up, still, rise, grab]);
+  }, [shown, still, rise, grab]);
 
   // ── breathing, and blinking ───────────────────────────────────────────
   useEffect(() => {
@@ -379,6 +411,40 @@ export default function ClaudeTurtleBuddy({
     };
   }, [thinking, reading, still, unit, gazeX, gazeY, nod, tap, drum]);
 
+  // ── a poke ────────────────────────────────────────────────────────────
+  const onPoke = useCallback(() => {
+    if (sulking) return;
+    const next = nextPoke(pokeRun.current, Date.now());
+    pokeRun.current = { count: next.count, lastAt: next.lastAt };
+    if (next.flee) {
+      // One too many. Off the ledge, and back in a few seconds — the timer
+      // is a ref so a re-render mid-sulk cannot leave him down for good.
+      impactHaptic('medium');
+      setSulking(true);
+      if (sulkTimer.current) clearTimeout(sulkTimer.current);
+      sulkTimer.current = setTimeout(() => setSulking(false), SULK_MS);
+      return;
+    }
+    tapHaptic();
+    if (still) return;
+    // Knocked one way, springs back. Alternating, so a run jostles him side
+    // to side instead of repeating one twitch.
+    pokeAnim.current?.stop();
+    const way = pokeWay(next.count);
+    pokeAnim.current = Animated.sequence([
+      Animated.timing(poke, { toValue: way, duration: 90, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.spring(poke, { toValue: 0, friction: 4, tension: 150, useNativeDriver: true }),
+    ]);
+    pokeAnim.current.start();
+  }, [sulking, still, poke]);
+
+  // Nothing may outlive the component: a timer firing into an unmounted tree
+  // sets state on nothing, and a spring left running holds a frame callback.
+  useEffect(() => () => {
+    if (sulkTimer.current) clearTimeout(sulkTimer.current);
+    pokeAnim.current?.stop();
+  }, []);
+
   // ── what each layer does with all that ────────────────────────────────
   const faceStyle = {
     transform: [
@@ -387,14 +453,20 @@ export default function ClaudeTurtleBuddy({
         Animated.add(
           read.interpolate({ inputRange: [0, 1], outputRange: [0, TYPE_DIP] }),
           Animated.add(
-            think.interpolate({ inputRange: [0, 1], outputRange: [0, -0.8] }),
-            breath.interpolate({ inputRange: [0, 1], outputRange: [0, -0.5] }),
+            // A knock sinks him a little whichever way it came from — which
+            // is what makes it read as a jostle rather than as a lean.
+            poke.interpolate({ inputRange: [-1, 0, 1], outputRange: [POKE_DIP, 0, POKE_DIP] }),
+            Animated.add(
+              think.interpolate({ inputRange: [0, 1], outputRange: [0, -0.8] }),
+              breath.interpolate({ inputRange: [0, 1], outputRange: [0, -0.5] }),
+            ),
           ),
         ),
       ) },
       { rotate: think.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${THINK_TILT_DEG}deg`] }) },
       { rotate: read.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${TYPE_TILT_DEG}deg`] }) },
       { rotate: nod.interpolate({ inputRange: [-1, 1], outputRange: [`${-NOD_DEG}deg`, `${NOD_DEG}deg`] }) },
+      { rotate: poke.interpolate({ inputRange: [-1, 1], outputRange: [`${-POKE_DEG}deg`, `${POKE_DEG}deg`] }) },
     ],
   };
   // Both hands arrive the same way: down onto the ledge, just after the face.
@@ -433,8 +505,19 @@ export default function ClaudeTurtleBuddy({
   const layer = { position: 'absolute', left: 0, top: 0, width: size, height };
   const art = { size, color, tilt };
 
+  const Root = pokeable ? Pressable : View;
+  const rootProps = pokeable
+    ? {
+      onPress: onPoke,
+      // No ripple, no opacity: the REACTION is the feedback, and a press
+      // state under it would read as a button rather than as a creature.
+      accessibilityRole: 'button',
+      accessibilityLabel: 'Poke the turtle',
+    }
+    : { pointerEvents: 'none' };
+
   return (
-    <View pointerEvents="none" style={{ width: size, height }} testID={testID}>
+    <Root {...rootProps} style={{ width: size, height }} testID={testID}>
       {/* 1 — behind the ledge: nothing of the face shows below the line. */}
       <View
         testID={`${testID}-clip`}
@@ -474,7 +557,7 @@ export default function ClaudeTurtleBuddy({
       <Animated.View testID={`${testID}-hand-point`} style={[layer, pointStyle]}>
         <ClaudeTurtleMark {...art} parts={POINT} handFill={handFill} testID={`${testID}-hand-point-art`} />
       </Animated.View>
-    </View>
+    </Root>
   );
 }
 

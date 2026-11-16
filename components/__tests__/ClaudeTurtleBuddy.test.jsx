@@ -24,6 +24,7 @@ import ClaudeTurtleBuddy, {
   BLINK, GLANCES, IDLE_GAP, THINK_DRIFT, THINK_GAP, THINK_GAZE, THINK_TILT_DEG,
   TYPE_DIP, TYPE_GAZE, TYPE_TILT_DEG, TYPING_LINGER_MS, nextActGap, nextBlinkGap,
 } from '../ClaudeTurtleBuddy';
+import { POKE_LIMIT, SULK_MS } from '../turtlePoke';
 import { CLAUDE_POINT_AT, eyeDots, ledgeOffset } from '../ClaudeTurtleMark';
 
 const SRC = fs.readFileSync(path.resolve(__dirname, '..', 'ClaudeTurtleBuddy.jsx'), 'utf8');
@@ -240,11 +241,14 @@ describe('ClaudeTurtleBuddy', () => {
     // The travel he is pushed through is the whole ledge and then some, so
     // there is no sliver of chin left on the line.
     expect(CODE).toMatch(/const travel = ledge \+ 3;/);
-    expect(CODE).toMatch(/rise\.setValue\(up \? 0 : 1\); grab\.setValue\(up \? 1 : 0\);/);
+    // `shown`, not `up`: a sulk after too many pokes puts him down the same
+    // way, so the two reasons meet in one value before the jump reads it.
+    expect(CODE).toMatch(/const shown = up && !sulking;/);
+    expect(CODE).toMatch(/rise\.setValue\(shown \? 0 : 1\); grab\.setValue\(shown \? 1 : 0\);/);
     // Going DOWN is its own move, and it does not bounce: an overshoot on
     // the way out would read as him being thrown rather than ducking.
-    expect(CODE).toMatch(/if \(!up\) \{/);
-    const sink = CODE.slice(CODE.indexOf('if (!up) {'), CODE.indexOf('const jump ='));
+    expect(CODE).toMatch(/if \(!shown\) \{/);
+    const sink = CODE.slice(CODE.indexOf('if (!shown) {'), CODE.indexOf('const jump ='));
     expect(sink).not.toMatch(/JUMP_OVERSHOOT/);
     // …and the hands leave before the head does.
     expect(sink).toMatch(/grab.*duration: 140[\s\S]*rise.*duration: 260/);
@@ -256,13 +260,59 @@ describe('ClaudeTurtleBuddy', () => {
     // are on the sign-in step, where there is nobody yet.
     expect(src).toMatch(/const markShown = claudeUiMode !== 'login';/);
     expect(src).toMatch(/\{markShown && \(\s*<View pointerEvents="none" style=\{styles\.claudeRidge\}/);
-    expect(src).toMatch(/\{markShown && \(\s*<>\s*<View pointerEvents="none" style=\{styles\.claudePeek\}/);
+    // NOT pointerEvents none any more: he takes his own tap now, so a prod
+    // of the drawing no longer falls through to the identity bar's Profile.
+    expect(src).toMatch(/\{markShown && \(\s*<>\s*<View style=\{styles\.claudePeek\}/);
     // A session has him up throughout; the notes header only while typing.
     expect(src).toMatch(/const markUp = claudeMarkShown \|\| claudeTyping;/);
     // DECLARED BEFORE IT IS READ. `markUp` is a const in the same body, so a
     // typing state declared further down is a temporal-dead-zone throw on
     // the first render — and nothing in this suite mounts the screen.
     expect(src.indexOf('const [claudeTyping')).toBeLessThan(src.indexOf('const markUp ='));
+  });
+
+  test('A POKE IS HIS, not the header’s — and too many send him off the ledge', async () => {
+    // Mark, 2026-11-16. Tapping the drawing used to fall through to the
+    // identity bar and open Profile, which is a door nobody was aiming for
+    // when they prodded a turtle.
+    const { fireEvent } = require('@testing-library/react-native');
+    const view = await render(<ClaudeTurtleBuddy size={80} pokeable />);
+    // The root itself is the target — one id, and `accessibilityRole` is
+    // what says whether this one can be prodded.
+    const target = view.getByTestId('claude-turtle-buddy');
+    expect(target.props.accessibilityRole).toBe('button');
+    expect(target.props.accessibilityLabel).toMatch(/poke/i);
+
+    // A run of pokes rocks him; he is still up for all of them.
+    for (let i = 0; i < POKE_LIMIT; i += 1) {
+      await act(async () => { fireEvent.press(target); });
+    }
+    expect(view.getByTestId('claude-turtle-buddy-face')).toBeTruthy();
+
+    // One too many and he goes. Nothing UNMOUNTS — the clip hides him, the
+    // same way `up` does — so the header keeps its ridge and its title.
+    await act(async () => { fireEvent.press(target); });
+    expect(view.getByTestId('claude-turtle-buddy-face')).toBeTruthy();
+    expect(view.getByTestId('claude-turtle-buddy-clip')).toBeTruthy();
+
+    // …and he comes back on his own.
+    await act(async () => { jest.advanceTimersByTime(SULK_MS + 50); });
+    expect(view.getByTestId('claude-turtle-buddy-face')).toBeTruthy();
+    await view.unmount();
+  });
+
+  test('…and he is NOT a touch target where he is decoration', async () => {
+    // Every other place the mark appears it is paint. A stray press target
+    // over a header is a tap that silently does nothing.
+    const view = await render(<ClaudeTurtleBuddy size={80} />);
+    expect(view.getByTestId('claude-turtle-buddy').props.accessibilityRole).toBeUndefined();
+    expect(CODE).toMatch(/\{ pointerEvents: 'none' \}/);
+  });
+
+  test('the sulk timer and the spring do not outlive him', () => {
+    // A timer firing into an unmounted tree sets state on nothing, and a
+    // spring left running holds a frame callback for ever.
+    expect(CODE).toMatch(/useEffect\(\(\) => \(\) => \{\s*if \(sulkTimer\.current\) clearTimeout\(sulkTimer\.current\);\s*pokeAnim\.current\?\.stop\(\);/);
   });
 
   test('NATIVE DRIVER throughout, and no Reanimated', () => {
@@ -284,7 +334,7 @@ describe('ClaudeTurtleBuddy', () => {
 
   test('the session header wears him, and he thinks while a turn is in flight', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
-    expect(src).toMatch(/<ClaudeTurtleBuddy\s+size=\{CLAUDE_PEEK_WIDTH\}\s+up=\{markUp\}\s+thinking=\{claudeBusy\}/);
+    expect(src).toMatch(/<ClaudeTurtleBuddy\s+size=\{CLAUDE_PEEK_WIDTH\}\s+pokeable\s+up=\{markUp\}\s+thinking=\{claudeBusy\}/);
     expect(src).toMatch(/typing=\{claudeTyping\}/);
   });
 });

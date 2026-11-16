@@ -304,7 +304,10 @@ describe('ClaudeTurtleMark', () => {
     // The ring itself stands down for a live session.
     expect(src).toMatch(/\{!claudeMarkShown && \(\s*<View style=\{styles\.identityAvatarWrap\}>/);
     // Touch-transparent: the identity bar underneath keeps the tap.
-    expect(src).toMatch(/<View pointerEvents="none" style=\{styles\.claudePeek\} testID="claude-mark-peek">/);
+    // NOT pointerEvents none: the drawing takes its own tap now, so a prod of
+    // it rocks him instead of falling through to the bar's Profile door
+    // (Mark, 2026-11-16). The rest of the bar still opens Profile.
+    expect(src).toMatch(/<View style=\{styles\.claudePeek\} testID="claude-mark-peek">/);
     // Hung from the row's CENTRE line by its own ledge, so that line runs
     // under the chin and through the hands. Both numbers come from the art.
     const peek = src.slice(src.indexOf('    claudePeek: {'), src.indexOf('    claudeRidge: {'));

@@ -2455,11 +2455,16 @@ export default function TurtleScreen() {
             is holding on to the ledge, not drawn on top of a line.
 
             The title is centred on the same line, so the name and the
-            drawing are level by construction. Takes no touches — the
-            identity bar underneath still owns the tap and the long-press. */}
+            drawing are level by construction.
+
+            HE TAKES THE TAP HIMSELF (Mark, 2026-11-16). It used to fall
+            through to the identity bar and open Profile, which is a door
+            nobody was aiming for when they prodded a drawing — the rest of
+            the bar still opens it. Poked, he rocks; poked once too often he
+            goes off the ledge and climbs back (components/turtlePoke). */}
         {markShown && (
           <>
-            <View pointerEvents="none" style={styles.claudePeek} testID="claude-mark-peek">
+            <View style={styles.claudePeek} testID="claude-mark-peek">
               {/* ALIVE: he breathes, blinks and looks about; for as long as a
                   turn is in flight he THINKS, with one finger at the corner
                   of his mouth and his eyes rolled up and away.
@@ -2471,6 +2476,7 @@ export default function TurtleScreen() {
                   sinks back when you stop. */}
               <ClaudeTurtleBuddy
                 size={CLAUDE_PEEK_WIDTH}
+                pokeable
                 up={markUp}
                 thinking={claudeBusy}
                 // …and while you are writing to him he reads the line
