@@ -49,6 +49,7 @@ import { playFocusComplete } from '../../../services/focusChime';
 import { focusSkin } from '../utils/focusSkin';
 import { NEU_GAP, NEU_PAGE_TOP, neuRaised } from '../../../utils/neumorph';
 import Grain from '../../../components/Grain';
+import NeuSheen, { sheenColors } from '../../../components/NeuSheen';
 import { boardLabel } from '../utils/taskHelpers';
 import { focusStats, formatMinutes } from '../utils/focusStats';
 import { rangeSummaries } from '../utils/focusRanges';
@@ -112,7 +113,7 @@ export function clockFromMs(ms) {
  */
 function FocusDeck({
   running, remaining, focusMinutes, block, todaySessions,
-  progress, pulse, pal, neu, grain, accent, breakAccent,
+  progress, pulse, pal, neu, sheen, grain, accent, breakAccent,
   task, onPickTask, onClearTask, onJot,
   onStartFocus, onStartBreak, onStop,
 }) {
@@ -147,6 +148,7 @@ function FocusDeck({
         { transform: [{ scale: pulse }] },
       ]}
     >
+        <NeuSheen colors={sheen} radius={24} />
         <Grain level={grain} radius={24} />
       <View style={styles.deckHead}>
         <View style={[styles.badge, { backgroundColor: pal.tile }]}>
@@ -384,13 +386,14 @@ function useCountUp(value, ms = 520) {
  * counts up to it and `format` turns each step into what you read, so "1h 05m"
  * climbs as honestly as "65" would.
  */
-function Tile({ icon, label, count, format, value, caption, pal, neu, grain, accent, enter, onPress, testID }) {
+function Tile({ icon, label, count, format, value, caption, pal, neu, sheen, grain, accent, enter, onPress, testID }) {
   const shown = useCountUp(count ?? 0);
   const text = count == null ? value : (format ? format(shown) : String(shown));
   const skin = neu;
   const body = (
     <>
       {/* tileCard's radius — the tooth is clipped to the panel it dresses. */}
+      <NeuSheen colors={sheen} radius={22} />
       <Grain level={grain} radius={22} />
       <View style={styles.tileTop}>
         <View style={[styles.iconTile, { backgroundColor: pal.tile }]}>
@@ -570,6 +573,10 @@ function FocusPage({
   // the card tone and the panels stop being a different colour from it. One
   // object, reused: the shadow list is the same for all of them.
   const neu = useMemo(() => neuRaised(pal.card, theme.mode), [pal.card, theme.mode]);
+  // The light on each panel's upper face — the same tone its own highlight is
+  // drawn in, worked out once here so no sub-panel can disagree with the page
+  // about where the light is (components/NeuSheen).
+  const sheen = useMemo(() => sheenColors(pal.card, theme.mode), [pal.card, theme.mode]);
   const accent = theme.colors.accentInfo || theme.colors.textPrimary;
   // The break's own colour, and the chat timer card's exactly (TimerMessage):
   // the same two modes wearing the same two colours wherever they are shown.
@@ -736,6 +743,7 @@ function FocusPage({
       {/* The countdown, the bar, and the one control that matters. */}
       <FocusDeck
         neu={neu}
+        sheen={sheen}
         grain={grain}
         running={running}
         remaining={remaining}
@@ -763,7 +771,7 @@ function FocusPage({
           count={stats.todayMinutes}
           format={formatMinutes}
           caption={stats.todaySessions === 1 ? '1 block' : `${stats.todaySessions} blocks`}
-          pal={pal} neu={neu} grain={grain}
+          pal={pal} neu={neu} sheen={sheen} grain={grain}
           enter={enterAt(0, 0.35)}
           // The only tile that opens: "50m · 2 blocks" is a number with
           // nothing beside it, and whether 50 minutes is good depends on what
@@ -777,7 +785,7 @@ function FocusPage({
           count={stats.weekMinutes}
           format={formatMinutes}
           caption="last 7 days"
-          pal={pal} neu={neu} grain={grain}
+          pal={pal} neu={neu} sheen={sheen} grain={grain}
           enter={enterAt(0.08, 0.45)}
           testID="focus-tile-week"
         />
@@ -786,7 +794,7 @@ function FocusPage({
           label="Streak"
           value={stats.streak ? `${stats.streak}d` : '—'}
           caption={stats.streak ? 'days running' : 'start one today'}
-          pal={pal} neu={neu} grain={grain}
+          pal={pal} neu={neu} sheen={sheen} grain={grain}
           accent={stats.streak >= 3 ? '#F59E0B' : null}
           enter={enterAt(0.16, 0.55)}
           testID="focus-tile-streak"
@@ -796,7 +804,7 @@ function FocusPage({
           label="Average"
           value={stats.averageMinutes ? `${stats.averageMinutes}m` : '—'}
           caption={stats.totalSessions === 1 ? 'over 1 block' : `over ${stats.totalSessions} blocks`}
-          pal={pal} neu={neu} grain={grain}
+          pal={pal} neu={neu} sheen={sheen} grain={grain}
           enter={enterAt(0.24, 0.65)}
           testID="focus-tile-average"
         />
@@ -808,6 +816,7 @@ function FocusPage({
       <Animated.View
         style={[styles.panel, neu, enterAt(0.3, 0.7)]}
       >
+        <NeuSheen colors={sheen} radius={24} />
         <Grain level={grain} radius={24} />
         <WeekBars
           week={stats.week}
@@ -839,6 +848,7 @@ function FocusPage({
               pressed && styles.pressed,
             ]}
           >
+        <NeuSheen colors={sheen} radius={22} />
         <Grain level={grain} radius={22} />
             <View style={styles.statKeyTop}>
               <Text style={[styles.label, { color: pal.muted }]} numberOfLines={1}>{r.title}</Text>
@@ -864,6 +874,7 @@ function FocusPage({
       <Animated.View
         style={[styles.panel, neu, enterAt(0.38, 0.78)]}
       >
+        <NeuSheen colors={sheen} radius={24} />
         <Grain level={grain} radius={24} />
         <HourStrip byHour={stats.byHour} pal={pal} accent={accent} />
       </Animated.View>
@@ -897,6 +908,7 @@ function FocusPage({
             ]}
             testID="focus-recent-panel"
           >
+        <NeuSheen colors={sheen} radius={24} />
         <Grain level={grain} radius={24} />
             {stats.recent.map((r, i) => {
               const task = r.taskId ? (taskOfId?.(r.taskId) || null) : null;
@@ -961,6 +973,7 @@ function FocusPage({
             style={[styles.row, neu]}
             testID={`focus-board-${b.name}`}
           >
+        <NeuSheen colors={sheen} radius={20} />
         <Grain level={grain} radius={20} />
             <View style={styles.rowTop}>
               <Text style={[styles.rowName, { color: pal.text }]} numberOfLines={1}>{boardLabel(b.name)}</Text>
@@ -1015,6 +1028,7 @@ function FocusPage({
           sessions={sessions}
           boardOfTask={boardOfTask}
           pal={pal}
+          sheen={sheen}
           theme={theme}
           initialRange={statsRange}
           onClose={() => setStatsRange(null)}

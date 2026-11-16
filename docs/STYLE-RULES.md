@@ -589,6 +589,14 @@ is not this style.**
   **ink flips with it**. NOT `insetCardPalette`, whose text is white in BOTH
   modes because its card is a charcoal recess — that palette's ink on this
   surface is invisible in light mode, and it has happened twice.
+- **`<NeuSheen colors={sheen} radius={N} />`** — `components/NeuSheen.jsx`.
+  The light on a raised panel's upper face: the panel's **own** `lit` tone,
+  fading to nothing by a third of the way down. Not a contradiction of the
+  one-colour rule — it IS the light, and the panel's body is still exactly
+  the page. Added 2026-11-16 because tiles the same colour as a grained page
+  go missing in it. Laid FIRST, with the grain over it: the tooth belongs to
+  the material, so it sits on the lit face. The **ground gets none** — light
+  the things standing out of the page, not the page.
 - **`<Grain level={grain} radius={N} />`** — `components/Grain.jsx`. The
   silver tooth. A flat fill under soft shadows reads as plastic; the speckle is
   what makes it a material. **`level` is a prop, never a `useTheme()` read** —
