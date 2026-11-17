@@ -146,28 +146,42 @@ describe('Grain', () => {
     expect(off.queryByTestId('grain-clip', HIDDEN)).toBeNull();
   });
 
-  test('TINT recolours the speckle without touching its alpha', async () => {
-    // Anodized, not brushed: the art is grey noise, so a tint is what turns
-    // aluminium into aluminium anodized in a colour. The alpha channel is
-    // the texture itself and must survive — tinting the IMAGE rather than
-    // washing a colour over it is what keeps it.
-    // Nothing is laid until the clip has been measured, so the layout has
-    // to be fired before there is an Image to look at (see the tiling
-    // tests above).
-    const laid = async (node) => {
-      const view = await render(node);
-      await act(async () => {
-        clipOf(view).props.onLayout({ nativeEvent: { layout: { width: 200, height: 100 } } });
-      });
-      return view;
-    };
-    const plain = await laid(<Grain />);
-    expect(plain.getByTestId('grain', HIDDEN).props.tintColor).toBeUndefined();
-    const anodized = await laid(<Grain tint="#58665D" />);
-    expect(anodized.getByTestId('grain', HIDDEN).props.tintColor).toBe('#58665D');
-    // …and the strength is still the setting, not the tint.
-    expect(flat(clipOf(anodized)).opacity).toBe(GRAIN_OPACITY);
+  test(String.raw`THE NOISE IS IN THE RGB — never tintColor this art`, () => {
+    // The texture is grey 0..255 at a CONSTANT alpha of 45. tintColor
+    // replaces the RGB of every pixel and keeps the alpha, so on this
+    // asset it replaces the texture itself and leaves a flat 17.6% film.
+    // That shipped for one release: the prop was set, a test said so, and
+    // the surface had no grain on it at all.
+    const fs2 = require('fs');
+    const path2 = require('path');
+    const zlib = require('zlib');
+    const buf = fs2.readFileSync(path2.resolve(__dirname, '..', '..', 'assets', 'grain.png'));
+    let i = 8; const idat = [];
+    while (i < buf.length) {
+      const len = buf.readUInt32BE(i);
+      if (buf.toString('ascii', i + 4, i + 8) === 'IDAT') idat.push(buf.slice(i + 8, i + 8 + len));
+      i += 12 + len;
+    }
+    const raw = zlib.inflateSync(Buffer.concat(idat));
+    const greys = new Set(); const alphas = new Set();
+    for (let y = 0; y < GRAIN_TILE; y += 1) {
+      for (let x = 0; x < GRAIN_TILE; x += 1) {
+        const o = y * (GRAIN_TILE * 2 + 1) + 1 + x * 2;
+        greys.add(raw[o]); alphas.add(raw[o + 1]);
+      }
+    }
+    expect(greys.size).toBeGreaterThan(100);   // the texture
+    expect(alphas.size).toBe(1);               // …and nothing in the alpha
+    // So nothing may hand this component a tint.
+    const src = fs2.readFileSync(path2.resolve(__dirname, '..', 'Grain.jsx'), 'utf8');
+    // …in the CODE. The note above the component says the word, and the
+    // note is the thing that stops it coming back.
+    const code = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    expect(code).not.toMatch(/tintColor/);
   });
+
   test('a level it cannot read falls back to the designed strength', async () => {
     // A surface with its texture silently off looks like a bug, not like a
     // preference — so junk means "as designed", never "none".

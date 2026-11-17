@@ -4,17 +4,18 @@ const path = require('path');
 /**
  * THE IDENTITY BLOCK WEARS THE NAV BAR.
  *
- * Mark, 2026-11-16, over three passes: the nav bar's backdrop, a subtle
- * darker gradient at its two ends, everything on it legible, and — in place
- * of the glows that were there first — "grainy metal anodized look like the
- * silver but it takes the colour gain of the colour chosen".
+ * Mark, 2026-11-16, over four passes: the nav bar's backdrop; the glows
+ * under each figure; then "remove the glow but make it grainy metal
+ * anodized look like the silver but it takes the colour gain of the colour
+ * chosen"; then "remove the dark gradient and add grain to the backdrop".
+ * What is left is a coloured band with a metal tooth on it, and nothing else.
  *
- * `navSurface.test` proves the colour maths. ProfileScreen's index is far too
- * heavy to mount, so what is pinned here is the WIRING — and every line of it
- * is a thing that fails silently rather than loudly: ink that stops flipping
- * with its surface is invisible rather than wrong-looking (§1), and a texture
- * that stops being tinted is silver on a green band, which reads as a dusty
- * screen rather than as a bug.
+ * `navSurface.test` proves the colour maths and `Grain.test` proves the
+ * texture's. ProfileScreen's index is far too heavy to mount, so what is
+ * pinned here is the WIRING — and every line of it is a thing that fails
+ * silently rather than loudly: ink that stops flipping with its surface is
+ * invisible rather than wrong-looking (§1), and a grain that stops being
+ * drawn leaves a flat band that looks deliberate.
  */
 
 const SRC = fs.readFileSync(path.resolve(__dirname, '..', 'index.jsx'), 'utf8');
@@ -50,38 +51,42 @@ describe('the profile identity block', () => {
     expect(SRC.slice(SRC.indexOf('const makeStyles'))).not.toMatch(/color: c\.accentInk/);
   });
 
-  test('IT IS ANODIZED METAL, not a glow', () => {
-    // The glows went first (they were a pool of light under each figure).
-    // This is the same tooth the Focus and Inbox panels wear, driven by the
-    // same slider — but TINTED with a lighter step of the band's own colour
-    // rather than left grey, which is the whole difference between brushed
-    // aluminium and aluminium anodized in a colour.
-    expect(SRC).toContain('{navSkin && <Grain level={grain} tint={navSkin.grain} />}');
+  test('IT IS ANODIZED METAL — grain on the band, and nothing else on it', () => {
+    // The same tooth the Focus and Inbox panels wear, driven by the same
+    // slider: grey noise modulating around the band's own colour, which is
+    // what anodized aluminium is. The colour comes from the surface, where
+    // it already was.
+    expect(SRC).toContain('{navSkin && <Grain level={grain * METAL_GRAIN} />}');
+    // NOT tinted. The art's noise lives in its RGB, so a tintColor replaces
+    // the texture with one flat colour — that shipped for a release and
+    // left the band slightly paler with no grain on it (Grain's own note
+    // and test hold the other half of this).
+    // Scoped to the Grain tag: `tint` is a perfectly good prop elsewhere on
+    // this screen (the stats charts take one), and a blanket ban would fail
+    // for a reason that has nothing to do with this.
+    expect(SRC).not.toMatch(/<Grain[^/]*tint=/);
     // One slider for every textured surface in the app, not a second one.
     expect(SRC).toMatch(/\n {4}grain,\n {2}\} = useTheme\(\);/);
-    // …and the glow is gone with all of its machinery, not left dangling.
+    // …and the glow before it is gone with all of its machinery.
     expect(SRC).not.toMatch(/DockGlow|statGlow|navGlow|SPOT_/);
   });
 
-  test('the tooth sits UNDER the shade, which is the light ON the metal', () => {
-    // The darkened ends are light falling on the surface, so they fall on
-    // its grain too. Grain first, gradient second.
-    expect(SRC.indexOf('<Grain level={grain}'))
-      .toBeLessThan(SRC.indexOf('profile-identity-shade'));
+  test('…and HEAVIER than a page’s dusting, or a dark band shows none', () => {
+    // The grain modulates AROUND the surface, and a dark band has far less
+    // room above it than a cream page: the layer that reads as texture on
+    // the Focus panels is invisible on this one.
+    const metal = /const METAL_GRAIN = ([\d.]+);/.exec(SRC);
+    expect(metal).toBeTruthy();
+    expect(Number(metal[1])).toBeGreaterThan(1);
+    // A multiplier on the person's own setting, so Off is still off here.
+    expect(SRC).toContain('grain * METAL_GRAIN');
   });
 
-  test('the band’s two ENDS are darker, and only the ends', () => {
-    // "A subtle darker gradient on the top and bottom." Four stops, the
-    // middle two transparent, so the band keeps its own colour everywhere
-    // the ink actually is.
-    expect(SRC).toMatch(/colors=\{\[EDGE_SHADE, 'transparent', 'transparent', EDGE_SHADE\]\}/);
-    expect(SRC).toMatch(/locations=\{\[0, 0\.22, 0\.78, 1\]\}/);
-    const shade = /const EDGE_SHADE = 'rgba\(0,0,0,([\d.]+)\)'/.exec(SRC);
-    expect(shade).toBeTruthy();
-    // Subtle: a shade you can SEE is a second colour, and one heavy enough
-    // to matter would drag the ink's contrast down with it.
-    expect(Number(shade[1])).toBeLessThanOrEqual(0.25);
-    expect(Number(shade[1])).toBeGreaterThan(0.05);
+  test('THE DARK GRADIENT IS GONE, with the constant that drove it', () => {
+    // Mark, 2026-11-16: "remove the dark gradient". The band is one colour
+    // with a tooth on it now.
+    expect(SRC).not.toMatch(/EDGE_SHADE|profile-identity-shade/);
+    expect(SRC).not.toMatch(/LinearGradient/);
   });
 
   test('EVERYTHING ON THE BAND IS LEGIBLE — no page colours left on it', () => {

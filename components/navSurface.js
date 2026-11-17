@@ -35,16 +35,6 @@ import { glowStrength, pickedGlowColor } from './dockLight';
 export const NAV_BLOCK_ALPHA = 0.92;
 
 /**
- * How far the anodized tooth moves from the surface it dusts.
- *
- * A SMALL step. The speckle already arrives at about 9% once the art's own
- * alpha and the grain layer opacity are through with it, so a big move
- * reads as dirt rather than as metal — at 0.55 a near-white dock came out
- * hazy grey. 0.3 is tooth on every colour and dirt on none.
- */
-const GRAIN_STEP = 0.3;
-
-/**
  * The opaque colour behind a skin's wash.
  *
  * `skin.colour` only exists on the CUSTOM skin; every fixed style and every
@@ -89,14 +79,6 @@ export function navBlockSurface(settings = {}, page) {
     // colour. A pale chip carrying the band's white text is white on
     // near-white, which is what shipped and Mark could not read.
     chip: light ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)',
-    // THE ANODIZED TOOTH: the band's own colour, lifted.
-    //
-    // The grain art is grey, so untinted it is brushed aluminium. Tinted
-    // with a LIGHTER step of the surface it is anodized in that colour —
-    // the same metal, the speckle catching light in the hue the surface
-    // already is rather than in silver. Taken off the surface so it
-    // follows whatever dock colour is on, like everything else here.
-    grain: mixHex(fill, light ? '#FFFFFF' : '#000000', GRAIN_STEP),
     ink: light ? '#FFFFFF' : '#1F2024',
     sub: light ? 'rgba(255,255,255,0.74)' : 'rgba(31,32,36,0.72)',
     muted: light ? 'rgba(255,255,255,0.56)' : 'rgba(31,32,36,0.56)',

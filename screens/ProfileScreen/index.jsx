@@ -4,7 +4,6 @@ import {
   RefreshControl, AppState,
 } from 'react-native';
 import { depth, insetRule, listGlyphInk } from '../../utils/surfaceDepth';
-import { LinearGradient } from 'expo-linear-gradient';
 import Grain from '../../components/Grain';
 import { navBlockSurface } from '../../components/navSurface';
 import AppTextInput from '../../components/AppTextInput';
@@ -543,26 +542,22 @@ export default function ProfileScreen() {
               than a darker mix of the colour: "darker" is the same answer
               whichever colour the dock is wearing, and a per-colour shade
               would need a second palette to keep in step. */}
-          {/* ANODIZED, not glowing. Mark, 2026-11-16: "remove the glow but
-              make it grainy metal anodized look like the silver but it takes
-              the colour gain of the colour chosen."
+          {/* ANODIZED METAL. The same tooth the Focus and Inbox panels wear,
+              driven by the same slider — grey noise modulating around the
+              band's own colour, which is what anodized aluminium IS: a
+              coloured metal with a neutral brushed grain.
 
-              The same tooth the Focus and Inbox panels wear and the same
-              slider drives it — but TINTED with a lighter step of the band's
-              own colour instead of left grey, which is the difference
-              between brushed aluminium and aluminium anodized in a colour.
-              Over the fill and UNDER the shade: the darkened ends are the
-              light falling on the metal, so they fall on the grain too. */}
-          {navSkin && <Grain level={grain} tint={navSkin.grain} />}
-          {navSkin && (
-            <LinearGradient
-              pointerEvents="none"
-              testID="profile-identity-shade"
-              colors={[EDGE_SHADE, 'transparent', 'transparent', EDGE_SHADE]}
-              locations={[0, 0.22, 0.78, 1]}
-              style={StyleSheet.absoluteFill}
-            />
-          )}
+              NOT tinted. The art's noise lives in its RGB channel, so a
+              tintColor replaces the texture with one flat colour — that
+              shipped for a release and left the band slightly paler with no
+              grain on it (see Grain's note). The colour comes from the
+              surface underneath, where it already was.
+
+              HEAVIER than a page's dusting (METAL_GRAIN). The tooth
+              modulates around the fill, and a dark fill has far less room
+              above it than a cream page does — the same layer that reads as
+              texture on the Focus panels is invisible on this one. */}
+          {navSkin && <Grain level={grain * METAL_GRAIN} />}
           {/* Settings, pinned to the card's top-right. The Settings CARD lower
               down still works — this is the conventional place to reach for it
               on a profile, so it's a second door to the same page, not a move. */}
@@ -1939,14 +1934,16 @@ const statStyles = StyleSheet.create({
 });
 
 /**
- * How dark the band's two ends go.
+ * How much heavier the metal's tooth is than a page's dusting.
  *
- * "Subtle" (Mark, 2026-11-16): enough to curl the band away from the page
- * above it and the list below, not enough to read as a second colour — and
- * low enough that the ink's contrast is unaffected where the ink actually
- * is, which is the middle.
+ * The grain modulates AROUND the surface it is on, and a dark band has far
+ * less room above it than a cream page: the layer that reads as texture on
+ * the Focus panels is invisible on this one. At 1.5 the speckle spans
+ * roughly ±20 levels either side of the fill, which is metal rather than
+ * dirt — and it is a multiplier on the person's own setting, so Off is
+ * still off here too.
  */
-const EDGE_SHADE = 'rgba(0,0,0,0.18)';
+const METAL_GRAIN = 1.5;
 
 const makeStyles = (theme, nav) => {
   const c = theme.colors;
