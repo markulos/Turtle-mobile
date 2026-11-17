@@ -90,6 +90,10 @@ export function grainTiles(width, height, tile = GRAIN_TILE) {
 }
 
 /**
+ * `tint` recolours the speckle — see the note on the Image below. Without
+ * one the tooth is the art's own grey, which is the silver every other
+ * surface in the app wears.
+ *
  * `level` is the person's setting (Settings → Appearance), passed DOWN rather
  * than read from the theme here. Reaching into ThemeContext from a leaf like
  * this pulls AsyncStorage into every consumer's tests — utils/inputField.js
@@ -98,7 +102,7 @@ export function grainTiles(width, height, tile = GRAIN_TILE) {
  * of them together.
  */
 export default function Grain({
-  level = 1, fine = false, opacity = GRAIN_OPACITY, radius = 0, style, testID = 'grain',
+  level = 1, fine = false, tint, opacity = GRAIN_OPACITY, radius = 0, style, testID = 'grain',
 }) {
   const strength = opacity
     * (Number.isFinite(level) ? Math.max(0, level) : 1)
@@ -133,6 +137,17 @@ export default function Grain({
           key={i}
           testID={i === 0 ? testID : undefined}
           source={GRAIN}
+          /**
+           * ANODIZED, when a surface asks for it.
+           *
+           * The art is grey noise with an alpha channel, so by default the
+           * speckle is silver — a neutral tooth that suits a cream or a
+           * charcoal page. `tint` recolours every speckle without touching
+           * the alpha, which is what turns brushed aluminium into aluminium
+           * ANODIZED in a colour: the same grain, catching light in the
+           * surface's own hue rather than in grey (Mark, 2026-11-16).
+           */
+          tintColor={tint}
           style={{
             position: 'absolute',
             left: (i % cols) * GRAIN_TILE,

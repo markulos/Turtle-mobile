@@ -5,9 +5,8 @@ import {
 } from 'react-native';
 import { depth, insetRule, listGlyphInk } from '../../utils/surfaceDepth';
 import { LinearGradient } from 'expo-linear-gradient';
-import DockGlow from '../../components/DockGlow';
-import { SPOT_H, SPOT_PEAK, SPOT_W } from '../../components/dockLight';
-import { navBlockSurface, navGlow } from '../../components/navSurface';
+import Grain from '../../components/Grain';
+import { navBlockSurface } from '../../components/navSurface';
 import AppTextInput from '../../components/AppTextInput';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useKeyboardHeight from '../../utils/useKeyboardHeight';
@@ -83,7 +82,10 @@ export default function ProfileScreen() {
     theme, isDark,
     // The dock's own three, so the identity block lands on whatever the nav
     // bar landed on and keeps tracking it (components/navSurface).
-    dockTheme: dockThemeKey, dockStyle, dockColor, dockGlow, dockGlowColor,
+    dockTheme: dockThemeKey, dockStyle, dockColor,
+    // Settings → Appearance → Surface grain, which is the same control that
+    // dusts the Focus and Inbox panels. One slider, every textured surface.
+    grain,
   } = useTheme();
   /**
    * THE IDENTITY BLOCK WEARS THE NAV BAR (Mark, 2026-11-16): "a slightly
@@ -102,10 +104,7 @@ export default function ProfileScreen() {
     ),
     [dockThemeKey, dockStyle, dockColor, theme.colors.background],
   );
-  const statGlow = useMemo(
-    () => navGlow({ dockGlow, dockGlowColor, accent: theme.colors.accent }),
-    [dockGlow, dockGlowColor, theme.colors.accent],
-  );
+
   const c = theme.colors;
   const insets = useSafeAreaInsets();
   // Name edit keyboard: pad the page so the field can scroll clear of it.
@@ -544,6 +543,17 @@ export default function ProfileScreen() {
               than a darker mix of the colour: "darker" is the same answer
               whichever colour the dock is wearing, and a per-colour shade
               would need a second palette to keep in step. */}
+          {/* ANODIZED, not glowing. Mark, 2026-11-16: "remove the glow but
+              make it grainy metal anodized look like the silver but it takes
+              the colour gain of the colour chosen."
+
+              The same tooth the Focus and Inbox panels wear and the same
+              slider drives it — but TINTED with a lighter step of the band's
+              own colour instead of left grey, which is the difference
+              between brushed aluminium and aluminium anodized in a colour.
+              Over the fill and UNDER the shade: the darkened ends are the
+              light falling on the metal, so they fall on the grain too. */}
+          {navSkin && <Grain level={grain} tint={navSkin.grain} />}
           {navSkin && (
             <LinearGradient
               pointerEvents="none"
@@ -689,26 +699,6 @@ export default function ProfileScreen() {
                       : `${s.value} ${s.label}${s.hint ? `, ${s.hint}` : ''}`
                   }
                 >
-                  {/* ITS OWN GLOW, the dock's exactly — same ellipse, same
-                      falloff, same two settings (components/DockGlow,
-                      navSurface). One per cell and independent of the others:
-                      the dock has one because only one tab is active, and
-                      these four are four things rather than a choice between
-                      them. Pinned to the bottom of the cell so the four pools
-                      line up on one horizon. */}
-                  {statGlow.strength > 0 && (
-                    <View pointerEvents="none" style={styles.statGlow}>
-                      <DockGlow
-                        id={`profile-stat-glow-${s.key}`}
-                        width={SPOT_W}
-                        height={SPOT_H}
-                        color={statGlow.color}
-                        peak={SPOT_PEAK * statGlow.strength}
-                        cy={1}
-                        ry={1}
-                      />
-                    </View>
-                  )}
                   <Icon name={s.icon} size={13} color={navSkin ? navSkin.muted : c.textMuted} style={{ marginBottom: 3 }} />
                   {/* An em dash while the first load is in flight, rather than
                       hiding the strip: a card that grows a row once the network
@@ -2097,38 +2087,11 @@ const makeStyles = (theme, nav) => {
       marginTop: 18, paddingTop: 14,
       borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: hair,
     },
-    /**
-     * The cell's pool of light. Absolutely placed and CENTRED on the cell's
-     * bottom edge, which is what puts the four on one horizon however wide
-     * the cells are — the dock does the same with its single spot, and a
-     * glow laid out in flow would move with the text above it instead.
-     */
-    statGlow: {
-      position: 'absolute',
-      left: '50%',
-      marginLeft: -SPOT_W / 2,
-      // FLUSH WITH THE CELL'S BOTTOM, not hung below it.
-      //
-      // The ellipse is centred on the BOTTOM of its own box (cy/ry 1), so the
-      // bright end of the light is that bottom edge and the box holds the
-      // upper half of the pool. Hanging the box below the cell by half its
-      // height put the bright end outside the clip and left only the faint
-      // tail showing — which is why the glows did not appear at all. At 0 the
-      // light rises from the cell's lower edge, exactly as the dock's spot
-      // rises from the bar's.
-      bottom: 0,
-      width: SPOT_W,
-      height: SPOT_H,
-    },
+
     statDivider: { width: StyleSheet.hairlineWidth, backgroundColor: hair, marginVertical: 2 },
     // paddingHorizontal is 4, not 6: the cells now carry a hint line ("12h 30m
     // total") that needs every point of width it can get before it ellipsises.
-    stat: {
-      flex: 1, alignItems: 'center', paddingVertical: 4, paddingHorizontal: 4,
-      // Clipped: the pool is centred on the cell's bottom edge, so half of it
-      // is below the block and would spill onto the list of doors underneath.
-      overflow: 'hidden',
-    },
+    stat: { flex: 1, alignItems: 'center', paddingVertical: 4, paddingHorizontal: 4 },
     statNum: { fontSize: 19, fontWeight: '800', color: ink },
     statLabel: { fontSize: 11, color: inkMuted, marginTop: 1 },
     // Reserved height, so a cell whose hint hasn't loaded (or has none) keeps

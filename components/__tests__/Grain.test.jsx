@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
-import { render } from '@testing-library/react-native';
+import { act, render } from '@testing-library/react-native';
 
 import Grain, { FINE_GRAIN, GRAIN_OPACITY, GRAIN_TILE, grainTiles } from '../Grain';
 
@@ -146,6 +146,28 @@ describe('Grain', () => {
     expect(off.queryByTestId('grain-clip', HIDDEN)).toBeNull();
   });
 
+  test('TINT recolours the speckle without touching its alpha', async () => {
+    // Anodized, not brushed: the art is grey noise, so a tint is what turns
+    // aluminium into aluminium anodized in a colour. The alpha channel is
+    // the texture itself and must survive — tinting the IMAGE rather than
+    // washing a colour over it is what keeps it.
+    // Nothing is laid until the clip has been measured, so the layout has
+    // to be fired before there is an Image to look at (see the tiling
+    // tests above).
+    const laid = async (node) => {
+      const view = await render(node);
+      await act(async () => {
+        clipOf(view).props.onLayout({ nativeEvent: { layout: { width: 200, height: 100 } } });
+      });
+      return view;
+    };
+    const plain = await laid(<Grain />);
+    expect(plain.getByTestId('grain', HIDDEN).props.tintColor).toBeUndefined();
+    const anodized = await laid(<Grain tint="#58665D" />);
+    expect(anodized.getByTestId('grain', HIDDEN).props.tintColor).toBe('#58665D');
+    // …and the strength is still the setting, not the tint.
+    expect(flat(clipOf(anodized)).opacity).toBe(GRAIN_OPACITY);
+  });
   test('a level it cannot read falls back to the designed strength', async () => {
     // A surface with its texture silently off looks like a bug, not like a
     // preference — so junk means "as designed", never "none".
