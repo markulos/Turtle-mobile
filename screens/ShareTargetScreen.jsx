@@ -75,6 +75,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useServer } from '../context/ServerContext';
+import { serverOrigin } from '../utils/serverOrigin';
 import { useShareUpload } from '../context/ShareUploadContext';
 import { impactHaptic, notifyHaptic } from '../utils/haptics';
 import {
@@ -625,6 +626,11 @@ export default function ShareTargetScreen({ shareIntent, onDismiss }) {
       {filePickerOpen && (
         <FolderPickerSheet
           title="File into"
+          // THE COVER BASE, which this call site never passed — so every
+          // folder fell back to its tinted initial and the picker looked
+          // like it had no thumbnails at all. It always had them; it had
+          // nowhere to resolve the URLs from (FolderTile).
+          base={serverOrigin(serverIP)}
           onClose={() => setFilePickerOpen(false)}
           onPick={(target) => {
             setFilePickerOpen(false);

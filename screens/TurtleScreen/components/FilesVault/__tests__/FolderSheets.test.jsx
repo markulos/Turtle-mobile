@@ -57,6 +57,61 @@ describe('FolderSheets', () => {
     expect(onPick).toHaveBeenLastCalledWith({ id: 'unfiled', name: 'Unfiled' });
   });
 
+  it('FolderPickerSheet is a PAGE, not a card to pull up', async () => {
+    // Mark, 2026-11-16: filing something means BROWSING a grid of folders,
+    // and at the house 60% detent every one of them started below the fold.
+    // One detent — nothing to drag up — but drag-down still closes, because
+    // that is the cancel.
+    const src = require('fs').readFileSync(
+      require('path').resolve(__dirname, '..', 'FolderSheets.jsx'), 'utf8',
+    );
+    const picker = src.slice(src.indexOf('export function FolderPickerSheet'));
+    expect(picker).toMatch(/collapsedRatio=\{EXPANDED_RATIO\}/);
+    expect(src).toMatch(/import ViewerSheet, \{ EXPANDED_RATIO \}/);
+  });
+
+  it('FolderPickerSheet searches, and OFFERS THE FOLDER IT CANNOT FIND', async () => {
+    // "If the folder does not exist, it will offer to create a new folder
+    // with the searched name." You came here to file something and typed
+    // where it goes; the app not knowing that place is no reason to send
+    // you away.
+    mockApi.get.mockImplementation(() => Promise.resolve({ success: true, folder: null, path: [], folders: [{"id":"fld_aaaaaaaaaaaa","name":"Scans","itemCount":1,"folderCount":0,"covers":[]},{"id":"fld_cccccccccccc","name":"Receipts 2024","itemCount":3,"folderCount":0,"covers":[]}], items: [], unfiled: { count: 2 } }));
+    // The hook posts through sendOrQueue, not through api.post directly —
+    // mocking the wrong one leaves `r` undefined and the create silently
+    // fails back to the sheet.
+    require('../../../../../services/offlineQueue').sendOrQueue
+      .mockResolvedValue({ queued: false, result: { success: true, folder: { id: 'fld_new', name: 'Invoices' } } });
+    const onPick = jest.fn();
+    const view = await render(<FolderPickerSheet onPick={onPick} onClose={() => {}} theme={theme} />);
+    await waitFor(() => view.getByText('Scans'));
+
+    // It FILTERS…
+    await fireEvent.changeText(view.getByLabelText('Search folders'), 'receipts');
+    await waitFor(() => expect(view.queryByText('Scans')).toBeNull());
+    expect(view.getByText('Receipts 2024')).toBeTruthy();
+    // …and a near miss still offers the exact name you typed, because
+    // "Receipts" is not "Receipts 2024".
+    expect(view.getByTestId('folder-picker-create')).toBeTruthy();
+
+    // An EXACT match offers nothing: the folder is right there.
+    await fireEvent.changeText(view.getByLabelText('Search folders'), 'Scans');
+    await waitFor(() => expect(view.queryByTestId('folder-picker-create')).toBeNull());
+
+    // And creating one files into it in the same breath — making the folder
+    // and then asking where to put the thing is one question twice.
+    await fireEvent.changeText(view.getByLabelText('Search folders'), 'Invoices');
+    await fireEvent.press(view.getByTestId('folder-picker-create'));
+    await waitFor(() => expect(onPick).toHaveBeenCalledWith({ id: 'fld_new', name: 'Invoices' }));
+  });
+
+  it('FolderPickerSheet says so when a search matches nothing it can make', async () => {
+    mockApi.get.mockImplementation(() => Promise.resolve({ success: true, folder: null, path: [], folders: [], items: [], unfiled: { count: 2 } }));
+    const view = await render(<FolderPickerSheet onPick={() => {}} onClose={() => {}} theme={theme} />);
+    await waitFor(() => view.getByLabelText('Search folders'));
+    // Empty box, empty folder: the old hint, which is about Move here.
+    expect(view.getByText(/No folders inside/)).toBeTruthy();
+  });
+
   it('FilesSortSheet reports the sort, order and query', async () => {
     const onChange = jest.fn();
     const { getByLabelText } = await render(<FilesSortSheet sort="date" order="desc" query="" onChange={onChange} onClose={() => {}} theme={theme} />);
