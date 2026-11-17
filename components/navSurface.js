@@ -75,6 +75,10 @@ export function navBlockSurface(settings = {}, page) {
     // other way from its surface or it is not an edge.
     edge: light ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.14)',
     ridge: light ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.12)',
+    // A chip ON the band: a wash of the band's own ink, never a page
+    // colour. A pale chip carrying the band's white text is white on
+    // near-white, which is what shipped and Mark could not read.
+    chip: light ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)',
     ink: light ? '#FFFFFF' : '#1F2024',
     sub: light ? 'rgba(255,255,255,0.74)' : 'rgba(31,32,36,0.72)',
     muted: light ? 'rgba(255,255,255,0.56)' : 'rgba(31,32,36,0.56)',

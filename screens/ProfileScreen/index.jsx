@@ -4,6 +4,7 @@ import {
   RefreshControl, AppState,
 } from 'react-native';
 import { depth, insetRule, listGlyphInk } from '../../utils/surfaceDepth';
+import { LinearGradient } from 'expo-linear-gradient';
 import DockGlow from '../../components/DockGlow';
 import { SPOT_H, SPOT_PEAK, SPOT_W } from '../../components/dockLight';
 import { navBlockSurface, navGlow } from '../../components/navSurface';
@@ -535,6 +536,23 @@ export default function ProfileScreen() {
           ]}
           testID="profile-identity"
         >
+          {/* A DARKER TOP AND BOTTOM. Mark, 2026-11-16: "a subtle darker
+              gradient on the top and bottom of the profile backdrop colour."
+              One gradient with four stops rather than two views — the middle
+              pair are transparent, so the band keeps its own colour across
+              the whole middle and only the two ends are shaded. Black rather
+              than a darker mix of the colour: "darker" is the same answer
+              whichever colour the dock is wearing, and a per-colour shade
+              would need a second palette to keep in step. */}
+          {navSkin && (
+            <LinearGradient
+              pointerEvents="none"
+              testID="profile-identity-shade"
+              colors={[EDGE_SHADE, 'transparent', 'transparent', EDGE_SHADE]}
+              locations={[0, 0.22, 0.78, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
           {/* Settings, pinned to the card's top-right. The Settings CARD lower
               down still works — this is the conventional place to reach for it
               on a profile, so it's a second door to the same page, not a move. */}
@@ -609,7 +627,7 @@ export default function ProfileScreen() {
               accessibilityLabel="Edit your name"
             >
               <Text style={styles.name} numberOfLines={1}>{name}</Text>
-              <Icon name="pencil-outline" size={16} color={c.textMuted} />
+              <Icon name="pencil-outline" size={16} color={navSkin ? navSkin.muted : c.textMuted} />
             </TouchableOpacity>
           )}
 
@@ -630,7 +648,7 @@ export default function ProfileScreen() {
                 accessibilityLabel={`Choose your animal, currently ${fallbackName}`}
                 testID="profile-handle-chip"
               >
-                <AnimalGlyph id={identity} animal={myAnimal} size={12} color={c.textTertiary} />
+                <AnimalGlyph id={identity} animal={myAnimal} size={12} color={navSkin ? navSkin.muted : c.textTertiary} />
                 <Text style={styles.handleText} numberOfLines={1}>{fallbackName}</Text>
               </Pressable>
             )}
@@ -643,7 +661,7 @@ export default function ProfileScreen() {
 
           {!!me?.phone && (
             <View style={styles.phoneRow}>
-              <Icon name="phone-outline" size={13} color={c.textMuted} />
+              <Icon name="phone-outline" size={13} color={navSkin ? navSkin.muted : c.textMuted} />
               <Text style={styles.phoneText} numberOfLines={1}>{me.phone}</Text>
             </View>
           )}
@@ -1930,6 +1948,16 @@ const statStyles = StyleSheet.create({
   ledgerTotal: { fontSize: 18, fontWeight: '800' },
 });
 
+/**
+ * How dark the band's two ends go.
+ *
+ * "Subtle" (Mark, 2026-11-16): enough to curl the band away from the page
+ * above it and the list below, not enough to read as a second colour — and
+ * low enough that the ink's contrast is unaffected where the ink actually
+ * is, which is the middle.
+ */
+const EDGE_SHADE = 'rgba(0,0,0,0.18)';
+
 const makeStyles = (theme, nav) => {
   const c = theme.colors;
   /**
@@ -2042,12 +2070,17 @@ const makeStyles = (theme, nav) => {
     handleChip: {
       flexDirection: 'row', alignItems: 'center', gap: 5,
       paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999,
-      backgroundColor: c.surfaceElevated,
+      // ON THE BAND, a wash of the band's own ink — not `surfaceElevated`,
+      // which is a PAGE colour: a pale chip carrying the band's white text
+      // was white on near-white, which is exactly what Mark could not read.
+      // No depth() either; a lifted card on a coloured band reads as a
+      // sticker stuck to it.
+      backgroundColor: nav ? nav.chip : c.surfaceElevated,
+      ...(nav ? null : depth(theme, 'control')),
       // Shrinks rather than pushing the row wider than the card.
       flexShrink: 1, maxWidth: '100%',
-      ...depth(theme, 'control'),
     },
-    handleText: { fontSize: 12, fontWeight: '600', color: inkMuted, flexShrink: 1 },
+    handleText: { fontSize: 12, fontWeight: '600', color: inkSub, flexShrink: 1 },
     roleChip: {
       paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999,
       backgroundColor: (c.accent || c.accentInfo) + '26',
@@ -2074,7 +2107,16 @@ const makeStyles = (theme, nav) => {
       position: 'absolute',
       left: '50%',
       marginLeft: -SPOT_W / 2,
-      bottom: -SPOT_H / 2,
+      // FLUSH WITH THE CELL'S BOTTOM, not hung below it.
+      //
+      // The ellipse is centred on the BOTTOM of its own box (cy/ry 1), so the
+      // bright end of the light is that bottom edge and the box holds the
+      // upper half of the pool. Hanging the box below the cell by half its
+      // height put the bright end outside the clip and left only the faint
+      // tail showing — which is why the glows did not appear at all. At 0 the
+      // light rises from the cell's lower edge, exactly as the dock's spot
+      // rises from the bar's.
+      bottom: 0,
       width: SPOT_W,
       height: SPOT_H,
     },
