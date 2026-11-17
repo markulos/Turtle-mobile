@@ -22,6 +22,8 @@ import { FolderNameSheet, FolderPickerSheet, FilesSortSheet, FolderActionsSheet 
 import VaultShareSheet from '../VaultShareSheet';
 import { openDocument } from './documentOpen';
 import PdfViewer, { canRenderPdf } from './PdfViewer';
+import DocxViewer from './DocxViewer';
+import { isDocx } from '../../../../utils/docx';
 import DocumentPeek from './DocumentPeek';
 import { collapseCrumbs, gridCellSize, isDocument, isPdf, messageOf, sortFolderItems } from './filesUtils';
 import VideoTranscribeSheet from './VideoTranscribeSheet';
@@ -63,6 +65,10 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   // The document the in-app PDF viewer is showing, or null. A pushed page over
   // this one, so the left-edge swipe pops the reader before the folder.
   const [viewing, setViewing] = useState(null);
+  // The Word document being read, beside the PDF being viewed. Two states
+  // rather than one tagged union: the two viewers mount independently and
+  // a single slot would make "which one" a thing to get wrong.
+  const [reading, setReading] = useState(null);
   // The document being peeked at (long-press), or null.
   const [peek, setPeek] = useState(null);
   const [progress, setProgress] = useState({}); // id → 0..1
@@ -131,11 +137,15 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   const handleBack = useCallback(() => { if (selectMode) { clearSelection(); return; } onClose(); }, [selectMode, clearSelection, onClose]);
   const selectedItems = useMemo(() => items.filter((i) => selected.has(i.id)), [items, selected]);
 
-  // A PDF opens IN the app — the viewer does its own download and shows its
-  // own progress, so the row's hairline bar is not started for it. Every other
-  // document still goes out to the system share sheet (Quick Look previews a
-  // .docx; we do not), and so does a PDF in a binary with no renderer in it,
-  // which is exactly where these opened before the viewer existed.
+  // A PDF and a .docx open IN the app — each viewer does its own download
+  // and shows its own progress, so the row's hairline bar is not started for
+  // them. Everything else still goes out to the system share sheet, and so
+  // does a PDF in a binary with no renderer in it, which is exactly where
+  // these opened before the viewers existed.
+  //
+  // A .DOC — the old binary format — is NOT one of them: it is a compound
+  // file of undocumented records rather than a zip of XML, and pretending to
+  // read it would be worse than handing it to something that can.
   // Out to the OS: Quick Look, Open in …, print, mark up. The peek's Share key
   // and every non-PDF tap land here.
   const shareOut = useCallback(async (item) => {
@@ -155,6 +165,7 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
   const open = useCallback(async (item) => {
     if (busyRef.current) return;
     if (isPdf(item) && canRenderPdf()) { setViewing(item); return; }
+    if (isDocx(item)) { setReading(item); return; }
     await shareOut(item);
   }, [shareOut]);
 
@@ -410,6 +421,9 @@ export default function FolderPage({ visible, parent, onClose, onOpenFolder, onO
             bare safe area rather than reserving room for a bar that is gone. */}
         {!!viewing && (
           <PdfViewer visible item={viewing} onClose={() => setViewing(null)} getFullUrl={getFullUrl} theme={theme} />
+        )}
+        {!!reading && (
+          <DocxViewer visible item={reading} onClose={() => setReading(null)} getFullUrl={getFullUrl} theme={theme} />
         )}
       </View>
     </EdgeSwipePage>

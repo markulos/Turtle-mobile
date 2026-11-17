@@ -36,6 +36,11 @@ jest.mock('../../EdgeSwipePage', () => ({ visible, children }) => (visible ? chi
 // covers the viewer itself. `mockCanRenderPdf` is flipped by the test that
 // checks the no-renderer fallback.
 let mockCanRenderPdf = true;
+jest.mock('../DocxViewer', () => {
+  const React = require('react');
+  const { Text } = require('react-native');
+  return { __esModule: true, default: ({ item }) => React.createElement(Text, null, `READING ${item?.originalName}`) };
+});
 jest.mock('../PdfViewer', () => {
   const React = require('react');
   const { Text } = require('react-native');
@@ -62,6 +67,7 @@ const listing = {
     { id: 'doc-1', type: 'document', originalName: 'lease.pdf', size: 5, uploadDate: 100, rawUrl: '/r/1', thumbnailUrl: '/t/1', thumbnailLgUrl: '/t/1-lg' },
     { id: 'doc-2', type: 'document', originalName: 'minutes.docx', size: 7, uploadDate: 200, rawUrl: '/r/3' },
     { id: 'doc-3', type: 'document', originalName: 'old-scan.pdf', size: 9, uploadDate: 150, rawUrl: '/r/4', thumbnailUrl: '/t/4' },
+    { id: 'doc-4', type: 'document', originalName: 'archive.doc', size: 4, uploadDate: 120, rawUrl: '/r/5' },
     { id: 'img-1', type: 'image', originalName: 'a.jpg', size: 50, uploadDate: 300, rawUrl: '/r/2', thumbnailUrl: '/t/2' },
   ],
   pagination: { total: 4, limit: 200, offset: 0, hasMore: false },
@@ -84,8 +90,8 @@ describe('FolderPage', () => {
     expect(getByText('Taxes')).toBeTruthy();
     await fireEvent.press(getByLabelText('Open folder 2025'));
     expect(p.onOpenFolder).toHaveBeenCalledWith(expect.objectContaining({ id: 'fld_cccccccccccc' }));
-    await fireEvent.press(getByLabelText('Open minutes.docx'));
-    await waitFor(() => expect(mockOpenDocument).toHaveBeenCalledWith(expect.objectContaining({ id: 'doc-2' }), expect.any(Object)));
+    await fireEvent.press(getByLabelText('Open archive.doc'));
+    await waitFor(() => expect(mockOpenDocument).toHaveBeenCalledWith(expect.objectContaining({ id: 'doc-4' }), expect.any(Object)));
     await fireEvent.press(getByLabelText('Open photo a.jpg'));
     expect(p.onOpenMedia).toHaveBeenCalledWith([expect.objectContaining({ id: 'img-1' })], expect.objectContaining({ id: 'img-1' }));
   });
@@ -116,9 +122,14 @@ describe('FolderPage', () => {
     expect(style.marginHorizontal ?? 0).toBe(0);
   });
 
-  // The whole point of the reader: a PDF must NOT leave the app. Anything else
-  // still does, because the OS previews a .docx and we cannot.
-  it('a PDF opens the in-app reader; other documents still go to the share sheet', async () => {
+  /**
+   * The whole point of the readers: a PDF and a Word document must NOT leave
+   * the app (Mark, 2026-11-17). Everything else still does — including a
+   * legacy .DOC, which is a compound file of undocumented records rather
+   * than a zip of XML, and pretending to read it would be worse than
+   * handing it to something that can.
+   */
+  it('a PDF and a .docx open in the app; a .doc and the rest go to the share sheet', async () => {
     const { getByText, getByLabelText, queryByText } = await render(<FolderPage {...props()} />);
     await waitFor(() => getByText('lease.pdf'));
     await fireEvent.press(getByLabelText('Open lease.pdf'));
@@ -126,8 +137,12 @@ describe('FolderPage', () => {
     expect(mockOpenDocument).not.toHaveBeenCalled();
 
     await fireEvent.press(getByLabelText('Open minutes.docx'));
-    await waitFor(() => expect(mockOpenDocument).toHaveBeenCalledWith(expect.objectContaining({ id: 'doc-2' }), expect.any(Object)));
-    expect(queryByText('VIEWING minutes.docx')).toBeNull();
+    await waitFor(() => getByText('READING minutes.docx'));
+    expect(mockOpenDocument).not.toHaveBeenCalled();
+
+    await fireEvent.press(getByLabelText('Open archive.doc'));
+    await waitFor(() => expect(mockOpenDocument).toHaveBeenCalledWith(expect.objectContaining({ id: 'doc-4' }), expect.any(Object)));
+    expect(queryByText('READING archive.doc')).toBeNull();
   });
 
   // An OTA update can land on a binary built before react-native-pdf was
@@ -262,6 +277,9 @@ describe('FolderPage', () => {
     const capped = { ...listing, pagination: { total: 250, limit: 200, offset: 0, hasMore: true } };
     mockApi.get.mockImplementation((p) => Promise.resolve(p.includes('parent=root') ? root : capped));
     const { getByText } = await render(<FolderPage {...props()} />);
-    await waitFor(() => getByText('Showing the first 4 of 250'));
+    // Counted from the fixture, not written down: adding a document to the
+    // listing used to break this assertion for a reason that has nothing to
+    // do with truncation.
+    await waitFor(() => getByText(`Showing the first ${listing.items.length} of 250`));
   });
 });

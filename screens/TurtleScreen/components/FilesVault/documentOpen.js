@@ -1,7 +1,8 @@
 /**
  * documentOpen — get a document's bytes onto the phone once, then either hand
- * them to the in-app viewer (PDFs) or to the system share sheet (Quick Look /
- * Open in …, which knows how to preview a .docx and we do not).
+ * them to an in-app viewer (PDFs, and Word documents since 2026-11-17) or to
+ * the system share sheet (Quick Look / Open in …), which is still the right
+ * answer for everything else and for the full fidelity of a .docx.
  *
  * `ensureLocalCopy` is the half both paths share: one cache directory, one
  * download, one set of error words. Cached files open instantly; a download
@@ -12,7 +13,22 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 
 const DIR = `${FileSystem.cacheDirectory || ''}files/`;
-const UTI = { 'application/pdf': 'com.adobe.pdf', 'text/plain': 'public.plain-text', 'application/zip': 'public.zip-archive', 'application/json': 'public.json' };
+/**
+ * The system's own name for a type, so iOS offers a PREVIEW rather than only
+ * "copy to …". Word was missing from this map and fell through to
+ * `public.data`, which tells the share sheet nothing about what it is
+ * holding — so the one thing a Word file most needed from this path was the
+ * one thing it did not get.
+ */
+const UTI = {
+  'application/pdf': 'com.adobe.pdf',
+  'text/plain': 'public.plain-text',
+  'application/zip': 'public.zip-archive',
+  'application/json': 'public.json',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'org.openxmlformats.wordprocessingml.document',
+  'application/msword': 'com.microsoft.word.doc',
+  'application/rtf': 'public.rtf',
+};
 
 const safeName = (s) => String(s || 'file').replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
 export const cachePathFor = (item) => `${DIR}${item.id}-${safeName(item.originalName || item.filename)}`;
