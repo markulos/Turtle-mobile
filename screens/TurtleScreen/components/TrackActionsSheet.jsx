@@ -56,6 +56,16 @@ export default function TrackActionsSheet({
   isPlaying = false,
   playlists = [],
   currentPlaylists = [],
+  /**
+   * The playlist this sheet was opened FROM, if any.
+   *
+   * Mark, 2026-11-18: "give the option to remove items from playlist". The
+   * picker below can take a track off any playlist it is on, but the one you
+   * are standing in is the one you almost always mean — so it gets a row of
+   * its own on the first page, named, rather than being two taps and a search
+   * away.
+   */
+  inPlaylist = null,
   busy = false,
   // 'none' | 'running' | 'done' — what this track's transcript situation is,
   // so the row can say what the tap will actually do instead of offering
@@ -65,6 +75,7 @@ export default function TrackActionsSheet({
   onShare,
   onRename,
   onAddToPlaylist,
+  onRemoveFromPlaylist,
   /** () => void — file this track into the Voice recordings folder, or take it
    *  back out. `isRecording` says which way it goes. Optional: a surface that
    *  cannot file (a track someone else shared) simply omits it. */
@@ -228,7 +239,7 @@ export default function TrackActionsSheet({
   ) : null;
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+    <View style={[StyleSheet.absoluteFill, styles.layer]} pointerEvents="box-none">
       <Animated.View
         pointerEvents={visible ? 'auto' : 'none'}
         style={[StyleSheet.absoluteFill, styles.scrim, { opacity: anim }]}
@@ -366,6 +377,26 @@ export default function TrackActionsSheet({
                 setPage('playlists');
               }}
             />
+            {/* REMOVE FROM THE PLAYLIST YOU ARE IN. Directly under "Add to
+                playlist" because it is the same filing job in reverse, and
+                named rather than generic: "Remove from this playlist" makes
+                you check which one you are in, and the whole point of this
+                row is that you already know. Not destructive — the track
+                stays in the vault and on its other playlists — so it is not
+                drawn in the delete colour. */}
+            {inPlaylist && onRemoveFromPlaylist ? (
+              <ActionRow
+                testID="track-remove-from-playlist"
+                icon="playlist-minus"
+                label={`Remove from ${inPlaylist}`}
+                color={c.textPrimary}
+                style={rowBorder}
+                onPress={() => {
+                  impactHaptic('medium');
+                  onRemoveFromPlaylist(inPlaylist);
+                }}
+              />
+            ) : null}
             {/* Voice recordings. A FOLDER, not a playlist, and the label says
                 the consequence rather than the mechanism: what goes in there
                 leaves the music library and stops playing with everything
@@ -650,17 +681,30 @@ export default function TrackActionsSheet({
 
               {picks.matches.map((name) => {
                 const already = currentPlaylists.includes(name);
+                // A ticked row USED TO BE DISABLED, which left no way at all
+                // to take a track off a playlist (Mark, 2026-11-18). It is a
+                // toggle now: the tick still says "on this one", and the
+                // trailing × says what the tap will do about it. The label
+                // carries that too, because a screen reader gets the row's
+                // name and not its glyphs.
+                const removable = already && !!onRemoveFromPlaylist;
                 return (
                   <ActionRow
                     key={name}
+                    testID={`playlist-row-${name}`}
                     icon={already ? 'check' : 'playlist-music'}
                     label={name}
+                    a11yLabel={removable ? `${name}, remove from this playlist` : name}
                     color={already ? (tint) : c.textPrimary}
                     style={rowBorder}
-                    disabled={already}
+                    trail={removable ? 'close' : null}
+                    // Still inert when there is nowhere for a removal to go —
+                    // the recordings' own picker passes no remove handler.
+                    disabled={already && !removable}
                     onPress={() => {
                       impactHaptic('medium');
-                      onAddToPlaylist?.(name);
+                      if (removable) onRemoveFromPlaylist(name);
+                      else onAddToPlaylist?.(name);
                     }}
                   />
                 );
@@ -706,12 +750,16 @@ function PersonDisc({ person, size = 24, baseUrl }) {
   );
 }
 
-function ActionRow({ icon, label, color, onPress, style, disabled, chevron, testID }) {
+function ActionRow({
+  icon, label, color, onPress, style, disabled, chevron, testID, trail, a11yLabel,
+}) {
   return (
     <TouchableOpacity
       testID={testID}
       accessibilityRole="button"
-      accessibilityLabel={label}
+      // A row whose tap does something its LABEL does not say gets to say so
+      // here — the playlist rows that remove rather than add.
+      accessibilityLabel={a11yLabel || label}
       activeOpacity={0.7}
       disabled={disabled}
       onPress={onPress}
@@ -721,12 +769,28 @@ function ActionRow({ icon, label, color, onPress, style, disabled, chevron, test
       <Text style={[styles.rowLabel, { color }]} numberOfLines={1}>
         {label}
       </Text>
+      {trail ? <Icon name={trail} size={18} color={color} /> : null}
       {chevron ? <Icon name="chevron-right" size={20} color={color} /> : null}
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
+  /**
+   * ABOVE EVERYTHING IT CAN BE DRAWN BESIDE.
+   *
+   * Mark, 2026-11-18: the ⋯ card has to be on top "even when you are within
+   * an overlay inset like a playlist overlay". Tree order alone was not
+   * enough: a nested EdgeSwipePage renders as an in-tree layer at zIndex 150
+   * (its `overlay` form), so a sheet that is a LATER sibling of the page it
+   * was opened from still lost to it. 400 clears that and the vault's own
+   * 200, and is under nothing this is ever a sibling of.
+   *
+   * It is the other half of the fix — MusicVault draws this inside whichever
+   * full-screen page is up, because each of those is a real Modal and no
+   * z-index reaches across one.
+   */
+  layer: { zIndex: 400, elevation: 400 },
   scrim: { backgroundColor: 'rgba(0,0,0,0.5)' },
   // The bottom pin lives on the ANCHOR (which carries the keyboard lift), not
   // on the card — so the card's transform stays free for the open/drag motion.

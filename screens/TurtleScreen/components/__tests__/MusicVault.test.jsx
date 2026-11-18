@@ -591,7 +591,15 @@ describe('a playlist is its own queue', () => {
   );
 
   it('the open playlist hands its own rows to renderTrack', () => {
-    expect(SRC).toMatch(/renderItem=\{\(\{ item \}\) => renderTrack\(\{ item, queue: openPlaylistTracks \}\)\}/);
+    // The shape loosened when the ⋯ gained an onOptions here (it carries the
+    // playlist's NAME so the card can offer to remove the track from it), so
+    // the assertion is on the argument that matters rather than on the whole
+    // call as it was written that day.
+    expect(SRC).toMatch(/queue: openPlaylistTracks,?\s/);
+    const call = SRC.slice(SRC.indexOf('data={openPlaylistTracks}'));
+    expect(call.slice(0, 1200)).toMatch(
+      /renderItem=\{\(\{ item \}\) => renderTrack\(\{\s*item,\s*queue: openPlaylistTracks,/
+    );
   });
 
   it('no list inside a pushed page renders renderTrack bare', () => {
@@ -722,5 +730,66 @@ describe('the row that is playing', () => {
       .map((n) => StyleSheet.flatten(n.props.style).color);
     expect(subs.length).toBeGreaterThan(1);
     expect(subs.filter((col) => /^rgba\(255,255,255,/.test(col))).toHaveLength(1);
+  });
+});
+
+/**
+ * TAKING A TRACK OFF A PLAYLIST, from inside the playlist.
+ *
+ * Mark, 2026-11-18: "give the option to remove items from playlist and let the
+ * three dot overlay card always be above all on click even when you are within
+ * an overlay inset like a playlist overlay."
+ *
+ * This drives BOTH halves at once, which is the point: the ⋯ is tapped two
+ * pages deep (Playlists → Chill) and the card has to be reachable there at
+ * all. It was not — the page used to close itself to show the menu, so this
+ * test would previously have been asserting from the library.
+ */
+describe('removing a track from a playlist', () => {
+  /**
+   * The ⋯ on the TOPMOST copy of a row.
+   *
+   * The library list stays mounted behind the modal and carries the same row,
+   * so there are two of this label in the tree and `getByLabelText` throws
+   * "Found multiple elements" — which reads like the row is duplicated rather
+   * than like there being a page over it.
+   */
+  const pressOptions = async (view, name) => {
+    const rows = view.getAllByLabelText(`Options for ${name}`);
+    await fireEvent.press(rows[rows.length - 1]);
+  };
+  const openChill = async (view) => {
+    await fireEvent.press(view.getByLabelText('Playlists, 2'));
+    await fireEvent.press(view.getByText('Chill'));
+    return view;
+  };
+
+  test('the ⋯ opens INSIDE the playlist, and offers to remove from it BY NAME', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await openChill(view);
+    await pressOptions(view, 'First');
+    // Named: you are standing in Chill and the row says Chill.
+    expect(view.getByText('Remove from Chill')).toBeTruthy();
+    // …and the playlist is still the page behind it. Before this, showing the
+    // card meant closing the page, so this header was gone.
+    expect(view.getByLabelText('Back to playlists')).toBeTruthy();
+  });
+
+  test('…and the tap is a tag write with that name taken out', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await openChill(view);
+    await pressOptions(view, 'First');
+    await fireEvent.press(view.getByTestId('track-remove-from-playlist'));
+    // The tags endpoint REPLACES the list, so what goes up is everything the
+    // row had minus this one.
+    expect(mockApi.put).toHaveBeenCalledWith('/media/one/tags', { tags: [] });
+  });
+
+  test('the library’s own ⋯ offers no such row — there is no playlist to name', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Options for First'));
+    expect(view.queryByTestId('track-remove-from-playlist')).toBeNull();
+    // The picker is still the way, and it is two taps from here.
+    expect(view.getByText('Add to playlist')).toBeTruthy();
   });
 });

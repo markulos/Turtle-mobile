@@ -138,6 +138,61 @@ describe('picking a playlist', () => {
     expect(onAddToPlaylist).not.toHaveBeenCalled();
   });
 
+  /**
+   * TAKING A TRACK OFF A PLAYLIST.
+   *
+   * Mark, 2026-11-18: "give the option to remove items from playlist". There
+   * was none anywhere in the app: a playlist the track was already on drew as
+   * a ticked, DISABLED row, so a track filed into the wrong one stayed there.
+   */
+  test('…but it CAN be taken off it, which was the thing missing', async () => {
+    const onAddToPlaylist = jest.fn();
+    const onRemoveFromPlaylist = jest.fn();
+    const view = await openPicker({
+      onAddToPlaylist, onRemoveFromPlaylist, currentPlaylists: ['Audio'],
+    });
+    fireEvent.press(view.getByText('Audio'));
+    expect(onRemoveFromPlaylist).toHaveBeenCalledWith('Audio');
+    // And it is a toggle, not a second way to add: the add must not also fire.
+    expect(onAddToPlaylist).not.toHaveBeenCalled();
+  });
+
+  test('a row that removes SAYS SO, because a tick is not a verb', async () => {
+    // The glyphs carry it on screen (a tick for "on this one", a × for what
+    // the tap does); a screen reader gets the label and nothing else.
+    const view = await openPicker({
+      onRemoveFromPlaylist: jest.fn(), currentPlaylists: ['Audio'],
+    });
+    expect(view.getByLabelText('Audio, remove from this playlist')).toBeTruthy();
+    // A playlist the track is NOT on is still just its name.
+    expect(view.getByLabelText('Classics')).toBeTruthy();
+  });
+
+  test('a row stays INERT when there is nowhere for a removal to go', async () => {
+    // The Voice recordings picker passes no remove handler — its ticks mean
+    // the same thing and there is no write behind them.
+    const onAddToPlaylist = jest.fn();
+    const view = await openPicker({ onAddToPlaylist, currentPlaylists: ['Audio'] });
+    fireEvent.press(view.getByText('Audio'));
+    expect(onAddToPlaylist).not.toHaveBeenCalled();
+    expect(view.getByLabelText('Audio')).toBeTruthy();
+  });
+
+  test('the keyboard’s key still never removes — it is an ADD key', async () => {
+    // One match left standing and the track is already on it: Return used to
+    // be a no-op there and must stay one. A key that quietly unfiled a track
+    // because you hit Return out of habit is the opposite of this feature.
+    const onRemoveFromPlaylist = jest.fn();
+    const onAddToPlaylist = jest.fn();
+    const view = await openPicker({
+      onAddToPlaylist, onRemoveFromPlaylist, currentPlaylists: ['Audio'],
+    });
+    await type(view, 'audi');
+    await submit(view);
+    expect(onRemoveFromPlaylist).not.toHaveBeenCalled();
+    expect(onAddToPlaylist).not.toHaveBeenCalled();
+  });
+
   test('the keyboard’s key takes the only match, or makes the missing one', async () => {
     const onAddToPlaylist = jest.fn();
     const view = await openPicker({ onAddToPlaylist });

@@ -367,6 +367,20 @@ export default function MusicVault({
   // re-resolved from the live list, so a library refresh mid-sheet can't leave
   // the sheet acting on a stale row.
   const [sheetId, setSheetId] = useState(null);
+  /**
+   * The playlist the ⋯ was tapped INSIDE, if any.
+   *
+   * Mark, 2026-11-18: "give the option to remove items from playlist". The
+   * sheet can take a track off any playlist it is on, but the one you are
+   * standing in is the one you almost always mean — so the sheet is told
+   * which that is and names it on its first page.
+   */
+  const [sheetFrom, setSheetFrom] = useState(null);
+  /** Open the ⋯ card, optionally remembering the playlist it came from. */
+  const openSheet = useCallback((id, from = null) => {
+    setSheetFrom(from);
+    setSheetId(String(id));
+  }, []);
   const [sheetBusy, setSheetBusy] = useState(false);
   const sheetTrack = useMemo(
     // The library first, then the recordings: the ⋯ menu is reachable from
@@ -379,7 +393,7 @@ export default function MusicVault({
       || null,
     [visibleTracks, voiceRecordings, sheetId]
   );
-  const closeSheet = useCallback(() => setSheetId(null), []);
+  const closeSheet = useCallback(() => { setSheetId(null); setSheetFrom(null); }, []);
 
   // Measured height of the pinned transport bar, used as the list's bottom
   // padding so the last track can always scroll clear of it. MEASURED, not a
@@ -890,6 +904,48 @@ export default function MusicVault({
         .catch((e) => {
           console.warn('[MusicVault] playlist add failed:', e?.message || e);
           Alert.alert('Playlist', `Could not add “${titleOf(item)}” to ${clean}.`);
+          refreshLibrary();
+        });
+    },
+    [sheetTrack, api, refreshLibrary, closeSheet]
+  );
+
+  /**
+   * ⋯ → Remove this track from a playlist.
+   *
+   * Mark, 2026-11-18: "give the option to remove items from playlist". There
+   * was none: the picker drew a playlist the track was already on as a ticked,
+   * DISABLED row, so a track filed into the wrong playlist stayed there.
+   *
+   * The mirror image of the add — a playlist is a tag, so taking a track off
+   * one is a tag write with that name removed. Same optimism for the same
+   * reason: closes immediately, parks in the outbox offline, and only a
+   * permanent failure says so and refreshes the truth back.
+   *
+   * It does NOT delete anything. The track stays in the vault and on its other
+   * playlists, which is why it is not drawn in the destructive colour.
+   */
+  const sheetRemoveFromPlaylist = useCallback(
+    (name) => {
+      const item = sheetTrack;
+      const clean = String(name || '').trim();
+      if (!item || !clean) return;
+      closeSheet();
+      const lower = clean.toLowerCase();
+      // Case-insensitively, because that is how the picker matched it in the
+      // first place (utils/playlistSearch) — a tag that differs only in case
+      // is the same playlist to everything the user can see.
+      const next = tagsOf(item).filter((t) => String(t).trim().toLowerCase() !== lower);
+      sendOrQueue(api, {
+        method: 'put',
+        path: `/media/${item.id}/tags`,
+        body: { tags: next },
+        label: `Remove from ${clean}`,
+      })
+        .then(({ queued }) => { if (!queued) refreshLibrary(); })
+        .catch((e) => {
+          console.warn('[MusicVault] playlist remove failed:', e?.message || e);
+          Alert.alert('Playlist', `Could not take “${titleOf(item)}” out of ${clean}.`);
           refreshLibrary();
         });
     },
@@ -1499,11 +1555,13 @@ export default function MusicVault({
           accessibilityRole="button"
           accessibilityLabel={`Options for ${titleOf(item)}`}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
-          // `onOptions` is for a row on a PUSHED page: the actions sheet is an
-          // in-tree overlay on this screen, and an EdgeSwipePage is a Modal —
-          // so a sheet opened from inside one renders underneath it and looks
-          // like a dead button. The page stands down first instead (the same
-          // move openTranscribe makes, for the same reason).
+          // `onOptions` is for a row on a PUSHED page. It used to exist because
+          // the sheet could not paint over one (each page is a Modal) and so
+          // every page stood itself down to show the menu — throwing you back
+          // to the library to answer it. Now the sheet is drawn INSIDE the open
+          // page (see `sheetLayer`) and this is only about CONTEXT: which
+          // playlist you were in, so the card can offer to take the track out
+          // of it.
           onPress={() => (onOptions ? onOptions(String(item.id)) : setSheetId(String(item.id)))}
           style={styles.moreBtn}
         >
@@ -1904,6 +1962,91 @@ export default function MusicVault({
     </View>
   ), [c, recordingsTab, voiceRecordings.length, recordingPlaylists.length]);
 
+  /**
+   * WHERE THE ⋯ CARD IS DRAWN.
+   *
+   * Mark, 2026-11-18: it must be on top "even when you are within an overlay
+   * inset like a playlist overlay". It never was, and the app had grown three
+   * workarounds for it: every list on a pushed page CLOSED that page before
+   * showing the menu, so the ⋯ inside Playlists, Downloads and Voice
+   * recordings threw you back to the library to answer it.
+   *
+   * The reason is that each full-screen page is a real <Modal> (EdgeSwipePage)
+   * and NO z-index reaches across one — a later sibling of the modal still
+   * draws underneath it. So the card is not a sibling of the pages any more:
+   * it is a child of whichever one is on top, and the sheet's own zIndex (400)
+   * takes it over the nested in-tree page layer at 150.
+   *
+   * One element, placed once. Only one of these pages is ever open at a time
+   * (they are all opened from the library), and the ladder makes that an
+   * assumption with a defined answer rather than a race.
+   */
+  const sheetLayer = playlistsOpen ? 'playlists'
+    : recordingsOpen ? 'recordings'
+      : downloadsOpen ? 'downloads'
+        : sharedOpen ? 'shared'
+          : 'root';
+
+  /**
+   * The per-track options card, as a card that rises from the bottom edge.
+   *
+   * Built here and rendered in exactly ONE of the places below — see
+   * `sheetLayer`. An in-tree overlay rather than a Modal because the vault
+   * itself can be inside one (the chat's vault overlay), and on iOS a second
+   * sibling Modal over an open one silently never appears.
+   */
+  const actionsSheet = (
+        <TrackActionsSheet
+          visible={!!sheetTrack}
+          track={sheetTrack}
+          title={sheetTrack ? titleOf(sheetTrack) : ''}
+          subtitle={sheetTrack ? (sourceOf(sheetTrack) || 'Audio') : ''}
+          isActive={!!sheetTrack && String(sheetTrack.id) === String(activeTrack?.mediaId)}
+          isPlaying={isPlaying}
+          // A recording is offered the playlists that exist INSIDE its folder,
+          // not the music ones. Tags are global, so either list would "work" —
+          // but suggesting your albums while filing a sermon is how a recording
+          // ends up tagged into a music playlist it can never be seen in (the
+          // library's playlist index is built from music rows only).
+          playlists={sheetTrack && isVoiceRecording(sheetTrack) ? recordingPlaylists : playlists}
+          // The reserved tag is never a playlist. Left in, it would show as one
+          // the recording is "already on" — and the sheet draws those as a tick,
+          // one tap from a write that silently moves the recording back into the
+          // music library. That is what "Move back to music" is for, with a
+          // label saying so.
+          currentPlaylists={sheetTrack
+            ? tagsOf(sheetTrack).filter((t) => String(t).trim().toLowerCase() !== VOICE_RECORDINGS_TAG.toLowerCase())
+            : []}
+          busy={sheetBusy}
+          transcriptState={sheetTranscriptState}
+          onPlay={sheetPlay}
+          onShare={sheetShare}
+          onRename={sheetRename}
+          onAddToPlaylist={sheetAddToPlaylist}
+        // The playlist the ⋯ was tapped inside, and the write that takes the
+        // track out of one. A ticked row in the picker removes rather than
+        // being inert, and the first page names this one outright.
+        inPlaylist={sheetFrom}
+        onRemoveFromPlaylist={sheetRemoveFromPlaylist}
+          onToggleRecording={sheetToggleRecording}
+          isRecording={!!sheetTrack && isVoiceRecording(sheetTrack)}
+          onTranscribe={sheetTranscribe}
+          onToggleOffline={sheetTrack ? () => toggleOffline(sheetTrack) : undefined}
+          offlineState={sheetTrack ? offline.statusOf(sheetTrack.id).state : 'absent'}
+          offlineProgress={sheetTrack ? (offline.statusOf(sheetTrack.id).progress || 0) : 0}
+          onDelete={sheetDelete}
+          onClose={closeSheet}
+          bottomInset={Math.max(insets.bottom, bottomInset)}
+          colors={c}
+          api={api}
+          baseUrl={getBaseUrl?.()}
+          // A grant or a revoke changes the face count on the row behind — and
+          // the strip of tracks OTHER people have shared, if that just changed
+          // hands too.
+          onPondChanged={refreshPondTracks}
+        />
+  );
+
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
     {/* The lifting layer. Permanently `lift` taller than the page (the negative
@@ -2274,6 +2417,8 @@ export default function MusicVault({
             }}
           />
         </View>
+      {/* The ⋯ card, drawn INSIDE this page because the page is a Modal. */}
+      {sheetLayer === 'shared' && actionsSheet}
       </EdgeSwipePage>
 
       {/* ── Voice recordings, pushed over the library ───────────────────────
@@ -2337,7 +2482,7 @@ export default function MusicVault({
             renderItem={({ item }) => renderTrack({
               item,
               queue: downloadedTracks,
-              onOptions: (id) => { setDownloadsOpen(false); setSheetId(id); },
+              onOptions: (id) => openSheet(id),
             })}
             extraData={`${current}:${isPlaying}:${ready}:${downloadedTracks.length}:${offlineSignature}`}
             contentContainerStyle={{ paddingBottom: listPadBottom }}
@@ -2353,6 +2498,8 @@ export default function MusicVault({
             )}
           />
         </View>
+      {/* The ⋯ card, drawn INSIDE this page because the page is a Modal. */}
+      {sheetLayer === 'downloads' && actionsSheet}
       </EdgeSwipePage>
 
       {/* Voice recordings. Two views of ONE folder, switched by the tabs
@@ -2419,10 +2566,7 @@ export default function MusicVault({
               renderItem={({ item }) => renderTrack({
                 item,
                 queue: voiceRecordings,
-                // Standing down to show the menu lands you in the library — which
-                // is where the track itself goes if you pick "Move back to music",
-                // so the two agree.
-                onOptions: (id) => { setRecordingsOpen(false); setSheetId(id); },
+                onOptions: (id) => openSheet(id),
               })}
               extraData={`${current}:${isPlaying}:${ready}:${voiceRecordings.length}:${offlineSignature}`}
               contentContainerStyle={{ paddingBottom: listPadBottom }}
@@ -2470,7 +2614,7 @@ export default function MusicVault({
                 renderItem={({ item }) => renderTrack({
                   item,
                   queue: openRecordingPlaylistRows,
-                  onOptions: (id) => { setOpenRecordingPlaylist(null); setRecordingsOpen(false); setSheetId(id); },
+                  onOptions: (id) => openSheet(id, openRecordingPlaylist),
                 })}
                 extraData={`${current}:${isPlaying}:${ready}:${openRecordingPlaylistRows.length}:${offlineSignature}`}
                 contentContainerStyle={{ paddingBottom: listPadBottom }}
@@ -2479,6 +2623,8 @@ export default function MusicVault({
             </View>
           </EdgeSwipePage>
         </View>
+      {/* The ⋯ card, drawn INSIDE this page because the page is a Modal. */}
+      {sheetLayer === 'recordings' && actionsSheet}
       </EdgeSwipePage>
 
       {/* Playlists, pushed over the library. Level 1 lists the playlists; level
@@ -2559,7 +2705,13 @@ export default function MusicVault({
                 // track 3 onward and wandered out of the playlist at its end.
                 // Voice recordings always passed its own rows for this reason;
                 // this list is the one that did not.
-                renderItem={({ item }) => renderTrack({ item, queue: openPlaylistTracks })}
+                renderItem={({ item }) => renderTrack({
+                  item,
+                  queue: openPlaylistTracks,
+                  // Which playlist the ⋯ came from, so its first page can
+                  // offer to take the track out of THIS one by name.
+                  onOptions: (id) => openSheet(id, openPlaylist),
+                })}
                 extraData={`${activeTrack?.mediaId}:${isPlaying}:${ready}:${offlineSignature}`}
                 contentContainerStyle={{ paddingBottom: listPadBottom }}
                 ItemSeparatorComponent={() => <View style={styles.trackSep} />}
@@ -2567,6 +2719,8 @@ export default function MusicVault({
             </View>
           </EdgeSwipePage>
         </View>
+      {/* The ⋯ card, drawn INSIDE this page because the page is a Modal. */}
+      {sheetLayer === 'playlists' && actionsSheet}
       </EdgeSwipePage>
 
       {/* ── Transcribe, pushed over the library ─────────────────────────────
@@ -2647,54 +2801,7 @@ export default function MusicVault({
         </View>
       </EdgeSwipePage>
 
-      {/* Per-track options, as a card that rises from the bottom edge. Rendered
-          LAST so it stacks over the list and the transport bar; it's an in-tree
-          overlay rather than a Modal because the vault itself can be inside one
-          (a second sibling Modal silently never shows on iOS). */}
-      <TrackActionsSheet
-        visible={!!sheetTrack}
-        track={sheetTrack}
-        title={sheetTrack ? titleOf(sheetTrack) : ''}
-        subtitle={sheetTrack ? (sourceOf(sheetTrack) || 'Audio') : ''}
-        isActive={!!sheetTrack && String(sheetTrack.id) === String(activeTrack?.mediaId)}
-        isPlaying={isPlaying}
-        // A recording is offered the playlists that exist INSIDE its folder,
-        // not the music ones. Tags are global, so either list would "work" —
-        // but suggesting your albums while filing a sermon is how a recording
-        // ends up tagged into a music playlist it can never be seen in (the
-        // library's playlist index is built from music rows only).
-        playlists={sheetTrack && isVoiceRecording(sheetTrack) ? recordingPlaylists : playlists}
-        // The reserved tag is never a playlist. Left in, it would show as one
-        // the recording is "already on" — and the sheet draws those as a tick,
-        // one tap from a write that silently moves the recording back into the
-        // music library. That is what "Move back to music" is for, with a
-        // label saying so.
-        currentPlaylists={sheetTrack
-          ? tagsOf(sheetTrack).filter((t) => String(t).trim().toLowerCase() !== VOICE_RECORDINGS_TAG.toLowerCase())
-          : []}
-        busy={sheetBusy}
-        transcriptState={sheetTranscriptState}
-        onPlay={sheetPlay}
-        onShare={sheetShare}
-        onRename={sheetRename}
-        onAddToPlaylist={sheetAddToPlaylist}
-        onToggleRecording={sheetToggleRecording}
-        isRecording={!!sheetTrack && isVoiceRecording(sheetTrack)}
-        onTranscribe={sheetTranscribe}
-        onToggleOffline={sheetTrack ? () => toggleOffline(sheetTrack) : undefined}
-        offlineState={sheetTrack ? offline.statusOf(sheetTrack.id).state : 'absent'}
-        offlineProgress={sheetTrack ? (offline.statusOf(sheetTrack.id).progress || 0) : 0}
-        onDelete={sheetDelete}
-        onClose={closeSheet}
-        bottomInset={Math.max(insets.bottom, bottomInset)}
-        colors={c}
-        api={api}
-        baseUrl={getBaseUrl?.()}
-        // A grant or a revoke changes the face count on the row behind — and
-        // the strip of tracks OTHER people have shared, if that just changed
-        // hands too.
-        onPondChanged={refreshPondTracks}
-      />
+      {sheetLayer === 'root' && actionsSheet}
     </View>
   );
 }
