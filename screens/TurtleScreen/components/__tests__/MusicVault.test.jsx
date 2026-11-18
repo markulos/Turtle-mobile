@@ -662,12 +662,20 @@ describe('search reaches the pond', () => {
     await waitFor(() => expect(view.getByText(/From Michelle/)).toBeTruthy());
   });
 
-  test('its ⋯ is LEAVE, not the owner’s sheet', async () => {
-    // Rename, delete and share-with-the-pond are not mine to do on someone
-    // else's track; the one action it has on its own page is handing it back.
+  test('its ⋯ opens a CUT-DOWN card, not the owner’s', async () => {
+    // Rename, delete and share-with-the-pond are still not mine to do on
+    // someone else's track — but since 2026-11-18 it can go on one of MY
+    // playlists, so a leave-only key was no longer the whole story. The card
+    // withholds the owner's rows and keeps the two that are mine.
     const view = await search('moonlight');
-    await waitFor(() => expect(view.getByTestId('search-shared-leave-sh-1')).toBeTruthy());
-    expect(view.queryByLabelText('Options for Moonlight Mix')).toBeNull();
+    await waitFor(() => expect(view.getByTestId('search-shared-options-sh-1')).toBeTruthy());
+    await fireEvent.press(view.getByTestId('search-shared-options-sh-1'));
+    expect(view.getByText('Add to playlist')).toBeTruthy();
+    expect(view.getByTestId('track-leave-shared')).toBeTruthy();
+    expect(view.queryByText('Rename track…')).toBeNull();
+    expect(view.queryByText('Delete from vault')).toBeNull();
+    expect(view.queryByTestId('track-pond-open')).toBeNull();
+    expect(view.queryByTestId('track-offline-toggle')).toBeNull();
   });
 
   test('playing one hands the player the SHARED list as the queue', async () => {
@@ -791,5 +799,227 @@ describe('removing a track from a playlist', () => {
     expect(view.queryByTestId('track-remove-from-playlist')).toBeNull();
     // The picker is still the way, and it is two taps from here.
     expect(view.getByText('Add to playlist')).toBeTruthy();
+  });
+});
+
+/**
+ * A TRACK SOMEBODY GAVE ME, ON ONE OF MY PLAYLISTS.
+ *
+ * Mark, 2026-11-18: "make it possible to add shared with me tracks to my
+ * personal playlists".
+ *
+ * The write cannot be a tag: PUT /media/:id/tags ends `AND user_id IS ?`, so
+ * it would answer 404 — and if it did not, it would put MY playlist's name on
+ * somebody else's library row. It goes to my own settings blob instead
+ * (services/playlistGuests holds the argument and the caps), and what matters
+ * here is that the vault sends it to the right place.
+ */
+describe('a shared track on my playlist', () => {
+  const SHARED_TRACK = {
+    id: 'shared-9',
+    shareId: 'sh-9',
+    filename: 'Vespers.mp3',
+    ownerName: 'Michelle',
+    duration: 240,
+    rawUrl: '/media/shared-9.mp3',
+  };
+
+  const withPond = (settings = {}) => {
+    // The shared `mockApi` carries calls across describes in this file, and
+    // the point of the first test below is that NOTHING was written to the
+    // tags endpoint.
+    mockApi.put.mockClear();
+    mockApi.patch.mockClear();
+    mockApi.get = jest.fn((path) => {
+      if (path === '/shared-tracks') return Promise.resolve({ tracks: [SHARED_TRACK] });
+      if (path === '/me') return Promise.resolve({ user: { settings } });
+      return Promise.resolve({});
+    });
+  };
+
+  const openSharedOptions = async (view) => {
+    await fireEvent.press(view.getByTestId('music-shared-with-you'));
+    await waitFor(() => expect(view.getByTestId('shared-track-options-sh-9')).toBeTruthy());
+    await fireEvent.press(view.getByTestId('shared-track-options-sh-9'));
+    await waitFor(() => expect(view.getByText('Add to playlist')).toBeTruthy());
+    await fireEvent.press(view.getByText('Add to playlist'));
+    return view;
+  };
+
+  test('IT GOES TO MY SETTINGS, not to the owner tags', async () => {
+    withPond();
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await openSharedOptions(view);
+    await fireEvent.press(view.getByText('Chill'));
+
+    expect(mockApi.patch).toHaveBeenCalledWith('/me/settings', {
+      musicPlaylistGuests: { Chill: ['shared-9'] },
+    });
+    // The thing that must NOT happen: a tag write against a row that is not
+    // mine. It would 404, and the add would look like it had worked.
+    expect(mockApi.put).not.toHaveBeenCalled();
+  });
+
+  test('and the playlist then LISTS it, beside my own tracks', async () => {
+    withPond({ musicPlaylistGuests: { Chill: ['shared-9'] } });
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Playlists, 2'));
+    await fireEvent.press(view.getByText('Chill'));
+    // One list: my tagged track and the guest, sorted together. getAllByText
+    // because the library list stays mounted behind the modal and carries the
+    // same row (see `pressOptions` above for the same reason).
+    expect(view.getAllByText('First').length).toBeGreaterThan(0);
+    expect(view.getByText('Vespers')).toBeTruthy();
+  });
+
+  test('the picker TICKS the playlists I put it on, from my settings', async () => {
+    withPond({ musicPlaylistGuests: { Chill: ['shared-9'] } });
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await openSharedOptions(view);
+    expect(view.getByLabelText('Chill, remove from this playlist')).toBeTruthy();
+  });
+
+  test('and taking it off writes the shorter list back', async () => {
+    withPond({ musicPlaylistGuests: { Chill: ['shared-9'], Focus: ['shared-9'] } });
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await openSharedOptions(view);
+    await fireEvent.press(view.getByLabelText('Chill, remove from this playlist'));
+
+    expect(mockApi.patch).toHaveBeenCalledWith('/me/settings', {
+      musicPlaylistGuests: { Focus: ['shared-9'] },
+    });
+  });
+
+  test('A PLAYLIST THAT IS ONLY GUESTS STILL EXISTS', async () => {
+    // Putting a shared track on a brand-new playlist leaves no tagged row of
+    // mine to derive the name from, and a playlist you just made that is not
+    // in the list reads as the add having failed.
+    withPond({ musicPlaylistGuests: { 'Road trip': ['shared-9'] } });
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Playlists, 3'));
+    await waitFor(() => expect(view.getByText('Road trip')).toBeTruthy());
+  });
+});
+
+/**
+ * SHARING A WHOLE PLAYLIST.
+ *
+ * Mark, 2026-11-18: "allow to share entire playlists with other users in the
+ * pond". No new endpoint — a playlist is a tag and so is a photo board, and
+ * routes/albumAccess.js says so itself. What is worth pinning is that the
+ * phone reaches for THAT endpoint with the playlist's name, and that the
+ * receiving end exists at all: a share nobody can open is write-only.
+ */
+describe('sharing a playlist', () => {
+  const MEMBER = { id: 'u-michelle', name: 'Michelle' };
+  const SHARED_LIST = {
+    shareId: 'sa-1',
+    album: 'Sunday',
+    ownerName: 'Michelle',
+    ownerUserId: 'u-michelle',
+    permission: 'view',
+    count: 1,
+  };
+  const SHARED_ITEM = {
+    id: 'their-1', type: 'audio', originalName: 'Psalm.mp3', rawUrl: '/media/their-1.mp3',
+  };
+
+  const withShares = ({ albums = {}, shared = [], items = [], settings = {} } = {}) => {
+    mockApi.put.mockClear();
+    mockApi.patch.mockClear();
+    mockApi.get = jest.fn((path) => {
+      if (path === '/album-access/mine') return Promise.resolve({ albums });
+      if (path === '/shared-albums') return Promise.resolve({ albums: shared });
+      if (path.startsWith('/shared-albums/')) return Promise.resolve({ items });
+      if (path === '/friends') return Promise.resolve({ friends: [MEMBER] });
+      if (path.startsWith('/album-access?')) return Promise.resolve({ people: [] });
+      if (path === '/me') return Promise.resolve({ user: { settings } });
+      return Promise.resolve({});
+    });
+  };
+
+  const openPlaylists = async (view) => {
+    await fireEvent.press(view.getByLabelText('Playlists, 2'));
+    return view;
+  };
+
+  test('THE GRANT IS THE PLAYLIST NAME, through the pond album share', async () => {
+    // A name, not a list of tracks: a track added tomorrow is already shared,
+    // and one revoke takes the whole thing back.
+    withShares();
+    mockApi.post = jest.fn(() => Promise.resolve({ success: true, people: [] }));
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await openPlaylists(view);
+    await fireEvent.press(view.getByTestId('playlist-options-Chill'));
+    await waitFor(() => expect(view.getByTestId('playlist-actions-sheet')).toBeTruthy());
+    await waitFor(() => expect(view.getByTestId('playlist-pond-add-u-michelle')).toBeTruthy());
+    await fireEvent.press(view.getByTestId('playlist-pond-add-u-michelle'));
+
+    expect(mockApi.post).toHaveBeenCalledWith('/album-access', {
+      album: 'Chill', withUserId: 'u-michelle',
+    });
+  });
+
+  test('the row says who already has it, so you need not open anything', async () => {
+    withShares({ albums: { chill: [{ userId: 'u-michelle', name: 'Michelle', shareId: 'x' }] } });
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await openPlaylists(view);
+    await waitFor(() => expect(view.getByText(/shared with Michelle/)).toBeTruthy());
+  });
+
+  test('a playlist holding SHARED tracks says they stay with their owner', async () => {
+    // The pond would refuse to grant someone else's row, and a count that
+    // disagreed with what the recipient got is the thing nobody can explain.
+    withShares({ settings: { musicPlaylistGuests: { Chill: ['their-track'] } } });
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await openPlaylists(view);
+    await fireEvent.press(view.getByTestId('playlist-options-Chill'));
+    await waitFor(() => expect(view.getByTestId('playlist-share-guest-note')).toBeTruthy());
+  });
+
+  describe('the receiving end', () => {
+    test('a playlist somebody gave me is LISTED, above my own', async () => {
+      withShares({ shared: [SHARED_LIST], items: [SHARED_ITEM] });
+      const view = await render(<MusicVault onClose={jest.fn()} />);
+      await openPlaylists(view);
+      await waitFor(() => expect(view.getByTestId('shared-playlist-sa-1')).toBeTruthy());
+      expect(view.getByText('Sunday')).toBeTruthy();
+      expect(view.getByText(/from Michelle/)).toBeTruthy();
+    });
+
+    test('A PHOTO BOARD IS NOT A PLAYLIST', async () => {
+      // /shared-albums is every board shared with me and has no idea music
+      // exists: a holiday album has no business in the music tab.
+      withShares({
+        shared: [{ ...SHARED_LIST, album: 'Holiday' }],
+        items: [{ id: 'p1', type: 'image', originalName: 'beach.jpg' }],
+      });
+      const view = await render(<MusicVault onClose={jest.fn()} />);
+      await openPlaylists(view);
+      await waitFor(() => expect(view.getByText('Chill')).toBeTruthy());
+      expect(view.queryByText('Holiday')).toBeNull();
+    });
+
+    test('and opening it plays ITS tracks as the queue', async () => {
+      withShares({ shared: [SHARED_LIST], items: [SHARED_ITEM] });
+      const view = await render(<MusicVault onClose={jest.fn()} />);
+      await openPlaylists(view);
+      await waitFor(() => expect(view.getByTestId('shared-playlist-sa-1')).toBeTruthy());
+      await fireEvent.press(view.getByTestId('shared-playlist-sa-1'));
+      await waitFor(() => expect(view.getByText('Psalm')).toBeTruthy());
+      await fireEvent.press(view.getByText('Psalm'));
+      // Their playlist is the queue, not my library, which the player does
+      // not even hold these tracks in.
+      expect(mockPlayRows).toHaveBeenCalledWith([SHARED_ITEM], 'their-1');
+    });
+
+    test('it can be handed back', async () => {
+      withShares({ shared: [SHARED_LIST], items: [SHARED_ITEM] });
+      const view = await render(<MusicVault onClose={jest.fn()} />);
+      await openPlaylists(view);
+      await waitFor(() => expect(view.getByTestId('shared-playlist-sa-1')).toBeTruthy());
+      await fireEvent.press(view.getByTestId('shared-playlist-sa-1'));
+      expect(view.getByTestId('shared-playlist-leave')).toBeTruthy();
+    });
   });
 });

@@ -17,7 +17,12 @@ import { titleOf, sourceOf, resolveMediaUrl } from '../../../services/musicTrack
 import { TAP_ONLY } from '../../../utils/pressBehavior';
 import { tapHaptic } from '../../../utils/haptics';
 import { sendOrQueue, subscribe as subscribeOfflineQueue, loadQueue } from '../../../services/offlineQueue';
+import {
+  GUESTS_KEY, addGuest, decodeGuests, encodeGuests, forgetGuest, guestIdsFor,
+  guestNames, guestPlaylistsOf, removeGuest,
+} from '../../../services/playlistGuests';
 import TrackActionsSheet from './TrackActionsSheet';
+import PlaylistActionsSheet from './PlaylistActionsSheet';
 import EdgeSwipePage from './EdgeSwipePage';
 import TimelineScrubber from './TimelineScrubber';
 import TranscriptionPanel from '../../../components/TranscriptionPanel';
@@ -56,6 +61,21 @@ import { mixHex, readableOn } from '../../../utils/accentColor';
 import { useOfflineMusic } from '../../../utils/useOfflineMusic';
 import { formatBytes } from '../../../services/musicOfflineStore';
 import { rowOfflineAppearance } from './musicRowAppearance';
+
+/**
+ * Is this media row audio?
+ *
+ * Used to tell a shared PLAYLIST from a shared photo board: both arrive from
+ * `/api/shared-albums`, which has no idea music exists. The row's own type
+ * first, then its mime, then the extension — in that order, because an older
+ * upload may carry only one of the three.
+ */
+function isAudioRow(row) {
+  if (String(row?.type || '').toLowerCase() === 'audio') return true;
+  if (String(row?.mimeType || '').toLowerCase().startsWith('audio/')) return true;
+  const name = String(row?.originalName || row?.filename || '').toLowerCase();
+  return /\.(mp3|m4a|aac|wav|flac|ogg|opus|wma|aiff?)$/.test(name);
+}
 
 // Tags double as playlists for audio: the vault already models "a named group of
 // media" as a tag, so a music playlist is just a tag on an audio row.
@@ -363,6 +383,37 @@ export default function MusicVault({
       : 'Connection lost - reconnecting...';
   const barWidthRef = useRef(1);
 
+  /**
+   * THE POND READS SIT ABOVE THE SHEET, because the sheet resolves against
+   * them: a ⋯ tapped on a track somebody shared with me has to find that track
+   * somewhere, and `visibleTracks` is my library only. Declaration order is
+   * load-bearing here for the reason written above the guest map — a const
+   * read from above its own declaration arrives as `undefined` under this
+   * transform rather than throwing.
+   */
+  // Two reads, both one-per-library rather than one-per-row: who has each of
+  // MY tracks (keyed by track id, for the face stacks), and the tracks other
+  // people have given ME.
+  const [trackAccess, setTrackAccess] = useState(() => ({}));
+  const [pondTracks, setPondTracks] = useState([]);
+  const [sharedOpen, setSharedOpen] = useState(false);
+
+  const refreshPondTracks = useCallback(async () => {
+    const [mine, theirs] = await Promise.allSettled([
+      api.get('/track-access/mine'),
+      api.get('/shared-tracks'),
+    ]);
+    // Each half stands on its own: a failure must leave what was already drawn
+    // rather than claim a track is shared with nobody.
+    if (mine.status === 'fulfilled' && mine.value?.tracks && typeof mine.value.tracks === 'object') {
+      setTrackAccess(mine.value.tracks);
+    }
+    if (theirs.status === 'fulfilled' && Array.isArray(theirs.value?.tracks)) {
+      setPondTracks(theirs.value.tracks);
+    }
+  }, [api]);
+  useEffect(() => { refreshPondTracks(); }, [refreshPondTracks]);
+
   // The track whose "⋯" was tapped (null = sheet closed). Held by ID and
   // re-resolved from the live list, so a library refresh mid-sheet can't leave
   // the sheet acting on a stale row.
@@ -390,10 +441,29 @@ export default function MusicVault({
     // since "Move back to music" lives in it.
     () => visibleTracks.find((t) => String(t.id) === String(sheetId))
       || voiceRecordings.find((t) => String(t.id) === String(sheetId))
+      // …and the tracks other people gave me. Since 2026-11-18 a shared row
+      // has a ⋯ of its own (it can go on my playlists), and resolving against
+      // my library alone is how that button opens nothing at all.
+      || pondTracks.find((t) => String(t.id) === String(sheetId))
       || null,
-    [visibleTracks, voiceRecordings, sheetId]
+    [visibleTracks, voiceRecordings, pondTracks, sheetId]
   );
   const closeSheet = useCallback(() => { setSheetId(null); setSheetFrom(null); }, []);
+  /**
+   * Is the ⋯ open on a track that is NOT mine?
+   *
+   * Decided by which list it came out of rather than by a field on the row:
+   * `pondTracks` is, by construction, exactly the tracks another member has
+   * given me (GET /api/shared-tracks). Everything the sheet may offer turns on
+   * this — see what is and is not handed to it below.
+   */
+  const sheetForeign = useMemo(
+    () => !!sheetId
+      && !tracks.some((t) => String(t.id) === String(sheetId))
+      && !voiceRecordings.some((t) => String(t.id) === String(sheetId))
+      && pondTracks.some((t) => String(t.id) === String(sheetId)),
+    [sheetId, tracks, voiceRecordings, pondTracks]
+  );
 
   // Measured height of the pinned transport bar, used as the list's bottom
   // padding so the last track can always scroll clear of it. MEASURED, not a
@@ -495,6 +565,74 @@ export default function MusicVault({
     } catch (err) { /* mid-layout — the next jump lands */ }
   }, [musicScrollY]);
 
+  /**
+   * DECLARED ABOVE `playlists` AND `tracksInPlaylist`, WHICH BOTH READ IT.
+   *
+   * Not a style choice: babel's transform leaves a `const` read from above its
+   * declaration as `undefined` rather than throwing, so a guest map declared
+   * further down this body arrives as undefined and takes the whole page out
+   * on its first render with "cannot read properties of undefined". This app
+   * has shipped that bug once already (see TasksScreen's markUp note).
+   */
+  /**
+   * SOMEBODY ELSE'S TRACKS, ON MY PLAYLISTS.
+   *
+   * Mark, 2026-11-18: "make it possible to add shared with me tracks to my
+   * personal playlists". It cannot be a tag — `PUT /media/:id/tags` ends
+   * `AND user_id IS ?`, and my filing has no business landing on another
+   * member's library row — so the membership is mine and lives in my own
+   * settings blob. See services/playlistGuests for the whole argument.
+   */
+  const [guests, setGuests] = useState(() => new Map());
+  /**
+   * NOTHING MAY BE SAVED BEFORE THE FIRST LOAD LANDS.
+   *
+   * The blob is one column rewritten whole, and the initial state is empty:
+   * one stray write before the read returns replaces every playlist the user
+   * has. A ref, because the writers are callbacks that would otherwise close
+   * over the value as it was when they were made.
+   */
+  const guestsLoadedRef = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const me = await api.get('/me');
+        if (!alive) return;
+        const loaded = decodeGuests(me?.user?.settings?.[GUESTS_KEY] ?? me?.settings?.[GUESTS_KEY]);
+        guestsLoadedRef.current = true;
+        // Only when there is something, so the common case — nobody has put a
+        // shared track on a playlist — costs no re-render at all. A new empty
+        // Map is a new identity, and this page re-reads its library on every
+        // render it is focused for.
+        if (loaded.size) setGuests(loaded);
+      } catch (e) {
+        // Leave the flag down: a failed read must not be followed by a write
+        // that treats "I could not find out" as "there was nothing".
+        console.warn('[MusicVault] playlist guests load failed:', e?.message || e);
+      }
+    })();
+    return () => { alive = false; };
+  }, [api]);
+
+  /** Persist the guest map. Optimistic like every other write on this page. */
+  const saveGuests = useCallback((next) => {
+    setGuests(next);
+    if (!guestsLoadedRef.current) return;
+    sendOrQueue(api, {
+      method: 'patch',
+      path: '/me/settings',
+      body: { [GUESTS_KEY]: encodeGuests(next) },
+      // Keyed: this is a whole-key replacement, so collapsing two saves into
+      // the later one loses nothing — unlike a tag write, which carries a list
+      // it computed at the time.
+      key: `music:${GUESTS_KEY}`,
+      label: 'Playlist',
+    }).catch((e) => {
+      console.warn('[MusicVault] playlist guests save failed:', e?.message || e);
+    });
+  }, [api]);
+
   // Playlists are derived from the AUDIO library's own tags, not the global
   // album list — so the picker offers music playlists rather than every photo
   // board in the vault. No extra request: the rows already carry their tags.
@@ -547,23 +685,152 @@ export default function MusicVault({
       if (transcribedIds.size && !names.includes(TRANSCRIBED_PLAYLIST)) {
         names.push(TRANSCRIBED_PLAYLIST);
       }
+      // …and the ones that exist ONLY as shared tracks. Putting a track
+      // somebody gave me onto a brand-new playlist leaves no tagged row of
+      // mine to derive the name from, and a playlist you just made that is
+      // not in the list reads as the add having failed.
+      const lower = new Set(names.map((n) => n.toLowerCase()));
+      for (const name of guestNames(guests)) {
+        if (!lower.has(name.toLowerCase())) { names.push(name); lower.add(name.toLowerCase()); }
+      }
       return names.sort((a, b) => a.localeCompare(b));
     },
-    [playlistIndex, transcribedIds]
+    [playlistIndex, transcribedIds, guests]
   );
 
-  /** One playlist's tracks, with Transcribed unioned from the local list. */
+  /**
+   * One playlist's tracks: my tagged ones, plus the shared ones I put on it.
+   *
+   * Two sources because a playlist has two kinds of member — a tag on a row of
+   * mine, and an id in my own settings pointing at somebody else's row (see
+   * services/playlistGuests). They sort together into one list, because to the
+   * person looking at it there is one playlist.
+   *
+   * A guest whose share has been revoked simply does not resolve and is left
+   * out; `leaveSharedTrack` forgets it properly, and this is what keeps the
+   * list honest in between.
+   */
   const tracksInPlaylist = useCallback((name) => {
     const tagged = playlistIndex.get(name) || [];
+    const ids = guestIdsFor(guests, name);
+    const seen = new Set(tagged.map((t) => String(t.id)));
+    const invited = ids.length
+      ? pondTracks.filter((t) => ids.includes(String(t.id)) && !seen.has(String(t.id)))
+      : [];
     // A NEW array — `playlistIndex`'s own is shared, and sorting in place would
     // reorder it under every other reader.
-    if (name !== TRANSCRIBED_PLAYLIST) return tagged.slice().sort(byTitleNatural);
-    const seen = new Set(tagged.map((t) => String(t.id)));
+    if (name !== TRANSCRIBED_PLAYLIST) {
+      return [...tagged, ...invited].sort(byTitleNatural);
+    }
+    for (const t of invited) seen.add(String(t.id));
     const derived = visibleTracks.filter(
       (t) => transcribedIds.has(String(t.id)) && !seen.has(String(t.id)),
     );
-    return (derived.length ? [...tagged, ...derived] : tagged.slice()).sort(byTitleNatural);
-  }, [playlistIndex, visibleTracks, transcribedIds]);
+    return [...tagged, ...invited, ...derived].sort(byTitleNatural);
+  }, [playlistIndex, visibleTracks, transcribedIds, guests, pondTracks]);
+
+  /**
+   * SHARING A WHOLE PLAYLIST, and the playlists I have already shared.
+   *
+   * Mark, 2026-11-18: "allow to share entire playlists with other users in the
+   * pond". No new endpoint: a playlist is a tag and so is a photo board, and
+   * `server/routes/albumAccess.js` says in as many words that this is why the
+   * phone can hang a share button off a playlist. The grant is the NAME, so a
+   * track added tomorrow is already shared and one revoke takes it all back.
+   */
+  const [playlistSheet, setPlaylistSheet] = useState(null);
+  /** name (lowercased) → the people who have it. ONE request for the page. */
+  const [playlistAccess, setPlaylistAccess] = useState(() => ({}));
+  const refreshPlaylistAccess = useCallback(async () => {
+    try {
+      const res = await api.get('/album-access/mine');
+      if (!res?.albums || typeof res.albums !== 'object') return;
+      // Empty-to-empty is not a change. A fresh object is a new identity, and
+      // this page re-reads its library on every render it is focused for — so
+      // the common case (nothing shared) must cost no render at all.
+      setPlaylistAccess((prev) => (
+        Object.keys(prev).length === 0 && Object.keys(res.albums).length === 0 ? prev : res.albums
+      ));
+    } catch (e) {
+      // The rows just say nothing about sharing. "Shared with nobody" and
+      // "could not ask" are different claims and only one of them is true.
+    }
+  }, [api]);
+
+  /**
+   * Playlists somebody else shared with ME.
+   *
+   * The receiving end of the same share, through the same pair of endpoints
+   * the photo vault's shared boards use. Filtered to the ones that actually
+   * hold audio: `/shared-albums` is every board shared with me, and a holiday
+   * photo album has no business in the music tab.
+   */
+  const [sharedPlaylists, setSharedPlaylists] = useState([]);
+  const [openSharedPlaylist, setOpenSharedPlaylist] = useState(null);
+  const [sharedPlaylistTracks, setSharedPlaylistTracks] = useState([]);
+  const [sharedPlaylistBusy, setSharedPlaylistBusy] = useState(false);
+  const refreshSharedPlaylists = useCallback(async () => {
+    let albums = [];
+    try {
+      const res = await api.get('/shared-albums');
+      albums = Array.isArray(res?.albums) ? res.albums : [];
+    } catch (e) {
+      return;
+    }
+    // One request per board to find out whether it is music, run together
+    // rather than in series — there are a handful of these, not hundreds, and
+    // the alternative is a list that appears a board at a time.
+    const checked = await Promise.all(albums.map(async (album) => {
+      try {
+        const items = await api.get(`/shared-albums/${album.shareId}/items?limit=200`);
+        const audio = (Array.isArray(items?.items) ? items.items : []).filter(isAudioRow);
+        return audio.length ? { ...album, tracks: audio } : null;
+      } catch (e) {
+        return null;
+      }
+    }));
+    const next = checked.filter(Boolean);
+    // Same rule as above: empty-to-empty is not a change.
+    setSharedPlaylists((prev) => (prev.length === 0 && next.length === 0 ? prev : next));
+  }, [api]);
+  useEffect(() => {
+    refreshPlaylistAccess();
+    refreshSharedPlaylists();
+  }, [refreshPlaylistAccess, refreshSharedPlaylists]);
+
+  /** Open one, from the copy already in hand — no second request to wait on. */
+  const openShared = useCallback((album) => {
+    setOpenSharedPlaylist(album);
+    setSharedPlaylistTracks(album.tracks || []);
+  }, []);
+
+  /** Hand a shared playlist back. The recipient's half of the same revoke. */
+  const leaveSharedPlaylist = useCallback((album) => {
+    Alert.alert(
+      `Leave “${album.album}”?`,
+      `It will disappear from your music. ${album.ownerName || 'The owner'} can always share it again.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            setSharedPlaylistBusy(true);
+            try {
+              const res = await api.delete(`/album-access/${album.shareId}`);
+              if (!res?.success) throw new Error(res?.error || 'Could not leave');
+              setOpenSharedPlaylist(null);
+              setSharedPlaylists((prev) => prev.filter((a) => a.shareId !== album.shareId));
+            } catch (e) {
+              Alert.alert('Could not leave', e?.message || 'Please try again.');
+            } finally {
+              setSharedPlaylistBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  }, [api]);
 
   // ── Playlists page ─────────────────────────────────────────────────────────
   // Pushed over the library as an EdgeSwipePage (the app's push-page primitive),
@@ -572,28 +839,6 @@ export default function MusicVault({
   // `openPlaylist` is the second level: null = the list of playlists, a name =
   // that playlist's tracks.
   // ── Sharing a track inside the pond ──────────────────────────────────────
-  // Two reads, both one-per-library rather than one-per-row: who has each of
-  // MY tracks (keyed by track id, for the face stacks), and the tracks other
-  // people have given ME.
-  const [trackAccess, setTrackAccess] = useState(() => ({}));
-  const [pondTracks, setPondTracks] = useState([]);
-  const [sharedOpen, setSharedOpen] = useState(false);
-  const refreshPondTracks = useCallback(async () => {
-    const [mine, theirs] = await Promise.allSettled([
-      api.get('/track-access/mine'),
-      api.get('/shared-tracks'),
-    ]);
-    // Each half stands on its own: a failure must leave what was already drawn
-    // rather than claim a track is shared with nobody.
-    if (mine.status === 'fulfilled' && mine.value?.tracks && typeof mine.value.tracks === 'object') {
-      setTrackAccess(mine.value.tracks);
-    }
-    if (theirs.status === 'fulfilled' && Array.isArray(theirs.value?.tracks)) {
-      setPondTracks(theirs.value.tracks);
-    }
-  }, [api]);
-  useEffect(() => { refreshPondTracks(); }, [refreshPondTracks]);
-
   // ── Kept on this device ────────────────────────────────────────────────
   // The store lives outside React (services/musicOfflineStore), so a download
   // keeps running when the vault unmounts; this is only the subscription.
@@ -893,6 +1138,18 @@ export default function MusicVault({
       const clean = String(name || '').trim();
       if (!item || !clean) return;
       closeSheet();
+      // NOT MINE → my own settings, not their tags. The tag write would answer
+      // 404 (it is scoped to the owner) and, if it did not, it would put my
+      // playlist's name on another member's library row.
+      if (sheetForeign) {
+        const { guests: next, added, full } = addGuest(guests, clean, String(item.id));
+        if (full) {
+          Alert.alert('Playlist', `That playlist is full — ${clean} cannot take any more shared tracks.`);
+          return;
+        }
+        if (added) saveGuests(next);
+        return;
+      }
       const next = Array.from(new Set([...tagsOf(item), clean]));
       sendOrQueue(api, {
         method: 'put',
@@ -907,7 +1164,7 @@ export default function MusicVault({
           refreshLibrary();
         });
     },
-    [sheetTrack, api, refreshLibrary, closeSheet]
+    [sheetTrack, api, refreshLibrary, closeSheet, sheetForeign, guests, saveGuests]
   );
 
   /**
@@ -931,6 +1188,11 @@ export default function MusicVault({
       const clean = String(name || '').trim();
       if (!item || !clean) return;
       closeSheet();
+      if (sheetForeign) {
+        const { guests: next, removed } = removeGuest(guests, clean, String(item.id));
+        if (removed) saveGuests(next);
+        return;
+      }
       const lower = clean.toLowerCase();
       // Case-insensitively, because that is how the picker matched it in the
       // first place (utils/playlistSearch) — a tag that differs only in case
@@ -949,7 +1211,7 @@ export default function MusicVault({
           refreshLibrary();
         });
     },
-    [sheetTrack, api, refreshLibrary, closeSheet]
+    [sheetTrack, api, refreshLibrary, closeSheet, sheetForeign, guests, saveGuests]
   );
 
   /**
@@ -1626,20 +1888,21 @@ export default function MusicVault({
           />
         )}
         trailing={(
-          // The ⋯ sheet is built from MY library — rename, delete, share with
-          // the pond — and none of that is mine to do on someone else's
-          // track. A shared row gets the one action it has on its own page
-          // instead: hand it back.
+          // The ⋯ sheet used to be built only from MY library — rename,
+          // delete, share with the pond — none of which is mine to do on
+          // someone else's track, so a shared row got a leave-only key. The
+          // sheet now withholds those rows for a foreign track and keeps the
+          // two that ARE mine: my playlists, and handing it back.
           shared ? (
             <TouchableOpacity
-              testID={`search-shared-leave-${item.shareId}`}
+              testID={`search-shared-options-${item.shareId}`}
               accessibilityRole="button"
-              accessibilityLabel={`Leave ${titleOf(item)}`}
+              accessibilityLabel={`Options for ${titleOf(item)}`}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
-              onPress={() => leaveSharedTrack(item)}
+              onPress={() => openSheet(item.id)}
               style={styles.moreBtn}
             >
-              <Icon name="exit-to-app" size={20} color={c.textTertiary} />
+              <Icon name="dots-horizontal" size={22} color={c.textTertiary} />
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
@@ -1656,7 +1919,7 @@ export default function MusicVault({
         />
       </View>
     );
-  }, [theme, c, activeTrack, isPlaying, playTrack, pondTracks, leaveSharedTrack]);
+  }, [theme, c, activeTrack, isPlaying, playTrack, pondTracks, openSheet]);
 
   /** One web result. Tap previews, the key downloads — see MusicWebResultRow. */
   const renderWebRow = useCallback(({ item }) => {
@@ -1873,6 +2136,12 @@ export default function MusicVault({
     // its contents can't disagree — Transcribed is partly derived from the
     // local jobs list rather than wholly from tags.
     const count = tracksInPlaylist(item).length;
+    // Keyed lowercase, which is how the server keys its own answer (a board
+    // name is matched COLLATE NOCASE everywhere).
+    const people = playlistAccess[String(item).toLowerCase()] || [];
+    const shared = people.length === 1
+      ? people[0].name
+      : people.length > 1 ? `${people.length} people` : '';
     return (
       <TouchableOpacity
         {...TAP_ONLY}
@@ -1888,13 +2157,29 @@ export default function MusicVault({
         <View style={trackStyles.body}>
           <Text style={trackStyles.titleIdle} numberOfLines={1}>{item}</Text>
           <Text style={trackStyles.source} numberOfLines={1}>
-            {count} track{count === 1 ? '' : 's'}
+            {`${count} track${count === 1 ? '' : 's'}`}
+            {/* Who has it, on the row — so "have I already given this to
+                Michelle?" is answered without opening anything. */}
+            {shared ? ` · shared with ${shared}` : ''}
           </Text>
         </View>
+        {/* Mark, 2026-11-18: "allow to share entire playlists with other users
+            in the pond". A playlist is a tag and so is a photo board, so this
+            is the pond's existing album share with a music label on it. */}
+        <TouchableOpacity
+          testID={`playlist-options-${item}`}
+          accessibilityRole="button"
+          accessibilityLabel={`Share ${item} in your pond`}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
+          onPress={() => { tapHaptic(); setPlaylistSheet(item); }}
+          style={styles.moreBtn}
+        >
+          <Icon name="account-multiple-plus-outline" size={21} color={c.textTertiary} />
+        </TouchableOpacity>
         <Icon name="chevron-right" size={22} color={c.textTertiary} />
       </TouchableOpacity>
     );
-  }, [c, trackStyles, tracksInPlaylist]);
+  }, [c, trackStyles, tracksInPlaylist, playlistAccess]);
 
   /**
    * One playlist of recordings. Its own row rather than reusing the music
@@ -2008,37 +2293,54 @@ export default function MusicVault({
           // but suggesting your albums while filing a sermon is how a recording
           // ends up tagged into a music playlist it can never be seen in (the
           // library's playlist index is built from music rows only).
-          playlists={sheetTrack && isVoiceRecording(sheetTrack) ? recordingPlaylists : playlists}
+          // …and never for a FOREIGN track: the owner's own "Voice recordings"
+          // tag would send my shared-track filing into their folder's list.
+          playlists={!sheetForeign && sheetTrack && isVoiceRecording(sheetTrack)
+            ? recordingPlaylists : playlists}
           // The reserved tag is never a playlist. Left in, it would show as one
           // the recording is "already on" — and the sheet draws those as a tick,
           // one tap from a write that silently moves the recording back into the
           // music library. That is what "Move back to music" is for, with a
           // label saying so.
-          currentPlaylists={sheetTrack
-            ? tagsOf(sheetTrack).filter((t) => String(t).trim().toLowerCase() !== VOICE_RECORDINGS_TAG.toLowerCase())
-            : []}
+          // A SHARED track's playlists are the ones I put it on, which live in
+          // my own settings rather than in its tags — the owner's filing is
+          // theirs (services/playlistGuests).
+          currentPlaylists={!sheetTrack
+            ? []
+            : sheetForeign
+              ? guestPlaylistsOf(guests, String(sheetTrack.id))
+              : tagsOf(sheetTrack).filter((t) => String(t).trim().toLowerCase() !== VOICE_RECORDINGS_TAG.toLowerCase())}
           busy={sheetBusy}
           transcriptState={sheetTranscriptState}
           onPlay={sheetPlay}
-          onShare={sheetShare}
-          onRename={sheetRename}
           onAddToPlaylist={sheetAddToPlaylist}
-        // The playlist the ⋯ was tapped inside, and the write that takes the
-        // track out of one. A ticked row in the picker removes rather than
-        // being inert, and the first page names this one outright.
-        inPlaylist={sheetFrom}
-        onRemoveFromPlaylist={sheetRemoveFromPlaylist}
-          onToggleRecording={sheetToggleRecording}
-          isRecording={!!sheetTrack && isVoiceRecording(sheetTrack)}
-          onTranscribe={sheetTranscribe}
-          onToggleOffline={sheetTrack ? () => toggleOffline(sheetTrack) : undefined}
+          // The playlist the ⋯ was tapped inside, and the write that takes the
+          // track out of one. A ticked row in the picker removes rather than
+          // being inert, and the first page names this one outright.
+          inPlaylist={sheetFrom}
+          onRemoveFromPlaylist={sheetRemoveFromPlaylist}
+          isRecording={!sheetForeign && !!sheetTrack && isVoiceRecording(sheetTrack)}
           offlineState={sheetTrack ? offline.statusOf(sheetTrack.id).state : 'absent'}
           offlineProgress={sheetTrack ? (offline.statusOf(sheetTrack.id).progress || 0) : 0}
-          onDelete={sheetDelete}
+          {...(sheetForeign ? {} : {
+            // OWNER-ONLY, and WITHHELD rather than disabled: a row that is not
+            // mine to use is better absent than greyed out, and every one of
+            // these would fail at the server anyway — rename, delete and the
+            // tag writes are all scoped to the owner of the row. What a track
+            // somebody shared with me keeps is Play, my own playlists (which
+            // live in my settings, not its tags), and giving it back.
+            onShare: sheetShare,
+            onRename: sheetRename,
+            onToggleRecording: sheetToggleRecording,
+            onTranscribe: sheetTranscribe,
+            onDelete: sheetDelete,
+            onToggleOffline: sheetTrack ? () => toggleOffline(sheetTrack) : undefined,
+            api,
+          })}
+          onLeave={sheetForeign && sheetTrack ? () => leaveSharedTrack(sheetTrack) : undefined}
           onClose={closeSheet}
           bottomInset={Math.max(insets.bottom, bottomInset)}
           colors={c}
-          api={api}
           baseUrl={getBaseUrl?.()}
           // A grant or a revoke changes the face count on the row behind — and
           // the strip of tracks OTHER people have shared, if that just changed
@@ -2402,15 +2704,20 @@ export default function MusicVault({
                     </Text>
                   </View>
                   {item.duration ? <Text style={trackStyles.duration}>{fmtTime(item.duration)}</Text> : null}
+                  {/* A ⋯, where there used to be a leave-only key.
+                      Mark, 2026-11-18: a track somebody gave me can go on my
+                      own playlists now, so there is more than one thing to do
+                      with it — and Leave is still in the card, which is where
+                      everything else about a track already lives. */}
                   <TouchableOpacity
-                    testID={`shared-track-leave-${item.shareId}`}
+                    testID={`shared-track-options-${item.shareId}`}
                     accessibilityRole="button"
-                    accessibilityLabel={`Leave ${titleOf(item)}`}
+                    accessibilityLabel={`Options for ${titleOf(item)}`}
                     hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
-                    onPress={() => leaveSharedTrack(item)}
+                    onPress={() => openSheet(item.id)}
                     style={styles.moreBtn}
                   >
-                    <Icon name="exit-to-app" size={20} color={c.textTertiary} />
+                    <Icon name="dots-horizontal" size={22} color={c.textTertiary} />
                   </TouchableOpacity>
                 </TouchableOpacity>
               );
@@ -2660,6 +2967,40 @@ export default function MusicVault({
             renderItem={renderPlaylistRow}
             contentContainerStyle={{ paddingBottom: listPadBottom }}
             ItemSeparatorComponent={() => <View style={styles.trackSep} />}
+            /* PLAYLISTS SOMEBODY ELSE GAVE ME, above my own. The receiving
+               end of the share — without this the feature would be write-only
+               and the pond would be granting access to a screen that does not
+               exist. Above rather than below because it is the part you did
+               not already know about. */
+            ListHeaderComponent={sharedPlaylists.length ? (
+              <View testID="music-shared-playlists">
+                <Text style={[styles.sectionLabel, { color: c.textTertiary }]}>Shared with you</Text>
+                {sharedPlaylists.map((album) => (
+                  <TouchableOpacity
+                    key={album.shareId}
+                    {...TAP_ONLY}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${album.album}, from ${album.ownerName}`}
+                    testID={`shared-playlist-${album.shareId}`}
+                    onPress={() => { tapHaptic(); openShared(album); }}
+                    style={styles.row}
+                  >
+                    <View style={[styles.art, trackStyles.artTint]}>
+                      <Icon name="playlist-music" size={22} color={glyphInk.onTile} />
+                    </View>
+                    <View style={trackStyles.body}>
+                      <Text style={trackStyles.titleIdle} numberOfLines={1}>{album.album}</Text>
+                      <Text style={trackStyles.source} numberOfLines={1}>
+                        {`${album.tracks.length} track${album.tracks.length === 1 ? '' : 's'} · from ${album.ownerName}`}
+                      </Text>
+                    </View>
+                    <Icon name="chevron-right" size={22} color={c.textTertiary} />
+                  </TouchableOpacity>
+                ))}
+                <Text style={[styles.sectionLabel, { color: c.textTertiary }]}>Yours</Text>
+              </View>
+            ) : null}
             ListEmptyComponent={(
               <View style={styles.pageEmpty}>
                 <Icon name="playlist-music-outline" size={40} color={c.textTertiary} />
@@ -2719,6 +3060,78 @@ export default function MusicVault({
             </View>
           </EdgeSwipePage>
         </View>
+          {/* ONE SHARED PLAYLIST, opened. Nested inside this page exactly as a
+              playlist of mine is, and read-only for the same reason the photo
+              vault's shared boards are: an album share carries 'view' and the
+              pond stores nothing else. The one thing you may do is hand it
+              back. */}
+          <EdgeSwipePage overlay visible={!!openSharedPlaylist} onClose={() => setOpenSharedPlaylist(null)}>
+            <View style={{ flex: 1, backgroundColor: c.background, paddingTop: insets.top + 6 }}>
+              <View style={styles.pageHeader}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to playlists"
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  onPress={() => { tapHaptic(); setOpenSharedPlaylist(null); }}
+                  style={styles.pageBackBtn}
+                >
+                  <Icon name="chevron-left" size={28} color={c.textPrimary} />
+                </TouchableOpacity>
+                <Text style={[styles.pageTitle, { color: c.textPrimary }]} numberOfLines={1}>
+                  {openSharedPlaylist?.album || ''}
+                </Text>
+                <TouchableOpacity
+                  testID="shared-playlist-leave"
+                  accessibilityRole="button"
+                  accessibilityLabel={`Leave ${openSharedPlaylist?.album || 'this playlist'}`}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  disabled={sharedPlaylistBusy}
+                  onPress={() => openSharedPlaylist && leaveSharedPlaylist(openSharedPlaylist)}
+                  style={styles.pageBackBtn}
+                >
+                  <Icon name="exit-to-app" size={22} color={c.textTertiary} />
+                </TouchableOpacity>
+              </View>
+              <Animated.FlatList {...SCROLL_INDICATOR}
+                onScroll={chromeScroll}
+                scrollEventThrottle={16}
+                data={sharedPlaylistTracks}
+                keyExtractor={(t) => String(t.id)}
+                // THIS playlist is the queue, so Next walks the tracks you
+                // were given rather than wandering into my library — which the
+                // player does not even hold these in.
+                renderItem={({ item }) => renderTrack({
+                  item,
+                  queue: sharedPlaylistTracks,
+                  onOptions: (id) => openSheet(id, openSharedPlaylist?.album || null),
+                })}
+                extraData={`${activeTrack?.mediaId}:${isPlaying}:${ready}`}
+                contentContainerStyle={{ paddingBottom: listPadBottom }}
+                ItemSeparatorComponent={() => <View style={styles.trackSep} />}
+                ListHeaderComponent={(
+                  <Text style={[styles.sectionLabel, { color: c.textTertiary }]}>
+                    {`From ${openSharedPlaylist?.ownerName || 'the pond'}`}
+                  </Text>
+                )}
+              />
+            </View>
+          </EdgeSwipePage>
+
+          {/* Who has one of MY playlists, and giving it to somebody. In here
+              because this page is a Modal and the sheet has to be its child
+              to paint over it (the same rule the ⋯ card follows). */}
+          <PlaylistActionsSheet
+            visible={!!playlistSheet}
+            name={playlistSheet}
+            trackCount={playlistSheet ? tracksInPlaylist(playlistSheet).length : 0}
+            guestCount={playlistSheet ? guestIdsFor(guests, playlistSheet).length : 0}
+            api={api}
+            baseUrl={getBaseUrl?.()}
+            colors={c}
+            bottomInset={Math.max(insets.bottom, bottomInset)}
+            onClose={() => setPlaylistSheet(null)}
+            onChanged={refreshPlaylistAccess}
+          />
       {/* The ⋯ card, drawn INSIDE this page because the page is a Modal. */}
       {sheetLayer === 'playlists' && actionsSheet}
       </EdgeSwipePage>
@@ -2832,6 +3245,13 @@ const styles = StyleSheet.create({
   pageBackBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   pageTitle: { flex: 1, fontSize: 22, fontWeight: '600' },
   pageEmpty: { alignItems: 'center', justifyContent: 'center', padding: 32, paddingTop: 80 },
+  // The two groups on the Playlists page: the ones somebody gave me, and mine.
+  // Aligned with a row's text, not with its glyph, so it reads as a heading
+  // over the column rather than as another row.
+  sectionLabel: {
+    fontSize: 11.5, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase',
+    paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6,
+  },
   // The Recordings / Playlists switch. A segmented control rather than two
   // pushed pages: these are two views of the SAME folder, and making one of
   // them a destination you navigate into would imply it holds different

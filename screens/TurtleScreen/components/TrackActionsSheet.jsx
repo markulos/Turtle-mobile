@@ -76,6 +76,8 @@ export default function TrackActionsSheet({
   onRename,
   onAddToPlaylist,
   onRemoveFromPlaylist,
+  /** Hand back a track somebody shared with me. Absent for my own tracks. */
+  onLeave,
   /** () => void — file this track into the Voice recordings folder, or take it
    *  back out. `isRecording` says which way it goes. Optional: a surface that
    *  cannot file (a track someone else shared) simply omits it. */
@@ -300,14 +302,22 @@ export default function TrackActionsSheet({
               style={rowBorder}
               onPress={run(onPlay)}
             />
-            <ActionRow
-              icon="share-variant"
-              label="Share"
-              color={c.textPrimary}
-              style={rowBorder}
-              disabled={busy}
-              onPress={run(onShare)}
-            />
+            {/* Every row from here to Delete is conditional on its own
+                handler, and that is what makes this sheet usable on a track
+                somebody SHARED WITH ME: the vault hands over only the actions
+                that are mine to take on someone else's row (play it, file it
+                on my own playlist, give it back) and the rest simply are not
+                here. Mark, 2026-11-18. */}
+            {onShare ? (
+              <ActionRow
+                icon="share-variant"
+                label="Share"
+                color={c.textPrimary}
+                style={rowBorder}
+                disabled={busy}
+                onPress={run(onShare)}
+              />
+            ) : null}
             {/* Giving the track to a person, as against handing the FILE to
                 whatever the OS offers above. Directly under Share because it
                 is the other answer to the same question, and the one that
@@ -354,6 +364,7 @@ export default function TrackActionsSheet({
               />
             ) : null}
 
+            {onRename ? (
             <ActionRow
               icon="pencil-outline"
               label="Rename track…"
@@ -366,6 +377,7 @@ export default function TrackActionsSheet({
                 setPage('rename');
               }}
             />
+            ) : null}
             <ActionRow
               icon="playlist-plus"
               label="Add to playlist"
@@ -428,16 +440,34 @@ export default function TrackActionsSheet({
                 onPress={run(onTranscribe)}
               />
             ) : null}
-            <ActionRow
-              icon="trash-can-outline"
-              label="Delete from vault"
-              color={c.accentError || '#F87171'}
-              style={rowBorder}
-              onPress={() => {
-                notifyHaptic('warning');
-                onDelete?.();
-              }}
-            />
+            {onDelete ? (
+              <ActionRow
+                icon="trash-can-outline"
+                label="Delete from vault"
+                color={c.accentError || '#F87171'}
+                style={rowBorder}
+                onPress={() => {
+                  notifyHaptic('warning');
+                  onDelete();
+                }}
+              />
+            ) : null}
+            {/* A track somebody gave me: handing it back is the only
+                destructive thing I can do to it, and it destroys nothing —
+                their copy is the copy. Hence the wording and hence not red. */}
+            {onLeave ? (
+              <ActionRow
+                testID="track-leave-shared"
+                icon="exit-to-app"
+                label="Remove from my music"
+                color={c.textPrimary}
+                style={rowBorder}
+                onPress={() => {
+                  notifyHaptic('warning');
+                  onLeave();
+                }}
+              />
+            ) : null}
           </>
         ) : page === 'rename' ? (
           <>
