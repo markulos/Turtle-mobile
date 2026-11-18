@@ -56,6 +56,19 @@ jest.mock('@rntp/player', () => ({
   usePlaybackState: () => mockPlaybackState,
   useProgress: () => mockProgress,
 }));
+/**
+ * The interruption channel, in the test's hands.
+ *
+ * `mock`-prefixed because a jest.mock factory is hoisted above everything
+ * else in the file and may only close over names that start with it.
+ */
+const mockInterruptionListeners = [];
+const mockResumeNow = jest.fn();
+/** Fire an interruption at the provider, the way the native event does. */
+const mockInterrupt = (info) => {
+  for (const listener of mockInterruptionListeners) listener(info);
+};
+
 jest.mock('../../services/musicPlayerService', () => ({
   musicPlayerService: {
     ensureReady: jest.fn().mockResolvedValue(undefined),
@@ -65,6 +78,18 @@ jest.mock('../../services/musicPlayerService', () => ({
     next: jest.fn().mockResolvedValue(undefined),
     seekTo: jest.fn().mockResolvedValue(undefined),
     clear: jest.fn().mockResolvedValue(undefined),
+  },
+  // Called THROUGH a wrapper, not referenced directly: the factory runs while
+  // this file's own const declarations are still in their dead zone, so
+  // `resumeNow: mockResumeNow` captures nothing.
+  musicAutoResume: { resumeNow: (...args) => mockResumeNow(...args) },
+  onPlaybackInterrupted: (listener) => {
+    mockInterruptionListeners.push(listener);
+    listener(null);
+    return () => {
+      const at = mockInterruptionListeners.indexOf(listener);
+      if (at >= 0) mockInterruptionListeners.splice(at, 1);
+    };
   },
 }));
 
@@ -85,6 +110,8 @@ function Probe({ visible = true }) {
       <Text testID="preparing">{String(music.preparing)}</Text>
       <Text testID="preparing-pct">{String(music.preparingPct)}</Text>
       <Text testID="preparing-stalled">{String(music.preparingStalled)}</Text>
+      <Text testID="interrupted">{music.interrupted ? `${music.interrupted.code}:${music.interrupted.exhausted}` : ''}</Text>
+      <Button title="resume" onPress={() => music.resumeInterrupted()} />
       <Button title="play-two" onPress={() => music.playMedia('two')} />
       <Button title="play-one" onPress={() => music.playMedia('one')} />
       <Button title="play-memo" onPress={() => music.playMedia('memo')} />
@@ -110,6 +137,8 @@ describe('MusicPlayerProvider', () => {
     mockPlaybackState = 'ready';
     mockProgress = { position: 12, duration: 180, buffered: 12 };
     mockMediaVersion = 0;
+    mockInterruptionListeners.length = 0;
+    mockResumeNow.mockClear();
     mockAuth = {
       isAuthenticated: true,
       authIdentity: 'sub:account-a',
@@ -788,6 +817,82 @@ describe('MusicPlayerProvider', () => {
         </MusicPlayerProvider>
       );
       await waitFor(() => expect(view.getByTestId('recordings').props.children).toBe(''));
+    });
+  });
+  describe('playback that stopped on its own', () => {
+    /**
+     * Mark, 2026-11-18: background music "stops playing after a few minutes".
+     * services/musicAutoResume.js gets the music back; this is the half that
+     * reaches a screen. The provider is only a conduit, and the thing worth
+     * pinning is that it IS one — a dropped subscription leaves audio stopping
+     * in silence again, which is exactly how this went unnoticed.
+     */
+    const mount = () => render(
+      <MusicPlayerProvider>
+        <Probe />
+      </MusicPlayerProvider>
+    );
+
+    test('the interruption reaches the UI', async () => {
+      const view = await mount();
+      await waitFor(() => expect(view.getByTestId('interrupted').props.children).toBe(''));
+
+      await act(async () => {
+        mockInterrupt({ code: 'network', message: 'lost', exhausted: false });
+      });
+      expect(view.getByTestId('interrupted').props.children).toBe('network:false');
+
+      await act(async () => {
+        mockInterrupt({ code: 'network', message: 'lost', exhausted: true });
+      });
+      expect(view.getByTestId('interrupted').props.children).toBe('network:true');
+    });
+
+    test('…and so does the recovery, which takes it back off the screen', async () => {
+      const view = await mount();
+      await act(async () => {
+        mockInterrupt({ code: 'network', message: 'lost', exhausted: false });
+      });
+      await act(async () => { mockInterrupt(null); });
+      expect(view.getByTestId('interrupted').props.children).toBe('');
+    });
+
+    test('AUDIBLE MUSIC CLEARS IT, whatever recovered the playback', async () => {
+      // The safety net for every path that does not go through the ladder: a
+      // manual Play, a skip, a new queue. A bar saying the connection is gone
+      // over music that is playing is worse than saying nothing.
+      mockPlaying = false;
+      const view = await mount();
+      await act(async () => {
+        mockInterrupt({ code: 'network', message: 'lost', exhausted: true });
+      });
+      expect(view.getByTestId('interrupted').props.children).toBe('network:true');
+
+      mockPlaying = true;
+      await view.rerender(
+        <MusicPlayerProvider>
+          <Probe />
+        </MusicPlayerProvider>
+      );
+      await waitFor(() => expect(view.getByTestId('interrupted').props.children).toBe(''));
+    });
+
+    test('Resume asks the ladder to climb again', async () => {
+      const view = await mount();
+      await act(async () => {
+        mockInterrupt({ code: 'network', message: 'lost', exhausted: true });
+      });
+      await act(async () => {
+        fireEvent.press(view.getByText('resume'));
+      });
+      expect(mockResumeNow).toHaveBeenCalledTimes(1);
+    });
+
+    test('the subscription is dropped when the provider goes', async () => {
+      const view = await mount();
+      expect(mockInterruptionListeners).toHaveLength(1);
+      await act(async () => { view.unmount(); });
+      expect(mockInterruptionListeners).toHaveLength(0);
     });
   });
 });

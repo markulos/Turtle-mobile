@@ -9,6 +9,9 @@ jest.mock('@rntp/player', () => {
     skipToNext: jest.fn().mockResolvedValue(undefined),
     seekTo: jest.fn().mockResolvedValue(undefined),
     clear: jest.fn().mockResolvedValue(undefined),
+    retry: jest.fn(),
+    getProgress: jest.fn(() => ({ position: 0, duration: 0, buffered: 0 })),
+    isPlaying: jest.fn(() => false),
     addEventListener: jest.fn(() => ({ remove: jest.fn() })),
     registerBackgroundEventHandler: jest.fn(),
   };
@@ -18,6 +21,8 @@ jest.mock('@rntp/player', () => {
     Event: {
       MediaItemTransition: 'event.media-item-transition',
       RemoteNext: 'event.remote-next',
+      PlaybackError: 'event.playback-error',
+      PlaybackStateChanged: 'event.playback-state-changed',
     },
     PlayerCommand: {
       Previous: 'previous',
@@ -31,14 +36,30 @@ jest.mock('react-native', () => ({
   Platform: { OS: 'android' },
 }));
 
+/**
+ * The most recently loaded resume ladder, so it can be switched off.
+ *
+ * It runs on REAL timers here (the ladder's own tests inject a clock), and a
+ * ladder left climbing holds the node event loop open for its full two
+ * minutes — which hangs the suite rather than failing it.
+ */
+let liveResume = null;
+afterEach(() => {
+  liveResume?.cancel();
+  liveResume = null;
+});
+
 const loadService = () => {
   jest.resetModules();
   const playerModule = require('@rntp/player');
   const serviceModule = require('../musicPlayerService');
+  liveResume = serviceModule.musicAutoResume;
   return {
     TrackPlayer: playerModule.default,
     Event: playerModule.Event,
     musicPlayerService: serviceModule.musicPlayerService,
+    musicAutoResume: serviceModule.musicAutoResume,
+    onPlaybackInterrupted: serviceModule.onPlaybackInterrupted,
   };
 };
 
@@ -105,6 +126,96 @@ describe('musicPlayerService native controls', () => {
     await backgroundHandler({ type: Event.RemoteNext });
 
     expect(TrackPlayer.skipToNext).not.toHaveBeenCalled();
+  });
+});
+
+describe('background playback survives a blip', () => {
+  /**
+   * Mark, 2026-11-18: background music "stops playing after a few minutes".
+   * The cause was here: this module subscribed to exactly two events, so the
+   * player's own `PlaybackError` — the thing that says playback has stopped
+   * and can be retried — was never heard by anyone.
+   */
+  test('IT LISTENS FOR THE FAILURE, which is what it never used to do', () => {
+    const { TrackPlayer, Event } = loadService();
+    const subscribed = TrackPlayer.addEventListener.mock.calls.map(([event]) => event);
+    expect(subscribed).toContain(Event.PlaybackError);
+    expect(subscribed).toContain(Event.PlaybackStateChanged);
+    // …and nothing is registered against an undefined event, which is what a
+    // renamed constant would silently become.
+    expect(subscribed.every(Boolean)).toBe(true);
+  });
+
+  test('a network error re-prepares the item and plays it again', async () => {
+    const { TrackPlayer, Event } = loadService();
+    const onError = TrackPlayer.addEventListener.mock.calls.find(
+      ([event]) => event === Event.PlaybackError
+    )[1];
+
+    onError({ code: 'network', message: 'The request timed out' });
+
+    expect(TrackPlayer.retry).toHaveBeenCalledTimes(1);
+    expect(TrackPlayer.play).toHaveBeenCalledTimes(1);
+  });
+
+  test('…ON ANDROID TOO, where the handler runs with no app in front of it', async () => {
+    // The platform where the event arrives in a headless task — and the only
+    // one where "the app is closed" can mean the process is not even up.
+    const { TrackPlayer, Event } = loadService();
+    const backgroundHandler = TrackPlayer.registerBackgroundEventHandler.mock.calls[0][0]();
+
+    await backgroundHandler({ type: Event.PlaybackError, code: 'network', message: 'lost' });
+
+    expect(TrackPlayer.retry).toHaveBeenCalledTimes(1);
+  });
+
+  test('the transport bar is TOLD, so the silence has a reason on it', () => {
+    const { TrackPlayer, Event, onPlaybackInterrupted } = loadService();
+    const seen = [];
+    const unsubscribe = onPlaybackInterrupted((info) => seen.push(info));
+    // Subscribing reports the state as it already is — a bar that mounts
+    // after the failure has to show it.
+    expect(seen).toEqual([null]);
+
+    const onError = TrackPlayer.addEventListener.mock.calls.find(
+      ([event]) => event === Event.PlaybackError
+    )[1];
+    onError({ code: 'network', message: 'lost' });
+    expect(seen[1]).toMatchObject({ code: 'network', exhausted: false });
+
+    unsubscribe();
+    onError({ code: 'source', message: 'gone' });
+    expect(seen).toHaveLength(2);
+  });
+
+  test('PAUSE CANCELS IT — nothing may start the music after a deliberate stop', async () => {
+    const { TrackPlayer, Event, musicPlayerService, musicAutoResume } = loadService();
+    await musicPlayerService.playQueue([{ mediaId: 'one' }], 0);
+    const onError = TrackPlayer.addEventListener.mock.calls.find(
+      ([event]) => event === Event.PlaybackError
+    )[1];
+    onError({ code: 'network', message: 'lost' });
+    expect(musicAutoResume.isRecovering()).toBe(true);
+
+    await musicPlayerService.togglePlayback(true);   // the user pressed pause
+
+    expect(TrackPlayer.pause).toHaveBeenCalled();
+    expect(musicAutoResume.isRecovering()).toBe(false);
+  });
+
+  test('a new queue starts with no memory of where the last track was', async () => {
+    const { TrackPlayer, musicPlayerService, musicAutoResume } = loadService();
+    musicAutoResume.noteSeek(120);
+    await musicPlayerService.playQueue([{ mediaId: 'one' }], 0);
+    expect(musicAutoResume.position()).toBe(0);
+    expect(TrackPlayer.setMediaItems).toHaveBeenCalled();
+  });
+
+  test('a user seek is where a resume goes back to', async () => {
+    const { musicPlayerService, musicAutoResume } = loadService();
+    await musicPlayerService.playQueue([{ mediaId: 'one' }], 0);
+    await musicPlayerService.seekTo(64);
+    expect(musicAutoResume.position()).toBe(64);
   });
 });
 

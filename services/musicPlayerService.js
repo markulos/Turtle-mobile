@@ -1,8 +1,59 @@
 import TrackPlayer, { Event, PlayerCommand } from '@rntp/player';
 import { Platform } from 'react-native';
 import { createMusicPlayerController } from './musicPlayerController';
+import { createAutoResume } from './musicAutoResume';
 
 let nativePlayerReady = false;
+
+/**
+ * Whoever is drawing the transport bar, told that playback was interrupted.
+ *
+ * A module-level list rather than a context value because the thing that
+ * hears the failure is a native event, which arrives whether or not anything
+ * is mounted — the whole point being that this happens with the screen off.
+ */
+const interruptionListeners = new Set();
+let lastInterruption = null;
+
+const announceInterruption = (info) => {
+  lastInterruption = info;
+  for (const listener of interruptionListeners) {
+    try {
+      listener(info);
+    } catch {
+      // One bad subscriber must not stop the others hearing it.
+    }
+  }
+};
+
+/** Subscribe to interruptions. Returns an unsubscribe. */
+export function onPlaybackInterrupted(listener) {
+  if (typeof listener !== 'function') return () => {};
+  interruptionListeners.add(listener);
+  // Immediately, with whatever the state already is: a bar that mounts after
+  // the failure must show it, not wait for a second one.
+  try {
+    listener(lastInterruption);
+  } catch {
+    /* ignore */
+  }
+  return () => interruptionListeners.delete(listener);
+}
+
+/**
+ * The ladder that keeps background playback alive across a network blip —
+ * see musicAutoResume.js for why a failed item used to be the end of it.
+ */
+export const musicAutoResume = createAutoResume(
+  {
+    retry: () => TrackPlayer.retry(),
+    play: () => TrackPlayer.play(),
+    seekTo: (seconds) => TrackPlayer.seekTo(seconds),
+    getProgress: () => TrackPlayer.getProgress(),
+    isPlaying: () => TrackPlayer.isPlaying(),
+  },
+  { onInterrupted: announceInterruption }
+);
 
 const setNativeCommands = (nextEnabled) =>
   Promise.resolve(
@@ -48,18 +99,33 @@ const nativeAdapter = {
     }
     await setNativeCommands(false);
   },
-  setQueue: (items, startIndex) =>
-    Promise.resolve(TrackPlayer.setMediaItems(items, startIndex)),
+  // The three deliberate stops cancel the resume ladder. Pause is the one
+  // that matters: a rung still pending would otherwise start the music again
+  // seconds after somebody silenced it.
+  setQueue: (items, startIndex) => {
+    musicAutoResume.cancel();
+    return Promise.resolve(TrackPlayer.setMediaItems(items, startIndex));
+  },
   // Changes what the lock screen shows for an item already in the queue,
   // without touching playback — see the controller's renameInQueue.
   updateMetadata: (index, metadata) =>
     Promise.resolve(TrackPlayer.updateMetadata(index, metadata)),
   play: () => Promise.resolve(TrackPlayer.play()),
-  pause: () => Promise.resolve(TrackPlayer.pause()),
+  pause: () => {
+    musicAutoResume.cancel();
+    return Promise.resolve(TrackPlayer.pause());
+  },
   previous: () => Promise.resolve(TrackPlayer.skipToPrevious()),
   next: () => Promise.resolve(TrackPlayer.skipToNext()),
-  seekTo: (seconds) => Promise.resolve(TrackPlayer.seekTo(seconds)),
-  clear: () => Promise.resolve(TrackPlayer.clear()),
+  seekTo: (seconds) => {
+    // Where a resume belongs is now where the user just put the playhead.
+    musicAutoResume.noteSeek(seconds);
+    return Promise.resolve(TrackPlayer.seekTo(seconds));
+  },
+  clear: () => {
+    musicAutoResume.cancel();
+    return Promise.resolve(TrackPlayer.clear());
+  },
   setNextEnabled: (enabled) => setNativeCommands(enabled),
 };
 
@@ -67,15 +133,30 @@ export const musicPlayerService = createMusicPlayerController(nativeAdapter);
 
 const handleNativePlaybackEvent = async (event) => {
   if (event?.type === Event.MediaItemTransition) {
+    musicAutoResume.noteTrackChanged();
     await musicPlayerService.handleActiveIndexChanged(event.index);
   } else if (event?.type === Event.RemoteNext) {
     await musicPlayerService.next();
+  } else if (event?.type === Event.PlaybackError) {
+    // The event this app used to not be listening to at all.
+    musicAutoResume.handleError(event);
+  } else if (event?.type === Event.PlaybackStateChanged) {
+    musicAutoResume.noteStateChange(event.state);
   }
 };
 
-TrackPlayer.addEventListener(Event.MediaItemTransition, (event) => {
-  handleNativePlaybackEvent({ type: Event.MediaItemTransition, ...event }).catch(() => {});
-});
+const forward = (type) => {
+  TrackPlayer.addEventListener(type, (event) => {
+    handleNativePlaybackEvent({ ...event, type }).catch(() => {});
+  });
+};
+
+forward(Event.MediaItemTransition);
+// Both of these are the fix for background playback dying on a blip: the
+// error is what says it died, and the state is what lets the ladder tell a
+// recovery from a queue that simply ended.
+forward(Event.PlaybackError);
+forward(Event.PlaybackStateChanged);
 
 if (Platform.OS === 'android') {
   TrackPlayer.registerBackgroundEventHandler(() => handleNativePlaybackEvent);

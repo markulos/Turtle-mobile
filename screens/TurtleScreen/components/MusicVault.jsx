@@ -239,6 +239,11 @@ export default function MusicVault({
     preparing,
     preparingPct,
     preparingStalled,
+    // Playback stopped on its own — see services/musicAutoResume.js. Defaulted
+    // for the same reason as `recordings`: this page is mounted against mocked
+    // providers that predate the field.
+    interrupted = null,
+    resumeInterrupted,
     position,
     duration,
     playMedia,
@@ -340,6 +345,22 @@ export default function MusicVault({
   // The same sentence the tapped ROW shows — built in one place, so one wait
   // cannot read as two different numbers on the same screen.
   const waitingLabel = preparingLabel(preparingPct, { stalled: preparingStalled });
+  /**
+   * THE SENTENCE FOR AUDIO THAT STOPPED BY ITSELF.
+   *
+   * Mark, 2026-11-18: background playback "stops playing after a few minutes".
+   * The resume ladder (services/musicAutoResume.js) is what gets the music
+   * back; this is what the bar says while it tries, and what it says when it
+   * cannot. Silence with no explanation was most of why that bug read as
+   * mysterious rather than as a network fault.
+   */
+  const interruptedLabel = !interrupted
+    ? null
+    : interrupted.exhausted
+      ? (interrupted.retryable === false
+        ? 'This track could not be played'
+        : 'Connection lost - tap to resume')
+      : 'Connection lost - reconnecting...';
   const barWidthRef = useRef(1);
 
   // The track whose "⋯" was tapped (null = sheet closed). Held by ID and
@@ -2093,8 +2114,15 @@ export default function MusicVault({
               {/* The source line carries the wait. This bar is where the play
                   button is, so it is where someone decides the tap did not
                   work and presses it again — which only restarts the wait. */}
-              <Text style={{ fontSize: 12, color: c.textTertiary }} numberOfLines={1}>
-                {preparing ? waitingLabel : (sourceOf(nowTrack) || 'audio')}
+              {/* The interruption outranks the wait: a stall the ladder is
+                  already working on is not "finding the audio", and the one
+                  thing worth the line is the reason the music stopped. */}
+              <Text
+                style={{ fontSize: 12, color: interruptedLabel ? MUSIC_TINT(c) : c.textTertiary }}
+                numberOfLines={1}
+                testID="music-transport-sub"
+              >
+                {interruptedLabel || (preparing ? waitingLabel : (sourceOf(nowTrack) || 'audio'))}
               </Text>
             </View>
             <TouchableOpacity
@@ -2108,8 +2136,15 @@ export default function MusicVault({
             </TouchableOpacity>
             <TouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel={preparing ? waitingLabel : isPlaying ? 'Pause' : 'Play'}
-              onPress={togglePlayback}
+              accessibilityLabel={
+                interruptedLabel ? 'Resume playback' : preparing ? waitingLabel : isPlaying ? 'Pause' : 'Play'
+              }
+              /* A failed item will not start from `play()` alone — it has to be
+                 re-prepared first, which is exactly what the ladder's own
+                 attempt does. So the key routes to it rather than looking like
+                 a play button that does nothing, which is the shape this bug
+                 had on screen. */
+              onPress={interruptedLabel && resumeInterrupted ? resumeInterrupted : togglePlayback}
               disabled={!ready}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >

@@ -20,7 +20,9 @@ import { useMediaVersion } from './DownloadsContext';
 import { useServer } from './ServerContext';
 import { buildMusicQueue } from '../services/musicTrackMapper';
 import { partitionVoiceRecordings } from '../utils/voiceRecordings';
-import { musicPlayerService } from '../services/musicPlayerService';
+import {
+  musicAutoResume, musicPlayerService, onPlaybackInterrupted,
+} from '../services/musicPlayerService';
 import { musicOfflineStore } from '../services/musicOfflineStore';
 import { preparingPercent, preparingStalled } from '../services/preparingProgress';
 
@@ -108,6 +110,18 @@ export function MusicPlayerProvider({ children }) {
    * percentage stops being worth showing. See preparingStalled().
    */
   const [preparingStalledNow, setPreparingStalledNow] = useState(false);
+  /**
+   * PLAYBACK STOPPED ON ITS OWN — and what is being done about it.
+   *
+   * `null` almost always. `{ code, message, exhausted }` while the resume
+   * ladder is climbing (exhausted: false) and after it has given up
+   * (exhausted: true). See services/musicAutoResume.js: this is the half of
+   * that fix that reaches a screen, because audio that stops needs a reason
+   * on it — Mark's report was "stops playing after a few minutes" precisely
+   * because nothing ever said anything.
+   */
+  const [interrupted, setInterrupted] = useState(null);
+  useEffect(() => onPlaybackInterrupted(setInterrupted), []);
   const preparingSinceRef = useRef(0);
   const preparingKey = preparing ? String(activeTrack?.mediaId ?? activeTrack?.id ?? '') : '';
   // `buffered` is an absolute position, so the amount IN HAND is the part of
@@ -420,6 +434,25 @@ export function MusicPlayerProvider({ children }) {
     [runCommand]
   );
 
+  /**
+   * "Try again" after the ladder has given up — the tap the transport bar's
+   * play key becomes while `interrupted` is set.
+   *
+   * Not routed through runCommand: the player is already set up (it was
+   * playing a moment ago), and the ladder reports its own progress through
+   * `interrupted` rather than through commandError.
+   */
+  const resumeInterrupted = useCallback(() => {
+    musicAutoResume.resumeNow();
+  }, []);
+
+  // Audio is coming out of the speaker, so nothing is interrupted — whatever
+  // recovered it. The ladder clears this itself; this is the safety net for
+  // the paths that do not go through it (a manual Play, a skip, a new queue).
+  useEffect(() => {
+    if (isPlaying) setInterrupted((current) => (current ? null : current));
+  }, [isPlaying]);
+
   const error = setupError || libraryError || commandError;
 
   const value = useMemo(
@@ -436,6 +469,8 @@ export function MusicPlayerProvider({ children }) {
       preparing,
       preparingPct,
       preparingStalled: preparingStalledNow,
+      interrupted,
+      resumeInterrupted,
       position,
       duration,
       refreshLibrary,
@@ -462,6 +497,8 @@ export function MusicPlayerProvider({ children }) {
       preparing,
       preparingPct,
       preparingStalledNow,
+      interrupted,
+      resumeInterrupted,
       position,
       duration,
       refreshLibrary,
