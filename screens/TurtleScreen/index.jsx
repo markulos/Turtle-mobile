@@ -69,6 +69,7 @@ import MediaGallery from './components/MediaGallery';
 import MediaLightbox from '../../components/MediaLightbox';
 import VaultImagePicker from './components/VaultImagePicker';
 import { usePomodoroSocket } from './hooks/usePomodoroSocket';
+import useFocusPlan from '../../utils/useFocusPlan';
 import { useClaudeSession } from './hooks/useClaudeSession';
 import { useTerminalSession } from './hooks/useTerminalSession';
 import ClaudeConsole, { PANEL_GAP, MIN_PANEL_HEIGHT, COMPACT_MAX_HEIGHT } from './components/ClaudeConsole';
@@ -1281,9 +1282,16 @@ export default function TurtleScreen() {
   // (rendered below) reflects whatever the server reports for this session.
   // Since stop/complete acknowledgements come back through the socket, we
   // don't need to optimistically push system messages here.
+  // The account's saved lengths, and where today sits in the cycle. Shared
+  // with the desktop through users.settings — see utils/focusPlan.
+  const focus = useFocusPlan();
+
   const handleStartTimer = useCallback((mode) => {
-    pomodoro.start(mode);
-  }, [pomodoro]);
+    // Name the minutes: the saved plan, and the long break on every fourth
+    // finished session. Without this the server uses its own in-memory pair,
+    // which does not survive a restart.
+    pomodoro.start(mode, focus.minutesFor(mode));
+  }, [pomodoro, focus]);
 
   const handleStopTimer = useCallback(() => {
     pomodoro.stop();
@@ -1293,12 +1301,25 @@ export default function TurtleScreen() {
     setShowSettings(false);
   }, []);
 
-  const handleSaveSettings = useCallback(({ focusMinutes, breakMinutes }) => {
-    pomodoro.updateDurations(focusMinutes, breakMinutes);
+  const handleSaveSettings = useCallback(({ focusMinutes, breakMinutes, longBreakMinutes, longBreakEvery }) => {
+    // Saved to the ACCOUNT, which is what makes it survive a pond restart
+    // and show up on the desktop; the socket call keeps the server's
+    // in-memory pair in step for anything that starts a timer without
+    // naming a length.
+    const saved = focus.save({
+      focus: focusMinutes,
+      break: breakMinutes,
+      longBreak: longBreakMinutes,
+      longBreakEvery,
+    });
+    pomodoro.updateDurations(saved.focus, saved.break);
     const generateId = () => (Date.now() + Math.random()).toString();
+    const longPart = saved.longBreakEvery > 0
+      ? ` / ${saved.longBreak}m long every ${saved.longBreakEvery}`
+      : ' / no long breaks';
     setMessages(prev => [{
       id: generateId(),
-      text: `⚙️ Pomodoro settings updated: ${focusMinutes}m focus / ${breakMinutes}m break`,
+      text: `⚙️ Pomodoro settings updated: ${saved.focus}m focus / ${saved.break}m break${longPart}`,
       sender: 'system',
       timestamp: new Date().toISOString(),
     }, ...prev]);
@@ -2478,7 +2499,15 @@ export default function TurtleScreen() {
                 size={CLAUDE_PEEK_WIDTH}
                 pokeable
                 up={markUp}
-                thinking={claudeBusy}
+                // …and he only THINKS inside the log. A turn can still be in
+                // flight after you close it (the pond keeps working, which is
+                // what the subtitle says), and the thinking pose then belongs
+                // to a conversation that is no longer on screen — on the
+                // Notes to self header he reads what you are writing instead.
+                // Mark, 2026-11-18: the hand was being left behind on this
+                // page. ClaudeTurtleBuddy drops the pose for a figure that is
+                // down as well, so neither half can strand it.
+                thinking={claudeBusy && claudeMarkShown}
                 // …and while you are writing to him he reads the line
                 // instead: eyes down, head dipped after them.
                 typing={claudeTyping}
@@ -3571,8 +3600,11 @@ export default function TurtleScreen() {
         visible={showSettings}
         onClose={handleCloseSettings}
         onSave={handleSaveSettings}
-        initialFocusMinutes={durations.focus}
-        initialBreakMinutes={durations.break}
+        initialFocusMinutes={focus.plan.focus}
+        initialBreakMinutes={focus.plan.break}
+        initialLongBreakMinutes={focus.plan.longBreak}
+        initialLongBreakEvery={focus.plan.longBreakEvery}
+        finishedToday={focus.done}
       />
 
       {/* The vault as a photo source for the composer, alongside the phone's

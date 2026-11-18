@@ -44,7 +44,7 @@ const DEFAULT_DURATIONS = { focus: 25, break: 5 };
  *     state: null
  *          | { status:'active', mode, startedAt, endsAt, totalDuration }
  *          | { status:'completed'|'stopped', mode, startedAt, endedAt, totalDuration },
- *     start: (mode) => void,
+ *     start: (mode, customMinutes?) => void,
  *     stop: () => void,
  *     dismiss: () => void,    // hides the ended card + persists so the server's
  *                             // replay of it stays dismissed across reloads
@@ -108,9 +108,18 @@ export function usePomodoroSocket(serverIP) {
     return () => { alive = false; };
   }, []);
 
-  const start = useCallback((mode) => {
+  /**
+   * `customMinutes` is how the account's saved plan — and the long break
+   * every fourth session — reaches the server. Without it the server falls
+   * back to its own in-memory pair, which is per-session and forgotten on
+   * restart, so a length set in Settings would last until the pond next
+   * came up. The caller holds the plan; see utils/useFocusPlan.
+   */
+  const start = useCallback((mode, customMinutes) => {
+    const minutes = Number(customMinutes);
     socketRef.current?.emit('pomodoro-start', {
       mode,
+      ...(Number.isFinite(minutes) && minutes > 0 ? { customMinutes: Math.floor(minutes) } : {}),
       // Only this device gets the "timer done" push; omitted if unavailable.
       pushToken: pushTokenRef.current || undefined,
     });

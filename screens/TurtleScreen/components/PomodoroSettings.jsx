@@ -7,6 +7,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { depth } from '../../../utils/surfaceDepth';
+import { DEFAULT_PLAN, normalisePlan, untilLongBreak } from '../../../utils/focusPlan';
 import AppTextInput from '../../../components/AppTextInput';
 import { useTheme } from '../../../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -18,36 +19,59 @@ import { tapHaptic, impactHaptic } from '../../../utils/haptics';
  * Props:
  * - visible: boolean
  * - onClose: () => void
- * - onSave: ({ focusMinutes, breakMinutes }) => void
- * - initialFocusMinutes: number (default 25)
- * - initialBreakMinutes: number (default 5)
+ * - onSave: ({ focusMinutes, breakMinutes, longBreakMinutes, longBreakEvery }) => void
+ * - initialFocusMinutes / initialBreakMinutes / initialLongBreakMinutes
+ * - initialLongBreakEvery: every Nth break is the long one; 0 turns them off
+ * - finishedToday: focus sessions done today, for the line at the bottom
+ *
+ * The lengths are the ACCOUNT's, not this phone's — the desktop reads and
+ * writes the same two keys (see utils/focusPlan), so what is set here is
+ * what starts there. Clamping is that module's too, for the same reason: a
+ * limit the two apps disagree about is a timer whose length depends on
+ * which device you started it from.
  */
 export default function PomodoroSettings({
   visible,
   onClose,
   onSave,
-  initialFocusMinutes = 25,
-  initialBreakMinutes = 5,
+  initialFocusMinutes = DEFAULT_PLAN.focus,
+  initialBreakMinutes = DEFAULT_PLAN.break,
+  initialLongBreakMinutes = DEFAULT_PLAN.longBreak,
+  initialLongBreakEvery = DEFAULT_PLAN.longBreakEvery,
+  finishedToday = 0,
 }) {
   const { theme } = useTheme();
   const [focusMinutes, setFocusMinutes] = useState(String(initialFocusMinutes));
   const [breakMinutes, setBreakMinutes] = useState(String(initialBreakMinutes));
+  const [longBreakMinutes, setLongBreakMinutes] = useState(String(initialLongBreakMinutes));
+  const [longBreakEvery, setLongBreakEvery] = useState(String(initialLongBreakEvery));
   
   useEffect(() => {
     if (visible) {
       setFocusMinutes(String(initialFocusMinutes));
       setBreakMinutes(String(initialBreakMinutes));
+      setLongBreakMinutes(String(initialLongBreakMinutes));
+      setLongBreakEvery(String(initialLongBreakEvery));
     }
-  }, [visible, initialFocusMinutes, initialBreakMinutes]);
+  }, [visible, initialFocusMinutes, initialBreakMinutes, initialLongBreakMinutes, initialLongBreakEvery]);
   
   if (!visible) return null;
   
   const handleSave = () => {
-    const focus = parseInt(focusMinutes, 10) || 25;
-    const breakTime = parseInt(breakMinutes, 10) || 5;
+    // One clamp, shared with the desktop. The old pair here capped focus at
+    // 60 and a break at 30, which silently refused lengths the server runs
+    // happily and the other app allows.
+    const safe = normalisePlan({
+      focus: parseInt(focusMinutes, 10),
+      break: parseInt(breakMinutes, 10),
+      longBreak: parseInt(longBreakMinutes, 10),
+      longBreakEvery: parseInt(longBreakEvery, 10),
+    });
     onSave({
-      focusMinutes: Math.max(1, Math.min(60, focus)),
-      breakMinutes: Math.max(1, Math.min(30, breakTime)),
+      focusMinutes: safe.focus,
+      breakMinutes: safe.break,
+      longBreakMinutes: safe.longBreak,
+      longBreakEvery: safe.longBreakEvery,
     });
     onClose();
   };
@@ -107,6 +131,58 @@ export default function PomodoroSettings({
             <Text style={styles.unit}>minutes</Text>
           </View>
         </View>
+
+        {/* Long break. Every Nth break is this one instead of the short one;
+            0 turns them off, which the hint says rather than leaving someone
+            to discover that a blank means "never". */}
+        <View style={styles.inputGroup}>
+          <View style={styles.labelRow}>
+            <Icon name="sleep" size={20} color="#4ECDC4" />
+            <Text style={styles.label}>Long Break</Text>
+          </View>
+          <View style={styles.inputRow}>
+            <AppTextInput
+              style={styles.input}
+              value={longBreakMinutes}
+              onChangeText={setLongBreakMinutes}
+              keyboardType="number-pad"
+              maxLength={3}
+              placeholder={String(DEFAULT_PLAN.longBreak)}
+              placeholderTextColor={theme.colors.textMuted}
+            />
+            <Text style={styles.unit}>minutes</Text>
+          </View>
+        </View>
+
+        <View style={styles.inputGroup}>
+          <View style={styles.labelRow}>
+            <Icon name="repeat" size={20} color="#4ECDC4" />
+            <Text style={styles.label}>Long Break Every</Text>
+          </View>
+          <View style={styles.inputRow}>
+            <AppTextInput
+              style={styles.input}
+              value={longBreakEvery}
+              onChangeText={setLongBreakEvery}
+              keyboardType="number-pad"
+              maxLength={2}
+              placeholder={String(DEFAULT_PLAN.longBreakEvery)}
+              placeholderTextColor={theme.colors.textMuted}
+            />
+            <Text style={styles.unit}>sessions · 0 = off</Text>
+          </View>
+        </View>
+
+        {/* Where today actually stands, so the number above is not abstract. */}
+        <Text style={styles.cycleNote}>
+          {(() => {
+            const every = parseInt(longBreakEvery, 10) || 0;
+            if (every <= 0) return `${finishedToday} finished today · every break is short.`;
+            const toGo = untilLongBreak(finishedToday, { ...DEFAULT_PLAN, longBreakEvery: every });
+            if (toGo === 0 && finishedToday > 0) return `${finishedToday} finished today · the next break is the long one.`;
+            return `${finishedToday} finished today · ${toGo} to go until a long break.`;
+          })()}
+        </Text>
         
         {/* Presets */}
         <View style={styles.presetsContainer}>
@@ -223,7 +299,15 @@ const createStyles = (theme) =>
     unit: {
       fontSize: 15,
       color: theme.colors.textSecondary,
-      width: 70,
+      // Wide enough for "sessions · 0 = off" without pushing the field in.
+      width: 128,
+    },
+    cycleNote: {
+      fontSize: 12.5,
+      lineHeight: 17,
+      color: theme.colors.textMuted,
+      marginTop: -4,
+      marginBottom: 16,
     },
     presetsContainer: {
       marginTop: 8,
