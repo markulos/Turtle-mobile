@@ -49,6 +49,7 @@ import { chunkedUpload, CHUNKED_UPLOAD_THRESHOLD_BYTES } from '../services/chunk
 import { reportUploadIssue } from '../services/uploadDiagnostics';
 import { registerUploadWorker, scheduleUploadDrain, cancelUploadDrain, registerAutoUploadScanner } from '../services/backgroundUploadTask';
 import { subscribeAutoUpload, runAutoUpload } from '../services/cameraRollAutoUpload';
+import { askPhotoAccessIfDue } from '../services/photoAccessPrompt';
 import { deletionPlan, undeletableReason } from '../utils/originalDeletion';
 import { notifyHaptic } from '../utils/haptics';
 
@@ -461,7 +462,15 @@ export function VaultUploadProvider({ children }) {
       // Photo-library permission: needed to resolve assetIds (resume) and for
       // the end-of-batch delete offer. Non-granted is fine — picker URIs still
       // work within the session they were picked.
-      try { await MediaLibrary.requestPermissionsAsync(); } catch (e) { /* optional */ }
+      //
+      // ASKED ONCE, IN OUR OWN WORDS, and only when the batch actually holds
+      // camera-roll items (services/photoAccessPrompt). This used to be a bare
+      // `MediaLibrary.requestPermissionsAsync()` here: the system sheet at the
+      // top of EVERY upload, including a batch of PDFs and including somebody
+      // who had already said no — and with limited access granted, the "select
+      // more photos" picker every time. Not awaited, because the permission is
+      // optional and the bytes must not wait on an answer.
+      askPhotoAccessIfDue(batch.items).catch(() => {});
 
       // SEGMENTED PIPELINE. A 450-item batch used to resolve every asset up
       // front and then run 450 back-to-back upload iterations; on iOS that

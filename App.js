@@ -55,6 +55,7 @@ import ShareUploadToast from './components/ShareUploadToast';
 import useAccountAccent from './utils/useAccountAccent';
 import { VaultUploadProvider } from './context/VaultUploadContext';
 import VaultUploadPill from './components/VaultUploadPill';
+import PhotoAccessAsk from './components/PhotoAccessAsk';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { VaultProvider } from './context/VaultContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -902,6 +903,10 @@ export default function App() {
                             finish stats + delete-originals offer. Bottom-anchored
                             so it never collides with the share toast above. */}
                         <ErrorBoundary label="vault upload pill" fallback={null}><VaultUploadPill /></ErrorBoundary>
+                        {/* The one-time photo-library question, asked when an
+                            image upload starts — at the root because an upload
+                            outlives the screen that started it. */}
+                        <ErrorBoundary label="photo access ask" fallback={null}><PhotoAccessAsk /></ErrorBoundary>
                         {/* Floating ghost-download progress (links shared into the
                             Download album / enqueued): live % + cancel/retry, sits
                             just above the vault-upload pill. */}

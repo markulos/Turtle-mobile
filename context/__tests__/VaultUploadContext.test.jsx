@@ -36,6 +36,9 @@ jest.mock('expo-file-system/legacy', () => ({
   deleteAsync: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('expo-media-library', () => ({
+  // Both halves: services/photoAccessPrompt READS the status to decide
+  // whether its one question is due, and only an Allow ever requests.
+  getPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
   requestPermissionsAsync: jest.fn().mockResolvedValue({ granted: true }),
   getAssetInfoAsync: jest.fn().mockImplementation(async (id) => ({
     localUri: `file:///library/${id}.jpg`,
