@@ -110,3 +110,43 @@ describe('the live control', () => {
     expect(words(view)).toContain('signing in…');
   });
 });
+
+/**
+ * THE KEYS TAKE THE COLOUR OF WHAT THEY ARE ON.
+ *
+ * Mark, 2026-11-18: in light mode the composer wears the nav bar's backdrop,
+ * and these keys live in its top-right corner. They were drawn for the page;
+ * on a dark band page ink is invisible (§1). The screen hands them the band's
+ * palette and they use it — with none, nothing changes for anywhere else
+ * that mounts this.
+ *
+ * The theme in this file is a Proxy that answers every colour with a token of
+ * its own name, which is what makes the rest of the suite readable and what
+ * stops this one asserting on a rendered hex. So the two things pinned are
+ * the ones that matter and that this harness CAN see: that nothing breaks
+ * either way, and that the override MERGES.
+ */
+describe('the surface these keys are on', () => {
+  test('with no ink given, nothing about them changes', async () => {
+    const view = await render(<ClaudeSessionControls {...props()} />);
+    expect(view.getByTestId('claude-live-pill')).toBeTruthy();
+    expect(view.getByLabelText('Stop the Claude session')).toBeTruthy();
+  });
+
+  test('a PARTIAL palette does not blank everything it does not mention', async () => {
+    // The band hands over six colours and this component reads more than six.
+    // A replace rather than a merge leaves the rest `undefined`, which is a
+    // corner of invisible keys mid-session.
+    const view = await render(<ClaudeSessionControls {...props({ ink: { textPrimary: '#FFFFFF' } })} />);
+    expect(view.getByTestId('claude-live-pill')).toBeTruthy();
+    expect(view.getByLabelText(/Expand Claude session/)).toBeTruthy();
+    expect(view.getByLabelText('Hide the Claude console')).toBeTruthy();
+
+    const src = require('fs').readFileSync(
+      require('path').resolve(__dirname, '..', 'ClaudeSessionControls.jsx'), 'utf8',
+    );
+    expect(src).toMatch(
+      /const theme = ink \? \{ \.\.\.pageTheme, colors: \{ \.\.\.pageTheme\.colors, \.\.\.ink \} \} : pageTheme;/,
+    );
+  });
+});

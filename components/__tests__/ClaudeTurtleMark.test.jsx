@@ -459,7 +459,7 @@ describe('ClaudeTurtleMark', () => {
     // one inside the composer.
     expect(src.match(/<ClaudeSessionControls/g)).toHaveLength(1);
     const composer = src.slice(src.indexOf('<ChatComposer'));
-    expect(composer).toMatch(/\{inClaudeSession && \(\s*<ClaudeSessionControls\s+compact\s+style=\{styles\.composerControls\}/);
+    expect(composer).toMatch(/\{inClaudeSession && \(\s*<ClaudeSessionControls\s+compact\b[\s\S]{0,400}?style=\{styles\.composerControls\}/);
     // The same padding above and below the row in both states — neither is
     // conditional on the session.
     expect(src).toMatch(/const HEADER_PAD_BOTTOM = \d+;/);

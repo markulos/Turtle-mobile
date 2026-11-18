@@ -53,6 +53,8 @@ import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
 import { CLAUDE_MARK_LEVEL, CLAUDE_MARK_NIGHT, ledgeOffset } from '../../components/ClaudeTurtleMark';
 import ClaudeTurtleBuddy, { TYPING_LINGER_MS } from '../../components/ClaudeTurtleBuddy';
+import Grain from '../../components/Grain';
+import { navBlockSurface } from '../../components/navSurface';
 import TypingIndicator from '../../components/TypingIndicator';
 import MarkdownText from '../../components/MarkdownText';
 import CopyKey from '../../components/CopyKey';
@@ -221,7 +223,13 @@ const CLAUDE_MODELS = [
 ];
 
 export default function TurtleScreen() {
-  const { theme } = useTheme();
+  const {
+    theme,
+    // The dock's own three, so the composer lands on whatever the nav bar
+    // landed on and keeps tracking it (components/navSurface), and the one
+    // grain slider that dusts every textured surface in the app.
+    dockTheme: dockThemeKey, dockStyle, dockColor, grain,
+  } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
   const { api, isConnected, getBaseUrl, serverIP } = useServer();
   // Identity for the header bar: the server profile's name/avatar when set,
@@ -252,6 +260,70 @@ export default function TurtleScreen() {
     : null;
   const { token, authIdentity } = useAuth();
   const navigation = useNavigation();
+  /**
+   * THE COMPOSER WEARS THE NAV BAR, IN LIGHT MODE.
+   *
+   * Mark, 2026-11-18: "let the chat box orchestrator have the same backdrop
+   * theme as the Nafar and let it be fine grain." The composer was a frosted
+   * near-white card floating a few points above a dark dock — two materials,
+   * one above the other, in the one place on the screen where your eye is
+   * already going. Now it is the dock's material with the dock's tooth on it.
+   *
+   * LIGHT ONLY, because that is what was asked for and because it is where
+   * the mismatch was: in dark mode the frost is already the same family as
+   * the bar, and swapping it for an opaque band would cost the see-through
+   * that makes the chat read under the composer.
+   *
+   * Resolved through navBlockSurface rather than copied: the bar's colour is
+   * three settings deep and any of them can change while the app is open.
+   */
+  const composerSkin = useMemo(
+    () => (theme.mode === 'dark' ? null : navBlockSurface(
+      { dockTheme: dockThemeKey, dockStyle, dockColor },
+      theme.colors.background,
+    )),
+    [theme.mode, dockThemeKey, dockStyle, dockColor, theme.colors.background],
+  );
+  /**
+   * …AND THE INK COMES WITH IT.
+   *
+   * Every glyph and every line inside that card was picked for a near-white
+   * page. On a dark band they are invisible — §1, and the mistake this app
+   * has shipped twice. One derived theme, handed to the shared composer and
+   * to the session's keys, so there is no call site left to forget.
+   */
+  const composerTheme = useMemo(() => (composerSkin ? {
+    ...theme,
+    colors: {
+      ...theme.colors,
+      background: composerSkin.fill,
+      surface: composerSkin.chip,
+      surfaceElevated: composerSkin.chip,
+      surfaceHighlight: composerSkin.chip,
+      border: composerSkin.edge,
+      borderStrong: composerSkin.ridge,
+      textPrimary: composerSkin.ink,
+      textSecondary: composerSkin.sub,
+      textTertiary: composerSkin.muted,
+      textMuted: composerSkin.muted,
+      // The accent is a FILL and `accentInk` is the ink for it (§10) — but
+      // that ink was conditioned for the cream page. On this band the raw
+      // accent is the readable one, which is the same answer the dock's own
+      // glyphs get.
+      accentInk: theme.colors.accent,
+    },
+  } : theme), [composerSkin, theme]);
+  const composerInk = composerTheme.colors;
+  /**
+   * A chip ON the band is a wash of the band's own ink — never a page colour.
+   * `actionCircle` is `surfaceElevated`, which is a near-white disc: on this
+   * backdrop it is a row of bright coins, and the glyph inside it would be
+   * white on near-white. The exact shape of the bug navSurface's own note
+   * records from the profile band.
+   */
+  const composerChip = composerSkin
+    ? { backgroundColor: composerSkin.chip, shadowOpacity: 0 }
+    : null;
   const insets = useSafeAreaInsets();
   // Measured height of the floating bottom dock (cards + frosted composer).
   // It's an absolute overlay over the full-height message list, so we inset
@@ -3371,9 +3443,28 @@ export default function TurtleScreen() {
           useBottomTabBarHeight(), which over-reported for the margin-based
           floating card and left a visibly wide gap. Now the composer sits
           exactly COMPOSER_MARGIN above the card's top edge. */}
-      <View style={[styles.inputArea, { marginBottom: dockOccupied(insets.bottom) + COMPOSER_MARGIN }]}>
-        <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
-        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
+      <View
+        style={[
+          styles.inputArea,
+          { marginBottom: dockOccupied(insets.bottom) + COMPOSER_MARGIN },
+          composerSkin && { backgroundColor: composerSkin.fill, borderColor: composerSkin.edge },
+        ]}
+        testID="composer-card"
+      >
+        {/* The frost is the DARK mode's material: a blur under an opaque band
+            is a blur nobody can see, and paying for it every frame of a
+            keyboard animation would be the worst kind of invisible. */}
+        {!composerSkin && (
+          <>
+            <BlurView pointerEvents="none" style={StyleSheet.absoluteFill} {...blurProps(theme)} />
+            <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
+          </>
+        )}
+        {/* FINE grain, as asked: the lighter dusting, not the metal weight
+            the profile's band wears. This card is small and close to the
+            thumb, and the coarse tooth reads as noise at that distance. One
+            slider still moves it, and Off is off. */}
+        {composerSkin && <Grain fine level={grain} radius={28} />}
         {/* Autocomplete Dropdown */}
         {showAutocomplete && (
           <View style={styles.autocompleteContainer}>
@@ -3402,7 +3493,7 @@ export default function TurtleScreen() {
             so the main chat and board chats are literally one composer. */}
         <ChatComposer
           bare
-          theme={theme}
+          theme={composerTheme}
           inputRef={inputRef}
           value={inputText}
           onChangeText={handleInputChange}
@@ -3432,7 +3523,7 @@ export default function TurtleScreen() {
               <View style={styles.composerTopRow}>
               {/* Bot slot — opens/hides the Claude session; long-press = model picker. */}
               <TouchableOpacity
-                style={[styles.botSlot, claudeUiMode === 'session' && styles.botSlotActive]}
+                style={[styles.botSlot, composerChip, claudeUiMode === 'session' && styles.botSlotActive]}
                 onPressIn={() => tapHaptic()}
                 onPress={() => {
                   if (claudeUiMode === 'session') { claudeClose(); }
@@ -3445,7 +3536,7 @@ export default function TurtleScreen() {
                 accessibilityLabel={claudeUiMode === 'session' ? 'Hide Claude session' : 'Open Claude session'}
                 accessibilityHint="Long-press to choose the Claude model"
               >
-                <Icon name="robot-outline" size={17} color={claudeUiMode === 'session' ? (theme.mode === 'dark' ? '#FACC15' : '#CA8A04') : theme.colors.textMuted} />
+                <Icon name="robot-outline" size={17} color={claudeUiMode === 'session' ? (theme.mode === 'dark' ? '#FACC15' : '#FACC15') : composerInk.textMuted} />
               </TouchableOpacity>
               {/* The live session's controls — status, Live, Stop, expand,
                   hide — in the TOP-RIGHT CORNER of the composer, beside
@@ -3470,13 +3561,16 @@ export default function TurtleScreen() {
                   >
                     {/* 18, not the header's 24: it sits beside the bot slot's
                         17pt glyph now, and the hit area is the hitSlop's. */}
-                    <Icon name="magnify" size={18} color={theme.colors.textPrimary} />
+                    <Icon name="magnify" size={18} color={composerInk.textPrimary} />
                   </TouchableOpacity>
                 </View>
               )}
               {inClaudeSession && (
                 <ClaudeSessionControls
                   compact
+                  // On the band, so its keys are the band's ink rather than
+                  // the page's — the same derived theme the composer uses.
+                  ink={composerInk}
                   style={styles.composerControls}
                   mode={claudeUiMode}
                   active={claudeActive}
@@ -3537,10 +3631,10 @@ export default function TurtleScreen() {
                       <TouchableOpacity
                         onPress={() => setClaudeImages((prev) => prev.filter((p) => p.uri !== img.uri))}
                         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        style={styles.composerThumbX}
+                        style={[styles.composerThumbX, composerChip]}
                         accessibilityLabel={`Remove attached image ${index + 1}`}
                       >
-                        <Icon name="close" size={14} color={theme.colors.textPrimary} />
+                        <Icon name="close" size={14} color={composerInk.textPrimary} />
                       </TouchableOpacity>
                     </View>
                   ))}
@@ -3551,22 +3645,22 @@ export default function TurtleScreen() {
           actions={
             <>
               {claudeUiMode === 'session' && (
-                <TouchableOpacity style={styles.actionCircle} onPressIn={() => tapHaptic()} onPress={pickClaudeImage} accessibilityRole="button" accessibilityLabel="Attach an image to send to Claude">
-                  <Icon name="image-outline" size={14} color={claudeImages.length ? '#4ADE80' : theme.colors.textPrimary} />
+                <TouchableOpacity style={[styles.actionCircle, composerChip]} onPressIn={() => tapHaptic()} onPress={pickClaudeImage} accessibilityRole="button" accessibilityLabel="Attach an image to send to Claude">
+                  <Icon name="image-outline" size={14} color={claudeImages.length ? '#4ADE80' : composerInk.textPrimary} />
                 </TouchableOpacity>
               )}
               {(claudeUiMode === 'session' || claudeUiMode === 'login' || terminalOpen) && (
-                <TouchableOpacity style={styles.actionCircle} onPress={() => setKeyboardMode((m) => (m === 'code' ? 'normal' : 'code'))} accessibilityRole="button" accessibilityLabel={`Keyboard: ${keyboardMode === 'code' ? 'Code' : 'Normal'}. Tap to switch.`}>
-                  <Icon name={keyboardMode === 'code' ? 'code-tags' : 'keyboard-outline'} size={13} color={keyboardMode === 'code' ? '#4ADE80' : theme.colors.textPrimary} />
+                <TouchableOpacity style={[styles.actionCircle, composerChip]} onPress={() => setKeyboardMode((m) => (m === 'code' ? 'normal' : 'code'))} accessibilityRole="button" accessibilityLabel={`Keyboard: ${keyboardMode === 'code' ? 'Code' : 'Normal'}. Tap to switch.`}>
+                  <Icon name={keyboardMode === 'code' ? 'code-tags' : 'keyboard-outline'} size={13} color={keyboardMode === 'code' ? '#4ADE80' : composerInk.textPrimary} />
                 </TouchableOpacity>
               )}
               {/* @ — board conversations inbox. */}
-              <TouchableOpacity style={styles.actionCircle} onPressIn={() => tapHaptic()} onPress={() => setShowConversations(true)} accessibilityRole="button" accessibilityLabel="Open board conversations">
-                <Icon name="at" size={14} color={theme.colors.textPrimary} />
+              <TouchableOpacity style={[styles.actionCircle, composerChip]} onPressIn={() => tapHaptic()} onPress={() => setShowConversations(true)} accessibilityRole="button" accessibilityLabel="Open board conversations">
+                <Icon name="at" size={14} color={composerInk.textPrimary} />
               </TouchableOpacity>
               {/* # — slash-commands: prefill "/" so the autocomplete opens. */}
-              <TouchableOpacity style={styles.actionCircle} onPressIn={() => tapHaptic()} onPress={() => { handleInputChange('/'); setTimeout(() => inputRef.current?.focus(), 0); }} accessibilityRole="button" accessibilityLabel="Show commands">
-                <Icon name="pound" size={14} color={theme.colors.textPrimary} />
+              <TouchableOpacity style={[styles.actionCircle, composerChip]} onPressIn={() => tapHaptic()} onPress={() => { handleInputChange('/'); setTimeout(() => inputRef.current?.focus(), 0); }} accessibilityRole="button" accessibilityLabel="Show commands">
+                <Icon name="pound" size={14} color={composerInk.textPrimary} />
               </TouchableOpacity>
             </>
           }

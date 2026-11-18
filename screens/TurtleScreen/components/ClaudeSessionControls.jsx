@@ -47,8 +47,18 @@ export default function ClaudeSessionControls({
   onClose,
   compact = false,
   style,
+  /**
+   * The colours of the surface these keys are ON.
+   *
+   * Mark, 2026-11-18: in light mode the composer wears the nav bar's
+   * backdrop, and these keys live in its top-right corner. They were drawn
+   * for the page — on a dark band that is invisible (§1). Given a palette,
+   * they use it; given none, nothing changes anywhere else that mounts this.
+   */
+  ink = null,
 }) {
-  const { theme } = useTheme();
+  const { theme: pageTheme } = useTheme();
+  const theme = ink ? { ...pageTheme, colors: { ...pageTheme.colors, ...ink } } : pageTheme;
   const styles = createStyles(theme);
 
   const isLogin = mode === 'login';
