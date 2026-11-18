@@ -98,7 +98,13 @@ describe('ClaudeTurtleBuddy', () => {
     // A hand cannot change shape under a transform: the resting hand fades
     // out as the pointing one fades in, both on the move.
     expect(CODE).toMatch(/opacity: Animated\.multiply\(\s*grabOpacity,\s*think\.interpolate\(\{ inputRange: \[0, 0\.55\], outputRange: \[1, 0\]/);
-    expect(CODE).toMatch(/opacity: think\.interpolate\(\{ inputRange: \[0\.3, 0\.8\], outputRange: \[0, 1\]/);
+    // …and the pointing hand fades with BOTH of them — times grabOpacity,
+    // like every other hand. Mark, 2026-11-18: it was the one layer without
+    // that factor, so closing the Claude log left a lone orange hand on the
+    // Notes to self rule with no turtle behind it. The face is clipped away
+    // and the two resting hands fade, which is exactly why this one was what
+    // survived.
+    expect(CODE).toMatch(/opacity: Animated\.multiply\(\s*grabOpacity,\s*think\.interpolate\(\{ inputRange: \[0\.3, 0\.8\], outputRange: \[0, 1\]/);
     // No lone finger, no flat hand to the chin.
     expect(CODE).not.toMatch(/CHIN_HAND|FINGER\b|-finger/);
   });
@@ -120,7 +126,10 @@ describe('ClaudeTurtleBuddy', () => {
 
     // THINKING WINS. He cannot lean two ways at once, and a turn in flight is
     // the bigger thing to be saying.
-    expect(CODE).toMatch(/const reading = typing && !thinking;/);
+    expect(CODE).toMatch(/const reading = typing && !posing;/);
+    // `posing`, not `thinking`: a pose belongs to a VISIBLE figure, so a turn
+    // still in flight when he goes down does not keep him struck in it.
+    expect(CODE).toMatch(/const posing = thinking && shown;/);
     // While reading he HOLDS it — glancing round the room while you write is
     // the opposite of what the pose says.
     expect(CODE).toMatch(/if \(reading\) return;/);
@@ -360,7 +369,95 @@ describe('ClaudeTurtleBuddy', () => {
 
   test('the session header wears him, and he thinks while a turn is in flight', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
-    expect(src).toMatch(/<ClaudeTurtleBuddy\s+size=\{CLAUDE_PEEK_WIDTH\}\s+pokeable\s+up=\{markUp\}\s+thinking=\{claudeBusy\}/);
+    expect(src).toMatch(/<ClaudeTurtleBuddy\s+size=\{CLAUDE_PEEK_WIDTH\}\s+pokeable\s+up=\{markUp\}/);
     expect(src).toMatch(/typing=\{claudeTyping\}/);
+  });
+
+  test('…but ONLY inside the log, which is where a turn can be watched', () => {
+    // Closing the log does not stop the pond working, so `claudeBusy` can
+    // still be true on the Notes to self header — and the thinking pose then
+    // belongs to a conversation that is not on screen. Mark, 2026-11-18: the
+    // hand was being left behind on that page. Both halves are fixed, and
+    // this is the one a reader of the screen would undo by "simplifying".
+    const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'screens', 'TurtleScreen', 'index.jsx'), 'utf8');
+    expect(src).toMatch(/thinking=\{claudeBusy && claudeMarkShown\}/);
+    // On that header he READS instead, which is the pose that header has.
+    expect(src).toMatch(/typing=\{claudeTyping\}/);
+  });
+});
+
+/**
+ * NOTHING OF HIM IS LEFT ON THE LEDGE WHEN HE GOES DOWN.
+ *
+ * Mark, 2026-11-18, with a screenshot of the Notes to self header: a lone
+ * orange hand sitting on the rule, no turtle behind it, after the Claude log
+ * was closed. The pond keeps working when you close the log, so `thinking`
+ * was still true — and the pointing hand was the one layer whose opacity was
+ * not multiplied by the hands' own fade, so it stayed at full while the face
+ * was clipped away and the other two hands faded out.
+ *
+ * Driven rather than scanned: `Animated.multiply` of two interpolations reads
+ * back as a number through `__getValue()`, so this asserts the thing on the
+ * screen instead of the line that draws it.
+ */
+/**
+ * NOTHING OF HIM IS LEFT ON THE LEDGE WHEN HE GOES DOWN.
+ *
+ * Mark, 2026-11-18, with a screenshot of the Notes to self header: a lone
+ * orange hand sitting on the rule, no turtle behind it, after the Claude log
+ * was closed.
+ *
+ * Three layers are drawn outside the clip — the two resting hands and the
+ * pointing one — and only the first two had their opacity multiplied by the
+ * hands' own fade. So when he sank, the face was clipped away, those two
+ * faded, and the pointing hand stayed at full. It needed `thinking` to be
+ * true at that moment, which it was: closing the log does not stop the pond
+ * working.
+ *
+ * Read off the source, like the rest of this component's motion: RN's
+ * `Animated` is not driven by jest's clock here, so an interpolation's value
+ * is not a thing this suite can observe. What CAN be pinned is that no hand
+ * is drawn without the gate — and a fourth layer added later with the same
+ * omission is exactly how this comes back.
+ */
+describe('going down leaves nothing behind', () => {
+  /** Each hand layer's `opacity:` line, by the style object that carries it. */
+  const styleBlock = (name) => {
+    const at = CODE.indexOf(`const ${name} = {`);
+    expect(at).toBeGreaterThan(-1);
+    return CODE.slice(at, CODE.indexOf('\n  };', at));
+  };
+
+  test('EVERY HAND fades with the others — including the thinking one', () => {
+    for (const name of ['leftStyle', 'rightStyle', 'pointStyle']) {
+      expect(styleBlock(name)).toMatch(/opacity:[\s\S]*grabOpacity/);
+    }
+  });
+
+  test('…and every hand layer in the tree is one of those three', () => {
+    // The gate above is only worth anything if nothing is drawn around it.
+    const hands = CODE.match(/testID=\{`\$\{testID\}-hand-[a-z]+`\}/g) || [];
+    expect(hands).toEqual([
+      'testID={`${testID}-hand-left`}',
+      'testID={`${testID}-hand-right`}',
+      'testID={`${testID}-hand-point`}',
+    ]);
+  });
+
+  test('the POSE is dropped too, not just hidden', () => {
+    // So he does not come back up mid-think from a turn that ended while he
+    // was down — and so the Reduce Motion path, which sets values outright
+    // rather than animating them, lands on the same answer.
+    expect(CODE).toMatch(/const posing = thinking && shown;/);
+    expect(CODE).toMatch(/think\.setValue\(posing \? 1 : 0\)/);
+    expect(CODE).not.toMatch(/toValue: thinking \?/);
+  });
+
+  test('all three hands are still there to be drawn', async () => {
+    // The fix is a gate, not a deletion: up and thinking, he still has one.
+    await render(<ClaudeTurtleBuddy size={44} up thinking />);
+    for (const part of ['left', 'right', 'point']) {
+      expect(screen.getByTestId(`claude-turtle-buddy-hand-${part}`)).toBeTruthy();
+    }
   });
 });

@@ -202,9 +202,23 @@ export default function ClaudeTurtleBuddy({
   typing = false,
   testID = 'claude-turtle-buddy',
 }) {
-  const reading = typing && !thinking;
   // Sulking beats everything: he is not up, so there is nothing to be up as.
   const shown = up && !sulking;
+  /**
+   * …AND NEITHER IS HE THINKING WHEN HE IS NOT UP.
+   *
+   * Mark, 2026-11-18: closing the Claude log left the thinking hand on the
+   * Notes to self header — a lone orange hand on the rule with no turtle
+   * behind it. Closing the log takes him DOWN, but `thinking` is wired to
+   * "a turn is in flight", which can still be true at that moment, so the
+   * pose stayed struck for a figure that was no longer there.
+   *
+   * Derived rather than fixed at the call site because it is this component's
+   * own rule: a pose belongs to a visible figure. The screen says whether he
+   * is up and whether Claude is busy; what that adds up to is his business.
+   */
+  const posing = thinking && shown;
+  const reading = typing && !posing;
   const height = markHeight(size);
   const ledge = ledgeOffset(size);
   // From fully below the ledge (1) to his resting place (0).
@@ -324,16 +338,16 @@ export default function ClaudeTurtleBuddy({
 
   // ── the pose: hand to mouth, head toward it ───────────────────────────
   useEffect(() => {
-    if (still) { think.setValue(thinking ? 1 : 0); return undefined; }
+    if (still) { think.setValue(posing ? 1 : 0); return undefined; }
     const move = Animated.timing(think, {
-      toValue: thinking ? 1 : 0,
-      duration: thinking ? 340 : 260,
+      toValue: posing ? 1 : 0,
+      duration: posing ? 340 : 260,
       easing: OUT,
       useNativeDriver: true,
     });
     move.start();
     return () => move.stop();
-  }, [thinking, still, think]);
+  }, [posing, still, think]);
 
   // ── the head goes down to read, and comes back up ─────────────────────
   useEffect(() => {
@@ -352,7 +366,7 @@ export default function ClaudeTurtleBuddy({
 
   // ── the small things he does, one at a time ───────────────────────────
   useEffect(() => {
-    const home = thinking ? THINK_GAZE : reading ? TYPE_GAZE : [0, 0];
+    const home = posing ? THINK_GAZE : reading ? TYPE_GAZE : [0, 0];
     if (still) {
       gazeX.setValue(home[0] * unit);
       gazeY.setValue(home[1] * unit);
@@ -402,9 +416,9 @@ export default function ClaudeTurtleBuddy({
       if (reading) return;
       timer = setTimeout(() => {
         if (!alive) return;
-        running = thinking ? thinkingAct() : idleAct();
+        running = posing ? thinkingAct() : idleAct();
         running.start(({ finished }) => { if (finished) next(); });
-      }, nextActGap(thinking ? THINK_GAP : IDLE_GAP));
+      }, nextActGap(posing ? THINK_GAP : IDLE_GAP));
     };
     running.start(({ finished }) => { if (finished) next(); });
 
@@ -413,7 +427,7 @@ export default function ClaudeTurtleBuddy({
       if (timer) clearTimeout(timer);
       if (running) running.stop();
     };
-  }, [thinking, reading, still, unit, gazeX, gazeY, nod, tap, drum]);
+  }, [posing, reading, still, unit, gazeX, gazeY, nod, tap, drum]);
 
   // ── a poke ────────────────────────────────────────────────────────────
   const onPoke = useCallback(() => {
@@ -495,7 +509,16 @@ export default function ClaudeTurtleBuddy({
   };
   // …and the pointing hand arrives from that side as it does, then taps.
   const pointStyle = {
-    opacity: think.interpolate({ inputRange: [0.3, 0.8], outputRange: [0, 1], extrapolate: 'clamp' }),
+    // TIMES grabOpacity, like both resting hands. The pose above is already
+    // dropped when he goes down, but this is the invariant that cannot be
+    // defeated by a stale animation value — no hand of any kind is drawn for
+    // a figure that is behind the ledge. (It was the only layer without it:
+    // the face is clipped away and the other two fade, which is why a lone
+    // hand was what survived.)
+    opacity: Animated.multiply(
+      grabOpacity,
+      think.interpolate({ inputRange: [0.3, 0.8], outputRange: [0, 1], extrapolate: 'clamp' }),
+    ),
     transform: [
       { translateX: Animated.add(
         think.interpolate({ inputRange: [0, 1], outputRange: [-reach.x * 0.4, 0] }),
