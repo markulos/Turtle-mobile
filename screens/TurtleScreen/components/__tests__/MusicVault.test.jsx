@@ -1023,3 +1023,62 @@ describe('sharing a playlist', () => {
     });
   });
 });
+
+/**
+ * TAPPING WHAT IS PLAYING OPENS IT.
+ *
+ * Mark, 2026-11-18: the currently playing element should "open as a panel
+ * with the album and proper slider element and navigation buttons". The panel
+ * itself is tested beside it (NowPlayingPanel.test); what is pinned here is
+ * the door — and that opening it never costs you a tap on Pause, which is
+ * what sharing a row with three transport keys invites.
+ */
+describe('opening the now playing panel', () => {
+  test('the title on the bar is the way in', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    expect(view.queryByTestId('now-playing-panel')).toBeNull();
+    await fireEvent.press(view.getByTestId('music-now-playing-open'));
+    expect(view.getByTestId('now-playing-panel')).toBeTruthy();
+  });
+
+  test('…and it carries the track that is playing, with both ends of it', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByTestId('music-now-playing-open'));
+    // `Second` is the active track in this harness, at 45s of 180.
+    // Twice over, in fact: the bar is still behind the panel, and both read
+    // the same clock.
+    expect(view.getAllByText('Second').length).toBeGreaterThan(0);
+    expect(view.getAllByText('3:00').length).toBeGreaterThan(1);
+    expect(view.getByTestId('now-playing-slider')).toBeTruthy();
+  });
+
+  test('THE TRANSPORT KEYS ON THE BAR STILL DO THEIR OWN JOB', async () => {
+    // The door is the art and the title, not the row: a Pause that opened a
+    // panel instead of pausing would be a worse bar than the one we had.
+    mockTogglePlayback.mockClear();
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByLabelText('Pause'));
+    expect(mockTogglePlayback).toHaveBeenCalledTimes(1);
+    expect(view.queryByTestId('now-playing-panel')).toBeNull();
+  });
+
+  test('its keys are the BAR’s keys — one handler, not two', async () => {
+    // Cleared here rather than relied on: this file shares its mocks across
+    // describes, and the count is the whole assertion.
+    mockTogglePlayback.mockClear();
+    mockPrevious.mockClear();
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByTestId('music-now-playing-open'));
+    await fireEvent.press(view.getByTestId('now-playing-toggle'));
+    expect(mockTogglePlayback).toHaveBeenCalledTimes(1);
+    await fireEvent.press(view.getByTestId('now-playing-previous-track'));
+    expect(mockPrevious).toHaveBeenCalledTimes(1);
+  });
+
+  test('and it closes again', async () => {
+    const view = await render(<MusicVault onClose={jest.fn()} />);
+    await fireEvent.press(view.getByTestId('music-now-playing-open'));
+    await fireEvent.press(view.getByTestId('now-playing-close'));
+    expect(view.queryByTestId('now-playing-panel')).toBeNull();
+  });
+});

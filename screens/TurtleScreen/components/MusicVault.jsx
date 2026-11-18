@@ -23,6 +23,7 @@ import {
 } from '../../../services/playlistGuests';
 import TrackActionsSheet from './TrackActionsSheet';
 import PlaylistActionsSheet from './PlaylistActionsSheet';
+import NowPlayingPanel from './NowPlayingPanel';
 import EdgeSwipePage from './EdgeSwipePage';
 import TimelineScrubber from './TimelineScrubber';
 import TranscriptionPanel from '../../../components/TranscriptionPanel';
@@ -382,6 +383,33 @@ export default function MusicVault({
         : 'Connection lost - tap to resume')
       : 'Connection lost - reconnecting...';
   const barWidthRef = useRef(1);
+  /**
+   * THE BAR, OPENED OUT.
+   *
+   * Mark, 2026-11-18: tapping what is playing should "open as a panel with
+   * the album and proper slider element and navigation buttons". The strip at
+   * the bottom stays exactly as it is — it is the right thing while you are
+   * doing something else — and this is the same transport given the screen.
+   * Nothing new plays: every control in the panel is the handler the bar's
+   * own key calls.
+   */
+  const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
+  // Nothing to open onto once the music stops.
+  useEffect(() => { if (!nowTrack) setNowPlayingOpen(false); }, [nowTrack]);
+  /**
+   * The cover, at the size the panel wants it.
+   *
+   * `thumbnailLgUrl` first: the small one is a list thumbnail and is visibly
+   * soft at 300pt. Most rows in this vault have NEITHER — a voice memo, a
+   * file off a phone — and the panel draws its own empty frame for that
+   * rather than being handed a placeholder to stretch.
+   */
+  const nowArtwork = useMemo(() => {
+    const row = nowTrack;
+    if (!row) return null;
+    const base = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl?.() || '').replace(/\/api$/, '');
+    return resolveMediaUrl(row.thumbnailLgUrl || row.thumbnailUrl || row.artworkUrl, base);
+  }, [nowTrack, getMediaBaseUrl, getBaseUrl]);
 
   /**
    * THE POND READS SIT ABOVE THE SHEET, because the sheet resolves against
@@ -2551,10 +2579,24 @@ export default function MusicVault({
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, gap: 12 }}>
-            <View style={[styles.art, trackStyles.artTint]}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${titleOf(nowTrack)}`}
+              onPress={() => { tapHaptic(); setNowPlayingOpen(true); }}
+              style={[styles.art, trackStyles.artTint]}
+            >
               <Icon name="music-note" size={20} color={glyphInk.onTile} />
-            </View>
-            <View style={{ flex: 1 }}>
+            </Pressable>
+            {/* THE WAY IN. The art and the title are one target — the three
+                keys to the right keep doing what they do, so opening the
+                panel never costs you a tap on Pause. */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${titleOf(nowTrack)}`}
+              onPress={() => { tapHaptic(); setNowPlayingOpen(true); }}
+              style={{ flex: 1 }}
+              testID="music-now-playing-open"
+            >
               <Text style={{ fontSize: 15, fontWeight: '700', color: c.textPrimary }} numberOfLines={1}>{titleOf(nowTrack)}</Text>
               {/* The source line carries the wait. This bar is where the play
                   button is, so it is where someone decides the tap did not
@@ -2569,7 +2611,7 @@ export default function MusicVault({
               >
                 {interruptedLabel || (preparing ? waitingLabel : (sourceOf(nowTrack) || 'audio'))}
               </Text>
-            </View>
+            </Pressable>
             <TouchableOpacity
               accessibilityRole="button"
               accessibilityLabel="Previous track"
@@ -3215,6 +3257,34 @@ export default function MusicVault({
       </EdgeSwipePage>
 
       {sheetLayer === 'root' && actionsSheet}
+
+      {/* The transport, opened out. At the ROOT and nowhere else: the strip
+          it opens from is only reachable here, and the panel's own layer
+          (500) puts it over everything the vault draws, the ⋯ card included. */}
+      <NowPlayingPanel
+        visible={nowPlayingOpen && !!nowTrack}
+        title={titleOf(nowTrack)}
+        subtitle={interruptedLabel || (preparing ? waitingLabel : (sourceOf(nowTrack) || 'Audio'))}
+        artworkUri={nowArtwork}
+        isPlaying={isPlaying}
+        preparing={preparing}
+        position={position}
+        duration={duration}
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={previous}
+        onNext={next}
+        // The same resume the bar's key does when the connection went — a
+        // second play button that could not get the music back would be the
+        // bug this fixed, drawn twice.
+        onToggle={interruptedLabel && resumeInterrupted ? resumeInterrupted : togglePlayback}
+        onSeek={seekTo}
+        onClose={() => setNowPlayingOpen(false)}
+        colors={c}
+        tint={MUSIC_TINT(c)}
+        topInset={insets.top}
+        bottomInset={Math.max(insets.bottom, bottomInset)}
+      />
     </View>
   );
 }
