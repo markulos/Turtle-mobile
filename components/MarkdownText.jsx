@@ -105,8 +105,22 @@ function CodeBlock({ block, base, colors, gap, style: blockStyle }) {
   );
 }
 
-function MarkdownText({ text, style, theme, testID }) {
-  const blocks = useMemo(() => parseCached(text), [text]);
+function MarkdownText({ text, style, theme, testID, numberOfLines = 0 }) {
+  const all = useMemo(() => parseCached(text), [text]);
+  /**
+   * CLAMPED, for a list row.
+   *
+   * Mark's note "Hyperlink in notes": a note's row is two lines of preview,
+   * and it still has to show its formatting and its links. Rendering every
+   * block and letting the row clip them is not the same thing — a clipped
+   * code fence or a half-drawn list is worse than the plain text it
+   * replaced, and the blocks below the fold would still be measured and
+   * laid out for every row in a scrolling list.
+   *
+   * So a clamp means ONE block, with the platform's own line clamp on it.
+   * The rest of the note is in the note; this is the look at it.
+   */
+  const blocks = numberOfLines > 0 ? all.slice(0, 1) : all;
   const flat = StyleSheet.flatten(style) || {};
   const textColor = flat.color || theme?.colors?.textPrimary || '#fff';
   const fontSize = flat.fontSize || 15;
@@ -121,6 +135,12 @@ function MarkdownText({ text, style, theme, testID }) {
     copyDone: theme?.colors?.accentSuccess || theme?.colors?.primary || textColor,
   }), [textColor, theme]);
   const base = [style, { color: textColor, fontSize, lineHeight }];
+  /**
+   * Selection is OFF while clamped. A long-press on a row already means
+   * something (the note's own actions), and the platform's selection
+   * handles would swallow it.
+   */
+  const clamp = numberOfLines > 0 ? { numberOfLines, selectable: false } : null;
 
   return (
     <View testID={testID}>
@@ -130,7 +150,7 @@ function MarkdownText({ text, style, theme, testID }) {
           case 'heading': {
             const size = b.level === 1 ? fontSize + 4 : b.level === 2 ? fontSize + 2 : fontSize + 1;
             return (
-              <Text key={i} selectable style={[base, styles.bold, { fontSize: size, lineHeight: Math.round(size * 1.3) }, gap, i > 0 && { marginTop: 4 }]}>
+              <Text key={i} selectable {...clamp} style={[base, styles.bold, { fontSize: size, lineHeight: Math.round(size * 1.3) }, gap, i > 0 && { marginTop: 4 }]}>
                 <Spans spans={b.spans} colors={colors} />
               </Text>
             );
@@ -141,7 +161,7 @@ function MarkdownText({ text, style, theme, testID }) {
                 {b.items.map((it, j) => (
                   <View key={j} style={[styles.listRow, { paddingLeft: 4 + it.depth * 14 }]}>
                     <Text selectable style={[base, styles.marker]}>{b.ordered ? `${it.number ?? j + 1}.` : '•'}</Text>
-                    <Text selectable style={[base, styles.listText]}>
+                    <Text selectable {...clamp} style={[base, styles.listText]}>
                       <Spans spans={it.spans} colors={colors} />
                     </Text>
                   </View>
@@ -162,7 +182,7 @@ function MarkdownText({ text, style, theme, testID }) {
             return <View key={i} style={[styles.rule, { backgroundColor: colors.rule }, gap]} />;
           default:
             return (
-              <Text key={i} selectable style={[base, gap]}>
+              <Text key={i} selectable {...clamp} style={[base, gap]}>
                 <Spans spans={b.spans} colors={colors} />
               </Text>
             );

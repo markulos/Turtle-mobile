@@ -102,6 +102,24 @@ import {
 } from '../../utils/pinnedNotes';
 // Tab predicates + the feedback tag vocabulary (pure, unit-tested separately).
 import { APP_TAGS, PLATFORM_TAGS, isFeedbackNote, matchesFilter, topicChipsFor } from './feedbackFilter';
+/**
+ * A note is RICH TEXT, and its links are links.
+ *
+ * Mark's to-do "Hyperlink in notes" (Turtle App · Mobile App): "make it
+ * possible to have hyperlink in notes mobile and rich text."
+ *
+ * Nothing new had to be invented for it — chat replies have been drawn with
+ * utils/markdownLite + components/MarkdownText since the Claude console
+ * landed: bold, italic, strike, code, headings, lists, quotes, and both
+ * `[label](url)` and bare URLs, as nested <Text> with no WebView and no
+ * dependency. A note is a paragraph of someone's writing exactly as a reply
+ * is. So notes are drawn with the same renderer, and the storage does not
+ * change at all: the body is still plain text on the wire, which is what
+ * keeps it readable on the web and in a share sheet.
+ */
+import * as Clipboard from 'expo-clipboard';
+import MarkdownText from '../../components/MarkdownText';
+import { insertLink, isUrlish, wrapSelection } from './richText';
 // The three pages and the arithmetic the pager shares with its pill.
 import {
   DEFAULT_NOTE_PAGE, NOTE_PAGES, NOTE_SEGMENTS, pageAtOffset, pageIndex,
@@ -2054,19 +2072,23 @@ function NoteRowImpl({ note, onPress, onToggleDone, onLongPress, onSendToClaude,
 
         <View style={styles.body}>
           {/* Who shared it — automatic avatar + name at the top of the card. */}
-          <Text
+          {/* Clamped to the two lines this row has always had — but drawn,
+              so a bold word is bold and a link is a link you can reach from
+              the list rather than only after opening the note. */}
+          <MarkdownText
+            text={note.content}
             numberOfLines={2}
-            style={[
-              styles.content,
-              isDone && styles.contentDone,
-            ]}
-          >
-            {note.content}
-          </Text>
+            theme={theme}
+            style={StyleSheet.flatten([styles.content, isDone && styles.contentDone])}
+            testID="note-row-content"
+          />
           {note.description ? (
-            <Text numberOfLines={2} style={styles.description}>
-              {note.description}
-            </Text>
+            <MarkdownText
+              text={note.description}
+              numberOfLines={2}
+              theme={theme}
+              style={StyleSheet.flatten(styles.description)}
+            />
           ) : null}
           {thumbUri ? (
             <Image source={{ uri: thumbUri }} style={styles.linkThumb} resizeMode="cover" />
@@ -2561,7 +2583,12 @@ function LinkNoteCardImpl({ note, onEdit, onLongPress, onShareAsText, showShare 
       >
         <Text style={styles.title} numberOfLines={2}>{title}</Text>
         {note.description ? (
-          <Text style={styles.desc} numberOfLines={3}>{note.description}</Text>
+          <MarkdownText
+            text={note.description}
+            numberOfLines={3}
+            theme={theme}
+            style={StyleSheet.flatten(styles.desc)}
+          />
         ) : null}
 
         {Array.isArray(note.tags) && note.tags.length > 0 && (
@@ -2794,6 +2821,44 @@ function ComposerModal({
 }) {
   const [content, setContent] = useState('');
   const [description, setDescription] = useState('');
+  /**
+   * WRITING RICH TEXT WITHOUT KNOWING MARKDOWN.
+   *
+   * Mark's to-do "Hyperlink in notes": notes are drawn with markdown now, so
+   * the composer grew the three keys that write it — bold, italic and a link
+   * — plus a way to see the result. See screens/NotesScreen/richText for what
+   * each key does to the string, and why each hands back a selection.
+   *
+   * The body's live selection, as a REF and as state: the ref is what the
+   * keys read (they must not re-render the field on every caret move), and
+   * the state is the controlled `selection` prop that puts the caret back
+   * where a key says it belongs.
+   */
+  const bodySelRef = useRef({ start: 0, end: 0 });
+  const [bodySelection, setBodySelection] = useState(null);
+  const [preview, setPreview] = useState(false);
+  // The edit a key makes: the new text, and the caret that goes with it.
+  const applyBodyEdit = useCallback(({ text, selection }) => {
+    setDescription(text);
+    bodySelRef.current = selection;
+    setBodySelection(selection);
+  }, []);
+  /**
+   * The link key. One tap when there is a URL on the clipboard, which is the
+   * common case — you copied a link and came here to put it somewhere.
+   */
+  const onLinkKey = useCallback(async () => {
+    tapHaptic();
+    let url = null;
+    try {
+      const clip = await Clipboard.getStringAsync();
+      if (isUrlish(clip)) url = clip;
+    } catch (e) {
+      // No clipboard permission, no clipboard: the placeholder path still
+      // works, and it is the one that does not depend on anything.
+    }
+    applyBodyEdit(insertLink(descriptionRef.current || '', bodySelRef.current, url));
+  }, [applyBodyEdit]);
   // Composer mode: 'note' | 'todo' | 'feedback'. To-do is the default for a new
   // capture; 'feedback' additionally reveals the platform selector below.
   const [mode, setMode] = useState('todo');
@@ -3453,6 +3518,20 @@ function ComposerModal({
               </View>
             )}
 
+            {/* PREVIEW — the note as it will read, with its links live.
+                A flip rather than a split view: a phone has one column, and
+                showing the markup beside the result halves both. */}
+            {preview ? (
+              <View style={styles.bodyPreview} testID="note-body-preview">
+                {description.trim() ? (
+                  <MarkdownText text={description} theme={theme} style={StyleSheet.flatten(styles.bodyInput)} />
+                ) : (
+                  <Text style={[styles.bodyInput, { color: theme.colors.textPlaceholder }]}>
+                    Nothing written yet.
+                  </Text>
+                )}
+              </View>
+            ) : (
             <AppTextInput
               placeholder="Start writing…"
               placeholderTextColor={theme.colors.textPlaceholder}
@@ -3465,11 +3544,18 @@ function ComposerModal({
               onBlur={() => { bodyFocusedRef.current = false; }}
               // "Is the caret at the end of the note?" — the one condition under
               // which auto-scrolling to the bottom is what the user wants.
+              selection={bodySelection || undefined}
               onSelectionChange={(e) => {
                 const sel = e.nativeEvent?.selection || {};
                 caretAtEndRef.current = sel.start === sel.end && sel.end >= (descriptionRef.current?.length || 0);
+                bodySelRef.current = { start: sel.start, end: sel.end };
+                // Released once the field has taken it: a controlled
+                // selection that never lets go pins the caret and the field
+                // becomes impossible to type in.
+                if (bodySelection) setBodySelection(null);
               }}
             />
+            )}
           </ScrollView>
         </GestureDetector>
 
@@ -3496,6 +3582,67 @@ function ComposerModal({
             accessibilityLabel="Add files"
           >
             <Icon name="paperclip" size={20} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+
+          {/* ── RICH TEXT, AND LINKS ──────────────────────────────────────
+              Mark's to-do "Hyperlink in notes". The markup has always been
+              readable (notes are drawn with markdownLite now); these are so
+              you do not have to know it. They act on the BODY, which is
+              where a note's writing is — the title above is one line and a
+              bold title is a heading nobody asked for.
+
+              Hidden while previewing: a formatting key over a field you
+              cannot see would edit text you are not looking at. */}
+          {!preview && (
+            <>
+              <TouchableOpacity
+                onPress={() => {
+                  tapHaptic();
+                  applyBodyEdit(wrapSelection(descriptionRef.current || '', bodySelRef.current, '**'));
+                }}
+                style={styles.toolbarBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Bold"
+                testID="note-bold"
+              >
+                <Icon name="format-bold" size={21} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  tapHaptic();
+                  applyBodyEdit(wrapSelection(descriptionRef.current || '', bodySelRef.current, '_'));
+                }}
+                style={styles.toolbarBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Italic"
+                testID="note-italic"
+              >
+                <Icon name="format-italic" size={21} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={onLinkKey}
+                style={styles.toolbarBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Add a link"
+                testID="note-link"
+              >
+                <Icon name="link-variant" size={20} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </>
+          )}
+          <TouchableOpacity
+            onPress={() => { tapHaptic(); setPreview((on) => !on); }}
+            style={styles.toolbarBtn}
+            accessibilityRole="button"
+            accessibilityState={{ selected: preview }}
+            accessibilityLabel={preview ? 'Back to writing' : 'Preview'}
+            testID="note-preview"
+          >
+            <Icon
+              name={preview ? 'pencil-outline' : 'eye-outline'}
+              size={20}
+              color={preview ? theme.colors.accentInk : theme.colors.textSecondary}
+            />
           </TouchableOpacity>
           <View style={{ flex: 1 }} />
           <TouchableOpacity
@@ -3810,6 +3957,10 @@ const composerStyles = (theme, isDark) => StyleSheet.create({
     color: theme.colors.textPrimary,
     padding: 0, marginBottom: 8,
   },
+  // The preview stands in the body field's place, so it has to take the same
+  // room — a flip that changed the sheet's height would be a flip that moved
+  // everything under it.
+  bodyPreview: { minHeight: 90, paddingTop: 4 },
   bodyInput: {
     fontSize: 17, lineHeight: 24,
     color: theme.colors.textPrimary,
