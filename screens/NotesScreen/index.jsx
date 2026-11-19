@@ -4346,6 +4346,10 @@ const createStyles = (theme, isDark) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'stretch',
     position: 'relative',
+    // The breath between the underline and the groove below it. The planner
+    // carries the same 10 on its tab scroller; without it the bar and the
+    // rule sit on top of each other and the header reads as one thick line.
+    marginBottom: 10,
   },
   tabUnderline: {
     position: 'absolute',
