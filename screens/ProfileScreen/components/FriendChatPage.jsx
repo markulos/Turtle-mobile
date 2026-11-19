@@ -47,6 +47,12 @@
  * A photo IS a message: the send key arms with nothing typed, and a wordless
  * bubble draws no empty line under the picture.
  *
+ * A VIDEO sent from the vault ("Send in Turtle") arrives the same way, and the
+ * display tier hands back its poster — so without help it reads as a still and
+ * nothing offers to play it. `useMessageMedia` resolves which attachments are
+ * videos alongside the drawing, the tile gets a play disc, and tapping it
+ * opens MediaLightbox on `/api/media/video/:id` instead of the image viewer.
+ *
  * ─── Links are not plain text ──────────────────────────────────────────────
  *
  * A URL someone sends is pressable where it was written, and the FIRST link in
@@ -77,7 +83,9 @@ import AnimalAvatar from '../../../components/AnimalAvatar';
 import MessageLinkCard from '../../../components/MessageLinkCard';
 import MessageActionsSheet from '../../../components/MessageActionsSheet';
 import AttachmentViewer from '../../../components/AttachmentViewer';
+import MediaLightbox from '../../../components/MediaLightbox';
 import MessagePhotos from './MessagePhotos';
+import useMessageMedia from './useMessageMedia';
 import MessageDraftPhotos, { MessageAttachKey } from './MessageDraftPhotos';
 // "Turtle photos" — the pond's own library as a source for an attachment, the
 // same picker the Turtle chat uses. A photo already in the vault needs no
@@ -100,7 +108,7 @@ import { KEYBOARD_GAP, keyboardLift } from '../../../utils/keyboardMotion';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { copyText } from '../../../utils/copyText';
 import { FROST_OVERLAP } from '../../../utils/frostedChat';
-import { viewerImageUrl } from '../../../utils/mediaAttachments';
+import { viewerImageUrl, viewerVideoUrl } from '../../../utils/mediaAttachments';
 import { firstLinkUrl, linkSegments } from '../../../utils/messageLinks';
 import { scrollIndicator } from '../../../utils/scrollIndicator';
 import {
@@ -226,27 +234,40 @@ function FriendChatPage({
   // thing that works for a photo somebody sent US.
   const photoOrigin = useMemo(() => String(serverBase || '').replace(/\/api$/, ''), [serverBase]);
 
+  // Which attachment ids in this thread are videos. Resolved beside the
+  // drawing, never in front of it — see useMessageMedia.
+  const videoIds = useMessageMedia(thread);
+
   /**
-   * The pictures of one message, as `{ key, uri }`.
+   * The pictures of one message, as `{ key, uri, video }`.
    *
    * A bubble still in flight draws the LOCAL files it was sent with, so a photo
    * is on screen the instant Send is pressed and does not blink when the upload
-   * lands. Everything settled is addressed by vault id through the display tier.
+   * lands. Everything settled is addressed by vault id through the display tier
+   * — which answers for a video as well, with its poster, so `video` is what
+   * separates the two and it arrives a moment later than the picture does.
    */
   const photoFramesOf = useCallback((message) => {
     const local = Array.isArray(message?.localUris) ? message.localUris : [];
-    if (local.length) return local.map((uri, i) => ({ key: `local-${i}`, uri }));
+    if (local.length) return local.map((uri, i) => ({ key: `local-${i}`, uri, video: false }));
     return attachmentIdsOf(message).map((id) => ({
       key: id,
       uri: viewerImageUrl(photoOrigin, { id }),
+      video: videoIds.has(id),
     }));
-  }, [photoOrigin]);
+  }, [photoOrigin, videoIds]);
 
-  /** The same pictures, in the shape AttachmentViewer wants. */
+  /**
+   * The STILLS of one message, in the shape AttachmentViewer wants.
+   *
+   * Videos are left out rather than paged through as frozen frames: the viewer
+   * shows images, and a still you cannot play is worse than not being offered
+   * it. A tap on one opens the lightbox instead (see openFrame).
+   */
   const photosOf = useCallback(
-    (message) => photoFramesOf(message).map(({ key, uri }) => ({
-      key, uri, previewUri: uri, name: null,
-    })),
+    (message) => photoFramesOf(message)
+      .filter((f) => !f.video)
+      .map(({ key, uri }) => ({ key, uri, previewUri: uri, name: null })),
     [photoFramesOf],
   );
 
@@ -256,7 +277,43 @@ function FriendChatPage({
   const openPhotos = useCallback((images, index) => {
     if (images?.length) { impactHaptic('light'); setViewer({ images, index }); }
   }, []);
-  useEffect(() => { if (!visible) setViewer(null); }, [visible]);
+
+  // A video plays in the chat's own lightbox — an in-tree overlay like the
+  // viewer beside it, because this page is an EdgeSwipePage overlay and iOS
+  // will not present a Modal over one.
+  //
+  // `headers`, not a bare url: /api/media/video/:id sits BEHIND the auth gate
+  // (unlike /display/ and /raw/, which are mounted bare), and the native
+  // player does not go through the app's fetch interceptor — so the token is
+  // read at open time and handed over. Read then, not at mount: a thread left
+  // open across a refresh would otherwise hold the old one.
+  const [playing, setPlaying] = useState(null);
+  useEffect(() => { if (!visible) { setViewer(null); setPlaying(null); } }, [visible]);
+
+  /**
+   * A tap on frame `index` of `message` — the one entry point for both.
+   *
+   * The index it is handed counts EVERY frame in the bubble, videos included,
+   * because that is what the bubble drew. The image viewer is given stills
+   * only, so the index has to be re-counted among those or a tap on the third
+   * tile in a bubble whose first is a video opens the wrong picture.
+   */
+  const openFrame = useCallback((message, index) => {
+    const frames = photoFramesOf(message);
+    const frame = frames[index];
+    if (!frame) return;
+    if (frame.video) {
+      impactHaptic('light');
+      const token = getApiAuthToken();
+      setPlaying({
+        uri: viewerVideoUrl(photoOrigin, { id: frame.key }),
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      return;
+    }
+    const stillsBefore = frames.slice(0, index).filter((f) => !f.video).length;
+    openPhotos(photosOf(message), stillsBefore);
+  }, [photoFramesOf, photosOf, openPhotos, photoOrigin]);
 
   // ── Reading the thread ────────────────────────────────────────────────────
   // Reading also marks THEIR messages read, server-side, which is what clears
@@ -593,6 +650,8 @@ function FriendChatPage({
     }
     // The pictures of the held message, in its own order — the same list a tap
     // on one of them opens, so the sheet and the photo agree on what is next.
+    // Stills only, like that list: a video is played by tapping its disc, and
+    // offering to "open" one here only ever opened its frozen poster.
     const openable = photosOf(held);
     if (openable.length) {
       rows.push({
@@ -654,7 +713,7 @@ function FriendChatPage({
               photos={photoFrames}
               mine={inked}
               theme={theme}
-              onOpen={(index) => openPhotos(photosOf(item), index)}
+              onOpen={(index) => openFrame(item, index)}
             />
           )}
           {!!link && (
@@ -702,7 +761,7 @@ function FriendChatPage({
         {body}
       </View>
     );
-  }, [thread, s, retry, hold, theme, serverBase, photoFramesOf, photosOf, openPhotos]);
+  }, [thread, s, retry, hold, theme, serverBase, photoFramesOf, openFrame]);
 
   const avatar = resolveAvatarUrl(friend?.avatarUrl, serverBase);
 
@@ -877,6 +936,18 @@ function FriendChatPage({
         images={viewer?.images || []}
         index={viewer?.index || 0}
         onClose={() => setViewer(null)}
+      />
+
+      {/* A video, playing. The bytes come from /api/media/video/:id, which
+          resolves from the id alone and supports Range — the two things a
+          <video> needs and the three older media routes could not give the
+          person who RECEIVED the message. */}
+      <MediaLightbox
+        visible={!!playing}
+        uri={playing?.uri}
+        headers={playing?.headers}
+        isVideo
+        onClose={() => setPlaying(null)}
       />
     </EdgeSwipePage>
   );

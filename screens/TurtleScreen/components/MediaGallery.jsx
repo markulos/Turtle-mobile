@@ -3704,6 +3704,32 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
     }
   }, [api, sendInTurtleIds, leaveSelectMode]);
 
+  /**
+   * The sheet itself, written once and MOUNTED TWICE.
+   *
+   * It is raised from two places that cannot share one mount: the grid's
+   * selection bar, and the share chooser inside the viewer — and the viewer is
+   * a Modal, its own native window, which nothing in the screen's tree can
+   * draw over at any zIndex. A single root-level copy therefore opened
+   * UNDERNEATH the photo or video it was about to send (Mark, 2026-11-18).
+   *
+   * So both hosts get a copy and `shown` decides which one is real. The state
+   * behind them is one set of values, so it makes no difference to the sheet
+   * which copy the user is looking at.
+   */
+  const renderSendInTurtleSheet = (shown) => (
+    <SendInTurtleSheet
+      visible={shown && !!sendInTurtleIds}
+      people={sendablePeople}
+      count={(sendInTurtleIds || []).length}
+      busyFor={sendingTo}
+      onClose={() => { if (!sendingTo) setSendInTurtleIds(null); }}
+      onSend={sendInTurtle}
+      bottomInset={Math.max(tabBarH, insets.bottom)}
+      theme={theme}
+    />
+  );
+
   // Was the picker opened on the GRID's selection, or on items handed in from
   // somewhere else (the viewer, the Files tab)? Only the grid has a selection
   // to clear afterwards, which is the one thing the two tag paths below do
@@ -4895,6 +4921,17 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
               message,
             )}
           />
+
+          {/* Send in Turtle, VIEWER side. The chooser that raises this sheet
+              is itself in here, so the sheet has to be too: an in-tree View at
+              the screen root cannot paint over a Modal however high its
+              zIndex, because a Modal is its own native window. It opened
+              faithfully under the photo it was sending — the same trap the
+              editor above and the grid's gather overlay below document.
+
+              Two copies, one state, and exactly one of them shown — see the
+              root copy at the bottom of this file. */}
+          {renderSendInTurtleSheet(!!selectedMedia)}
         </PhotoViewer>
       </DevProfiler>
       {renderLocalSyncGallery()}
@@ -6232,21 +6269,11 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
           the SCREEN ROOT with its own zIndex, not beside the page that raised
           it. It used to sit one sibling above the photos page and was painted
           over by it: a sheet you press for and cannot see. */}
-      {/* Send to somebody in the pond. Same rule as the two sheets above: it
-          opens on a press, so it is mounted at the SCREEN ROOT in the top
-          zIndex band and covers the viewer, the selection bar and the dock
-          (STYLE-RULES §4). An in-tree overlay rather than a Modal, because it
-          opens OVER the viewer, which is one. */}
-      <SendInTurtleSheet
-        visible={!!sendInTurtleIds}
-        people={sendablePeople}
-        count={(sendInTurtleIds || []).length}
-        busyFor={sendingTo}
-        onClose={() => { if (!sendingTo) setSendInTurtleIds(null); }}
-        onSend={sendInTurtle}
-        bottomInset={Math.max(tabBarH, insets.bottom)}
-        theme={theme}
-      />
+      {/* Send to somebody in the pond, GRID side. Mounted at the screen root
+          in the top zIndex band so it covers the selection bar and the dock
+          (STYLE-RULES §4) — and shown only while the viewer is DOWN, because
+          the viewer's own copy (above, inside its Modal) is what covers it. */}
+      {renderSendInTurtleSheet(!selectedMedia)}
 
       <AlbumPickerSheet
         visible={!!albumPickerFor}

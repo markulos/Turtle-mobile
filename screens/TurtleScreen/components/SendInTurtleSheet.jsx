@@ -22,9 +22,18 @@
  * attached is the conversation's job, and this is the one-tap version. The
  * thread is where you say something about it.
  *
- * An in-tree absolute overlay in the app's top zIndex band, NOT a Modal: it
- * opens over the viewer (itself a Modal) and the selection bar, and iOS drops
- * a sibling Modal presented over an open one. STYLE-RULES §4.
+ * ─── Where it is mounted ───────────────────────────────────────────────────
+ *
+ * An in-tree absolute overlay in the app's top zIndex band, NOT a Modal: iOS
+ * drops a sibling Modal presented over an open one, and this opens over the
+ * viewer, which is a Modal. STYLE-RULES §4.
+ *
+ * That makes WHOSE tree it is in the whole question, and the answer is not
+ * "the screen's". A zIndex only orders siblings, and a Modal is a native
+ * window of its own — so a root-level copy of this sheet cannot cover the
+ * viewer either, which is what it was doing. The gallery mounts one copy
+ * inside the viewer's Modal and one at the screen root and shows whichever
+ * belongs to what is on screen; see renderSendInTurtleSheet in MediaGallery.
  */
 import React, { useCallback, useEffect, useMemo } from 'react';
 import {

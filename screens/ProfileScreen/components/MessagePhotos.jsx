@@ -17,10 +17,19 @@
  * the other side. The display tier has no such scoping (it is how a note's
  * viewer has always worked), so the id is enough.
  *
- * A photo that cannot be drawn — deleted from the vault since, or a video, which
- * the display tier refuses — falls back to a quiet frame rather than a broken
- * image. That is decided by the LOAD FAILING, which is the honest test: it
- * reflects what is true right now rather than what a cached row once said.
+ * A photo that cannot be drawn — deleted from the vault since — falls back to a
+ * quiet frame rather than a broken image. That is decided by the LOAD FAILING,
+ * which is the honest test: it reflects what is true right now rather than what
+ * a cached row once said.
+ *
+ * ── Videos ─────────────────────────────────────────────────────────────────
+ *
+ * The display tier answers for a video too, with the poster made at import, so
+ * a video arrives here as an ordinary still and there is nothing in the picture
+ * to say it is one. `video` is what says so, and it comes from a type lookup
+ * that runs BESIDE the drawing rather than before it (useMessageMedia) — the
+ * frame is never waiting on it. Playing it is the page's job: the bytes live at
+ * /api/media/video/:id, which the lightbox is pointed at.
  */
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -34,7 +43,7 @@ const TILE = 96;
 const SOLO_W = 220;
 const SOLO_H = 165;
 
-function Photo({ frameKey, uri, box, frameColor, wellColor, quietFg, onPress }) {
+function Photo({ frameKey, uri, video, box, frameColor, wellColor, quietFg, onPress }) {
   const [broken, setBroken] = useState(false);
 
   if (broken) {
@@ -53,7 +62,7 @@ function Photo({ frameKey, uri, box, frameColor, wellColor, quietFg, onPress }) 
       onPressIn={() => tapHaptic()}
       onPress={onPress}
       accessibilityRole="imagebutton"
-      accessibilityLabel="Photo"
+      accessibilityLabel={video ? 'Video' : 'Photo'}
       testID={`message-photo-${frameKey}`}
       style={[styles.frame, box, { borderColor: frameColor, backgroundColor: wellColor }]}
     >
@@ -68,6 +77,19 @@ function Photo({ frameKey, uri, box, frameColor, wellColor, quietFg, onPress }) 
         recyclingKey={`msg-photo:${frameKey}`}
         onError={() => setBroken(true)}
       />
+      {/* A video's still and a photo are the same picture from the display
+          tier — this disc is the only thing that says one of them plays. It
+          goes in the MIDDLE rather than a corner: the vault's grid uses a
+          corner pill because every cell there is the same square and the eye
+          scans them as a column, while a bubble is read one at a time. Its
+          own ink, not the theme's, because it sits on a photograph. */}
+      {video && (
+        <View style={styles.playWrap} pointerEvents="none">
+          <View style={styles.playDisc}>
+            <Icon name="play" size={22} color="#fff" />
+          </View>
+        </View>
+      )}
     </Pressable>
   );
 }
@@ -91,6 +113,7 @@ export default function MessagePhotos({ photos, mine, theme, onOpen }) {
           key={frame.key}
           frameKey={frame.key}
           uri={frame.uri}
+          video={!!frame.video}
           box={box}
           frameColor={frameColor}
           wellColor={wellColor}
@@ -107,6 +130,15 @@ const styles = StyleSheet.create({
   // tiles never run past the bubble's own max width.
   wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 6 },
   frame: { borderRadius: 12, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth },
+  playWrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  playDisc: {
+    width: 40, height: 40, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    // The glyph is optically off-centre inside a triangle, so the disc is
+    // nudged the other way rather than the picture being left to look wrong.
+    paddingLeft: 3,
+  },
   well: {
     borderRadius: 12, borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center', justifyContent: 'center',

@@ -41,6 +41,36 @@ export function isImage(m) {
 }
 
 /**
+ * Is this attachment a video?
+ *
+ * The mirror of `isImage`, and for the same reason: `type` is the server's own
+ * classification and is trusted over the mime whenever it is set. It matters
+ * because a video and a photo are drawn and OPENED differently — the display
+ * tier answers for both (a video gets its poster), so nothing about the first
+ * frame gives the two apart.
+ */
+export function isVideo(m) {
+  if (!m) return false;
+  if (m.type) return m.type === 'video';
+  return String(m.mimeType || '').startsWith('video/');
+}
+
+/**
+ * What PLAYS a video addressed by id alone — `GET /api/media/video/:id`.
+ *
+ * The counterpart to viewerImageUrl, and it exists for the same reason that
+ * one does: a message carries media ids and nothing else, and the routes that
+ * could otherwise reach the bytes are all closed to the person who RECEIVED
+ * it (`/media/by-ids` omits another member's row by design, `/media/raw/`
+ * wants a filename only that lookup has). This route streams from the id,
+ * with Range, which is what <video> needs to seek.
+ */
+export function viewerVideoUrl(origin, m) {
+  if (!m || !m.id) return null;
+  return `${origin}/api/media/video/${encodeURIComponent(String(m.id))}`;
+}
+
+/**
  * Split what came back into the two rows a strip renders.
  *
  * An image needs a thumbnail to be shown inline; one without (a row whose

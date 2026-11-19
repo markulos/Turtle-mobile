@@ -21,12 +21,27 @@ import { useVideoPlayer, VideoView } from 'expo-video';
  */
 const HIT_SLOP_12 = { top: 12, bottom: 12, left: 12, right: 12 };
 
-function LightboxVideo({ uri }) {
-  const player = useVideoPlayer(uri || null, (p) => { p.loop = false; p.play(); });
+/**
+ * `headers` exists for one case and is worth stating: a video the pond serves
+ * from BEHIND the auth gate. The app's global fetch interceptor attaches the
+ * Bearer token to every request made in JS, and the native player makes none
+ * of them — so a gated source has to be handed its header here or it 401s and
+ * plays nothing. A public URL passes undefined and nothing changes.
+ *
+ * The source is memoised on its two parts: `useVideoPlayer` re-creates the
+ * player whenever the source's identity changes, and an object literal in the
+ * render body changes identity every frame.
+ */
+function LightboxVideo({ uri, headers }) {
+  const source = useMemo(
+    () => (uri ? { uri, ...(headers ? { headers } : null) } : null),
+    [uri, headers],
+  );
+  const player = useVideoPlayer(source, (p) => { p.loop = false; p.play(); });
   return <VideoView player={player} style={styles.media} contentFit="contain" nativeControls />;
 }
 
-export default function MediaLightbox({ visible, uri, isVideo = false, onClose }) {
+export default function MediaLightbox({ visible, uri, isVideo = false, headers, onClose }) {
   const insets = useSafeAreaInsets();
   // Reactive — re-reads on rotation / iPad window resize (Dimensions.get is a
   // one-shot snapshot that goes stale where insets don't change, e.g. iPad).
@@ -57,7 +72,7 @@ export default function MediaLightbox({ visible, uri, isVideo = false, onClose }
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
 
       {isVideo ? (
-        <LightboxVideo uri={uri} />
+        <LightboxVideo uri={uri} headers={headers} />
       ) : (
         <ScrollView
           style={StyleSheet.absoluteFill}

@@ -9,6 +9,14 @@ jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
 require('@shopify/flash-list/jestSetup');
 jest.mock('expo-image', () => ({ Image: 'Image' }));
 jest.mock('expo-blur', () => ({ BlurView: 'BlurView' }));
+// The lightbox a video plays in. The native player is not a thing in jest, and
+// what matters here is WHAT it was pointed at — so the source is recorded and
+// the view is a leaf.
+const mockVideoPlayer = jest.fn();
+jest.mock('expo-video', () => ({
+  useVideoPlayer: (source) => { mockVideoPlayer(source); return { loop: false, play: jest.fn() }; },
+  VideoView: 'VideoView',
+}));
 jest.mock('../../../../utils/haptics', () => ({
   tapHaptic: jest.fn(), notifyHaptic: jest.fn(), impactHaptic: jest.fn(), markGesture: jest.fn(),
 }));
@@ -27,7 +35,9 @@ const mockApi = { get: jest.fn(), post: jest.fn() };
 jest.mock('../../../../context/ServerContext', () => ({
   useServer: () => ({ api: mockApi }),
   serverOrigin: () => 'http://pond',
-  getApiAuthToken: async () => 't',
+  // Sync, like the real one — it reads a module-level variable. An async stub
+  // here would hand the video player "Bearer [object Promise]".
+  getApiAuthToken: () => 't',
 }));
 
 let mockSignals = { messagesVersion: 0, messagesPing: null };
@@ -528,14 +538,17 @@ describe('a photo in a message', () => {
     expect(uris()).toContain('http://pond/api/media/display/media_abc');
   });
 
-  test('asks the vault NOTHING to do it — no lookup before the first pixel', async () => {
-    mockApi.get.mockResolvedValue({ success: true, messages: [withPhoto({ mine: false })] });
+  test('the picture does not wait on — or need — the vault answering', async () => {
+    // by-ids is asked (it is how a VIDEO is told from a photo), but nothing
+    // about the frame depends on it: here it fails outright, which is also
+    // what it did for years for a photo somebody else sent you.
+    mockApi.get.mockImplementation(async (path) => {
+      if (String(path).includes('by-ids')) throw new Error('nope');
+      return { success: true, messages: [withPhoto({ mine: false })] };
+    });
     await render(<FriendChatPage {...props()} />);
     await screen.findByTestId('message-photo-media_abc');
-    // The thread read, and nothing else. A by-ids call here is the owner-scoped
-    // lookup that could never answer for someone else's photo.
-    const paths = mockApi.get.mock.calls.map((c) => String(c[0]));
-    expect(paths.some((p) => p.includes('by-ids'))).toBe(false);
+    expect(uris()).toContain('http://pond/api/media/display/media_abc');
   });
 
   test('draws one I sent the same way', async () => {
@@ -566,6 +579,90 @@ describe('a photo in a message', () => {
       'http://pond/api/media/display/a1',
       'http://pond/api/media/display/a2',
     ]));
+  });
+});
+
+/**
+ * A VIDEO sent in the pond ("Send in Turtle").
+ *
+ * Mark, 2026-11-18: "but it just picture, no video". The display tier answers
+ * for a video with its poster, so it arrived as an ordinary still with nothing
+ * saying it played and nothing that would play it.
+ */
+describe('a video in a message', () => {
+  /** api.get, routed: the thread read, then the by-ids type lookup. */
+  const pond = (messages, items) => {
+    mockApi.get.mockImplementation(async (path) => (
+      String(path).includes('by-ids')
+        ? { items }
+        : { success: true, messages }
+    ));
+  };
+
+  const vid = (over = {}) => msg({
+    content: '',
+    attachments: [{ type: 'media', mediaId: 'media_vid' }],
+    ...over,
+  });
+
+  /** Is there a play disc anywhere in the tree? */
+  const hasPlayGlyph = () => {
+    let found = false;
+    const walk = (node) => {
+      if (!node || typeof node !== 'object' || found) return;
+      if (node.type === 'Icon' && node.props?.name === 'play') { found = true; return; }
+      (node.children || []).forEach(walk);
+    };
+    walk(screen.toJSON());
+    return found;
+  };
+
+  test('is marked as one once the vault says so', async () => {
+    pond([vid({ mine: false })], [{ id: 'media_vid', type: 'video' }]);
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(hasPlayGlyph()).toBe(true));
+  });
+
+  test('a photo gets no play disc', async () => {
+    pond([vid({ mine: false })], [{ id: 'media_vid', type: 'image' }]);
+    await render(<FriendChatPage {...props()} />);
+    await screen.findByTestId('message-photo-media_vid');
+    await act(async () => {});
+    expect(hasPlayGlyph()).toBe(false);
+  });
+
+  test('plays from /api/media/video/:id, with the token the gate wants', async () => {
+    pond([vid({ mine: false })], [{ id: 'media_vid', type: 'video' }]);
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(hasPlayGlyph()).toBe(true));
+
+    fireEvent.press(screen.getByTestId('message-photo-media_vid'));
+
+    await waitFor(() => expect(mockVideoPlayer).toHaveBeenCalled());
+    expect(mockVideoPlayer).toHaveBeenCalledWith({
+      uri: 'http://pond/api/media/video/media_vid',
+      headers: { Authorization: 'Bearer t' },
+    });
+  });
+
+  test('the image viewer counts stills only, so a photo beside a video opens itself', async () => {
+    pond(
+      [msg({
+        content: '',
+        attachments: [{ type: 'media', mediaId: 'v1' }, { type: 'media', mediaId: 'p2' }],
+      })],
+      [{ id: 'v1', type: 'video' }, { id: 'p2', type: 'image' }],
+    );
+    await render(<FriendChatPage {...props()} />);
+    await waitFor(() => expect(hasPlayGlyph()).toBe(true));
+
+    // The SECOND tile in the bubble, which is the FIRST (and only) still.
+    fireEvent.press(screen.getByTestId('message-photo-p2'));
+
+    const page = await screen.findByTestId('attachment-image-p2');
+    expect(page).toBeTruthy();
+    // And no player was started for it.
+    expect(mockVideoPlayer).not.toHaveBeenCalled();
   });
 });
 

@@ -145,16 +145,40 @@ describe('the gallery offers it wherever a photo is shared', () => {
     expect(CODE).toMatch(/p\.userId !== myUserId/);
   });
 
-  it('is mounted at the screen root, over the viewer that raises it', () => {
-    // A parent's zIndex or overflow outranks whatever the sheet carries, and
-    // the viewer is a Modal — so this has to be an in-tree overlay mounted
-    // beside the other root sheets (STYLE-RULES §4).
-    const mount = CODE.indexOf('<SendInTurtleSheet');
-    expect(mount).toBeGreaterThan(-1);
-    expect(mount).toBeGreaterThan(CODE.indexOf('<EdgeSwipePage overlay visible={photosOpen}'));
+  it('is an in-tree overlay, not a Modal', () => {
+    // iOS drops a sibling Modal presented over an open one, and this opens
+    // over the viewer, which is one (STYLE-RULES §4).
     const sheet = fs.readFileSync('screens/TurtleScreen/components/SendInTurtleSheet.jsx', 'utf8');
     expect(sheet).toMatch(/layer: \{ zIndex: 1000 \}/);
     expect(sheet).not.toMatch(/<Modal/);
+  });
+
+  it('is mounted INSIDE the viewer as well as at the screen root', () => {
+    // Mark, 2026-11-18: "it still shows up under the video / media overlay."
+    // A zIndex only orders siblings and the viewer is a Modal — its own
+    // native window — so the root copy could never cover it however high it
+    // sat. Both hosts render the sheet; `shown` picks the live one.
+    const mount = CODE.indexOf('const renderSendInTurtleSheet');
+    expect(mount).toBeGreaterThan(-1);
+    expect(CODE).toMatch(/<SendInTurtleSheet\s/);
+
+    const viewer = CODE.indexOf('</PhotoViewer>');
+    expect(viewer).toBeGreaterThan(-1);
+    const inViewer = CODE.indexOf('renderSendInTurtleSheet(!!selectedMedia)');
+    const atRoot = CODE.indexOf('renderSendInTurtleSheet(!selectedMedia)');
+    // One on each side of the viewer's closing tag — which is the whole point.
+    expect(inViewer).toBeGreaterThan(-1);
+    expect(inViewer).toBeLessThan(viewer);
+    expect(atRoot).toBeGreaterThan(viewer);
+  });
+
+  it('shows exactly one of the two copies', () => {
+    // Both are driven by the same state, so the only thing that can go wrong
+    // is both being visible at once (two scrims) or neither (a sheet you
+    // press for and never see).
+    const start = CODE.indexOf('const renderSendInTurtleSheet');
+    const body = CODE.slice(start, CODE.indexOf('/>', start));
+    expect(body).toMatch(/visible=\{shown && !!sendInTurtleIds\}/);
   });
 });
 
