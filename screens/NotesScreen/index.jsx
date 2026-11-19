@@ -1491,7 +1491,10 @@ export default function NotesScreen() {
           )}
         </TouchableOpacity>
       </View>
-      <View style={styles.headerRule} />
+      {/* NO rule here. Mark, 2026-11-18: "put the ridge line underneath the
+          tabs" — and the tabs are part of this header, so the groove belongs
+          under the pair of them rather than between them. Exactly where the
+          planner cuts its own (screens/TasksScreen/index). */}
     </View>
   );
 
@@ -1630,6 +1633,10 @@ export default function NotesScreen() {
           })}
         </View>
       )}
+      {/* The header's edge: the app's one groove (insetRule), under the title
+          and the tabs together. It is drawn whether or not the tabs are —
+          without it an error state would lose the line that ends the header. */}
+      <View style={styles.headerRule} />
 
       {/* Body — THREE PAGES, swiped between (Mark, 2026-11-18). The chrome
           above is rendered once and stays put; only the lists translate. */}
@@ -4339,7 +4346,6 @@ const createStyles = (theme, isDark) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'stretch',
     position: 'relative',
-    marginBottom: 6,
   },
   tabUnderline: {
     position: 'absolute',

@@ -162,6 +162,21 @@ describe('still true', () => {
     expect(SRC.match(/\{renderChrome\(\)\}/g)).toHaveLength(1);
   });
 
+  test('THE GROOVE IS UNDER THE TABS, and there is one of it', () => {
+    // Mark, 2026-11-18: "put the ridge line underneath the tabs". The tabs
+    // are part of the header, so the app's one rule (insetRule) closes the
+    // title and the tabs together — where the planner cuts its own — rather
+    // than running between them and boxing the tab row into a strip.
+    expect(SRC.match(/<View style=\{styles\.headerRule\} \/>/g) || []).toHaveLength(1);
+    const after = SRC.slice(SRC.indexOf('testID="notes-tabs"'));
+    expect(after.indexOf('styles.headerRule')).toBeGreaterThan(-1);
+    expect(after.indexOf('styles.headerRule')).toBeLessThan(after.indexOf('testID="notes-pager"'));
+    // Drawn whether or not the tabs are: an error state must not lose the
+    // line that ends the header.
+    const rule = SRC.slice(SRC.indexOf("The header's edge"), SRC.indexOf("Body — THREE PAGES"));
+    expect(rule).not.toMatch(/\{!error &&/);
+  });
+
   test('nothing is filtered silently', () => {
     expect(SRC).toMatch(/const scopeLabel =/);
     expect(SRC).toMatch(/testID="notes-filter-key"/);
