@@ -168,7 +168,9 @@ describe('where it sits, and what it clears', () => {
     const SRC = fs.readFileSync('screens/TurtleScreen/components/AlbumPickerSheet.jsx', 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
       .replace(/(^|[^:])\/\/[^\n]*/g, (m, lead) => lead + ' '.repeat(m.length - lead.length));
-    expect(SRC).toMatch(/useAnimatedKeyboard\(\)/);
+    // …read from the app's ONE keyboard source (utils/keyboardMotion).
+    expect(SRC).toMatch(/useKeyboardFrame\(\)/);
+    expect(SRC).not.toMatch(/useAnimatedKeyboard/);
     expect(SRC).not.toMatch(/KeyboardAvoidingView/);
     // The lift CANCELS the clearance the sheet already rests on; adding the
     // two leaves the card floating above the keyboard.

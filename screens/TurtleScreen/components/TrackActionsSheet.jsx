@@ -11,9 +11,9 @@ import {
 } from 'react-native';
 import AppTextInput from '../../../components/AppTextInput';
 import Reanimated, {
-  useAnimatedKeyboard,
   useAnimatedStyle,
 } from 'react-native-reanimated';
+import { useKeyboardFrame } from '../../../utils/keyboardMotion';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 import { useSheetDismiss } from '../../../utils/useSheetDismiss';
@@ -130,7 +130,7 @@ export default function TrackActionsSheet({
   // over the dock, so — exactly like the composer's `keyboardHeight − dockH` —
   // the lift cancels that resting clearance and leaves the card sitting on the
   // keyboard's top edge.
-  const keyboard = useAnimatedKeyboard();
+  const keyboard = useKeyboardFrame();
   const keyboardLift = useAnimatedStyle(() => {
     'worklet';
     return { transform: [{ translateY: -Math.max(keyboard.height.value - bottomInset, 0) }] };

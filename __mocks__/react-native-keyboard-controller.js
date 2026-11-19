@@ -6,9 +6,10 @@
  * has nothing to report in jest, and on a machine without it installed it
  * cannot even be resolved.
  *
- * The keyboard is drivable: `__moveKeyboard(height)` plays one frame to every
- * mounted `useKeyboardHandler`, the way the native side would, and moves the
- * provider's own values with it. `__resetKeyboard()` puts it back down.
+ * The keyboard is drivable: `__moveKeyboard(height)` plays one whole move to
+ * every mounted `useKeyboardHandler` — start (where it is GOING), a frame, the
+ * end — the way the native side would, and moves the provider's own values
+ * with it. `__resetKeyboard()` puts it back down.
  */
 const React = require('react');
 const { Animated, ScrollView, View } = require('react-native');
@@ -30,6 +31,7 @@ function __moveKeyboard(height, progress) {
   animated.height.setValue(-height);
   animated.progress.setValue(p);
   handlers.forEach((h) => {
+    if (h.onStart) h.onStart(frame(height, p));
     if (h.onMove) h.onMove(frame(height, p));
     if (h.onEnd) h.onEnd(frame(height, p));
   });

@@ -38,29 +38,17 @@ const EXT = new Set(['.js', '.jsx']);
  * away from timing a lift off the event again, so they are counted.
  */
 const LISTENERS_NOT_YET = [
-  'screens/NotesScreen/index.jsx',
-  'screens/TasksScreen/components/CalendarView.jsx',
-  'screens/TasksScreen/index.jsx',
   'screens/TurtleScreen/components/PhotoViewer/ViewerSheet.jsx',
   'screens/TurtleScreen/index.jsx',
 ];
 
-/** Still on Reanimated's deprecated keyboard hook. */
-const REANIMATED_HOOK_NOT_YET = [
-  'screens/NotesScreen/index.jsx',
-  // Put back on purpose (owner, 2026-11-14): same source as the main chat.
-  // It leaves this list WITH the main chat, not before it.
-  'screens/ProfileScreen/components/FriendChatPage.jsx',
-  'screens/TurtleScreen/components/AlbumActionsSheet.jsx',
-  'screens/TurtleScreen/components/AlbumPickerSheet.jsx',
-  'screens/TurtleScreen/components/BoardTimeline.jsx',
-  'screens/TurtleScreen/components/MediaGallery.jsx',
-  'screens/TurtleScreen/components/TrackActionsSheet.jsx',
-  'screens/TurtleScreen/components/VaultShareSheet.jsx',
-  // The main chat no longer calls it: components/KeyboardDriver does, as ONE
-  // of three drivers the keyboard lab switches between (2026-11-18).
-  'components/KeyboardDriver.jsx',
-];
+/**
+ * Still on Reanimated's deprecated keyboard hook. EMPTY since 2026-11-19: the
+ * owner put the three ways of following the keyboard side by side on the phone
+ * and picked the spring in utils/keyboardMotion, and every surface moved to it
+ * together. Nothing goes back on this list.
+ */
+const REANIMATED_HOOK_NOT_YET = [];
 
 /** Still importing React Native's own KeyboardAvoidingView. */
 const CORE_AVOIDING_VIEW_NOT_YET = [
@@ -111,6 +99,67 @@ describe('one keyboard', () => {
     // 0.17, 0.59, 0.4, 0.77 — pasted from file to file as "the iOS keyboard
     // ease". It is not the keyboard's curve; nothing is, but the keyboard.
     expect(filesWhere((src) => /bezier\(\s*0\.17,\s*0\.59,\s*0\.4,\s*0\.77\s*\)/.test(src))).toEqual([]);
+  });
+});
+
+describe('the keyboard is followed ONE way: its own spring', () => {
+  const motion = fs.readFileSync(path.join(ROOT, 'utils', 'keyboardMotion.js'), 'utf8');
+  const code = motion.slice(motion.indexOf('import '));
+  const readRel = (rel) => FILES.find((f) => f.rel === rel).src;
+
+  test('on iOS it sets off on the spring the keyboard itself moves on, when the keyboard starts', () => {
+    expect(code).toContain('export const IOS_KEYBOARD_SPRING = { mass: 3, stiffness: 1000, damping: 500, overshootClamping: true };');
+    const start = code.slice(code.indexOf('onStart:'), code.indexOf('onMove:'));
+    expect(start).toContain('height.value = withSpring(e.height, IOS_KEYBOARD_SPRING);');
+    expect(start).toContain('progress.value = withSpring(e.progress, IOS_KEYBOARD_SPRING);');
+    // Frame-by-frame following is for Android only, and for a dragging finger.
+    const move = code.slice(code.indexOf('onMove:'), code.indexOf('onInteractive:'));
+    expect(move).toContain('if (!IS_IOS) {');
+  });
+
+  test('EVERY handler that runs on the UI thread says it is a worklet', () => {
+    // A function reaching the UI runtime without the directive throws there,
+    // and in a release build that throw is fatal. jest cannot see it.
+    const handlers = code.match(/\bon(Start|Move|Interactive|End): [(]e[)] => [{]/g) || [];
+    const marked = code.match(/\bon(Start|Move|Interactive|End): [(]e[)] => [{]\s*'worklet';/g) || [];
+    expect(handlers).toHaveLength(4);
+    expect(marked).toHaveLength(4);
+    // …and nothing from React Native's own Easing, which is not a worklet.
+    expect(code).not.toMatch(/\bEasing\b/);
+  });
+
+  test('the file itself no longer reads the keyboard any other way', () => {
+    // A call or an import; the same words in a comment are history, not use.
+    expect(code).not.toMatch(/=\s*useAnimatedKeyboard[(]|[{,]\s*useAnimatedKeyboard\b/);
+    expect(code).not.toMatch(/=\s*useKeyboardAnimation[(]|[{,]\s*useKeyboardAnimation\b/);
+  });
+
+  test('the test panel that chose it is gone', () => {
+    for (const rel of ['components/KeyboardDriver.jsx', 'components/KeyboardLabStrip.jsx', 'utils/keyboardLab.js']) {
+      expect([rel, fs.existsSync(path.join(ROOT, rel))]).toEqual([rel, false]);
+    }
+    expect(filesWhere((src) => /keyboardLab|KeyboardLabStrip|KeyboardDriver/.test(src))).toEqual([]);
+  });
+
+  test('a screen that is not on screen does not hear the keyboard', () => {
+    // Every tab stays mounted. Each of these kept the keyboard height in state
+    // and so re-rendered — the whole screen — when the keyboard opened in the
+    // chat, a few frames into the ride.
+    for (const rel of [
+      'screens/TasksScreen/index.jsx',
+      'screens/TasksScreen/components/CalendarView.jsx',
+      'screens/NotesScreen/index.jsx',
+    ]) {
+      const src = readRel(rel);
+      expect([rel, /useKeyboardEvents[(]/.test(src)]).toEqual([rel, true]);
+      expect([rel, /Keyboard[.]addListener/.test(src)]).toEqual([rel, false]);
+    }
+    // Always mounted inside the chat itself: listens only while it is open.
+    expect(readRel('screens/TurtleScreen/components/ConversationsOverlay.jsx')).toContain('useKeyboardHeight(visible)');
+    // …and the state hook is built on the focus-gated listener.
+    const hook = fs.readFileSync(path.join(ROOT, 'utils', 'useKeyboardHeight.js'), 'utf8');
+    expect(hook).toContain('useKeyboardEvents(onShow, onHide, enabled);');
+    expect(hook).not.toMatch(/Keyboard[.]addListener/);
   });
 });
 
@@ -177,10 +226,10 @@ describe('the surfaces that ride the keyboard', () => {
   });
 
   test.each([
-    ['components/CommandConsole.jsx', /useKeyboardLiftAnimated\(\{ rest: insets\.bottom, enabled: visible \}\)/],
-    ['screens/TurtleScreen/components/TerminalConsole.jsx', /useKeyboardLiftAnimated\(\{ enabled: fullscreen \}\)/],
-    ['screens/TasksScreen/components/TaskForm.jsx', /useKeyboardLiftAnimated\(\{ rest: insets\.bottom \|\| 0, gap: FOOTER_GAP \}\)/],
-    ['components/AccentColorPicker.jsx', /useKeyboardLiftAnimated\(\{ enabled: visible \}\)/],
+    ['components/CommandConsole.jsx', /useKeyboardLiftStyle\(\{ rest: insets\.bottom, enabled: visible \}\)/],
+    ['screens/TurtleScreen/components/TerminalConsole.jsx', /useKeyboardLiftStyle\(\{ enabled: fullscreen \}\)/],
+    ['screens/TasksScreen/components/TaskForm.jsx', /useKeyboardLiftStyle\(\{ rest: insets\.bottom \|\| 0, gap: FOOTER_GAP \}\)/],
+    ['components/AccentColorPicker.jsx', /useKeyboardLiftStyle\(\{ enabled: visible \}\)/],
   ])('%s rides the keyboard instead of timing itself', (rel, lift) => {
     const src = read(rel);
     expect(src).toMatch(lift);

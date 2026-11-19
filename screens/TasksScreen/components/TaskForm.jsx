@@ -9,7 +9,6 @@ import {
   ScrollView,
   Keyboard,
   Switch,
-  Animated,
   LayoutAnimation,
 } from 'react-native';
 import { depth } from '../../../utils/surfaceDepth';
@@ -18,7 +17,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useKeyboardHeight from '../../../utils/useKeyboardHeight';
-import { useKeyboardLiftAnimated } from '../../../utils/keyboardMotion';
+import Reanimated from 'react-native-reanimated';
+import { useKeyboardLiftStyle } from '../../../utils/keyboardMotion';
 import { useTheme } from '../../../context/ThemeContext';
 import { inkOn } from '../../../utils/accentColor';
 import { useServer } from '../../../context/ServerContext';
@@ -281,7 +281,7 @@ export const TaskForm = ({
   // keyboard, so it rises by that much less and the button lands FOOTER_GAP
   // above the keyboard's edge.
   const keyboardHeight = useKeyboardHeight();
-  const footerLift = useKeyboardLiftAnimated({ rest: insets.bottom || 0, gap: FOOTER_GAP });
+  const footerLift = useKeyboardLiftStyle({ rest: insets.bottom || 0, gap: FOOTER_GAP });
   // Inline board picker under the Board row (replaces the old Alert picker —
   // Android caps Alert at 3 buttons, silently dropping the rest).
   const [boardListOpen, setBoardListOpen] = useState(false);
@@ -1631,7 +1631,7 @@ export const TaskForm = ({
                 keyboard on a native transform, so Save is reachable from
                 anywhere in the form without scrolling to the end. Dimmed
                 until the title has content; handleSave still guards + alerts. */}
-            <Animated.View style={[styles.footer, { transform: [{ translateY: footerLift }] }]}>
+            <Reanimated.View style={[styles.footer, footerLift]}>
               <TouchableOpacity
                 style={[styles.actionBtn, styles.saveBtn, !canSave && styles.saveBtnDisabled]}
                 disabled={!canSave}
@@ -1646,7 +1646,7 @@ export const TaskForm = ({
                   {isEditing ? `Save ${copy.label}` : `Add ${copy.label}`}
                 </Text>
               </TouchableOpacity>
-            </Animated.View>
+            </Reanimated.View>
           </View>
         </View>
 

@@ -226,22 +226,7 @@ function QuestionCard({ q, onRespond, theme, styles }) {
   );
 }
 
-/**
- * The panel's height at rest and with the keyboard up, for one frame. A
- * worklet: both of the styles that slide the console call it on the UI thread.
- */
-function consoleHeights(lift, maxHeight, progress) {
-  'worklet';
-  const restCap = Math.max(MIN_PANEL_HEIGHT, maxHeight);
-  const liftCap = Math.max(MIN_PANEL_HEIGHT, maxHeight - lift);
-  const restCompact = Math.min(COMPACT_MAX_HEIGHT, restCap);
-  const liftCompact = Math.min(COMPACT_MAX_HEIGHT, liftCap);
-  const rest = Math.round(restCompact + (restCap - restCompact) * progress);
-  const lifted = Math.round(liftCompact + (liftCap - liftCompact) * progress);
-  return { rest, take: rest - lifted };
-}
-
-export default function ClaudeConsole({ transcript = [], active, live = true, onToggleLive, mode, permissions = [], onRespondPermission, questions = [], onRespondQuestion, expanded, keyboard, maxHeight = COMPACT_MAX_HEIGHT, dockLiftBase = 0, slide = false }) {
+export default function ClaudeConsole({ transcript = [], active, live = true, onToggleLive, mode, permissions = [], onRespondPermission, questions = [], onRespondQuestion, expanded, keyboard, maxHeight = COMPACT_MAX_HEIGHT, dockLiftBase = 0 }) {
   const { theme } = useTheme();
   const styles = createStyles(theme);
   const scrollRef = useRef(null);
@@ -307,34 +292,6 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
     return { height: Math.round(compactH + (cap - compactH) * expandProgress.value) };
   });
 
-  // ── SLIDE instead of RESIZE (keyboard lab) ──────────────────────────
-  // The resize above is the one thing on the keyboard's path that is a LAYOUT
-  // change: a new height every frame, which sends this whole screen through
-  // layout and a commit on each one. Sliding does the same job with two
-  // transforms and no layout at all. `take` is what the resize would have
-  // taken off the height this frame:
-  //   • the panel is pushed back DOWN by it, so its top stays where the
-  //     resize would have left it — under the header — at its full height;
-  //   • the transcript inside rides UP by it, clipped by its own slot, so
-  //     the newest line still meets the composer.
-  // The bottom of the panel is then behind the composer and the keyboard,
-  // which is where the resize put nothing anyway. Compact, `take` is zero and
-  // the panel simply rides the dock, exactly as before.
-  const slidePanelStyle = useAnimatedStyle(() => {
-    'worklet';
-    const kb = keyboard ? keyboard.height.value : 0;
-    const lift = Math.max(kb - dockLiftBase, 0);
-    const { rest, take } = consoleHeights(lift, maxHeight, expandProgress.value);
-    return { height: rest, transform: [{ translateY: take }] };
-  });
-  const slideBodyStyle = useAnimatedStyle(() => {
-    'worklet';
-    const kb = keyboard ? keyboard.height.value : 0;
-    const lift = Math.max(kb - dockLiftBase, 0);
-    const { take } = consoleHeights(lift, maxHeight, expandProgress.value);
-    return { transform: [{ translateY: -take }] };
-  });
-
   // Keep the newest line in view as output streams in. Re-runs on
   // expand too so opening the full view lands on the latest line. Skipped while
   // the live view is paused (the transcript is frozen, so there's nothing new
@@ -370,7 +327,7 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
     // The window is lifted with the keyboard by TurtleScreen; the blur tint is
     // strong enough that the static chat behind reads as a soft frost rather
     // than visibly shearing as the window slides.
-    <Animated.View style={[styles.panel, slide ? slidePanelStyle : animatedPanelStyle]}>
+    <Animated.View style={[styles.panel, animatedPanelStyle]}>
       <BlurView pointerEvents="none" style={styles.glassFill} {...blurProps(theme)} />
       <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: frostOverlayColor(theme) }]} />
       <LinearGradient
@@ -425,11 +382,6 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
         </Animated.View>
       )}
 
-      {/* The transcript in a slot of its own, so that when it SLIDES (keyboard
-          lab) it is clipped at the top of the slot — under any pinned cards —
-          rather than riding up over them. Resizing, both wrappers are inert. */}
-      <View style={styles.slideClip}>
-      <Animated.View style={[styles.slideBody, slide && slideBodyStyle]}>
       <ScrollView {...SCROLL_INDICATOR}
         ref={scrollRef}
         // ALWAYS flex:1. The panel now has a concrete Reanimated-driven height
@@ -479,8 +431,6 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
           );
         })}
       </ScrollView>
-      </Animated.View>
-      </View>
     </Animated.View>
   );
 }
@@ -488,8 +438,6 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
 const MONO = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
 
 const createStyles = (theme) => StyleSheet.create({
-  slideClip: { flex: 1, overflow: 'hidden' },
-  slideBody: { flex: 1 },
   panel: {
     marginHorizontal: 8,
     // Matched by the same value of headroom under the chat header (see the

@@ -4,7 +4,8 @@ import {
   Alert, StyleSheet, Keyboard,
 } from 'react-native';
 import { depth } from '../../../utils/surfaceDepth';
-import Animated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle } from 'react-native-reanimated';
+import { useKeyboardFrame } from '../../../utils/keyboardMotion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
@@ -78,7 +79,7 @@ export default function BoardTimeline({ visible, board, onClose }) {
   // it. No KeyboardAvoidingView: that animated a layout prop from JS and
   // re-laid the whole inverted list out per frame — the visible lag.
   const composerMargin = Math.max(insets.bottom, 8);
-  const keyboard = useAnimatedKeyboard();
+  const keyboard = useKeyboardFrame();
   const keyboardLiftStyle = useAnimatedStyle(() => {
     'worklet';
     const kb = keyboard.height.value;

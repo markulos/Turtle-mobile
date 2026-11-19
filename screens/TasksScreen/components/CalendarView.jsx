@@ -15,7 +15,6 @@ import {
   LayoutAnimation,
   Platform,
   UIManager,
-  Keyboard,
   RefreshControl,
   Pressable,
   Animated,
@@ -69,6 +68,7 @@ import { BRING_CONTINUE, BRING_HERE, bringToDay } from '../utils/finderReadd';
 import { TaskSectionFrontier } from './TaskSectionFrontier';
 import { WheelTimePicker } from './WheelTimePicker';
 import { tapHaptic } from '../../../utils/haptics';
+import { useKeyboardEvents } from '../../../utils/keyboardEvents';
 import { useTapOnly } from '../../../utils/pressBehavior';
 import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
 
@@ -2290,24 +2290,16 @@ export const CalendarView = ({
   // Keyboard handling
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   
-  useEffect(() => {
-    // Pads the day pane's bottom so rows can scroll clear of the keyboard.
-    // No LayoutAnimation on the event: a global one captured every other
-    // layout change of that frame (the inspector, the fold) and dragged them
-    // behind the keyboard.
-    const showListener = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      (e) => setKeyboardHeight(e.endCoordinates.height)
-    );
-    const hideListener = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setKeyboardHeight(0)
-    );
-    return () => {
-      showListener.remove();
-      hideListener.remove();
-    };
-  }, []);
+  // Pads the day pane's bottom so rows can scroll clear of the keyboard.
+  // No LayoutAnimation on the event: a global one captured every other
+  // layout change of that frame (the inspector, the fold) and dragged them
+  // behind the keyboard. Heard only while this tab is focused
+  // (utils/keyboardEvents) — the calendar is always mounted, and it used to
+  // re-render whenever the keyboard opened in another tab.
+  useKeyboardEvents(
+    (e) => setKeyboardHeight(e.endCoordinates.height),
+    () => setKeyboardHeight(0),
+  );
   
   // Track last tap for double-tap detection
   const lastTapRef = useRef(0);

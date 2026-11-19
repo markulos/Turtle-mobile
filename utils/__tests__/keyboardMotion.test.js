@@ -13,8 +13,8 @@ import * as Controller from 'react-native-keyboard-controller';
 import {
   KEYBOARD_GAP,
   keyboardLift,
+  IOS_KEYBOARD_SPRING,
   useKeyboardFrame,
-  useKeyboardLiftAnimated,
 } from '../keyboardMotion';
 
 const OPEN = Controller.__OPEN_HEIGHT;
@@ -146,49 +146,24 @@ describe('useKeyboardFrame — the live keyboard', () => {
   });
 });
 
-describe('useKeyboardLiftAnimated — the same lift for RN Animated views', () => {
-  function Probe({ onNode, ...options }) {
-    onNode(useKeyboardLiftAnimated(options));
-    return <Text>probe</Text>;
-  }
-  const valueOf = (node) => node.__getValue();
+describe('the spring', () => {
+  test('is the one iOS moves its keyboard on, and cannot overshoot', () => {
+    expect(IOS_KEYBOARD_SPRING).toEqual({ mass: 3, stiffness: 1000, damping: 500, overshootClamping: true });
+    // Critically damped or over: damping >= 2 * sqrt(stiffness * mass).
+    const { mass, stiffness, damping } = IOS_KEYBOARD_SPRING;
+    expect(damping).toBeGreaterThanOrEqual(2 * Math.sqrt(stiffness * mass));
+  });
 
-  test('matches keyboardLift across the whole trip', async () => {
-    let node;
-    await render(<Probe rest={34} gap={12} onNode={(n) => { node = n; }} />);
-    for (const h of [0, 10, 22, 40, 168, OPEN]) {
-      Controller.__moveKeyboard(h);
-      expect(valueOf(node)).toBeCloseTo(-keyboardLift(h, h / OPEN, 34, 12));
+  test('however the spring ran, the keyboard LANDS exactly where it stopped', async () => {
+    function Probe({ onFrame }) {
+      onFrame(useKeyboardFrame());
+      return <Text>probe</Text>;
     }
-  });
-
-  test('matches keyboardLift when the gap is larger than the rest', async () => {
-    let node;
-    await render(<Probe rest={0} gap={12} onNode={(n) => { node = n; }} />);
-    for (const h of [0, 40, 168, OPEN]) {
-      Controller.__moveKeyboard(h);
-      expect(valueOf(node)).toBeCloseTo(-keyboardLift(h, h / OPEN, 0, 12));
+    let frame;
+    await render(<Probe onFrame={(f) => { frame = f; }} />);
+    for (const h of [OPEN, OPEN + 44, 0, 291, 0]) {
+      await act(async () => { Controller.__moveKeyboard(h); });
+      expect(frame.height.value).toBe(h);
     }
-  });
-
-  test('with no rest it is the keyboard height itself', async () => {
-    let node;
-    await render(<Probe onNode={(n) => { node = n; }} />);
-    Controller.__moveKeyboard(OPEN);
-    expect(valueOf(node)).toBe(-OPEN);
-  });
-
-  test('never pushes the bar below where it rests', async () => {
-    let node;
-    await render(<Probe rest={90} onNode={(n) => { node = n; }} />);
-    Controller.__moveKeyboard(55, 1);
-    expect(valueOf(node)).toBe(0);
-  });
-
-  test('switched off, it stays put whatever the keyboard does', async () => {
-    let node;
-    await render(<Probe enabled={false} onNode={(n) => { node = n; }} />);
-    Controller.__moveKeyboard(OPEN);
-    expect(valueOf(node)).toBe(0);
   });
 });

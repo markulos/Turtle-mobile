@@ -65,7 +65,6 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 // useAnimatedKeyboard tracks the root window only, so it can't see the keyboard
 // from inside a Modal's separate native window. See keyboard-sync-patterns.
 import Reanimated, {
-  useAnimatedKeyboard,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -73,6 +72,7 @@ import Reanimated, {
   runOnJS,
   Easing as REasing,
 } from 'react-native-reanimated';
+import { useKeyboardFrame } from '../../utils/keyboardMotion';
 // Composer pull-down-to-dismiss. The composer is IN-TREE (not a Modal), so the
 // app's root GestureHandlerRootView already feeds this detector.
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -92,6 +92,7 @@ import { useClaudeQueue } from '../../context/ClaudeQueueContext';
 import { keyboardScrollProps } from '../../components/KeyboardSafeView';
 import { DOUBLE_TAP, TAP_ONLY } from '../../utils/pressBehavior';
 import { tapHaptic, impactHaptic } from '../../utils/haptics';
+import { useKeyboardEvents } from '../../utils/keyboardEvents';
 import { inkOn } from '../../utils/accentColor';
 // Tier-3 fuzzy fallback (trigram/Dice) for the header search — mirrors web.
 import { fuzzyRank } from '../../utils/trigram';
@@ -2974,7 +2975,7 @@ function ComposerModal({
   // (a compositor-only transform, no relayout) is what makes the composer track
   // the keyboard frame-for-frame, in perfect lockstep, exactly like the session
   // card — including the interactive swipe-down dismiss.
-  const keyboard = useAnimatedKeyboard();
+  const keyboard = useKeyboardFrame();
   // How much room the floating tab dock ACTUALLY takes (card + float gap + safe
   // area). Everything pinned to this page's bottom edge — the toolbar and the
   // settings panel — rests above it, and the keyboard lift cancels exactly that
@@ -3234,18 +3235,18 @@ function ComposerModal({
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
   }, []);
 
-  useEffect(() => {
-    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const s = Keyboard.addListener(showEvt, (e) => {
+  // Heard only while the Notes tab is the focused one (utils/keyboardEvents):
+  // this editor is always mounted, and it used to re-render whenever the
+  // keyboard opened anywhere in the app.
+  useKeyboardEvents(
+    (e) => {
       setKb({ visible: true, height: e.endCoordinates?.height || 0 });
       // The reserved room lands with this state, so the scroll can only follow on
       // a later frame — after the taller content is laid out.
       setTimeout(keepCaretVisible, 60);
-    });
-    const h = Keyboard.addListener(hideEvt, () => setKb({ visible: false, height: 0 }));
-    return () => { s.remove(); h.remove(); };
-  }, [keepCaretVisible]);
+    },
+    () => setKb({ visible: false, height: 0 }),
+  );
   // Double-tap the page to TOGGLE the keyboard — closed → focus the note body,
   // open → dismiss. A quick, low-effort open/close that coexists with scrolling
   // (a scroll moves; a double-tap is stationary) and with the buttons (they

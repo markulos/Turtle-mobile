@@ -7,7 +7,6 @@ import {
   Pressable,
   StyleSheet,
   ScrollView,
-  Animated,
   Platform,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
@@ -18,7 +17,8 @@ import { useTheme } from '../context/ThemeContext';
 import { blurProps, frostOverlayColor, frostBorderColor } from '../utils/frostedChat';
 import ChatComposer, { ComposerAction } from './ChatComposer';
 import { tapHaptic } from '../utils/haptics';
-import { useKeyboardLiftAnimated } from '../utils/keyboardMotion';
+import Reanimated from 'react-native-reanimated';
+import { useKeyboardLiftStyle } from '../utils/keyboardMotion';
 import { SCROLL_INDICATOR } from '../utils/scrollIndicator';
 
 // Command names stay monospace — that is the one typographic cue this list
@@ -73,7 +73,7 @@ export default function CommandConsole({ visible, onClose }) {
   // native-driven transform, no relayout. It already rests `insets.bottom`
   // up, so it only covers the part of the keyboard above that and lands
   // flush on its top edge.
-  const kbY = useKeyboardLiftAnimated({ rest: insets.bottom, enabled: visible });
+  const keyboardRide = useKeyboardLiftStyle({ rest: insets.bottom, enabled: visible });
   const inputRef = useRef(null);
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
@@ -119,10 +119,11 @@ export default function CommandConsole({ visible, onClose }) {
       <View style={styles.fill}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
 
-        <Animated.View
+        <Reanimated.View
           style={[
             styles.column,
-            { paddingBottom: insets.bottom + 10, transform: [{ translateY: kbY }] },
+            { paddingBottom: insets.bottom + 10 },
+            keyboardRide,
           ]}
           pointerEvents="box-none"
         >
@@ -200,7 +201,7 @@ export default function CommandConsole({ visible, onClose }) {
               }
             />
           </View>
-        </Animated.View>
+        </Reanimated.View>
       </View>
     </Modal>
   );

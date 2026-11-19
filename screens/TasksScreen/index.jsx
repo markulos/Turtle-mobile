@@ -10,7 +10,6 @@ import {
   Animated,
   Easing,
   Alert,
-  Keyboard,
   Platform,
   ScrollView,
   useWindowDimensions,
@@ -42,6 +41,7 @@ import { togglePin } from './utils/focusList';
 import { loadPins, savePins } from '../../services/focusPins';
 import { completionChange } from './utils/completionChange';
 import { tapHaptic, impactHaptic, selectionHaptic, markGesture } from '../../utils/haptics';
+import { useKeyboardEvents } from '../../utils/keyboardEvents';
 import { resolveAvatarUrl } from '../../utils/avatarUrl';
 
 // An event is "over" once its end is in the past — start time + duration (a
@@ -814,31 +814,25 @@ export default function TasksScreen() {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   
-  useEffect(() => {
-    // The keyboard height only PADS the list's bottom so content can scroll
-    // clear of the keyboard; nothing on screen is re-laid-out to make room
-    // (house keyboard rule). The global LayoutAnimation this used to fire on
-    // every keyboard event captured every unrelated layout change in flight
-    // — sheets, chips and rows all eased a beat behind the keyboard.
-    const showListener = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      (e) => {
-        setKeyboardHeight(e.endCoordinates.height);
-        setKeyboardVisible(true);
-      }
-    );
-    const hideListener = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => {
-        setKeyboardHeight(0);
-        setKeyboardVisible(false);
-      }
-    );
-    return () => {
-      showListener.remove();
-      hideListener.remove();
-    };
-  }, []);
+  // The keyboard height only PADS the list's bottom so content can scroll
+  // clear of the keyboard; nothing on screen is re-laid-out to make room
+  // (house keyboard rule). The global LayoutAnimation this used to fire on
+  // every keyboard event captured every unrelated layout change in flight
+  // — sheets, chips and rows all eased a beat behind the keyboard.
+  //
+  // Heard ONLY while this tab is the focused one (utils/keyboardEvents): every
+  // tab stays mounted, and this whole screen used to re-render each time the
+  // keyboard opened in the chat — mid-ride, which is what made it stutter.
+  useKeyboardEvents(
+    (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+      setKeyboardVisible(true);
+    },
+    () => {
+      setKeyboardHeight(0);
+      setKeyboardVisible(false);
+    },
+  );
   
   const {
     tasks, setTasks, projects, allTags,

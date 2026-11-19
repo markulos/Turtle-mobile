@@ -30,7 +30,8 @@ import {
   ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TouchableOpacity,
   useWindowDimensions, View,
 } from 'react-native';
-import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
+import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
+import { useKeyboardFrame } from '../../../utils/keyboardMotion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AppTextInput from '../../../components/AppTextInput';
@@ -80,7 +81,7 @@ export default function AlbumPickerSheet({
    * shrinking takes its own top off the screen.
    */
   const pad = Math.max(insets.bottom, bottomInset);
-  const keyboard = useAnimatedKeyboard();
+  const keyboard = useKeyboardFrame();
   const lift = useAnimatedStyle(() => {
     'worklet';
     const up = Math.max(keyboard.height.value - pad, 0);

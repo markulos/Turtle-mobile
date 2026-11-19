@@ -158,8 +158,10 @@ export default function ConversationsOverlay({ visible, onClose, onOpenClaude, i
   // Rows are { name, lastTs, latest } — latest/lastTs null when only the plain
   // names list was available (fast path / fallback).
   const [boards, setBoards] = useState([]);
-  // Search keyboard: pad the list so results can scroll clear of it.
-  const keyboardHeight = useKeyboardHeight();
+  // Search keyboard: pad the list so results can scroll clear of it. Only
+  // while the inbox is OPEN — it is always mounted, and listening while
+  // hidden re-rendered it every time the keyboard opened in the chat.
+  const keyboardHeight = useKeyboardHeight(visible);
   // { [boardName]: [thumbnailUrl, ...] } — lazily hydrated collage avatars.
   const [avatars, setAvatars] = useState({});
   const [loading, setLoading] = useState(false);

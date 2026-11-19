@@ -1,32 +1,36 @@
 /**
  * keyboardMotion — the one way anything in the app moves with the keyboard.
  *
- * WHY THIS EXISTS. Three techniques grew up side by side, and only one of them
- * was actually in step with the keyboard:
+ * WHY THIS EXISTS. Four techniques grew up side by side:
  *
- *   1. A timed guess — listen for `keyboardWillShow`, then run an
+ *   1. A timed guess — listen for `keyboardWillShow` in JS, then run an
  *      `Animated.timing` with the reported duration and a bezier that
- *      approximates the keyboard's curve. The iOS keyboard is a spring, not a
- *      bezier, so the bar leads at one end of the trip and trails at the other.
+ *      approximates the keyboard's curve. Wrong curve, and it starts whenever
+ *      the JS thread gets round to it.
  *   2. A state snap — put the keyboard height in React state and let layout
  *      (`marginBottom`, `paddingBottom`) take it. The bar is at its final
  *      position on the first frame while the keyboard is still on its way.
- *   3. Reanimated's `useAnimatedKeyboard` — per frame, on the UI thread. Right
- *      idea, but it reads where the keyboard WAS (a frame late), cannot see a
- *      keyboard from inside a `<Modal>`, and is deprecated in Reanimated 4 in
- *      favour of the library below.
+ *   3. Reanimated's `useAnimatedKeyboard` — per frame, on the UI thread, but
+ *      it reads where the keyboard WAS (a frame late), cannot see a keyboard
+ *      from inside a `<Modal>`, and is deprecated in Reanimated 4.
+ *   4. Following `react-native-keyboard-controller` frame by frame. Closer,
+ *      but still a view chasing the keyboard: every frame it is told where the
+ *      keyboard got to, and moves there one frame afterwards.
  *
- * This file reads the keyboard from `react-native-keyboard-controller` (in the
- * native build since build 4; `KeyboardProvider` wraps the app in App.js). Its
- * native side reports the keyboard's position every frame on the UI thread,
- * for every window including modals, and during an interactive drag.
+ * WHAT IT DOES NOW (2026-11-19). Nothing chases the keyboard. On iOS the
+ * keyboard moves on one known spring; the native side says WHEN it starts and
+ * WHERE it is going, and this file starts the SAME spring at the same instant,
+ * on the UI thread. Two things on one curve arrive together without either
+ * watching the other. The three ways were put side by side on the phone
+ * (the keyboard test panel, c3daf1b) and this is the one the owner picked.
  *
- * THE RULE. Nothing times its own animation against the keyboard and nothing
- * snaps on a keyboard event. A view that should rise takes its transform from
- * here, so it is where the keyboard is on every frame of the trip, both ways.
+ * Android has no such spring to copy, so there the keyboard is followed frame
+ * by frame, as before. A finger dragging the keyboard is followed on both.
+ *
+ * THE RULE. Nothing times its own animation against the keyboard, nothing
+ * snaps on a keyboard event, and nothing reads the keyboard any other way.
  *
  *   Reanimated view      useKeyboardLiftStyle({ rest, gap })      → animated style
- *   RN Animated view     useKeyboardLiftAnimated({ rest, gap })   → translateY node
  *   your own worklet     useKeyboardFrame() + keyboardLift(...)   → shared values
  *
  * `rest` is how far the view already sits above the bottom of the screen with
@@ -34,16 +38,21 @@
  * air it should keep above the keyboard once it is up.
  */
 import { useLayoutEffect, useMemo } from 'react';
-import { Animated } from 'react-native';
-import { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
-import {
-  useKeyboardAnimation,
-  useKeyboardContext,
-  useKeyboardHandler,
-} from 'react-native-keyboard-controller';
+import { Platform } from 'react-native';
+import { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { useKeyboardContext, useKeyboardHandler } from 'react-native-keyboard-controller';
+
+const IS_IOS = Platform.OS === 'ios';
 
 /** The air a bar keeps above the keyboard unless a surface asks for its own. */
 export const KEYBOARD_GAP = 8;
+
+/**
+ * The spring iOS moves its keyboard on: mass 3, stiffness 1000, damping 500
+ * (what UIKit hands back as animation curve 7). Critically damped, so it never
+ * overshoots; the clamp only stops the last half point from wobbling.
+ */
+export const IOS_KEYBOARD_SPRING = { mass: 3, stiffness: 1000, damping: 500, overshootClamping: true };
 
 /**
  * How far a bar has risen, given where the keyboard is right now.
@@ -80,9 +89,16 @@ export function keyboardLift(height, progress, rest = 0, gap = 0) {
 }
 
 /**
- * The keyboard's live position as shared values: `height` in points (0 when
- * down, positive when up) and `progress` 0→1. Updated on the UI thread every
- * frame the keyboard moves — opening, closing, changing size, being dragged.
+ * The keyboard's position as shared values: `height` in points (0 when down,
+ * positive when up) and `progress` 0→1. On the UI thread, both ways, for every
+ * window including a `<Modal>`'s.
+ *
+ * Returns the shape `useAnimatedKeyboard()` used to (`keyboard.height.value`),
+ * so a surface that read the keyboard through Reanimated changes one word.
+ *
+ * Every handler below is a worklet and says so. A function reaching the UI
+ * runtime without the directive throws there, and in a release build that
+ * throw is fatal — which jest cannot see.
  */
 export function useKeyboardFrame() {
   const { reanimated } = useKeyboardContext();
@@ -100,18 +116,32 @@ export function useKeyboardFrame() {
 
   useKeyboardHandler(
     {
+      onStart: (e) => {
+        'worklet';
+        // The keyboard is about to move, and `e` is where it will END. Set
+        // off on its spring now rather than be told about each frame of it.
+        if (IS_IOS) {
+          height.value = withSpring(e.height, IOS_KEYBOARD_SPRING);
+          progress.value = withSpring(e.progress, IOS_KEYBOARD_SPRING);
+        }
+      },
       onMove: (e) => {
         'worklet';
-        height.value = e.height;
-        progress.value = e.progress;
+        // Android has no such spring to copy; follow the keyboard there.
+        if (!IS_IOS) {
+          height.value = e.height;
+          progress.value = e.progress;
+        }
       },
       onInteractive: (e) => {
         'worklet';
+        // A finger is dragging the keyboard: it is wherever the finger put it.
         height.value = e.height;
         progress.value = e.progress;
       },
       onEnd: (e) => {
         'worklet';
+        // Land exactly, whatever the spring made of the last half point.
         height.value = e.height;
         progress.value = e.progress;
       },
@@ -130,38 +160,10 @@ export function useKeyboardFrame() {
 export function useKeyboardLiftStyle({ rest = 0, gap = 0, enabled = true } = {}) {
   const keyboard = useKeyboardFrame();
   return useAnimatedStyle(() => {
+    'worklet';
     const lift = enabled
       ? keyboardLift(keyboard.height.value, keyboard.progress.value, rest, gap)
       : 0;
     return { transform: [{ translateY: -lift }] };
   }, [rest, gap, enabled]);
-}
-
-const STILL = new Animated.Value(0);
-const FAR = 4000;
-
-/**
- * The same lift for a view built on React Native's own `Animated` — a
- * `translateY` node, driven natively, never touching JS:
- *
- *   <Animated.View style={{ transform: [{ translateY: lift }] }} />
- *
- * Same motion as `keyboardLift`, written as Animated arithmetic.
- */
-export function useKeyboardLiftAnimated({ rest = 0, gap = 0, enabled = true } = {}) {
-  const { height, progress } = useKeyboardAnimation();
-  return useMemo(() => {
-    if (!enabled) return STILL;
-    const reach = rest > gap ? rest - gap : 0;
-    const extra = gap > rest ? gap - rest : 0;
-    // `height` is 0 → −keyboardHeight, which is already a translateY. Shifted
-    // by `reach` and clamped at 0, it is the bar standing still until the
-    // keyboard gets to it, then riding its edge.
-    const pushed = (reach ? Animated.add(height, reach) : height).interpolate({
-      inputRange: [-FAR, 0],
-      outputRange: [-FAR, 0],
-      extrapolate: 'clamp',
-    });
-    return extra ? Animated.add(pushed, Animated.multiply(progress, -extra)) : pushed;
-  }, [height, progress, rest, gap, enabled]);
 }

@@ -12,7 +12,8 @@ import {
 import AppTextInput from '../../../components/AppTextInput';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
-import { useKeyboardLiftAnimated } from '../../../utils/keyboardMotion';
+import Reanimated from 'react-native-reanimated';
+import { useKeyboardLiftStyle } from '../../../utils/keyboardMotion';
 
 /**
  * TerminalConsole — a vintage green-phosphor terminal for the `/terminal`
@@ -60,7 +61,7 @@ export default function TerminalConsole({
   // native window — which Reanimated's keyboard hook cannot see into. The
   // app's keyboard source (utils/keyboardMotion) can: the input column rides
   // the keyboard frame for frame on a native-driven transform, no relayout.
-  const kbY = useKeyboardLiftAnimated({ enabled: fullscreen });
+  const keyboardRide = useKeyboardLiftStyle({ enabled: fullscreen });
 
   // Auto-scroll to the newest line.
   useEffect(() => {
@@ -152,7 +153,7 @@ export default function TerminalConsole({
           {/* faint scanline / vignette wash */}
           <View pointerEvents="none" style={styles.scan} />
           {Header}
-          <Animated.View style={[styles.flex, { transform: [{ translateY: kbY }] }]}>
+          <Reanimated.View style={[styles.flex, keyboardRide]}>
             {Lines}
             <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
               <Text style={styles.inputPrompt}>{`${shortCwd(cwd)} >`}</Text>
@@ -174,7 +175,7 @@ export default function TerminalConsole({
                 <Icon name="play" size={18} color={VT.bg} />
               </TouchableOpacity>
             </View>
-          </Animated.View>
+          </Reanimated.View>
         </View>
       </Modal>
     );

@@ -100,10 +100,10 @@ import { FlashList } from '@shopify/flash-list';
 import Reanimated, {
   useSharedValue,
   useAnimatedStyle,
-  useAnimatedKeyboard,
   withSpring,
   runOnJS,
 } from 'react-native-reanimated';
+import { useKeyboardFrame } from '../../../utils/keyboardMotion';
 import TimelineScrubber from './TimelineScrubber';
 import { dockOccupied } from '../../../components/tabBarLayout';
 import MusicVault from './MusicVault';
@@ -1554,7 +1554,7 @@ export default function MediaGallery({ onClose, autoUpload = false, kind = null 
   // It rides on a WRAPPER around the card, not the card itself: the card's
   // transform belongs to the RN Animated drag/dismiss, and an RN Animated value
   // and a Reanimated style can't share one node.
-  const uploadKeyboard = useAnimatedKeyboard();
+  const uploadKeyboard = useKeyboardFrame();
   // Measured card height, so the lift can be exact instead of a guess. Shared
   // value (not state) — it's read inside the worklet every frame.
   const uploadCardH = useSharedValue(0);

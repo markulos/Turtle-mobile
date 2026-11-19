@@ -73,7 +73,7 @@ import {
   ActivityIndicator, Alert, BackHandler, Linking, Pressable, StyleSheet, Text, View,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
+import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Image } from 'expo-image';
@@ -104,7 +104,7 @@ import { panelTopInset, panelBottomInset } from '../../../components/tabBarLayou
 import { depth } from '../../../utils/surfaceDepth';
 import { inkOn } from '../../../utils/accentColor';
 import { tapHaptic, impactHaptic, notifyHaptic } from '../../../utils/haptics';
-import { KEYBOARD_GAP, keyboardLift } from '../../../utils/keyboardMotion';
+import { KEYBOARD_GAP, keyboardLift, useKeyboardFrame } from '../../../utils/keyboardMotion';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { copyText } from '../../../utils/copyText';
 import { FROST_OVERLAP } from '../../../utils/frostedChat';
@@ -213,7 +213,7 @@ function FriendChatPage({
   // keyboard height) and lifted by the main chat's formula — by the owner's
   // request, so the two chats are the same mechanism end to end rather than
   // two that are meant to agree.
-  const keyboard = useAnimatedKeyboard();
+  const keyboard = useKeyboardFrame();
   const keyboardRide = useAnimatedStyle(() => ({
     transform: [{ translateY: -keyboardLift(keyboard.height.value, 1, dockRest, KEYBOARD_GAP) }],
   }), [dockRest]);

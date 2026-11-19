@@ -37,7 +37,8 @@ import AppTextInput from '../../../components/AppTextInput';
 import AnimalAvatar from '../../../components/AnimalAvatar';
 import { resolveAvatarUrl } from '../../../utils/avatarUrl';
 import { usePondAccess } from '../../../utils/usePondAccess';
-import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
+import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
+import { useKeyboardFrame } from '../../../utils/keyboardMotion';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -390,7 +391,7 @@ export default function VaultShareSheet({ visible, subject, api, theme, onClose,
   const rest = Math.max(bottomInset, insets.bottom, 14);
   // The password field rides the keyboard frame-for-frame. The lift cancels the
   // resting clearance — mixing the two parks the card above the keyboard.
-  const keyboard = useAnimatedKeyboard();
+  const keyboard = useKeyboardFrame();
   const keyboardLift = useAnimatedStyle(() => {
     'worklet';
     return { transform: [{ translateY: -Math.max(keyboard.height.value - rest, 0) }] };

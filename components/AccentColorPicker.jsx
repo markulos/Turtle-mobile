@@ -38,7 +38,8 @@ import { panelBottomInset } from './tabBarLayout';
 import { useTheme } from '../context/ThemeContext';
 import { useSheetDismiss } from '../utils/useSheetDismiss';
 import { useSuppressEdgeSwipe } from '../utils/edgeSwipeGuard';
-import { useKeyboardLiftAnimated } from '../utils/keyboardMotion';
+import Reanimated from 'react-native-reanimated';
+import { useKeyboardLiftStyle } from '../utils/keyboardMotion';
 import { depth } from '../utils/surfaceDepth';
 import { impactHaptic, markGesture } from '../utils/haptics';
 import { INPUT_FIELD } from '../utils/inputField';
@@ -195,7 +196,7 @@ export default function AccentColorPicker({ visible, initialColor, onSelect, onC
   // on a native-driven transform (utils/keyboardMotion) — it is short enough
   // that clearing the keyboard entirely leaves everything reachable, so there
   // is nothing to scroll.
-  const lift = useKeyboardLiftAnimated({ enabled: visible });
+  const keyboardRide = useKeyboardLiftStyle({ enabled: visible });
 
   // Seed from the live accent on every open, and slide up.
   useEffect(() => {
@@ -280,6 +281,10 @@ export default function AccentColorPicker({ visible, initialColor, onSelect, onC
           <Pressable style={StyleSheet.absoluteFill} onPress={handleCancel} />
         </Animated.View>
 
+        {/* The keyboard's lift is a wrapper of its own: the sheet's slide and
+            drag are React Native Animated, the keyboard is Reanimated, and one
+            view cannot take a transform from both. */}
+        <Reanimated.View style={keyboardRide}>
         <Animated.View
           {...panHandlers}
           style={[
@@ -288,7 +293,7 @@ export default function AccentColorPicker({ visible, initialColor, onSelect, onC
             // floating dock is not over this sheet: the inset is the home
             // indicator plus a breath, never the dock's height.
             { paddingBottom: panelBottomInset(insets.bottom, false) },
-            { transform: [{ translateY: sheetY }, { translateY: lift }, ...sheetDragStyle.transform] },
+            { transform: [{ translateY: sheetY }, ...sheetDragStyle.transform] },
           ]}
         >
           <View>
@@ -378,6 +383,7 @@ export default function AccentColorPicker({ visible, initialColor, onSelect, onC
             <Text style={styles.useText} numberOfLines={1}>Use this colour</Text>
           </TouchableOpacity>
         </Animated.View>
+        </Reanimated.View>
       </View>
     </Modal>
   );

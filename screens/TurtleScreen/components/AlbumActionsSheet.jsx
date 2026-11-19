@@ -28,7 +28,8 @@ import {
   View,
 } from 'react-native';
 import AppTextInput from '../../../components/AppTextInput';
-import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
+import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
+import { useKeyboardFrame } from '../../../utils/keyboardMotion';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { impactHaptic, notifyHaptic, tapHaptic } from '../../../utils/haptics';
 import { useSheetDismiss } from '../../../utils/useSheetDismiss';
@@ -82,7 +83,7 @@ export default function AlbumActionsSheet({
   // The rename field rides the keyboard frame-for-frame. The card already
   // rests on `bottomInset` of dock clearance, so the lift CANCELS exactly that
   // clearance — mixing the two leaves the card floating over the keyboard.
-  const keyboard = useAnimatedKeyboard();
+  const keyboard = useKeyboardFrame();
   const keyboardLift = useAnimatedStyle(() => {
     'worklet';
     return { transform: [{ translateY: -Math.max(keyboard.height.value - bottomInset, 0) }] };
