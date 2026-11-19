@@ -102,6 +102,10 @@ import {
 } from '../../utils/pinnedNotes';
 // Tab predicates + the feedback tag vocabulary (pure, unit-tested separately).
 import { APP_TAGS, PLATFORM_TAGS, isFeedbackNote, matchesFilter, topicChipsFor } from './feedbackFilter';
+// The three pages and the arithmetic the pager shares with its pill.
+import {
+  DEFAULT_NOTE_PAGE, NOTE_PAGES, NOTE_SEGMENTS, pageAtOffset, pageIndex,
+} from './notePages';
 // The note's own files — fetched from its media ids and shown in the note,
 // matching the web reading pane. Tapping an image opens AttachmentViewer, which
 // takes URLs and so never routes through the media vault.
@@ -349,7 +353,8 @@ export default function NotesScreen() {
   const mediaOrigin = (getMediaBaseUrl ? getMediaBaseUrl() : getBaseUrl()).replace(/\/api$/, '');
 
   // ── UI state ────────────────────────────────────────────
-  const [filter, setFilter] = useState(FILTER_ALL);
+  // The kind IS the page now (see notePages), so the screen opens on one.
+  const [filter, setFilter] = useState(DEFAULT_NOTE_PAGE);
   // Completion scope, the Planner's own three keys. Defaults to OPEN, like the
   // Planner does: a ticked to-do is a thing you have finished thinking about,
   // and a list that leads with a month of them buries the ones still waiting.
@@ -1044,7 +1049,10 @@ export default function NotesScreen() {
   // chips, one lit in each. With the rails behind a key, the TITLE has to carry
   // the answer — a silently narrowed list with nothing saying so is the one
   // thing this change must not cost.
-  const kindScoped = filter !== FILTER_ALL;
+  // The kind is WHERE YOU ARE, not a narrowing of where you are: there is no
+  // such thing as clearing it, and counting it as an active filter would make
+  // the header claim a filter on every page of the screen.
+  const kindScoped = false;
   const topicScoped = !!selectedTopic;
   // Open-only is the resting state of this list, not something done TO it, so
   // it neither lights the key nor adds to its badge — the same rule the
@@ -1097,6 +1105,85 @@ export default function NotesScreen() {
   // is the board. Both are chips over ONE list now; the four-page pager that
   // used to carry the kind — and the underline, the label measuring and the
   // scroll-driven interpolations that kept it in step — went with it.
+  /**
+   * ── THE THREE PAGES ────────────────────────────────────────────────────
+   *
+   * Mark, 2026-11-18: "similar to planner page have three tabs that can be
+   * translate moved from one tab to the next that is split between to-do,
+   * notes, feedback."
+   *
+   * Built the planner's way (screens/TasksScreen/index): three pages side by
+   * side in a paging ScrollView, with the live offset on an Animated.Value so
+   * the pill tracks the swipe 1:1 rather than snapping after it. `filter` is
+   * still the kind — it is threaded through the composer, the counts and the
+   * empty states — and the pager is now the only thing that sets it.
+   */
+  const pagerRef = useRef(null);
+  const pagerScrollX = useRef(new Animated.Value(0)).current;
+  /**
+   * The page box.
+   *
+   * WIDTH is seeded from the window so the three pages have a real width on
+   * the very first paint — before onLayout, `'100%'` inside a horizontal
+   * scroller resolves against the content view and all three would stack at
+   * the wrong size for one frame.
+   *
+   * HEIGHT is measured, and it has to be: each page holds a FlatList, and a
+   * list inside a ScrollView needs a bounded height or it has nothing to
+   * scroll within (the planner's pager carries the same note).
+   */
+  const { width: windowWidth } = useWindowDimensions();
+  const [pagerBox, setPagerBox] = useState({ width: windowWidth, height: 0 });
+  const pagerWidth = pagerBox.width;
+  /**
+   * The tab track's width, measured.
+   *
+   * The pill's slot is a fraction of the track and its travel is in POINTS —
+   * `translateX` takes numbers, so the control cannot express "one third of
+   * myself" the way a width can. Until the layout lands the pill has no
+   * width and does not move, which is correct for a screen nobody has seen.
+   */
+  const [tabTrackW, setTabTrackW] = useState(0);
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
+  /** Tap a tab → set the kind AND glide to its page. */
+  const goToPage = useCallback((kind) => {
+    setFilter(kind);
+    if (pagerWidth > 0) {
+      pagerRef.current?.scrollTo({ x: pageIndex(kind) * pagerWidth, y: 0, animated: true });
+    }
+  }, [pagerWidth]);
+  /**
+   * Settle after a swipe → adopt the page we landed on.
+   *
+   * No re-scroll here, so it cannot fight goToPage's programmatic one.
+   */
+  const onPagerSettle = useCallback((e) => {
+    const kind = pageAtOffset(e.nativeEvent.contentOffset.x, pagerWidth);
+    setFilter((prev) => (prev === kind ? prev : kind));
+  }, [pagerWidth]);
+  /**
+   * Seeded ONCE, imperatively, on the first layout that reports a width — and
+   * NOT with a `contentOffset` prop: rebuilding that object each render makes
+   * RN re-apply it to the native ScrollView, which on Android yanks the
+   * scroll back mid-swipe on any unrelated re-render. The planner's note on
+   * the same line has the history.
+   */
+  const pagerSeeded = useRef(false);
+  useEffect(() => {
+    // Gated on a measured HEIGHT as well: a scroll issued against content the
+    // native view has not sized yet is silently dropped, which would leave the
+    // pill on one page and the pager on another.
+    if (pagerSeeded.current || !(pagerBox.width > 0) || !(pagerBox.height > 0)) return;
+    pagerSeeded.current = true;
+    const x = pageIndex(filterRef.current) * pagerBox.width;
+    if (x <= 0) return;
+    const raf = requestAnimationFrame(() => {
+      pagerRef.current?.scrollTo({ x, y: 0, animated: false });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [pagerBox.width, pagerBox.height]);
+
   // The list: search filter (Tier 1-3, see visibleNotes) + the kind filter +
   // the active topic filter. Notes are few. Still takes the kind as an ARGUMENT
   // rather than reading `filter` — the counts row calls it once per kind.
@@ -1397,7 +1484,7 @@ export default function NotesScreen() {
               <ActiveFilterChip
                 label={kindLabel}
                 icon="shape-outline"
-                onClear={() => setFilter(FILTER_ALL)}
+                onClear={() => setSelectedTopic(null)}
                 accessibilityLabel={`Clear the ${kindLabel} filter`}
                 testID="notes-clear-kind"
                 theme={theme}
@@ -1419,9 +1506,67 @@ export default function NotesScreen() {
         </View>
       )}
 
-      {/* Body — ONE page. It was a four-page pager, one per kind, and the kinds
-          were tabs you swiped between; they are one filter behind the header's
-          key now, so there is one list and it shows whatever the filters say. */}
+      {/* THE TABS. A sliding pill driven by the pager's own offset, so it
+          moves WITH your thumb instead of jumping when you let go — the
+          planner's control, with three segments instead of four. */}
+      {!error && (
+        <View
+          style={styles.tabTrack}
+          onLayout={(e) => setTabTrackW(e.nativeEvent.layout.width || 0)}
+          testID="notes-tabs"
+        >
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.tabPill,
+              {
+                width: Math.max(0, (tabTrackW - 6) / NOTE_SEGMENTS.length),
+                backgroundColor: theme.colors.surfaceElevated,
+                borderColor: theme.colors.border,
+                transform: [{
+                  // Page widths → pill widths. Clamped, so an iOS rubber-band
+                  // past either end does not carry the pill off its track.
+                  translateX: pagerScrollX.interpolate({
+                    inputRange: [0, Math.max(1, pagerWidth) * (NOTE_SEGMENTS.length - 1)],
+                    outputRange: [0, Math.max(0, (tabTrackW - 6) / NOTE_SEGMENTS.length) * (NOTE_SEGMENTS.length - 1)],
+                    extrapolate: 'clamp',
+                  }),
+                }],
+              },
+            ]}
+          />
+          {NOTE_SEGMENTS.map((seg) => {
+            const on = filter === seg.kind;
+            return (
+              <TouchableOpacity
+                key={seg.kind}
+                testID={`notes-tab-${seg.kind}`}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: on }}
+                accessibilityLabel={`${seg.label}${counts[seg.kind] ? `, ${counts[seg.kind]}` : ''}`}
+                onPress={() => { tapHaptic(); goToPage(seg.kind); }}
+                style={styles.tabSlot}
+                activeOpacity={0.7}
+              >
+                <Icon
+                  name={seg.icon}
+                  size={15}
+                  color={on ? theme.colors.textPrimary : theme.colors.textMuted}
+                />
+                <Text
+                  numberOfLines={1}
+                  style={[styles.tabLabel, { color: on ? theme.colors.textPrimary : theme.colors.textMuted }]}
+                >
+                  {seg.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Body — THREE PAGES, swiped between (Mark, 2026-11-18). The chrome
+          above is rendered once and stays put; only the lists translate. */}
       {error ? (
         <View style={styles.center}>
           <Icon name="cloud-off-outline" size={32} color={theme.colors.textMuted} />
@@ -1435,7 +1580,34 @@ export default function NotesScreen() {
           <ActivityIndicator color={theme.colors.primary} />
         </View>
       ) : (
-        renderPageBody(filter)
+        <Animated.ScrollView
+          ref={pagerRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          // The pages' own gestures are vertical (each is a FlatList), so a
+          // horizontal page-swipe never fights them.
+          style={{ flex: 1 }}
+          onLayout={(e) => {
+            const { width, height } = e.nativeEvent.layout;
+            setPagerBox((prev) => (
+              prev.width === width && prev.height === height ? prev : { width, height }
+            ));
+          }}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { x: pagerScrollX } } }],
+            { useNativeDriver: true },
+          )}
+          scrollEventThrottle={16}
+          onMomentumScrollEnd={onPagerSettle}
+          testID="notes-pager"
+        >
+          {NOTE_PAGES.map((kind) => (
+            <View key={kind} style={{ width: pagerBox.width, height: pagerBox.height || undefined }}>
+              {renderPageBody(kind)}
+            </View>
+          ))}
+        </Animated.ScrollView>
       )}
 
       {/* FAB */}
@@ -1459,10 +1631,10 @@ export default function NotesScreen() {
         onClose={() => setFilterOpen(false)}
         theme={theme}
         isDark={isDark}
-        kinds={FILTER_ORDER}
-        kindLabels={FILTER_LABELS}
-        filter={filter}
-        onFilterChange={setFilter}
+        // The KIND is the tabs' now (Mark, 2026-11-18): a page you swipe to
+        // cannot also be a chip in a sheet, or the two disagree about which
+        // page you are on. The sheet keeps what the tabs do not say — the
+        // status scope and the topic.
         counts={counts}
         statuses={TODO_STATUS}
         statusLabels={TODO_STATUS_LABELS}
@@ -1481,7 +1653,8 @@ export default function NotesScreen() {
         // Clear puts status back to OPEN, not to Everything: clearing a filter
         // restores the default, and showing finished work is not it.
         onClearAll={() => {
-          setFilter(FILTER_ALL);
+          // NOT back to a kind: the kind is where you are standing, and
+          // clearing the filters must not move you to another page.
           setTodoStatus(TODO_STATUS_DEFAULT);
           setSelectedTopic(null);
         }}
@@ -3956,6 +4129,36 @@ const createStyles = (theme, isDark) => StyleSheet.create({
   // The app's one separator, under every screen header (STYLE-RULES §1). Its
   // own element because it is TWO lines — see `insetRule`.
   headerRule: insetRule(theme),
+  /**
+   * THE TAB TRACK — a groove the pill slides in, under the header's own rule
+   * and above the pages. The planner's control with three segments.
+   */
+  tabTrack: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    borderRadius: 11,
+    backgroundColor: theme.colors.surface,
+    padding: 3,
+  },
+  tabPill: {
+    position: 'absolute',
+    top: 3,
+    bottom: 3,
+    left: 3,
+    borderRadius: 9,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  tabSlot: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 7,
+  },
+  tabLabel: { fontSize: 13, fontWeight: '700' },
   // The title AS a key: the label and its disclosure on one line. It SHRINKS
   // (rather than flexing) so the count stays beside the words instead of being
   // pushed to the far edge — but a long topic still ellipsizes rather than

@@ -38,13 +38,6 @@ import { panelBottomInset, panelTopInset } from '../../components/tabBarLayout';
 import { SCROLL_INDICATOR } from '../../utils/scrollIndicator';
 
 /** The kind chips, in the order they read — widest scope first. */
-const KIND_ICONS = {
-  all: 'format-list-bulleted',
-  note: 'note-text-outline',
-  todo: 'checkbox-marked-circle-outline',
-  feedback: 'message-text-outline',
-};
-
 /** The status chips. Same keys and same icons as the Planner's. */
 const STATUS_ICONS = {
   todo: 'checkbox-blank-circle-outline',
@@ -106,10 +99,6 @@ export default function NotesFilterPanel({
   theme,
   isDark,
   // Kind — all / note / todo / feedback
-  kinds = [],
-  kindLabels = {},
-  filter,
-  onFilterChange,
   counts = {},
   // Status — which to-dos. 'todo' (open) is the default, so it does NOT count
   // as a narrowing: a list that hides finished work is the list, not a scope
@@ -136,8 +125,8 @@ export default function NotesFilterPanel({
   const insets = useSafeAreaInsets();
   const s = useMemo(() => panelStyles(theme, isDark), [theme, isDark]);
 
-  const scoped = (filter && filter !== 'all') || !!selectedTopic
-    || (!!status && status !== statusDefault);
+  // The kind is not one of these any more — it is the page you are on.
+  const scoped = !!selectedTopic || (!!status && status !== statusDefault);
 
   const close = useCallback(() => { onClose?.(); }, [onClose]);
 
@@ -194,33 +183,11 @@ export default function NotesFilterPanel({
           keyboardShouldPersistTaps="handled"
           testID="notes-filter-scroll"
         >
-          <Section
-            title="Kind"
-            value={kindLabels[filter] || 'All'}
-            theme={theme}
-            isDark={isDark}
-            testID="notes-filter-kind"
-          >
-            {kinds.map((k) => (
-              <Chip
-                key={k}
-                label={kindLabels[k] || k}
-                icon={KIND_ICONS[k]}
-                // "All" counts the whole list, so a badge on it is the list's
-                // own length restated — noise beside the chips that narrow.
-                count={k === 'all' ? undefined : (counts[k] || undefined)}
-                active={filter === k}
-                onPress={() => onFilterChange?.(k)}
-                theme={theme}
-                isDark={isDark}
-                testID={`notes-filter-kind-${k}`}
-              />
-            ))}
-          </Section>
-
-          {/* Status sits BELOW kind and above topic, in the order the three
-              read as one sentence: which kind of thing, how much of it is
-              still live, and under which board. */}
+          {/* THE KIND IS NOT HERE ANY MORE. Mark, 2026-11-18: the three
+              kinds are pages you swipe between (screens/NotesScreen/notePages),
+              and a page you are standing on cannot also be a chip in a sheet —
+              the two would disagree about where you are. What is left is what
+              the tabs do not say. */}
           <Section
             title="Status"
             value={statusLabels[status] || statusLabels[statusDefault] || 'Open'}
