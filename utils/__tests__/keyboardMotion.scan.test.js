@@ -57,7 +57,9 @@ const REANIMATED_HOOK_NOT_YET = [
   'screens/TurtleScreen/components/MediaGallery.jsx',
   'screens/TurtleScreen/components/TrackActionsSheet.jsx',
   'screens/TurtleScreen/components/VaultShareSheet.jsx',
-  'screens/TurtleScreen/index.jsx',
+  // The main chat no longer calls it: components/KeyboardDriver does, as ONE
+  // of three drivers the keyboard lab switches between (2026-11-18).
+  'components/KeyboardDriver.jsx',
 ];
 
 /** Still importing React Native's own KeyboardAvoidingView. */

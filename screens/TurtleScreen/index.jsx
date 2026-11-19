@@ -21,7 +21,6 @@ import {
 import { depth, insetRule } from '../../utils/surfaceDepth';
 import AppTextInput from '../../components/AppTextInput';
 import Reanimated, {
-  useAnimatedKeyboard,
   useAnimatedStyle,
   useSharedValue,
 } from 'react-native-reanimated';
@@ -53,6 +52,9 @@ import { useAuth } from '../../context/AuthContext';
 import AnimalAvatar from '../../components/AnimalAvatar';
 import { CLAUDE_MARK_LEVEL, CLAUDE_MARK_NIGHT, ledgeOffset } from '../../components/ClaudeTurtleMark';
 import ClaudeTurtleBuddy, { TYPING_LINGER_MS } from '../../components/ClaudeTurtleBuddy';
+import KeyboardDriver from '../../components/KeyboardDriver';
+import KeyboardLabStrip from '../../components/KeyboardLabStrip';
+import { useKeyboardLab } from '../../utils/keyboardLab';
 import Grain from '../../components/Grain';
 import { navBlockSurface } from '../../components/navSurface';
 import TypingIndicator from '../../components/TypingIndicator';
@@ -636,7 +638,15 @@ export default function TurtleScreen() {
   // is false), and useAnimatedKeyboard consumes the IME inset itself — so
   // Android must move the composer via this padding too, not rely on
   // adjustResize. The inputArea below therefore contributes no bottom inset.
-  const keyboard = useAnimatedKeyboard();
+  // THE keyboard's height (points, positive up): ONE shared value, which every
+  // lift below reads. What WRITES it is a driver mounted in the JSX
+  // (KeyboardDriver), chosen by the keyboard lab. This screen no longer tracks
+  // the keyboard itself — so the three ways of tracking it can be compared
+  // with only one of them running, and the winner is a one-word change.
+  // `keyboard` keeps the shape the worklets and the console always read.
+  const keyboardHeight = useSharedValue(0);
+  const keyboard = useMemo(() => ({ height: keyboardHeight }), [keyboardHeight]);
+  const keyboardLab = useKeyboardLab();
   // The resting gap under the composer — applied as the frosted BlurView's
   // own paddingBottom (see the inputArea render below), so the bar's blur+tint
   // fills the margin instead of leaving bare chat showing through. Static, so
@@ -2607,6 +2617,19 @@ export default function TurtleScreen() {
             the line under the title is in the same place, open or closed. */}
       </Reanimated.View>
 
+      {/* THE KEYBOARD TEST — temporary. Times every move of the keyboard on
+          the UI thread and switches between the ways of following it (see
+          utils/keyboardLab). Counter-lifted like the header, so it stays put
+          while the column rides the keyboard in normal chat. */}
+      <Reanimated.View
+        pointerEvents="box-none"
+        style={[styles.keyboardLabHost, { top: headerBottom + 6 }, headerCounterStyle]}
+      >
+        <KeyboardLabStrip height={keyboardHeight} inputRef={inputRef} inSession={inClaudeSession} />
+      </Reanimated.View>
+      {/* The ONE thing writing the keyboard height. Renders nothing. */}
+      <KeyboardDriver drive={keyboardLab.drive} out={keyboardHeight} />
+
       {/* History failed to load — an inline strip under the header rather than
           an alert, so it never blocks a chat that is otherwise usable (you can
           still send; the socket delivers new messages regardless). Disappears
@@ -3305,6 +3328,8 @@ export default function TurtleScreen() {
           // useAnimatedKeyboard inside the console desynced during a mid-session
           // keyboard open, sliding its top under the chat header).
           keyboard={keyboard}
+          // Keyboard lab: slide the transcript instead of resizing the panel.
+          slide={keyboardLab.console === 'slide'}
           // The console shrinks by exactly what the dock rises, so it needs the
           // same baseline the lift worklet subtracts (dockOccupied).
           dockLiftBase={dockH}
@@ -4044,6 +4069,8 @@ const createStyles = (theme, insets) =>
       backgroundColor: theme.colors.borderNeutral,
       opacity: 0.8,
     },
+    // The keyboard test panel: over the top of the chat, under the header.
+    keyboardLabHost: { position: 'absolute', left: 8, right: 8, zIndex: 150 },
     identityBar: {
       flex: 1,
       flexDirection: 'row',
