@@ -27,7 +27,7 @@ import { useTheme } from '../../../context/ThemeContext';
 import { inkOn } from '../../../utils/accentColor';
 import { blurProps, frostOverlayColor } from '../../../utils/frostedChat';
 import { impactHaptic, notifyHaptic } from '../../../utils/haptics';
-import { SCROLL_INDICATOR } from '../../../utils/scrollIndicator';
+import { scrollIndicator } from '../../../utils/scrollIndicator';
 
 // Glossy top sheen laid over the frosted blur — a soft light highlight that
 // fades out, giving the glass a polished, lit look. Subtler in dark mode.
@@ -226,6 +226,44 @@ function QuestionCard({ q, onRespond, theme, styles }) {
   );
 }
 
+const IS_IOS = Platform.OS === 'ios';
+
+/**
+ * The panel's height with the keyboard down (`rest`), with the keyboard where
+ * it is this frame (`lifted`), and what the keyboard has taken off it (`take`).
+ *
+ * Every point the dock rises is a point of headroom lost under the chat
+ * header, so the panel gives back exactly that much: the cap is the room left,
+ * and compact → expanded is interpolated inside it. Rounded to whole points:
+ * sub-point heights make Yoga re-solve this subtree on frames where nothing
+ * visibly moved.
+ *
+ * A worklet — the animated styles call it on the UI thread — and plain
+ * arithmetic, so JS calls it too.
+ */
+export function consoleHeights(lift, maxHeight, progress) {
+  'worklet';
+  const restCap = Math.max(MIN_PANEL_HEIGHT, maxHeight);
+  const liftCap = Math.max(MIN_PANEL_HEIGHT, maxHeight - lift);
+  const restCompact = Math.min(COMPACT_MAX_HEIGHT, restCap);
+  const liftCompact = Math.min(COMPACT_MAX_HEIGHT, liftCap);
+  const rest = Math.round(restCompact + (restCap - restCompact) * progress);
+  const lifted = Math.round(liftCompact + (liftCap - liftCompact) * progress);
+  return { rest, lifted, take: rest - lifted };
+}
+
+/**
+ * How far the transcript slides UP inside its box while the keyboard has
+ * `take` points of the panel. `slack` is the empty room under the log's last
+ * line: a short log has plenty and need not move at all; a log that fills the
+ * box has none and rides the whole way, so its newest line stays in view.
+ */
+export function transcriptShift(take, slack) {
+  'worklet';
+  const shift = take - slack;
+  return shift > 0 ? shift : 0;
+}
+
 export default function ClaudeConsole({ transcript = [], active, live = true, onToggleLive, mode, permissions = [], onRespondPermission, questions = [], onRespondQuestion, expanded, keyboard, maxHeight = COMPACT_MAX_HEIGHT, dockLiftBase = 0 }) {
   const { theme } = useTheme();
   const styles = createStyles(theme);
@@ -283,14 +321,69 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
     // desync. Every point the dock rises is a point of headroom lost under the
     // chat header, so the panel gives back exactly that much.
     const lift = Math.max(kb - dockLiftBase, 0);
-    const cap = Math.max(MIN_PANEL_HEIGHT, maxHeight - lift);
-    const compactH = Math.min(COMPACT_MAX_HEIGHT, cap);
-    // Interpolate compact → expanded by the toggle progress; both already fit
-    // the room, so the keyboard shrink rides along for free. Rounded to whole
-    // points: sub-point heights make Yoga re-solve this subtree on frames where
-    // nothing visibly moved.
-    return { height: Math.round(compactH + (cap - compactH) * expandProgress.value) };
+    return { height: consoleHeights(lift, maxHeight, expandProgress.value).lifted };
   });
+
+  // ── THE TRANSCRIPT'S BOX KEEPS ONE SIZE WHILE THE KEYBOARD MOVES ──────────
+  // The panel above changes height every frame, and the transcript used to
+  // fill it (flex: 1) — so the ScrollView was resized every frame too. On the
+  // way UP that is harmless: a box that shrinks keeps its scroll position.
+  // On the way DOWN it grows, and a log scrolled to its end is then past the
+  // new end on every frame: iOS re-clamps the offset, and React Native
+  // answers every one of those with a state update — a whole-tree commit,
+  // per frame, on top of the one that moves the panel. That was the keyboard
+  // lagging on its way down, only in a session, only with a log loaded.
+  //
+  // So the box no longer changes: it hangs out of the bottom of its slot by
+  // exactly what the keyboard took (`bottom: -take`, so its height is the
+  // slot's plus `take` — the resting height, always), the slot clips it, and
+  // the log slides up inside on a transform to keep its newest line in view.
+  // Nothing is scrolled, so there is nothing to clamp.
+  //
+  // iOS only. Android has no such clamp-per-frame cost and keeps the resize.
+  const slack = useSharedValue(0);
+  const boxHeightRef = useRef(0);
+  const contentHeightRef = useRef(0);
+  const transcriptHoldStyle = useAnimatedStyle(() => {
+    'worklet';
+    if (!IS_IOS) return { bottom: 0, transform: [{ translateY: 0 }] };
+    const kb = keyboard ? keyboard.height.value : 0;
+    const lift = Math.max(kb - dockLiftBase, 0);
+    const take = consoleHeights(lift, maxHeight, expandProgress.value).take;
+    return { bottom: -take, transform: [{ translateY: -transcriptShift(take, slack.value) }] };
+  });
+
+  // With the keyboard up, the top of the box is under the slot's edge by as
+  // much as the log slid. Told to the ScrollView as a top inset — ONCE, after
+  // the keyboard has settled — so the first lines can still be pulled into
+  // view. Never during the ride: this is state.
+  const keyboardUpRef = useRef(0);
+  const [hiddenTop, setHiddenTop] = useState(0);
+  const roomRef = useRef({});
+  roomRef.current = { dockLiftBase, maxHeight, expanded };
+  const noteTranscript = () => {
+    const box = boxHeightRef.current;
+    const free = box > 0 ? Math.max(box - contentHeightRef.current, 0) : 0;
+    slack.value = free;
+    let next = 0;
+    if (IS_IOS && keyboardUpRef.current > 0 && box > 0) {
+      const room = roomRef.current;
+      const lift = Math.max(keyboardUpRef.current - room.dockLiftBase, 0);
+      next = transcriptShift(consoleHeights(lift, room.maxHeight, room.expanded ? 1 : 0).take, free);
+    }
+    setHiddenTop((prev) => (prev === next ? prev : next));
+  };
+  useEffect(() => {
+    noteTranscript();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, maxHeight, dockLiftBase]);
+  // The inset has just come on (the keyboard is up). Setting an inset must not
+  // move the log, and on a log already at its end it does not — but say so,
+  // rather than depend on it: the newest line is what has to be in view.
+  const topHidden = hiddenTop > 0;
+  useEffect(() => {
+    if (topHidden) scrollRef.current?.scrollToEnd({ animated: false });
+  }, [topHidden]);
 
   // Keep the newest line in view as output streams in. Re-runs on
   // expand too so opening the full view lands on the latest line. Skipped while
@@ -307,10 +400,17 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
   // view the moment the composer is focused, with no new output to re-trigger
   // the effect above. One listener, fired once per transition (not per frame).
   useEffect(() => {
-    const sub = Keyboard.addListener('keyboardDidShow', () => {
+    const shown = Keyboard.addListener('keyboardDidShow', (e) => {
+      keyboardUpRef.current = e?.endCoordinates?.height || 0;
+      noteTranscript();
       scrollRef.current?.scrollToEnd({ animated: true });
     });
-    return () => sub.remove();
+    const hidden = Keyboard.addListener('keyboardDidHide', () => {
+      keyboardUpRef.current = 0;
+      noteTranscript();
+    });
+    return () => { shown.remove(); hidden.remove(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const isLogin = mode === 'login';
@@ -382,7 +482,11 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
         </Animated.View>
       )}
 
-      <ScrollView {...SCROLL_INDICATOR}
+      {/* The slot is what the panel has left for the log; the box inside it
+          keeps its resting height (see transcriptHoldStyle). */}
+      <View style={styles.bodySlot}>
+      <Animated.View style={[styles.bodyHold, transcriptHoldStyle]}>
+      <ScrollView {...scrollIndicator({ top: hiddenTop })}
         ref={scrollRef}
         // ALWAYS flex:1. The panel now has a concrete Reanimated-driven height
         // in BOTH states, so the body must fill it every frame of the resize —
@@ -393,6 +497,17 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
         style={[styles.body, styles.bodyExpanded]}
         contentContainerStyle={styles.bodyContent}
         keyboardShouldPersistTaps="handled"
+        // What the slot hides of the top of the box while the keyboard is up
+        // (iOS; zero otherwise) — the log can be pulled down past it.
+        contentInset={{ top: hiddenTop, left: 0, bottom: 0, right: 0 }}
+        onLayout={(e) => {
+          boxHeightRef.current = e.nativeEvent.layout.height;
+          noteTranscript();
+        }}
+        onContentSizeChange={(w, h) => {
+          contentHeightRef.current = h;
+          noteTranscript();
+        }}
       >
         {transcript.length === 0 ? (
           <Text style={styles.metaLine}>{isLogin ? 'Starting sign-in…' : 'Starting Claude…'}</Text>
@@ -431,6 +546,8 @@ export default function ClaudeConsole({ transcript = [], active, live = true, on
           );
         })}
       </ScrollView>
+      </Animated.View>
+      </View>
     </Animated.View>
   );
 }
@@ -501,6 +618,12 @@ const createStyles = (theme) => StyleSheet.create({
     borderColor: `${theme.colors.accentWarning}55`,
   },
   pausedText: { flex: 1, fontSize: 12, color: theme.colors.textSecondary, lineHeight: 16 },
+  // What the panel has left for the log. Clips the box, which is taller than
+  // it whenever the keyboard is up.
+  bodySlot: { flex: 1, overflow: 'hidden' },
+  // The box: pinned to the slot on three sides, its bottom driven by the
+  // keyboard so that its HEIGHT never changes.
+  bodyHold: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   body: { paddingHorizontal: 14 },
   // The panel has a concrete (Reanimated-animated) height in BOTH states, so
   // the scroll body fills the remaining space (flex:1) in both — letting the
