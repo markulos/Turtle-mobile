@@ -1161,9 +1161,55 @@ export default function NotesScreen() {
    * myself" the way a width can. Until the layout lands the pill has no
    * width and does not move, which is correct for a screen nobody has seen.
    */
-  const [tabTrackW, setTabTrackW] = useState(0);
+  /**
+   * EACH TAB'S MEASURED BOX.
+   *
+   * Mark, 2026-11-18: these tabs should be "the same style as the tabs in
+   * planner with the underline and same translation and active animation and
+   * style". So this is the planner's control, not a copy of its look: the bar
+   * is sized to the tab it is under, and a tab's width is not computable
+   * (font metrics, the icon and the user's font scale all land in it), so
+   * every tab reports its own.
+   */
+  const [tabLayouts, setTabLayouts] = useState({});
+  const measureTab = useCallback((kind, x, w) => {
+    const nx = Math.round(x);
+    const nw = Math.round(w);
+    if (!nw) return;
+    // Functional update + no-op guard: onLayout fires on every re-measure
+    // (rotation, font scale), and an unconditional setState here would loop.
+    setTabLayouts((prev) => {
+      const cur = prev[kind];
+      if (cur && cur.x === nx && cur.width === nw) return prev;
+      return { ...prev, [kind]: { x: nx, width: nw } };
+    });
+  }, []);
   const filterRef = useRef(filter);
   filterRef.current = filter;
+  /**
+   * THE BAR'S TWO ENDS, both as transforms.
+   *
+   * The native animated module handles transforms and opacity only, so
+   * `width` is out: the bar is 1pt wide and SCALED to the live tab, and the
+   * translate places its left edge. Derived from the segment list rather
+   * than written out per page — a hand-listed range is exactly what breaks,
+   * silently and by parking the bar under the wrong label, the day a tab is
+   * added.
+   */
+  const tabFallback = (i) => ({ x: i * 110, width: 84 });
+  const tabBoxes = NOTE_SEGMENTS.map((seg, i) => tabLayouts[seg.kind] || tabFallback(i));
+  const pageStops = NOTE_SEGMENTS.map((_, i) => i * (pagerWidth || 1));
+  const tabUnderlineX = pagerScrollX.interpolate({
+    inputRange: pageStops,
+    outputRange: tabBoxes.map((b) => b.x),
+    extrapolate: 'clamp',
+  });
+  const tabUnderlineScale = pagerScrollX.interpolate({
+    inputRange: pageStops,
+    outputRange: tabBoxes.map((b) => b.width),
+    extrapolate: 'clamp',
+  });
+
   /** Tap a tab → set the kind AND glide to its page. */
   const goToPage = useCallback((kind) => {
     setFilter(kind);
@@ -1524,59 +1570,61 @@ export default function NotesScreen() {
         </View>
       )}
 
-      {/* THE TABS. A sliding pill driven by the pager's own offset, so it
-          moves WITH your thumb instead of jumping when you let go — the
-          planner's control, with three segments instead of four. */}
+      {/* THE TABS — the planner's control, with three segments.
+          Mark, 2026-11-18: "the same style as the tabs in planner with the
+          underline and same translation and active animation and style."
+
+          Both ends of the bar's move are TRANSFORMS, which is what keeps it
+          on the native driver: it is 1pt wide and scaled to the live tab's
+          measured width, with its origin on the left so the translate places
+          its left edge. Square ends, deliberately — scaleX on a rounded bar
+          smears the caps into a lens. */}
       {!error && (
-        <View
-          style={styles.tabTrack}
-          onLayout={(e) => setTabTrackW(e.nativeEvent.layout.width || 0)}
-          testID="notes-tabs"
-        >
+        <View style={styles.tabTrack} testID="notes-tabs">
           <Animated.View
             pointerEvents="none"
             style={[
-              styles.tabPill,
-              {
-                width: Math.max(0, (tabTrackW - 6) / NOTE_SEGMENTS.length),
-                backgroundColor: theme.colors.surfaceElevated,
-                borderColor: theme.colors.border,
-                transform: [{
-                  // Page widths → pill widths. Clamped, so an iOS rubber-band
-                  // past either end does not carry the pill off its track.
-                  translateX: pagerScrollX.interpolate({
-                    inputRange: [0, Math.max(1, pagerWidth) * (NOTE_SEGMENTS.length - 1)],
-                    outputRange: [0, Math.max(0, (tabTrackW - 6) / NOTE_SEGMENTS.length) * (NOTE_SEGMENTS.length - 1)],
-                    extrapolate: 'clamp',
-                  }),
-                }],
-              },
+              styles.tabUnderline,
+              { transform: [{ translateX: tabUnderlineX }, { scaleX: tabUnderlineScale }] },
             ]}
           />
-          {NOTE_SEGMENTS.map((seg) => {
-            const on = filter === seg.kind;
+          {NOTE_SEGMENTS.map((seg, i) => {
+            // 1:1 scroll physics: full strength on its own page, nothing on
+            // either neighbour, cross-faded across the swipe between.
+            const inputRange = [(i - 1) * pagerWidth, i * pagerWidth, (i + 1) * pagerWidth];
+            const activeOp = pagerScrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
+            // 0.6, not 1: an inactive tab is still legible, still the same
+            // ink, just plainly not the one you are on.
+            const inactiveOp = pagerScrollX.interpolate({ inputRange, outputRange: [0.6, 0, 0.6], extrapolate: 'clamp' });
             return (
               <TouchableOpacity
                 key={seg.kind}
-                testID={`notes-tab-${seg.kind}`}
+                // The TAB is measured, not its label: the bar underlines the
+                // whole thing, icon included.
+                onLayout={(e) => measureTab(seg.kind, e.nativeEvent.layout.x, e.nativeEvent.layout.width)}
+                style={[styles.tabSeg, i === NOTE_SEGMENTS.length - 1 && styles.tabSegLast]}
+                onPressIn={() => tapHaptic()}
+                onPress={() => goToPage(seg.kind)}
+                activeOpacity={0.8}
                 accessibilityRole="tab"
-                accessibilityState={{ selected: on }}
+                accessibilityState={{ selected: filter === seg.kind }}
                 accessibilityLabel={`${seg.label}${counts[seg.kind] ? `, ${counts[seg.kind]}` : ''}`}
-                onPress={() => { tapHaptic(); goToPage(seg.kind); }}
-                style={styles.tabSlot}
-                activeOpacity={0.7}
+                testID={`notes-tab-${seg.kind}`}
               >
-                <Icon
-                  name={seg.icon}
-                  size={15}
-                  color={on ? theme.colors.textPrimary : theme.colors.textMuted}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={[styles.tabLabel, { color: on ? theme.colors.textPrimary : theme.colors.textMuted }]}
-                >
-                  {seg.label}
-                </Text>
+                {/* Two stacked rows. Cross-fading opacities beats recolouring:
+                    an opacity rides the native driver, a colour does not. The
+                    ACTIVE row is absolute so the pair never affect each
+                    other's layout, and the INACTIVE one — the lighter weight —
+                    is what sizes the tab, so its width does not jump by a
+                    point as the weight cross-fades under it. */}
+                <Animated.View style={[styles.tabSegRow, styles.tabSegRowActive, { opacity: activeOp }]}>
+                  <Icon name={seg.icon} size={13} color={theme.colors.textPrimary} />
+                  <Text style={[styles.tabSegText, styles.tabSegTextActive]} numberOfLines={1}>{seg.label}</Text>
+                </Animated.View>
+                <Animated.View style={[styles.tabSegRow, { opacity: inactiveOp }]}>
+                  <Icon name={seg.icon} size={13} color={theme.colors.textPrimary} />
+                  <Text style={[styles.tabSegText, styles.tabSegTextInactive]} numberOfLines={1}>{seg.label}</Text>
+                </Animated.View>
               </TouchableOpacity>
             );
           })}
@@ -4280,36 +4328,56 @@ const createStyles = (theme, isDark) => StyleSheet.create({
   // The app's one separator, under every screen header (STYLE-RULES §1). Its
   // own element because it is TWO lines — see `insetRule`.
   headerRule: insetRule(theme),
-  /**
-   * THE TAB TRACK — a groove the pill slides in, under the header's own rule
-   * and above the pages. The planner's control with three segments.
-   */
+  // ── The tabs ──────────────────────────────────────────────────────────
+  // The planner's control (screens/TasksScreen/index), three segments wide.
+  // Mark, 2026-11-18: the same underline, translation, active animation and
+  // style — so these are its measurements, not a second set that looks near
+  // enough.
   tabTrack: {
+    paddingHorizontal: 16,
+    height: 40,
     flexDirection: 'row',
-    marginHorizontal: 16,
-    marginTop: 8,
-    marginBottom: 4,
-    borderRadius: 11,
-    backgroundColor: theme.colors.surface,
-    padding: 3,
+    alignItems: 'stretch',
+    position: 'relative',
+    marginBottom: 6,
   },
-  tabPill: {
+  tabUnderline: {
     position: 'absolute',
-    top: 3,
-    bottom: 3,
-    left: 3,
-    borderRadius: 9,
-    borderWidth: StyleSheet.hairlineWidth,
+    bottom: 0,
+    // ONE POINT wide, scaled to the live tab. Square, and not as a
+    // compromise: scaleX on a rounded bar stretches the caps into a lens.
+    //
+    // left:0, NOT the track's padding: a tab's measured `x` already includes
+    // the container's padding (Yoga gives a child's layout.x from the
+    // parent's border box), so adding it again would park the bar one margin
+    // to the right of the tab it belongs under.
+    left: 0,
+    width: 1,
+    height: 2.5,
+    transformOrigin: 'left',
+    // THE highlight, not the ink: the bar is the one thing here that says
+    // which page you are on, and the accent is what says 'active' everywhere
+    // else in the app.
+    backgroundColor: theme.colors.accent || theme.colors.accentInfo,
   },
-  tabSlot: {
-    flex: 1,
+  // Sized to its own content, with the gap AFTER it. The gap is the only
+  // thing separating two tabs, so it does all the work of telling them apart.
+  tabSeg: { justifyContent: 'center', alignItems: 'center', marginRight: 30, zIndex: 1 },
+  tabSegLast: { marginRight: 0 },
+  tabSegRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 7,
+    // Tighter than the gap BETWEEN tabs, by a wide margin: an icon and its
+    // word have to read as one thing, or the eye counts six items in the row
+    // instead of three.
+    gap: 4,
   },
-  tabLabel: { fontSize: 13, fontWeight: '700' },
+  tabSegRowActive: { position: 'absolute' },
+  tabSegText: { fontSize: 13, letterSpacing: 0 },
+  tabSegTextActive: { fontWeight: '700', color: theme.colors.textPrimary },
+  // The SAME ink as the active label — the opacity above is what separates
+  // them. A second, dimmer colour under a 60% opacity compounds into a smudge.
+  tabSegTextInactive: { fontWeight: '500', color: theme.colors.textPrimary },
   // The title AS a key: the label and its disclosure on one line. It SHRINKS
   // (rather than flexing) so the count stays beside the words instead of being
   // pushed to the far edge — but a long topic still ellipsizes rather than

@@ -45,22 +45,54 @@ describe('the three pages', () => {
     expect(SRC).not.toMatch(/\['todo', 'note', 'feedback'\]/);
   });
 
-  test('THE PILL TRACKS THE SWIPE, rather than snapping after it', () => {
-    // The whole of "translate moved from one tab to the next": the control's
+  test('THE UNDERLINE TRACKS THE SWIPE, rather than snapping after it', () => {
+    // The whole of "translate moved from one tab to the next": the bar's
     // offset is the pager's own, on the native thread.
     expect(SRC).toMatch(/onScroll=\{Animated\.event\(/);
     expect(SRC).toMatch(/contentOffset: \{ x: pagerScrollX \}/);
     expect(SRC).toMatch(/useNativeDriver: true/);
-    expect(SRC).toMatch(/transform: \[\{[\s\S]{0,400}?translateX: pagerScrollX\.interpolate/);
+    expect(SRC).toMatch(/transform: \[\{ translateX: tabUnderlineX \}, \{ scaleX: tabUnderlineScale \}\]/);
     // Clamped, so an iOS rubber-band past either end leaves it on its track.
     expect(SRC).toMatch(/extrapolate: 'clamp'/);
   });
 
-  test('the pill’s WIDTH and its TRAVEL are the same slot', () => {
-    // Two expressions of "one third of the track" is how a pill ends up
-    // half a segment out at the far end.
-    const slot = /Math\.max\(0, \(tabTrackW - 6\) \/ NOTE_SEGMENTS\.length\)/;
-    expect(SRC.match(new RegExp(slot.source, 'g')) || []).toHaveLength(2);
+  test('BOTH ENDS OF THE BAR ARE TRANSFORMS, which is what keeps it native', () => {
+    // Mark, 2026-11-18: the planner's underline, translation and active
+    // animation. The native animated module handles transforms and opacity
+    // only — animating `width` would silently drop the whole control onto
+    // the JS thread and it would stutter against the swipe it is tracking.
+    expect(SRC).toMatch(/const tabUnderlineX = pagerScrollX\.interpolate\(/);
+    expect(SRC).toMatch(/const tabUnderlineScale = pagerScrollX\.interpolate\(/);
+    expect(SRC).toMatch(/width: 1,/);
+    expect(SRC).toMatch(/transformOrigin: 'left'/);
+    const bar = SRC.slice(SRC.indexOf('tabUnderline: {'), SRC.indexOf('tabSeg: {'));
+    expect(bar).not.toMatch(/borderRadius/);
+  });
+
+  test('the bar is sized to the tab it is under, which is MEASURED', () => {
+    // A tab's width is not computable: font metrics, the icon and the user's
+    // font scale all land in it. Each tab reports its own, and the ranges are
+    // derived from the segment list — a hand-listed one is what parks the bar
+    // under the wrong label the day a tab is added.
+    expect(SRC).toMatch(/onLayout=\{\(e\) => measureTab\(seg\.kind, e\.nativeEvent\.layout\.x, e\.nativeEvent\.layout\.width\)\}/);
+    expect(SRC).toMatch(/const tabBoxes = NOTE_SEGMENTS\.map\(/);
+    expect(SRC).toMatch(/const pageStops = NOTE_SEGMENTS\.map\(/);
+    // …and a no-op guard, or onLayout re-measuring loops.
+    expect(SRC).toMatch(/if \(cur && cur\.x === nx && cur\.width === nw\) return prev;/);
+  });
+
+  test('the ACTIVE label cross-fades, and does not move the tab', () => {
+    // Two stacked rows: an opacity rides the native driver and a colour does
+    // not. The active row is absolute so the pair never affect each other's
+    // layout — and so the tab's width does not jump by a point as the weight
+    // changes under it.
+    expect(SRC).toMatch(/const activeOp = pagerScrollX\.interpolate\(\{ inputRange, outputRange: \[0, 1, 0\]/);
+    expect(SRC).toMatch(/const inactiveOp = pagerScrollX\.interpolate\(\{ inputRange, outputRange: \[0\.6, 0, 0\.6\]/);
+    expect(SRC).toMatch(/tabSegRowActive: \{ position: 'absolute' \}/);
+    // The same ink in both: a dimmer colour under a 60% opacity compounds
+    // into a smudge.
+    expect(SRC).toMatch(/tabSegTextActive: \{ fontWeight: '700', color: theme\.colors\.textPrimary \}/);
+    expect(SRC).toMatch(/tabSegTextInactive: \{ fontWeight: '500', color: theme\.colors\.textPrimary \}/);
   });
 
   test('a tap glides, and a settle adopts — without the two fighting', () => {
